@@ -1,0 +1,38 @@
+syntax = "proto3";
+package server.chat.v1;
+
+option csharp_namespace = "Server.Chat.V1";
+
+message JoinRoomRequest {
+  string user_id = 1;
+  string room = 2;
+  string trace_id = 3;
+}
+
+message JoinRoomResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message LeaveRoomRequest { string user_id = 1; string room = 2; }
+message LeaveRoomResponse { bool success = 1; }
+
+message SendMessageRequest {
+  string user_id = 1;
+  string room = 2;
+  string text = 3;
+  string correlation_id = 4;
+}
+
+message SendMessageResponse { bool accepted = 1; }
+
+message ListRoomsRequest {}
+message ListRoomsResponse { repeated string rooms = 1; }
+
+service ChatService {
+  rpc JoinRoom(JoinRoomRequest) returns (JoinRoomResponse);
+  rpc LeaveRoom(LeaveRoomRequest) returns (LeaveRoomResponse);
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse);
+  rpc ListRooms(ListRoomsRequest) returns (ListRoomsResponse);
+}
+

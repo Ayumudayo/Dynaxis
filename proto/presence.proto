@@ -1,0 +1,25 @@
+syntax = "proto3";
+package server.presence.v1;
+
+option csharp_namespace = "Server.Presence.V1";
+
+message SetOnlineRequest {
+  string user_id = 1;
+  string session_id = 2;
+  string gateway_id = 3;
+}
+message SetOnlineResponse { bool ok = 1; }
+
+message SetOfflineRequest { string user_id = 1; string session_id = 2; }
+message SetOfflineResponse { bool ok = 1; }
+
+message GetPresenceRequest { repeated string user_ids = 1; }
+message PresenceState { string user_id = 1; bool online = 2; string gateway_id = 3; }
+message GetPresenceResponse { repeated PresenceState items = 1; }
+
+service PresenceService {
+  rpc SetOnline(SetOnlineRequest) returns (SetOnlineResponse);
+  rpc SetOffline(SetOfflineRequest) returns (SetOfflineResponse);
+  rpc GetPresence(GetPresenceRequest) returns (GetPresenceResponse);
+}
+

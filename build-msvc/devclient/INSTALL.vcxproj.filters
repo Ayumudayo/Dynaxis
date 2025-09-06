@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="E:\Repos\MyRepos\Knights\build-msvc\CMakeFiles\a188eb211ca33cc8dc0e685d2cb48e34\INSTALL_force.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{882BD659-4019-30EE-A914-7A2E4D9A9B9B}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

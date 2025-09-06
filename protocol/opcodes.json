@@ -1,0 +1,14 @@
+{
+  "namespace": "server::core::protocol",
+  "opcodes": [
+    { "name": "MSG_HELLO",          "id": "0x0001", "desc": "버전/서버 정보" },
+    { "name": "MSG_PING",           "id": "0x0002", "desc": "heartbeat ping" },
+    { "name": "MSG_PONG",           "id": "0x0003", "desc": "heartbeat pong" },
+    { "name": "MSG_ERR",            "id": "0x0004", "desc": "에러 응답" },
+    { "name": "MSG_LOGIN_REQ",      "id": "0x0010", "desc": "로그인 요청" },
+    { "name": "MSG_LOGIN_RES",      "id": "0x0011", "desc": "로그인 응답" },
+    { "name": "MSG_CHAT_SEND",      "id": "0x0100", "desc": "채팅 전송" },
+    { "name": "MSG_CHAT_BROADCAST", "id": "0x0101", "desc": "채팅 브로드캐스트" }
+  ]
+}
+

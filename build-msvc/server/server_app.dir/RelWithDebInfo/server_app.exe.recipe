@@ -1,0 +1,17 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <ProjectOutputs>
+    <ProjectOutput>
+      <FullPath>E:\Repos\MyRepos\Knights\build-msvc\x64\RelWithDebInfo\ZERO_CHECK</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>E:\Repos\MyRepos\Knights\build-msvc\x64\RelWithDebInfo\generate_opcodes</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>E:\Repos\MyRepos\Knights\build-msvc\server\RelWithDebInfo\server_app.exe</FullPath>
+    </ProjectOutput>
+  </ProjectOutputs>
+  <ContentFiles />
+  <SatelliteDlls />
+  <NonRecipeFileRefs />
+</Project>
