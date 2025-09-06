@@ -32,6 +32,20 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j
 ```
 
+## VSCode 설정(자동 완성/오류 제거)
+- 확장 설치: CMake Tools, C/C++(ms-vscode.cpptools)
+- 레포에는 VSCode 프리셋이 포함되어 있습니다:
+  - `.vscode/settings.json`: CMake Tools를 IntelliSense 공급자로 설정, C++20 지정, Ninja 제너레이터와 `build-vscode` 빌드 디렉터리 사용.
+  - `.vscode/c_cpp_properties.json`: `configurationProvider`를 `ms-vscode.cmake-tools`로 지정.
+  - `.vscode/extensions.json`: 권장 확장 목록.
+- 절차
+  1) VSCode로 레포를 열면 CMake가 자동 구성됩니다(처음엔 킷 선택 필요: MSVC/Clang 등).
+  2) 하단 `CMake: [Debug/RelWithDebInfo]` 옆 톱니에서 Configure 실행.
+  3) 구성 완료 후 IntelliSense가 CMake의 컴파일 옵션/정의/포함경로(Boost 포함)를 인식하므로 Asio 관련 빨간줄이 사라집니다.
+  4) 만약 Boost가 기본 경로가 아니라면, `-DBOOST_ROOT=...`를 CMake 옵션에 추가하고 재구성하세요(CMake Tools 상태바의 Configure Settings 사용). 필요 시 `.vscode/settings.json`의 `includePath` 주석 라인을 본인 환경에 맞게 활성화/수정.
+
+참고: 루트 `CMakeLists.txt`는 `CMAKE_EXPORT_COMPILE_COMMANDS=ON`을 설정합니다. Ninja/Makefile 제너레이터 사용 시 `compile_commands.json`이 생성되어 clangd 등의 다른 인텔리센스에도 활용할 수 있습니다.
+
 ## 산출물
 - `server_app` (빌드 확인용 placeholder)
 - `server_core` (라이브러리)

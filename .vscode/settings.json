@@ -1,0 +1,9 @@
+{
+  "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+  "C_Cpp.default.cppStandard": "c++20",
+  // Windows에서 자동 인텔리센스용: 필요 시 다음 경로를 사용자가 맞게 조정
+  "C_Cpp.default.includePath": ["${workspaceFolder}/core/include", "C:/local/boost_1_89_0"],
+  "C_Cpp.default.defines": ["BOOST_ERROR_CODE_HEADER_ONLY", "_WIN32_WINNT=0x0602"],
+  "cmake.configureOnOpen": true,
+  "cmake.buildDirectory": "${workspaceFolder}/build-vscode"
+}
