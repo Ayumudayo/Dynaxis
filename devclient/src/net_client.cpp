@@ -3,6 +3,7 @@
 #include "server/core/protocol.hpp"
 #include "server/core/protocol_flags.hpp"
 #include "server/core/protocol/frame.hpp"
+#include "server/wire/codec.hpp"
 #include "server/wire/v1/wire.pb.h"
 #include <cstring>
 #include <chrono>
@@ -65,7 +66,7 @@ void NetClient::recv_loop() {
                 if (on_err_) on_err_(code, msg);
             } else if (hh.msg_id == proto::MSG_LOGIN_RES) {
                 server::wire::v1::LoginRes pb;
-                if (pb.ParseFromArray(body.data(), static_cast<int>(body.size()))) {
+                if (server::wire::codec::Decode(body.data(), body.size(), pb)) {
                     if (on_login_) on_login_(pb.effective_user(), pb.session_id());
                 } else {
                     // fallback legacy
@@ -73,7 +74,7 @@ void NetClient::recv_loop() {
                 }
             } else if (hh.msg_id == proto::MSG_CHAT_BROADCAST) {
                 server::wire::v1::ChatBroadcast pb;
-                if (pb.ParseFromArray(body.data(), static_cast<int>(body.size()))) {
+                if (server::wire::codec::Decode(body.data(), body.size(), pb)) {
                     if (on_bcast_) on_bcast_(pb.room(), pb.sender(), pb.text(), hh.flags, pb.sender_sid());
                 } else {
                     // fallback legacy
@@ -81,7 +82,7 @@ void NetClient::recv_loop() {
                 }
             } else if (hh.msg_id == proto::MSG_ROOM_USERS) {
                 server::wire::v1::RoomUsers pb;
-                if (pb.ParseFromArray(body.data(), static_cast<int>(body.size()))) {
+                if (server::wire::codec::Decode(body.data(), body.size(), pb)) {
                     std::vector<std::string> list(pb.users().begin(), pb.users().end());
                     if (on_room_users_) on_room_users_(pb.room(), std::move(list));
                 } else {
@@ -89,7 +90,7 @@ void NetClient::recv_loop() {
                 }
             } else if (hh.msg_id == proto::MSG_STATE_SNAPSHOT) {
                 server::wire::v1::StateSnapshot pb;
-                if (pb.ParseFromArray(body.data(), static_cast<int>(body.size()))) {
+                if (server::wire::codec::Decode(body.data(), body.size(), pb)) {
                     std::vector<std::string> rooms; rooms.reserve(pb.rooms_size());
                     for (const auto& ri : pb.rooms()) rooms.emplace_back(ri.name());
                     std::vector<std::string> users(pb.users().begin(), pb.users().end());
