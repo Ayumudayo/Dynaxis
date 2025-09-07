@@ -13,7 +13,7 @@ HEADER_TMPL = """// 자동 생성 파일: tools/gen_wire_codec.py에 의해 생�
 #include "server/core/protocol.hpp"
 #include "server/wire/v1/wire.pb.h"
 
-namespace server { namespace wire { namespace codec {
+namespace server {{ namespace wire {{ namespace codec {{
 
 // MsgId<T> 특수화: Protobuf 타입 -> msg_id
 {msgid_specs}
@@ -32,7 +32,7 @@ inline const char* TypeName(std::uint16_t id) {{
   }}
 }}
 
-}}} // namespace server::wire::codec
+}}}}}} // namespace server::wire::codec
 """
 
 def parse_id(v: str) -> int:
@@ -94,4 +94,3 @@ def main():
 
 if __name__ == '__main__':
     sys.exit(main())
-
