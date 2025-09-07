@@ -21,6 +21,8 @@
 #include "server/core/dispatcher.hpp"
 #include "server/core/session.hpp"
 #include "server/core/protocol.hpp"
+// flags
+#include "server/core/protocol_flags.hpp"
 // 에러 코드
 #include "server/core/protocol_errors.hpp"
 // 고정 헤더에 UTC/SEQ가 항상 포함되므로 별도 플래그 불필요
@@ -80,11 +82,40 @@ int main(int argc, char** argv) {
                 corelog::info("LOGIN_REQ 수신");
                 auto sp = std::span<const std::uint8_t>(payload.data(), payload.size());
                 std::string user, token;
-                server::core::protocol::read_lp_utf8(sp, user);
-                server::core::protocol::read_lp_utf8(sp, token);
+                if (!server::core::protocol::read_lp_utf8(sp, user) || !server::core::protocol::read_lp_utf8(sp, token)) {
+                    s.send_error(protocol::errc::INVALID_PAYLOAD, "bad login payload");
+                    return;
+                }
                 {
                     std::lock_guard<std::mutex> lk(chat.mu);
-                    std::string new_user = user.empty() ? std::string("guest") : user;
+                    auto gen_hex = [&](){
+                        auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::system_clock::now().time_since_epoch()).count();
+                        std::uint64_t v = (static_cast<std::uint64_t>(s.session_id()) << 32) ^ static_cast<std::uint64_t>(now64);
+                        v &= 0xFFFFFFFFull; std::ostringstream oss; oss << std::hex; oss.width(8); oss.fill('0'); oss << v; return oss.str();
+                    };
+                    std::string new_user;
+                    if (!user.empty() && user != "guest") {
+                        // 유일 닉 정책: 이미 존재하면 거부
+                        auto itset = chat.by_user.find(user);
+                        if (itset != chat.by_user.end()) {
+                            // live check
+                            bool taken = false;
+                            for (auto wit = itset->second.begin(); wit != itset->second.end(); ) {
+                                if (auto p = wit->lock()) { taken = true; break; }
+                                else { wit = itset->second.erase(wit); }
+                            }
+                            if (taken) { s.send_error(protocol::errc::NAME_TAKEN, "name taken"); return; }
+                        }
+                        new_user = user;
+                    } else {
+                        // 임시 닉 생성(충돌 회피)
+                        for (int i=0;i<4;++i){
+                            std::string cand = gen_hex();
+                            if (!chat.by_user.count(cand) || chat.by_user[cand].empty()) { new_user = std::move(cand); break; }
+                        }
+                        if (new_user.empty()) new_user = gen_hex();
+                    }
                     // 기존 사용자명이 있다면 사용자 맵에서 제거
                     if (auto itold = chat.user.find(&s); itold != chat.user.end()) {
                         auto itset = chat.by_user.find(itold->second);
@@ -103,9 +134,18 @@ int main(int argc, char** argv) {
                     set.insert(s.shared_from_this());
                 }
                 std::vector<std::uint8_t> res;
-                res.reserve(4 + 32);
+                res.reserve(4 + 64);
                 res.push_back(0); // status ok
                 server::core::protocol::write_lp_utf8(res, "ok");
+                // effective username
+                {
+                    std::lock_guard<std::mutex> lk(chat.mu);
+                    auto it = chat.user.find(&s);
+                    server::core::protocol::write_lp_utf8(res, (it!=chat.user.end()?it->second:std::string("guest")));
+                }
+                // 세션 ID 포함(u32)
+                std::size_t off = res.size(); res.resize(off + 4);
+                server::core::protocol::write_be32(s.session_id(), res.data() + off);
                 s.async_send(protocol::MSG_LOGIN_RES, res, 0);
             });
 
@@ -113,7 +153,7 @@ int main(int argc, char** argv) {
             [&chat](Session& s, std::span<const std::uint8_t> payload) {
                 auto sp = std::span<const std::uint8_t>(payload.data(), payload.size());
                 std::string room;
-                server::core::protocol::read_lp_utf8(sp, room);
+                if (!server::core::protocol::read_lp_utf8(sp, room)) { s.send_error(protocol::errc::INVALID_PAYLOAD, "bad join payload"); return; }
                 if (room.empty()) room = "lobby";
                 corelog::info(std::string("JOIN_ROOM: ") + room);
                 std::vector<std::shared_ptr<Session>> targets;
@@ -132,13 +172,14 @@ int main(int argc, char** argv) {
                     }
                     chat.cur_room[&s] = room;
                     chat.rooms[room].insert(s.shared_from_this());
-                    // 입장 브로드캐스트(해당 방 전체)
+                    // 입장 브로드캐스트(해당 방 전체): room, (system), text, u32 sender_sid(0), u64 ts
                     std::string sender;
                     auto it2 = chat.user.find(&s);
                     sender = (it2 != chat.user.end()) ? it2->second : std::string("guest");
                     server::core::protocol::write_lp_utf8(body, room);
                     server::core::protocol::write_lp_utf8(body, std::string("(system)"));
                     server::core::protocol::write_lp_utf8(body, sender + " 님이 입장했습니다");
+                    { std::size_t off_sid = body.size(); body.resize(off_sid + 4); server::core::protocol::write_be32(0, body.data() + off_sid); }
                     auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count();
                     std::size_t off = body.size(); body.resize(off + 8);
@@ -161,12 +202,57 @@ int main(int argc, char** argv) {
             [&chat](Session& s, std::span<const std::uint8_t> payload) {
                 std::string room, text;
                 auto sp = std::span<const std::uint8_t>(payload.data(), payload.size());
-                server::core::protocol::read_lp_utf8(sp, room);
-                server::core::protocol::read_lp_utf8(sp, text);
+                if (!server::core::protocol::read_lp_utf8(sp, room) || !server::core::protocol::read_lp_utf8(sp, text)) {
+                    s.send_error(protocol::errc::INVALID_PAYLOAD, "bad chat payload");
+                    return;
+                }
                 std::string sender;
                 {
                     std::lock_guard<std::mutex> lk(chat.mu);
                     corelog::info(std::string("CHAT_SEND: room=") + (room.empty()?"(empty)":room) + ", text=" + text);
+                    // /refresh는 인증 없이 허용(스냅샷만 반환)
+                    if (text == "/refresh") {
+                        std::string current;
+                        auto itcr = chat.cur_room.find(&s);
+                        current = (itcr != chat.cur_room.end()) ? itcr->second : std::string("lobby");
+                        std::vector<std::uint8_t> body;
+                        server::core::protocol::write_lp_utf8(body, current);
+                        // rooms 목록 + 인원
+                        std::uint16_t rooms_count = 0;
+                        std::size_t rooms_count_off = body.size();
+                        body.resize(body.size() + 2);
+                        for (auto& kv : chat.rooms) {
+                            std::uint16_t alive = 0;
+                            for (auto wit = kv.second.begin(); wit != kv.second.end(); ) {
+                                if (auto p = wit->lock()) { ++alive; ++wit; }
+                                else { wit = kv.second.erase(wit); }
+                            }
+                            server::core::protocol::write_lp_utf8(body, kv.first);
+                            std::size_t off = body.size(); body.resize(off + 2);
+                            server::core::protocol::write_be16(alive, body.data() + off);
+                            ++rooms_count;
+                        }
+                        server::core::protocol::write_be16(rooms_count, body.data() + rooms_count_off);
+                        // current 방 유저 목록
+                        std::uint16_t users_count = 0;
+                        std::size_t users_count_off = body.size();
+                        body.resize(body.size() + 2);
+                        auto itroom = chat.rooms.find(current);
+                        if (itroom != chat.rooms.end()) {
+                            for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) {
+                                if (auto p = wit->lock()) {
+                                    auto itu = chat.user.find(p.get());
+                                    std::string name = (itu != chat.user.end()) ? itu->second : std::string("guest");
+                                    server::core::protocol::write_lp_utf8(body, name);
+                                    ++users_count;
+                                    ++wit;
+                                } else { wit = itroom->second.erase(wit); }
+                            }
+                        }
+                        server::core::protocol::write_be16(users_count, body.data() + users_count_off);
+                        s.async_send(protocol::MSG_STATE_SNAPSHOT, body, 0);
+                        return;
+                    }
                     if (!chat.authed.count(&s)) {
                         // 미인증: 거부
                         s.send_error(protocol::errc::UNAUTHORIZED, "unauthorized");
@@ -210,35 +296,25 @@ int main(int argc, char** argv) {
                             // 구문: /who [room]
                             std::string target = room;
                             if (text.size() > 4) {
-                                // 공백 이후 방 이름
                                 auto pos = text.find_first_not_of(' ', 4);
                                 if (pos != std::string::npos) target = text.substr(pos);
                             }
-                            std::string msg = "who(" + target + "):";
+                            std::vector<std::uint8_t> body;
+                            server::core::protocol::write_lp_utf8(body, target);
+                            std::uint16_t n = 0; std::size_t off_n = body.size(); body.resize(off_n + 2);
                             auto itroom = chat.rooms.find(target);
                             if (itroom != chat.rooms.end()) {
-                                // 사용자명 나열
-                                bool first = true;
                                 for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) {
                                     if (auto p = wit->lock()) {
                                         auto itu = chat.user.find(p.get());
                                         std::string name = (itu != chat.user.end()) ? itu->second : std::string("guest");
-                                        msg += (first?" ":", ") + name; first = false; ++wit;
+                                        server::core::protocol::write_lp_utf8(body, name);
+                                        ++n; ++wit;
                                     } else { wit = itroom->second.erase(wit); }
                                 }
-                            } else {
-                                msg += " <none>";
                             }
-                            std::vector<std::uint8_t> body;
-                            server::core::protocol::write_lp_utf8(body, std::string("(system)"));
-                            server::core::protocol::write_lp_utf8(body, std::string("server"));
-                            server::core::protocol::write_lp_utf8(body, msg);
-                            auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::system_clock::now().time_since_epoch()).count();
-                            std::size_t off = body.size(); body.resize(off + 8);
-                            std::uint64_t ts = static_cast<std::uint64_t>(now64);
-                            for (int i = 7; i >= 0; --i) { body[off + i] = static_cast<std::uint8_t>(ts & 0xFF); ts >>= 8; }
-                            s.async_send(protocol::MSG_CHAT_BROADCAST, body, 0);
+                            server::core::protocol::write_be16(n, body.data() + off_n);
+                            s.async_send(protocol::MSG_ROOM_USERS, body, 0);
                             return;
                         } else if (text.rfind("/whisper ", 0) == 0) {
                             // 구문: /whisper <user> <message...>
@@ -273,11 +349,12 @@ int main(int argc, char** argv) {
                             // 보낸 사람 이름
                             auto it2 = chat.user.find(&s);
                             sender = (it2 != chat.user.end()) ? it2->second : std::string("guest");
-                            // payload: room="(direct)", sender, text="(to <user>) <msg>", ts
+                            // payload: room="(direct)", sender, text="(to <user>) <msg>", u32 sender_sid, ts
                             std::vector<std::uint8_t> body;
                             server::core::protocol::write_lp_utf8(body, std::string("(direct)"));
                             server::core::protocol::write_lp_utf8(body, sender);
                             server::core::protocol::write_lp_utf8(body, std::string("(to ") + target_user + ") " + wtext);
+                            { std::size_t off_sid = body.size(); body.resize(off_sid + 4); server::core::protocol::write_be32(s.session_id(), body.data() + off_sid); }
                             auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
                                 std::chrono::system_clock::now().time_since_epoch()).count();
                             std::size_t off = body.size(); body.resize(off + 8);
@@ -301,12 +378,21 @@ int main(int argc, char** argv) {
                     }
                     auto it2 = chat.user.find(&s);
                     sender = (it2 != chat.user.end()) ? it2->second : std::string("guest");
+                    if (sender == "guest") {
+                        s.send_error(protocol::errc::UNAUTHORIZED, "guest cannot chat");
+                        return;
+                    }
                 }
-                // 브로드캐스트 페이로드: room, sender, text, u64 ts_ms
+                // 브로드캐스트 페이로드: room, sender, text, u32 sender_sid, u64 ts_ms
                 std::vector<std::uint8_t> body;
                 server::core::protocol::write_lp_utf8(body, room);
                 server::core::protocol::write_lp_utf8(body, sender);
                 server::core::protocol::write_lp_utf8(body, text);
+                // sender session id
+                {
+                    std::size_t off_sid = body.size(); body.resize(off_sid + 4);
+                    server::core::protocol::write_be32(s.session_id(), body.data() + off_sid);
+                }
                 auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch()).count();
                 std::size_t off = body.size();
@@ -328,10 +414,13 @@ int main(int argc, char** argv) {
                     }
                 }
                 if (targets.empty()) {
-                    // 구독자가 없다면 자기 자신에게만 에코
-                    s.async_send(protocol::MSG_CHAT_BROADCAST, body, 0);
+                    // 구독자가 없다면 자기 자신에게만 에코(SELF 플래그)
+                    s.async_send(protocol::MSG_CHAT_BROADCAST, body, server::core::protocol::FLAG_SELF);
                 } else {
-                    for (auto& t : targets) t->async_send(protocol::MSG_CHAT_BROADCAST, body, 0);
+                    for (auto& t : targets) {
+                        auto f = (t.get() == &s) ? server::core::protocol::FLAG_SELF : 0;
+                        t->async_send(protocol::MSG_CHAT_BROADCAST, body, f);
+                    }
                 }
             });
 
@@ -349,35 +438,65 @@ int main(int argc, char** argv) {
                 auto itcr = chat.cur_room.find(&s);
                 if (itcr == chat.cur_room.end()) { s.send_error(protocol::errc::NO_ROOM, "no current room"); return; }
                 if (!room.empty() && itcr->second != room) { s.send_error(protocol::errc::ROOM_MISMATCH, "room mismatch"); return; }
-                    room = itcr->second;
-                    auto itroom = chat.rooms.find(room);
-                    if (itroom != chat.rooms.end()) {
-                        ChatState::WeakSession w = s.shared_from_this();
-                        itroom->second.erase(w);
-                        // 퇴장 브로드캐스트
+                room = itcr->second;
+                // 퇴장 브로드캐스트(현재 방)
+                auto itroom = chat.rooms.find(room);
+                if (itroom != chat.rooms.end()) {
+                    ChatState::WeakSession w = s.shared_from_this();
+                    itroom->second.erase(w);
+                    std::string sender;
+                    auto it2 = chat.user.find(&s);
+                    sender = (it2 != chat.user.end()) ? it2->second : std::string("guest");
+                    server::core::protocol::write_lp_utf8(body, room);
+                    server::core::protocol::write_lp_utf8(body, std::string("(system)"));
+                    server::core::protocol::write_lp_utf8(body, sender + " 님이 퇴장했습니다");
+                    { std::size_t off_sid = body.size(); body.resize(off_sid + 4); server::core::protocol::write_be32(0, body.data() + off_sid); }
+                    auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                    std::size_t off = body.size(); body.resize(off + 8);
+                    std::uint64_t ts = static_cast<std::uint64_t>(now64);
+                    for (int i = 7; i >= 0; --i) { body[off + i] = static_cast<std::uint8_t>(ts & 0xFF); ts >>= 8; }
+                    auto itb = chat.rooms.find(room);
+                    if (itb != chat.rooms.end()) {
+                        auto& set = itb->second;
+                        for (auto wit = set.begin(); wit != set.end(); ) {
+                            if (auto p = wit->lock()) { targets.emplace_back(std::move(p)); ++wit; }
+                            else { wit = set.erase(wit); }
+                        }
+                    }
+                }
+                // 로비로 자동 이동 설정
+                chat.cur_room[&s] = std::string("lobby");
+                chat.rooms["lobby"].insert(s.shared_from_this());
+                }
+                for (auto& t : targets) {
+                    auto f = (t.get() == &s) ? server::core::protocol::FLAG_SELF : 0;
+                    t->async_send(protocol::MSG_CHAT_BROADCAST, body, f);
+                }
+                // 로비 입장 브로드캐스트
+                {
+                    std::vector<std::shared_ptr<Session>> t2;
+                    std::vector<std::uint8_t> body2;
+                    {
+                        std::lock_guard<std::mutex> lk(chat.mu);
                         std::string sender;
                         auto it2 = chat.user.find(&s);
                         sender = (it2 != chat.user.end()) ? it2->second : std::string("guest");
-                        server::core::protocol::write_lp_utf8(body, room);
-                        server::core::protocol::write_lp_utf8(body, std::string("(system)"));
-                        server::core::protocol::write_lp_utf8(body, sender + " 님이 퇴장했습니다");
-                        auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::system_clock::now().time_since_epoch()).count();
-                        std::size_t off = body.size(); body.resize(off + 8);
-                        std::uint64_t ts = static_cast<std::uint64_t>(now64);
-                        for (int i = 7; i >= 0; --i) { body[off + i] = static_cast<std::uint8_t>(ts & 0xFF); ts >>= 8; }
-                        auto itb = chat.rooms.find(room);
+                        server::core::protocol::write_lp_utf8(body2, std::string("lobby"));
+                        server::core::protocol::write_lp_utf8(body2, std::string("(system)"));
+                        server::core::protocol::write_lp_utf8(body2, sender + " 님이 입장했습니다");
+                        { std::size_t off_sid = body2.size(); body2.resize(off_sid + 4); server::core::protocol::write_be32(0, body2.data() + off_sid); }
+                        auto itb = chat.rooms.find("lobby");
                         if (itb != chat.rooms.end()) {
                             auto& set = itb->second;
                             for (auto wit = set.begin(); wit != set.end(); ) {
-                                if (auto p = wit->lock()) { targets.emplace_back(std::move(p)); ++wit; }
+                                if (auto p = wit->lock()) { t2.emplace_back(std::move(p)); ++wit; }
                                 else { wit = set.erase(wit); }
                             }
                         }
                     }
-                    chat.cur_room.erase(itcr);
+                    for (auto& t : t2) t->async_send(protocol::MSG_CHAT_BROADCAST, body2, 0);
                 }
-                for (auto& t : targets) t->async_send(protocol::MSG_CHAT_BROADCAST, body, 0);
             });
 
         tcp::endpoint ep(tcp::v4(), port);
@@ -409,15 +528,16 @@ int main(int argc, char** argv) {
                                 // 해당 세션만 정확히 제거
                                 ChatState::WeakSession w = s.shared_from_this();
                                 itroom->second.erase(w);
-                                // 퇴장 브로드캐스트(해당 방 전체)
-                                server::core::protocol::write_lp_utf8(body, room);
-                                server::core::protocol::write_lp_utf8(body, std::string("(system)"));
-                                server::core::protocol::write_lp_utf8(body, name + " 님이 퇴장했습니다");
-                                auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    std::chrono::system_clock::now().time_since_epoch()).count();
-                                std::size_t off = body.size(); body.resize(off + 8);
-                                std::uint64_t ts = static_cast<std::uint64_t>(now64);
-                                for (int i = 7; i >= 0; --i) { body[off + i] = static_cast<std::uint8_t>(ts & 0xFF); ts >>= 8; }
+                // 퇴장 브로드캐스트(해당 방 전체): room, (system), text, u32 sender_sid(0), u64 ts
+                server::core::protocol::write_lp_utf8(body, room);
+                server::core::protocol::write_lp_utf8(body, std::string("(system)"));
+                server::core::protocol::write_lp_utf8(body, name + " 님이 퇴장했습니다");
+                { std::size_t off_sid = body.size(); body.resize(off_sid + 4); server::core::protocol::write_be32(0, body.data() + off_sid); }
+                auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                std::size_t off = body.size(); body.resize(off + 8);
+                std::uint64_t ts = static_cast<std::uint64_t>(now64);
+                for (int i = 7; i >= 0; --i) { body[off + i] = static_cast<std::uint8_t>(ts & 0xFF); ts >>= 8; }
                                 auto itb = chat.rooms.find(room);
                                 if (itb != chat.rooms.end()) {
                                     auto& set = itb->second;
@@ -430,8 +550,11 @@ int main(int argc, char** argv) {
                             chat.cur_room.erase(itcr);
                         }
                     }
-                    for (auto& t : targets) t->async_send(protocol::MSG_CHAT_BROADCAST, body, 0);
-                });
+                for (auto& t : targets) {
+                    auto f = (t.get() == &s) ? server::core::protocol::FLAG_SELF : 0;
+                    t->async_send(protocol::MSG_CHAT_BROADCAST, body, f);
+                }
+            });
             });
         acceptor->start();
         corelog::info("server_app 시작: 0.0.0.0:" + std::to_string(port));

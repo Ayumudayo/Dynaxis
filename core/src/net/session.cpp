@@ -30,6 +30,7 @@ Session::Session(asio::ip::tcp::socket socket,
     , read_timer_(socket_.get_executor())
     , heartbeat_timer_(socket_.get_executor()) {
     if (state_) state_->connection_count.fetch_add(1);
+    if (state_) session_id_ = state_->next_session_id.fetch_add(1);
 }
 
 void Session::start() {
@@ -179,7 +180,9 @@ void Session::send_hello() {
     payload.resize(12);
     server::core::protocol::write_be16(1, payload.data()); // proto_major
     server::core::protocol::write_be16(1, payload.data() + 2); // proto_minor (헤더 v1.1)
-    server::core::protocol::write_be16(static_cast<std::uint16_t>(server::core::protocol::CAP_COMPRESS_SUPP), payload.data() + 4);
+    // capabilities: 압축 지원 + sender_sid 포함
+    std::uint16_t caps = static_cast<std::uint16_t>(server::core::protocol::CAP_COMPRESS_SUPP | server::core::protocol::CAP_SENDER_SID);
+    server::core::protocol::write_be16(caps, payload.data() + 4);
     unsigned hb = options_ ? options_->heartbeat_interval_ms / 10 : 0;
     server::core::protocol::write_be16(static_cast<std::uint16_t>(hb), payload.data() + 6);
     // epoch_high32: 서버 UTC ms 상위 32비트 제공(클라가 64비트 재구성 가능)

@@ -40,6 +40,8 @@ public:
     // payload와 msg_id를 받아 프레임을 구성하여 전송
     void async_send(std::uint16_t msg_id, const std::vector<std::uint8_t>& payload, std::uint16_t flags = 0);
 
+    std::uint32_t session_id() const { return session_id_; }
+
 private:
     void do_read_header();
     void do_read_body(std::size_t body_len);
@@ -69,5 +71,6 @@ private:
     boost::asio::steady_timer heartbeat_timer_{socket_.get_executor()};
     std::uint32_t tx_seq_{1};
     std::function<void(Session&)> on_close_{};
+    std::uint32_t session_id_{0};
 };
 } // namespace server::core
