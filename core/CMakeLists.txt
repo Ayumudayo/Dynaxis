@@ -28,6 +28,9 @@ endif()
 if (TARGET generate_opcodes)
     add_dependencies(server_core generate_opcodes)
 endif()
+if (TARGET generate_wire_codec)
+    add_dependencies(server_core generate_wire_codec)
+endif()
 
 # 설치 규칙: 다른 프로그램이 코어의 패킷 구조를 공유할 수 있도록 export
 install(TARGETS server_core

@@ -56,6 +56,16 @@ if (Python3_Interpreter_FOUND)
         COMMENT "Generating protocol opcodes header"
         VERBATIM)
     add_custom_target(generate_opcodes DEPENDS ${GENERATED_HEADER})
+    # wire codec header generation
+    set(WIRE_MAP_JSON ${CMAKE_SOURCE_DIR}/protocol/wire_map.json)
+    set(GENERATED_WIRE_CODEC ${CMAKE_SOURCE_DIR}/core/include/server/wire/codec.hpp)
+    add_custom_command(
+        OUTPUT ${GENERATED_WIRE_CODEC}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/gen_wire_codec.py ${WIRE_MAP_JSON} ${GENERATED_WIRE_CODEC}
+        DEPENDS ${WIRE_MAP_JSON} ${CMAKE_SOURCE_DIR}/tools/gen_wire_codec.py ${CMAKE_SOURCE_DIR}/proto/wire.proto
+        COMMENT "Generating wire codec header"
+        VERBATIM)
+    add_custom_target(generate_wire_codec DEPENDS ${GENERATED_WIRE_CODEC})
 else()
     message(WARNING "Python3 not found: opcode 자동 생성 비활성화. 기존 헤더를 사용합니다.")
 endif()
