@@ -97,7 +97,17 @@ void ChatService::on_join(Session& s, std::span<const std::uint8_t> payload) {
         auto itold = state_.cur_room.find(&s);
         if (itold != state_.cur_room.end() && itold->second != room) {
             auto itroom = state_.rooms.find(itold->second);
-            if (itroom != state_.rooms.end()) { WeakSession w = s.shared_from_this(); itroom->second.erase(w); }
+            if (itroom != state_.rooms.end()) {
+                WeakSession w = s.shared_from_this();
+                itroom->second.erase(w);
+                // 기존 방이 비면(lobby 제외) 제거
+                for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) {
+                    if (wit->expired()) wit = itroom->second.erase(wit); else ++wit;
+                }
+                if (itroom->second.empty() && itold->second != "lobby") {
+                    state_.rooms.erase(itroom);
+                }
+            }
         }
         state_.cur_room[&s] = room;
         state_.rooms[room].insert(s.shared_from_this());
@@ -138,7 +148,12 @@ void ChatService::on_leave(Session& s, std::span<const std::uint8_t> payload) {
             proto::write_lp_utf8(body, room); proto::write_lp_utf8(body, std::string("(system)")); proto::write_lp_utf8(body, sender + " 님이 퇴장했습니다");
             { std::size_t off_sid = body.size(); body.resize(off_sid + 4); proto::write_be32(0, body.data() + off_sid); }
             auto itb = state_.rooms.find(room);
-            if (itb != state_.rooms.end()) { auto& set = itb->second; for (auto wit = set.begin(); wit != set.end(); ) { if (auto p = wit->lock()) { targets.emplace_back(std::move(p)); ++wit; } else { wit = set.erase(wit); } } }
+            if (itb != state_.rooms.end()) {
+                auto& set = itb->second;
+                for (auto wit = set.begin(); wit != set.end(); ) { if (auto p = wit->lock()) { targets.emplace_back(std::move(p)); ++wit; } else { wit = set.erase(wit); } }
+                // 방이 비면(lobby 제외) 제거
+                if (set.empty() && room != "lobby") state_.rooms.erase(itb);
+            }
         }
         state_.cur_room[&s] = std::string("lobby");
         state_.rooms["lobby"].insert(s.shared_from_this());
@@ -163,11 +178,14 @@ void ChatService::send_rooms_list(Session& s) {
     std::string msg = "rooms:";
     {
         std::lock_guard<std::mutex> lk(state_.mu);
-        for (auto& kv : state_.rooms) {
+        std::vector<std::string> to_remove;
+        for (auto it = state_.rooms.begin(); it != state_.rooms.end(); ++it) {
             std::size_t alive = 0;
-            for (auto wit = kv.second.begin(); wit != kv.second.end(); ) { if (auto p = wit->lock()) { ++alive; ++wit; } else { wit = kv.second.erase(wit); } }
-            msg += " " + kv.first + "(" + std::to_string(alive) + ")";
+            for (auto wit = it->second.begin(); wit != it->second.end(); ) { if (auto p = wit->lock()) { ++alive; ++wit; } else { wit = it->second.erase(wit); } }
+            if (alive == 0 && it->first != std::string("lobby")) { to_remove.push_back(it->first); continue; }
+            msg += " " + it->first + "(" + std::to_string(alive) + ")";
         }
+        for (auto& name : to_remove) state_.rooms.erase(name);
     }
     proto::write_lp_utf8(body, msg);
     auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -205,10 +223,13 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
     std::uint16_t rooms_count = 0; std::size_t rooms_count_off = body.size(); body.resize(body.size() + 2);
     {
         std::lock_guard<std::mutex> lk(state_.mu);
-        for (auto& kv : state_.rooms) {
-            std::uint16_t alive = 0; for (auto wit = kv.second.begin(); wit != kv.second.end(); ) { if (auto p = wit->lock()) { ++alive; ++wit; } else { wit = kv.second.erase(wit); } }
-            proto::write_lp_utf8(body, kv.first); std::size_t off = body.size(); body.resize(off + 2); proto::write_be16(alive, body.data() + off); ++rooms_count;
+        std::vector<std::string> to_remove;
+        for (auto it = state_.rooms.begin(); it != state_.rooms.end(); ++it) {
+            std::uint16_t alive = 0; for (auto wit = it->second.begin(); wit != it->second.end(); ) { if (auto p = wit->lock()) { ++alive; ++wit; } else { wit = it->second.erase(wit); } }
+            if (alive == 0 && it->first != std::string("lobby")) { to_remove.push_back(it->first); continue; }
+            proto::write_lp_utf8(body, it->first); std::size_t off = body.size(); body.resize(off + 2); proto::write_be16(alive, body.data() + off); ++rooms_count;
         }
+        for (auto& name : to_remove) state_.rooms.erase(name);
     }
     proto::write_be16(rooms_count, body.data() + rooms_count_off);
     // users in current
@@ -292,7 +313,20 @@ void ChatService::on_session_close(Session& s) {
         auto itcr = state_.cur_room.find(&s);
         if (itcr != state_.cur_room.end()) {
             auto room = itcr->second; auto itroom = state_.rooms.find(room);
-            if (itroom != state_.rooms.end()) { WeakSession w = s.shared_from_this(); itroom->second.erase(w); proto::write_lp_utf8(body, room); proto::write_lp_utf8(body, std::string("(system)")); proto::write_lp_utf8(body, name + " 님이 퇴장했습니다"); { std::size_t off_sid = body.size(); body.resize(off_sid + 4); proto::write_be32(0, body.data() + off_sid); } auto itb = state_.rooms.find(room); if (itb != state_.rooms.end()) { auto& set = itb->second; for (auto wit = set.begin(); wit != set.end(); ) { if (auto p = wit->lock()) { targets.emplace_back(std::move(p)); ++wit; } else { wit = set.erase(wit); } } } }
+            if (itroom != state_.rooms.end()) {
+                WeakSession w = s.shared_from_this();
+                itroom->second.erase(w);
+                proto::write_lp_utf8(body, room);
+                proto::write_lp_utf8(body, std::string("(system)"));
+                proto::write_lp_utf8(body, name + " 님이 퇴장했습니다");
+                { std::size_t off_sid = body.size(); body.resize(off_sid + 4); proto::write_be32(0, body.data() + off_sid); }
+                auto itb = state_.rooms.find(room);
+                if (itb != state_.rooms.end()) {
+                    auto& set = itb->second;
+                    for (auto wit = set.begin(); wit != set.end(); ) { if (auto p = wit->lock()) { targets.emplace_back(std::move(p)); ++wit; } else { wit = set.erase(wit); } }
+                    if (set.empty() && room != std::string("lobby")) state_.rooms.erase(itb);
+                }
+            }
             state_.cur_room.erase(itcr);
         }
     }
@@ -300,4 +334,3 @@ void ChatService::on_session_close(Session& s) {
 }
 
 } // namespace server::app::chat
-
