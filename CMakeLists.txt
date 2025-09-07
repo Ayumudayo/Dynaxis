@@ -61,6 +61,7 @@ else()
 endif()
 
 add_subdirectory(core)
+add_subdirectory(proto)
 add_subdirectory(server)
 add_subdirectory(devclient)
 # add_subdirectory(devclient)  # 이후 단계

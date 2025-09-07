@@ -4,6 +4,7 @@
 #include "server/core/protocol_errors.hpp"
 #include "server/core/protocol_flags.hpp"
 #include "server/core/util/log.hpp"
+#include "server/wire/v1/wire.pb.h"
 
 using namespace server::core;
 namespace proto = server::core::protocol;
@@ -73,12 +74,9 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         state_.cur_room[&s] = room;
         state_.rooms[room].insert(s.shared_from_this());
     }
-    std::vector<std::uint8_t> res;
-    res.reserve(64);
-    res.push_back(0);
-    proto::write_lp_utf8(res, "ok");
-    proto::write_lp_utf8(res, new_user);
-    std::size_t off = res.size(); res.resize(off + 4); proto::write_be32(s.session_id(), res.data() + off);
+    server::wire::v1::LoginRes pb; pb.set_effective_user(new_user); pb.set_session_id(s.session_id()); pb.set_message("ok");
+    std::string bytes; pb.SerializeToString(&bytes);
+    std::vector<std::uint8_t> res(bytes.begin(), bytes.end());
     s.async_send(proto::MSG_LOGIN_RES, res, 0);
 }
 
@@ -111,12 +109,15 @@ void ChatService::on_join(Session& s, std::span<const std::uint8_t> payload) {
         }
         state_.cur_room[&s] = room;
         state_.rooms[room].insert(s.shared_from_this());
-        // 입장 브로드캐스트
+        // 입장 브로드캐스트(Protobuf)
         std::string sender; auto it2 = state_.user.find(&s); sender = (it2 != state_.user.end()) ? it2->second : std::string("guest");
-        proto::write_lp_utf8(body, room);
-        proto::write_lp_utf8(body, std::string("(system)"));
-        proto::write_lp_utf8(body, sender + " 님이 입장했습니다");
-        { std::size_t off_sid = body.size(); body.resize(off_sid + 4); proto::write_be32(0, body.data() + off_sid); }
+        server::wire::v1::ChatBroadcast pb; pb.set_room(room); pb.set_sender("(system)"); pb.set_text(sender + " 님이 입장했습니다"); pb.set_sender_sid(0);
+        {
+            auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            pb.set_ts_ms(static_cast<std::uint64_t>(now64));
+        }
+        std::string bytes; pb.SerializeToString(&bytes); body.assign(bytes.begin(), bytes.end());
         // 타겟 수집
         auto it = state_.rooms.find(room);
         if (it != state_.rooms.end()) {
@@ -173,8 +174,6 @@ void ChatService::on_leave(Session& s, std::span<const std::uint8_t> payload) {
 
 void ChatService::send_rooms_list(Session& s) {
     std::vector<std::uint8_t> body;
-    proto::write_lp_utf8(body, std::string("(system)"));
-    proto::write_lp_utf8(body, std::string("server"));
     std::string msg = "rooms:";
     {
         std::lock_guard<std::mutex> lk(state_.mu);
@@ -187,18 +186,20 @@ void ChatService::send_rooms_list(Session& s) {
         }
         for (auto& name : to_remove) state_.rooms.erase(name);
     }
-    proto::write_lp_utf8(body, msg);
-    auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-    std::size_t off = body.size(); body.resize(off + 8); std::uint64_t ts = static_cast<std::uint64_t>(now64);
-    for (int i = 7; i >= 0; --i) { body[off + i] = static_cast<std::uint8_t>(ts & 0xFF); ts >>= 8; }
+    server::wire::v1::ChatBroadcast pb; pb.set_room("(system)"); pb.set_sender("server"); pb.set_text(msg); pb.set_sender_sid(0);
+    {
+        auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        pb.set_ts_ms(static_cast<std::uint64_t>(now64));
+    }
+    std::string bytes; pb.SerializeToString(&bytes); body.assign(bytes.begin(), bytes.end());
     s.async_send(proto::MSG_CHAT_BROADCAST, body, 0);
 }
 
 void ChatService::send_room_users(Session& s, const std::string& target) {
     std::vector<std::uint8_t> body;
-    proto::write_lp_utf8(body, target);
-    std::uint16_t n = 0; std::size_t off_n = body.size(); body.resize(off_n + 2);
+    server::wire::v1::RoomUsers pb; pb.set_room(target);
+    std::uint16_t n = 0;
     {
         std::lock_guard<std::mutex> lk(state_.mu);
         auto itroom = state_.rooms.find(target);
@@ -207,41 +208,36 @@ void ChatService::send_room_users(Session& s, const std::string& target) {
                 if (auto p = wit->lock()) {
                     auto itu = state_.user.find(p.get());
                     std::string name = (itu != state_.user.end()) ? itu->second : std::string("guest");
-                    proto::write_lp_utf8(body, name); ++n; ++wit;
+                    pb.add_users(name); ++n; ++wit;
                 } else { wit = itroom->second.erase(wit); }
             }
         }
     }
-    proto::write_be16(n, body.data() + off_n);
+    std::string bytes; pb.SerializeToString(&bytes); body.assign(bytes.begin(), bytes.end());
     s.async_send(proto::MSG_ROOM_USERS, body, 0);
 }
 
 void ChatService::send_snapshot(Session& s, const std::string& current) {
     std::vector<std::uint8_t> body;
-    proto::write_lp_utf8(body, current);
-    // rooms
-    std::uint16_t rooms_count = 0; std::size_t rooms_count_off = body.size(); body.resize(body.size() + 2);
+    server::wire::v1::StateSnapshot pb; pb.set_current_room(current);
     {
         std::lock_guard<std::mutex> lk(state_.mu);
         std::vector<std::string> to_remove;
         for (auto it = state_.rooms.begin(); it != state_.rooms.end(); ++it) {
-            std::uint16_t alive = 0; for (auto wit = it->second.begin(); wit != it->second.end(); ) { if (auto p = wit->lock()) { ++alive; ++wit; } else { wit = it->second.erase(wit); } }
+            std::uint32_t alive = 0; for (auto wit = it->second.begin(); wit != it->second.end(); ) { if (auto p = wit->lock()) { ++alive; ++wit; } else { wit = it->second.erase(wit); } }
             if (alive == 0 && it->first != std::string("lobby")) { to_remove.push_back(it->first); continue; }
-            proto::write_lp_utf8(body, it->first); std::size_t off = body.size(); body.resize(off + 2); proto::write_be16(alive, body.data() + off); ++rooms_count;
+            auto* ri = pb.add_rooms(); ri->set_name(it->first); ri->set_members(alive);
         }
         for (auto& name : to_remove) state_.rooms.erase(name);
     }
-    proto::write_be16(rooms_count, body.data() + rooms_count_off);
-    // users in current
-    std::uint16_t users_count = 0; std::size_t users_count_off = body.size(); body.resize(body.size() + 2);
     {
         std::lock_guard<std::mutex> lk(state_.mu);
         auto itroom = state_.rooms.find(current);
         if (itroom != state_.rooms.end()) {
-            for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) { if (auto p = wit->lock()) { auto itu = state_.user.find(p.get()); std::string name = (itu != state_.user.end()) ? itu->second : std::string("guest"); proto::write_lp_utf8(body, name); ++users_count; ++wit; } else { wit = itroom->second.erase(wit); } }
+            for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) { if (auto p = wit->lock()) { auto itu = state_.user.find(p.get()); std::string name = (itu != state_.user.end()) ? itu->second : std::string("guest"); pb.add_users(name); ++wit; } else { wit = itroom->second.erase(wit); } }
         }
     }
-    proto::write_be16(users_count, body.data() + users_count_off);
+    std::string bytes; pb.SerializeToString(&bytes); body.assign(bytes.begin(), bytes.end());
     s.async_send(proto::MSG_STATE_SNAPSHOT, body, 0);
 }
 
@@ -284,8 +280,9 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
                 std::lock_guard<std::mutex> lk(state_.mu); auto itset = state_.by_user.find(target_user); if (itset != state_.by_user.end()) { for (auto wit = itset->second.begin(); wit != itset->second.end(); ) { if (auto p = wit->lock()) { targets.emplace_back(std::move(p)); ++wit; } else { wit = itset->second.erase(wit); } } }
             }
             std::string sender; { std::lock_guard<std::mutex> lk(state_.mu); auto it2 = state_.user.find(&s); sender = (it2 != state_.user.end()) ? it2->second : std::string("guest"); }
-            std::vector<std::uint8_t> body; proto::write_lp_utf8(body, std::string("(direct)")); proto::write_lp_utf8(body, sender); proto::write_lp_utf8(body, std::string("(to ") + target_user + ") " + wtext); { std::size_t off_sid = body.size(); body.resize(off_sid + 4); proto::write_be32(s.session_id(), body.data() + off_sid); }
-            auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count(); std::size_t off = body.size(); body.resize(off + 8); std::uint64_t ts = static_cast<std::uint64_t>(now64); for (int i = 7; i >= 0; --i) { body[off + i] = static_cast<std::uint8_t>(ts & 0xFF); ts >>= 8; }
+            server::wire::v1::ChatBroadcast pb; pb.set_room("(direct)"); pb.set_sender(sender); pb.set_text(std::string("(to ") + target_user + ") " + wtext); pb.set_sender_sid(s.session_id());
+            auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count(); pb.set_ts_ms(static_cast<std::uint64_t>(now64));
+            std::string bytes; pb.SerializeToString(&bytes); std::vector<std::uint8_t> body(bytes.begin(), bytes.end());
             targets.emplace_back(s.shared_from_this()); for (auto& t : targets) t->async_send(proto::MSG_CHAT_BROADCAST, body, 0); return;
         }
     }
@@ -295,8 +292,9 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
         auto it2 = state_.user.find(&s); std::string sender = (it2 != state_.user.end()) ? it2->second : std::string("guest");
         if (sender == "guest") { s.send_error(proto::errc::UNAUTHORIZED, "guest cannot chat"); return; }
         std::vector<std::shared_ptr<Session>> targets; auto it = state_.rooms.find(room); if (it != state_.rooms.end()) { auto& set = it->second; for (auto wit = set.begin(); wit != set.end(); ) { if (auto p = wit->lock()) { targets.emplace_back(std::move(p)); ++wit; } else { wit = set.erase(wit); } } }
-        std::vector<std::uint8_t> body; proto::write_lp_utf8(body, room); proto::write_lp_utf8(body, sender); proto::write_lp_utf8(body, text); { std::size_t off_sid = body.size(); body.resize(off_sid + 4); proto::write_be32(s.session_id(), body.data() + off_sid); }
-        auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count(); std::size_t off = body.size(); body.resize(off + 8); std::uint64_t ts = static_cast<std::uint64_t>(now64); for (int i = 7; i >= 0; --i) { body[off + i] = static_cast<std::uint8_t>(ts & 0xFF); ts >>= 8; }
+        server::wire::v1::ChatBroadcast pb; pb.set_room(room); pb.set_sender(sender); pb.set_text(text); pb.set_sender_sid(s.session_id());
+        auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count(); pb.set_ts_ms(static_cast<std::uint64_t>(now64));
+        std::string bytes; pb.SerializeToString(&bytes); std::vector<std::uint8_t> body(bytes.begin(), bytes.end());
         if (targets.empty()) { s.async_send(proto::MSG_CHAT_BROADCAST, body, proto::FLAG_SELF); }
         else { for (auto& t : targets) { auto f = (t.get() == &s) ? proto::FLAG_SELF : 0; t->async_send(proto::MSG_CHAT_BROADCAST, body, f); } }
     }
@@ -316,10 +314,9 @@ void ChatService::on_session_close(Session& s) {
             if (itroom != state_.rooms.end()) {
                 WeakSession w = s.shared_from_this();
                 itroom->second.erase(w);
-                proto::write_lp_utf8(body, room);
-                proto::write_lp_utf8(body, std::string("(system)"));
-                proto::write_lp_utf8(body, name + " 님이 퇴장했습니다");
-                { std::size_t off_sid = body.size(); body.resize(off_sid + 4); proto::write_be32(0, body.data() + off_sid); }
+                server::wire::v1::ChatBroadcast pb; pb.set_room(room); pb.set_sender("(system)"); pb.set_text(name + " 님이 퇴장했습니다"); pb.set_sender_sid(0);
+                auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count(); pb.set_ts_ms(static_cast<std::uint64_t>(now64));
+                std::string bytes; pb.SerializeToString(&bytes); body.assign(bytes.begin(), bytes.end());
                 auto itb = state_.rooms.find(room);
                 if (itb != state_.rooms.end()) {
                     auto& set = itb->second;

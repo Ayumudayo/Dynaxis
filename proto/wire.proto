@@ -1,0 +1,34 @@
+syntax = "proto3";
+package server.wire.v1;
+
+// Wire payloads for external TCP protocol bodies.
+
+message LoginRes {
+  string effective_user = 1;
+  uint32 session_id = 2;
+  string message = 3;
+}
+
+message ChatBroadcast {
+  string room = 1;
+  string sender = 2;
+  string text = 3;
+  uint32 sender_sid = 4;   // 0 if unknown
+  uint64 ts_ms = 5;        // UTC epoch milliseconds
+}
+
+message StateSnapshot {
+  string current_room = 1;
+  message RoomInfo {
+    string name = 1;
+    uint32 members = 2;
+  }
+  repeated RoomInfo rooms = 2;
+  repeated string users = 3; // users in current_room
+}
+
+message RoomUsers {
+  string room = 1;
+  repeated string users = 2;
+}
+

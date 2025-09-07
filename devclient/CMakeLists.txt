@@ -11,6 +11,7 @@ target_include_directories(dev_chat_cli PRIVATE ${CMAKE_CURRENT_LIST_DIR}/includ
 
 # 코어 프로토콜 헤더 사용
 target_include_directories(dev_chat_cli PRIVATE ${CMAKE_SOURCE_DIR}/core/include)
+target_link_libraries(dev_chat_cli PRIVATE wire_proto)
 
 # FTXUI 의존성 (vcpkg)
 find_package(ftxui CONFIG REQUIRED)
