@@ -286,17 +286,26 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
             targets.emplace_back(s.shared_from_this()); for (auto& t : targets) t->async_send(proto::MSG_CHAT_BROADCAST, body, 0); return;
         }
     }
-    // 일반 채팅
+    // 일반 채팅: 방별 strand에 포스트하여 순차 처리
     {
-        std::lock_guard<std::mutex> lk(state_.mu);
-        auto it2 = state_.user.find(&s); std::string sender = (it2 != state_.user.end()) ? it2->second : std::string("guest");
-        if (sender == "guest") { s.send_error(proto::errc::UNAUTHORIZED, "guest cannot chat"); return; }
-        std::vector<std::shared_ptr<Session>> targets; auto it = state_.rooms.find(room); if (it != state_.rooms.end()) { auto& set = it->second; for (auto wit = set.begin(); wit != set.end(); ) { if (auto p = wit->lock()) { targets.emplace_back(std::move(p)); ++wit; } else { wit = set.erase(wit); } } }
-        server::wire::v1::ChatBroadcast pb; pb.set_room(room); pb.set_sender(sender); pb.set_text(text); pb.set_sender_sid(s.session_id());
-        auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count(); pb.set_ts_ms(static_cast<std::uint64_t>(now64));
-        std::string bytes; pb.SerializeToString(&bytes); std::vector<std::uint8_t> body(bytes.begin(), bytes.end());
-        if (targets.empty()) { s.async_send(proto::MSG_CHAT_BROADCAST, body, proto::FLAG_SELF); }
-        else { for (auto& t : targets) { auto f = (t.get() == &s) ? proto::FLAG_SELF : 0; t->async_send(proto::MSG_CHAT_BROADCAST, body, f); } }
+        auto self = s.shared_from_this();
+        auto room_copy = room;
+        auto text_copy = text;
+        boost::asio::post(strand_for(room_copy), [this, self, room_copy, text_copy]() {
+            std::vector<std::shared_ptr<Session>> targets;
+            std::string sender;
+            {
+                std::lock_guard<std::mutex> lk(state_.mu);
+                auto it2 = state_.user.find(self.get()); sender = (it2 != state_.user.end()) ? it2->second : std::string("guest");
+                if (sender == "guest") { self->send_error(proto::errc::UNAUTHORIZED, "guest cannot chat"); return; }
+                auto it = state_.rooms.find(room_copy); if (it != state_.rooms.end()) { auto& set = it->second; for (auto wit = set.begin(); wit != set.end(); ) { if (auto p = wit->lock()) { targets.emplace_back(std::move(p)); ++wit; } else { wit = set.erase(wit); } } }
+            }
+            server::wire::v1::ChatBroadcast pb; pb.set_room(room_copy); pb.set_sender(sender); pb.set_text(text_copy); pb.set_sender_sid(self->session_id());
+            auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count(); pb.set_ts_ms(static_cast<std::uint64_t>(now64));
+            std::vector<std::uint8_t> body = server::wire::codec::Encode(pb);
+            if (targets.empty()) { self->async_send(proto::MSG_CHAT_BROADCAST, body, proto::FLAG_SELF); }
+            else { for (auto& t : targets) { auto f = (t.get() == self.get()) ? proto::FLAG_SELF : 0; t->async_send(proto::MSG_CHAT_BROADCAST, body, f); } }
+        });
     }
 }
 

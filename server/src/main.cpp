@@ -58,7 +58,7 @@ int main(int argc, char** argv) {
         options->heartbeat_interval_ms = 10'000;
         auto state   = std::make_shared<server::core::SharedState>();
 
-        server::app::chat::ChatService chat;
+        server::app::chat::ChatService chat(io);
 
         // 핸들러 등록: PING -> PONG, CHAT_SEND -> CHAT_BROADCAST(자기 자신에게 에코)
         dispatcher.register_handler(protocol::MSG_PING,
