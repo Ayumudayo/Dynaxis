@@ -195,7 +195,7 @@ int main() {
 
         parts.push_back(filler());
         if (wide) {
-            parts.push_back(text(" F1:Help  F2:Rooms  F3:Who  F4:Login  F5:Join  F6:Refresh  q/ESC: 종료  ←/→: 폭 조절  Enter: 보내기 ") | dim);
+            parts.push_back(text(" F1:Help  F2:Rooms  F3:Who  F4:Login  F5:Join  F6:Refresh  ESC: 종료  ←/→: 폭 조절  Enter: 보내기 ") | dim);
         } else if (mid) {
             parts.push_back(text(" F1 Help  F2 Rooms  F3 Who  F4 Login  F5 Join  F6 Refresh ") | dim);
         } else if (sml) {
@@ -223,7 +223,7 @@ int main() {
             text("F4  : 입력창에 '/login ' 미리 채움"),
             text("F5  : 입력창에 '/join ' 미리 채움"),
             text("F6  : 전체 새로고침(방/유저 동기화)"),
-            text("Enter: 메시지 전송  q/ESC/Ctrl+C: 종료  ←/→: 좌측 폭 조절"),
+            text("Enter: 메시지 전송  ESC/Ctrl+C: 종료  ←/→: 좌측 폭 조절"),
         });
         return window(text(" 도움말 "), lines) | size(WIDTH, EQUAL, 56) | size(HEIGHT, GREATER_THAN, 10) | center | bgcolor(Color::Black) | color(Color::White);
     };
@@ -239,7 +239,7 @@ int main() {
 
     // 키 이벤트: 종료/Enter/좌우 폭 조절
     auto app_with_events = CatchEvent(app, [&](Event e) {
-        if (e == Event::Character('q') || e == Event::Escape || e == Event::CtrlC) {
+        if (e == Event::Escape || e == Event::CtrlC) {
             screen.ExitLoopClosure()();
             return true;
         }
