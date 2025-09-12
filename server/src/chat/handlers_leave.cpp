@@ -2,6 +2,8 @@
 #include "server/chat/chat_service.hpp"
 #include "server/core/protocol/opcodes.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
+#include "server/core/protocol/protocol_flags.hpp"
+#include "server/core/concurrent/job_queue.hpp"
 
 using namespace server::core;
 namespace proto = server::core::protocol;
@@ -96,4 +98,3 @@ void ChatService::on_leave(Session& s, std::span<const std::uint8_t> payload) {
 }
 
 } // namespace server::app::chat
-

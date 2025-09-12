@@ -2,6 +2,7 @@
 #include "server/chat/chat_service.hpp"
 #include "server/core/protocol/opcodes.hpp"
 #include "wire.pb.h"
+#include "server/core/concurrent/job_queue.hpp"
 
 using namespace server::core;
 namespace proto = server::core::protocol;
@@ -68,4 +69,3 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
 }
 
 } // namespace server::app::chat
-

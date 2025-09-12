@@ -3,10 +3,13 @@
 #include "server/core/protocol/opcodes.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/protocol/protocol_flags.hpp"
+#include "server/core/util/log.hpp"
+#include "server/core/concurrent/job_queue.hpp"
 #include "wire.pb.h"
 
 using namespace server::core;
 namespace proto = server::core::protocol;
+namespace corelog = server::core::log;
 
 namespace server::app::chat {
 
@@ -157,4 +160,3 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
 }
 
 } // namespace server::app::chat
-
