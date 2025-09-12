@@ -2,7 +2,12 @@ add_executable(server_app
     src/main.cpp
     src/app/bootstrap.cpp
     src/app/router.cpp
-    src/chat/chat_service.cpp
+    src/chat/chat_service_core.cpp
+    src/chat/handlers_login.cpp
+    src/chat/session_events.cpp
+    src/chat/handlers_join.cpp
+    src/chat/handlers_leave.cpp
+    src/chat/handlers_chat.cpp
 )
 target_include_directories(server_app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(server_app PRIVATE server_core wire_proto)
