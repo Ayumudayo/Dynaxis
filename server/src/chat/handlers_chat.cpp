@@ -176,7 +176,9 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
                 "\"text\":\"" + text + "\"," +
                 "\"ts_ms\":" + std::to_string(now64) + "}";
             std::string key = std::string("room:") + persisted_room_id + ":recent";
-            redis_->lpush_trim(key, json, 200);
+            if (!redis_->lpush_trim(key, json, 200)) {
+                corelog::warn(std::string("Redis update failed for key=") + key);
+            }
         }
         if (targets.empty()) { 
             session_sp->async_send(proto::MSG_CHAT_BROADCAST, std::vector<std::uint8_t>(bytes.begin(), bytes.end()), proto::FLAG_SELF); 

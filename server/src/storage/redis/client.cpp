@@ -6,6 +6,7 @@
 #if defined(HAVE_REDIS_PLUS_PLUS)
 #include <sw/redis++/redis++.h>
 #endif
+#include "server/core/util/log.hpp"
 
 namespace server::storage::redis {
 
@@ -40,8 +41,10 @@ private:
 
 std::shared_ptr<IRedisClient> make_redis_client(const std::string& uri, const Options& opts) {
 #if defined(HAVE_REDIS_PLUS_PLUS)
+    server::core::log::info("Redis backend: redis-plus-plus (real client)");
     return std::make_shared<RedisClientImpl>(uri, opts);
 #else
+    server::core::log::warn("Redis backend: stub (redis-plus-plus not found at build time)");
     return std::make_shared<RedisClientStub>(uri, opts);
 #endif
 }
