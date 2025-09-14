@@ -2,6 +2,4 @@
 
 alter table users
   add column if not exists last_login_ip inet,
-  add column if not exists last_login_at timestamptz,
-  add column if not exists last_login_ua text;
-
+  add column if not exists last_login_at timestamptz;

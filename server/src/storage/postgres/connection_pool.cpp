@@ -78,14 +78,13 @@ public:
     }
 
     void update_last_login(const std::string& user_id,
-                           const std::string& ip,
-                           const std::string& user_agent) override {
+                           const std::string& ip) override {
 #if defined(HAVE_LIBPQXX)
         w_->exec_params(
-            "update users set last_login_ip = $2::inet, last_login_at = now(), last_login_ua = $3 where id = $1::uuid",
-            user_id, ip, user_agent);
+            "update users set last_login_ip = $2::inet, last_login_at = now() where id = $1::uuid",
+            user_id, ip);
 #else
-        (void)user_id; (void)ip; (void)user_agent;
+        (void)user_id; (void)ip;
 #endif
     }
 

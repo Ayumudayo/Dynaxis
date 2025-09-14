@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash text NOT NULL,
   last_login_ip inet,
   last_login_at timestamptz,
-  last_login_ua text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 

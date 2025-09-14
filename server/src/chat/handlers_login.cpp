@@ -8,6 +8,7 @@
 // storage
 #include "server/core/storage/connection_pool.hpp"
 #include "server/core/storage/repositories.hpp"
+#include <algorithm>
 
 using namespace server::core;
 namespace proto = server::core::protocol;
@@ -26,6 +27,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
     auto session_sp = s.shared_from_this();
     job_queue_.Push([this, session_sp, user, token]() {
         corelog::info("LOGIN_REQ 처리 시작 (워커 스레드)");
+        bool guest_mode = (user.empty() || user == "guest");
         std::string new_user = ensure_unique_or_error(*session_sp, user);
         if (new_user.empty()) return;
 
@@ -63,12 +65,28 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                     std::lock_guard<std::mutex> lk(state_.mu);
                     state_.user_uuid[session_sp.get()] = uid;
                 }
-                // users 테이블에 마지막 로그인 IP/시각/UA 기록
+                // 게스트 모드라면 닉네임을 UUID 앞 8자로 정규화
+                if (guest_mode && !uid.empty()) {
+                    std::string uuid8 = uid;
+                    uuid8.erase(std::remove(uuid8.begin(), uuid8.end(), '-'), uuid8.end());
+                    if (uuid8.size() > 8) uuid8.resize(8);
+                    std::lock_guard<std::mutex> lk(state_.mu);
+                    auto itname = state_.user.find(session_sp.get());
+                    std::string prev = (itname != state_.user.end()) ? itname->second : std::string();
+                    if (!prev.empty() && prev != uuid8) {
+                        auto itset = state_.by_user.find(prev);
+                        if (itset != state_.by_user.end()) itset->second.erase(session_sp);
+                    }
+                    state_.user[session_sp.get()] = uuid8;
+                    state_.by_user[uuid8].insert(session_sp);
+                    new_user = uuid8;
+                }
+
+                // users 테이블에 마지막 로그인 IP/시각 기록
                 {
                     auto ip = session_sp->remote_ip();
-                    auto ua = std::string(); // 현재 UA 정보 미수집
                     auto uow3 = db_pool_->make_unit_of_work();
-                    uow3->users().update_last_login(uid, ip, ua);
+                    uow3->users().update_last_login(uid, ip);
                     uow3->commit();
                 }
                 // 현재 룸의 room_id 확보 후 시스템 메시지로 IP 기록
