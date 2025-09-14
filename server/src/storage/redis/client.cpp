@@ -13,19 +13,28 @@ namespace server::storage::redis {
 #if defined(HAVE_REDIS_PLUS_PLUS)
 class RedisClientImpl final : public IRedisClient {
 public:
-    explicit RedisClientImpl(std::string uri, Options opts)
-        : redis_(sw::redis::ConnectionOptions(uri)) { (void)opts; }
+    explicit RedisClientImpl(const std::string& uri, Options opts) {
+        sw::redis::ConnectionOptions conn_opts;
+        conn_opts.uri = uri; // 지원되는 형태: redis://, rediss://, tcp:// 등
+        sw::redis::ConnectionPoolOptions pool_opts;
+        if (opts.pool_max > 0) pool_opts.size = opts.pool_max;
+        redis_ = std::make_unique<sw::redis::Redis>(conn_opts, pool_opts);
+    }
 
     bool health_check() override {
-        try { auto pong = redis_.ping(); return !pong.empty(); } catch (...) { return false; }
+        try { auto pong = redis_->ping(); return !pong.empty(); } catch (...) { return false; }
     }
 
     bool lpush_trim(const std::string& key, const std::string& value, std::size_t maxlen) override {
-        try { redis_.lpush(key, value); if (maxlen > 0) redis_.ltrim(key, 0, static_cast<long long>(maxlen - 1)); return true; } catch (...) { return false; }
+        try {
+            redis_->lpush(key, value);
+            if (maxlen > 0) redis_->ltrim(key, 0, static_cast<long long>(maxlen - 1));
+            return true;
+        } catch (...) { return false; }
     }
 
 private:
-    sw::redis::Redis redis_;
+    std::unique_ptr<sw::redis::Redis> redis_;
 };
 #else
 class RedisClientStub final : public IRedisClient {
