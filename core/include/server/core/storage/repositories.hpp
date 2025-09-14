@@ -86,6 +86,8 @@ public:
                            const std::string& room_name,
                            const std::optional<std::string>& user_id,
                            const std::string& content) = 0;
+    // 해당 방의 마지막 메시지 id(없으면 0)
+    virtual std::uint64_t get_last_id(const std::string& room_id) = 0;
 };
 
 class IMembershipRepository {

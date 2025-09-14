@@ -37,6 +37,28 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
                 current = (itcr != state_.cur_room.end()) ? itcr->second : std::string("lobby");
             }
             send_snapshot(*session_sp, current); 
+            // 읽음 처리: 현재 방의 마지막 메시지 id로 last_seen 갱신
+            if (db_pool_) {
+                try {
+                    std::string uid;
+                    {
+                        std::lock_guard<std::mutex> lk(state_.mu);
+                        auto it = state_.user_uuid.find(session_sp.get());
+                        if (it != state_.user_uuid.end()) uid = it->second;
+                    }
+                    if (!uid.empty()) {
+                        auto rid = ensure_room_id_ci(current);
+                        if (!rid.empty()) {
+                            auto uow = db_pool_->make_unit_of_work();
+                            auto last_id = uow->messages().get_last_id(rid);
+                            if (last_id > 0) {
+                                uow->memberships().update_last_seen(uid, rid, last_id);
+                                uow->commit();
+                            }
+                        }
+                    }
+                } catch (...) {}
+            }
             return;
         }
         // 인증 체크
@@ -187,6 +209,22 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
                 auto f = (t.get() == session_sp.get()) ? proto::FLAG_SELF : 0; 
                 t->async_send(proto::MSG_CHAT_BROADCAST, std::vector<std::uint8_t>(bytes.begin(), bytes.end()), f); 
             } 
+        }
+        // 본인이 보낸 메시지는 읽음 처리: last_seen = persisted_msg_id
+        if (db_pool_ && persisted_msg_id > 0 && !persisted_room_id.empty()) {
+            try {
+                std::string uid;
+                {
+                    std::lock_guard<std::mutex> lk(state_.mu);
+                    auto it = state_.user_uuid.find(session_sp.get());
+                    if (it != state_.user_uuid.end()) uid = it->second;
+                }
+                if (!uid.empty()) {
+                    auto uow = db_pool_->make_unit_of_work();
+                    uow->memberships().update_last_seen(uid, persisted_room_id, persisted_msg_id);
+                    uow->commit();
+                }
+            } catch (...) {}
         }
     });
 }

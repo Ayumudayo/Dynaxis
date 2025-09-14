@@ -104,6 +104,11 @@ void ChatService::on_join(Session& s, std::span<const std::uint8_t> payload) {
                     if (!rid.empty()) {
                         auto uow = db_pool_->make_unit_of_work();
                         uow->memberships().upsert_join(uid, rid, "member");
+                        // 방 입장 시점의 마지막 메시지까지 읽음 처리
+                        auto last_id = uow->messages().get_last_id(rid);
+                        if (last_id > 0) {
+                            uow->memberships().update_last_seen(uid, rid, last_id);
+                        }
                         uow->commit();
                     }
                 }

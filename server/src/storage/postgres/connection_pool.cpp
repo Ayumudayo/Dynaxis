@@ -214,6 +214,17 @@ public:
 #endif
     }
 
+    std::uint64_t get_last_id(const std::string& room_id) override {
+#if defined(HAVE_LIBPQXX)
+        auto r = w_->exec_params(
+            "select coalesce(max(id), 0) from messages where room_id=$1::uuid",
+            room_id);
+        return r[0][0].as<std::uint64_t>();
+#else
+        (void)room_id; return 0;
+#endif
+    }
+
 #if defined(HAVE_LIBPQXX)
 private:
     pqxx::work* w_{};
