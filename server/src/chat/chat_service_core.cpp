@@ -76,7 +76,7 @@ void ChatService::send_rooms_list(Session& s) {
         }
         for (auto& name : to_remove) state_.rooms.erase(name);
     }
-    server::wire::v1::ChatBroadcast pb; pb.set_room("(system)"); pb.set_sender("server"); pb.set_text(msg); pb.set_sender_sid(0);
+    server::wire::v1::ChatBroadcast pb; pb.set_room("(system)"); pb.set_sender("(system)"); pb.set_text(msg); pb.set_sender_sid(0);
     {
         auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
@@ -129,8 +129,55 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
         std::lock_guard<std::mutex> lk(state_.mu);
         auto itroom = state_.rooms.find(current);
         if (itroom != state_.rooms.end()) {
-            for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) { if (auto p = wit->lock()) { auto itu = state_.user.find(p.get()); std::string name = (itu != state_.user.end()) ? itu->second : std::string("guest"); pb.add_users(name); ++wit; } else { wit = itroom->second.erase(wit); } }
+            for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) {
+                if (auto p = wit->lock()) {
+                    auto itu = state_.user.find(p.get());
+                    std::string name = (itu != state_.user.end()) ? itu->second : std::string("guest");
+                    pb.add_users(name); ++wit;
+                } else { wit = itroom->second.erase(wit); }
+            }
         }
+    }
+    // 최근 메시지 로딩(DB 경로)
+    if (db_pool_) {
+        try {
+            std::string rid = ensure_room_id_ci(current);
+            if (!rid.empty()) {
+                std::string uid;
+                {
+                    std::lock_guard<std::mutex> lk(state_.mu);
+                    auto it = state_.user_uuid.find(&s);
+                }
+                // last_seen은 저장소에서 조회(없으면 0)
+                auto uow = db_pool_->make_unit_of_work();
+                std::uint64_t last_seen = 0;
+                {
+                    // session 포인터 키 사용 대신 현재 세션의 user_uuid를 찾는다
+                    std::lock_guard<std::mutex> lk(state_.mu);
+                    auto itu = state_.user_uuid.find(&s);
+                    if (itu != state_.user_uuid.end()) uid = itu->second;
+                }
+                if (!uid.empty()) {
+                    auto opt = uow->memberships().get_last_seen(uid, rid);
+                    last_seen = opt.value_or(0);
+                }
+                const std::size_t limit = 20;
+                auto last_id = uow->messages().get_last_id(rid);
+                std::uint64_t since_id = (last_id > limit) ? (last_id - limit) : 0;
+                auto msgs = uow->messages().fetch_recent_by_room(rid, since_id, static_cast<std::size_t>(limit * 2));
+                for (const auto& m : msgs) {
+                    auto* sm = pb.add_messages();
+                    sm->set_id(m.id);
+                    std::string sender;
+                    if (m.user_name && !m.user_name->empty()) sender = *m.user_name;
+                    else sender = std::string("(system)");
+                    sm->set_sender(sender);
+                    sm->set_text(m.content);
+                    sm->set_ts_ms(static_cast<std::uint64_t>(m.created_at_ms));
+                }
+                pb.set_last_seen_id(last_seen);
+            }
+        } catch (...) {}
     }
     {
         std::string bytes; pb.SerializeToString(&bytes);

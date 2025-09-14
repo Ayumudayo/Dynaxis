@@ -93,4 +93,29 @@
 - CMake 타깃: `server_core`, `server_app`, `server_storage_pg`, `dev_chat_cli`, `wire_proto`
 
 이 문서만으로도 다음 담당자가 현재 설계 상태를 복원하고, 승인 후 구현 순서를 이어갈 수 있도록 작성했습니다. 추가 설명이 필요하면 `docs/` 내 세부 문서를 우선 참조하세요.
+## 이번 세션 변경 사항(요약)
+- 마이그레이션 러너 추가: `tools/migrations/runner.cpp`
+  - 실행: `DB_URI` 환경변수 또는 `--db-uri` 인자 사용, `--dry-run` 지원
+  - 적용 순서: `tools/migrations/*.sql`의 `000N_*.sql` 오름차순, `schema_migrations`로 상태 추적
+  - `CREATE INDEX CONCURRENTLY` 포함 시 non-transactional로 실행
+- Redis 프레즌스 최소 구현 및 재시작 복원
+  - 입장 시 SADD: `prefix + presence:room:{room_id}`에 `user_id` 추가
+  - 퇴장/세션종료 시 SREM: 동일 SET에서 제거
+  - 재시작 시 선택적 정리: `PRESENCE_CLEAN_ON_START != 0`이면 `SCAN`+`DEL`로 `prefix + presence:room:*` 제거
+  - 접두사: `REDIS_CHANNEL_PREFIX`가 설정되면 모든 프레즌스 키/패턴에 접두사 적용
+  - 변경 파일: `server/src/chat/handlers_join.cpp`, `server/src/chat/handlers_leave.cpp`, `server/src/chat/session_events.cpp`, `server/src/app/bootstrap.cpp`, `server/src/storage/redis/client.cpp`, `server/include/server/storage/redis/client.hpp`
+- Sender 표기 일관화 및 브로드캐스트 정리
+  - 시스템 메시지 sender를 "(system)"으로 통일
+  - 퇴장/세션종료 공지: Protobuf `ChatBroadcast` 사용으로 통일
+  - 변경 파일: `server/src/chat/handlers_leave.cpp`, `server/src/chat/session_events.cpp`, `server/src/chat/chat_service_core.cpp`
+- Postgres 빌드 오류 수정(현재 info.txt 기준)
+  - `PgMembershipRepository` 누락으로 인한 컴파일 오류(C2079, C2439) 해결: 구현 추가 확인
+  - 클래스/함수 재정의(C2011, C2084) 정리: 중복 정의 제거 상태 확인
+  - 파일: `server/src/storage/postgres/connection_pool.cpp`
 
+## 운영/설정 키(추가/변경)
+- Redis 정리 플래그: `PRESENCE_CLEAN_ON_START` — 0이 아니면 부팅 시 프레즌스 키 일괄 정리
+- 프레즌스 키 접두사: `REDIS_CHANNEL_PREFIX` — 예: `chat:dev:`
+
+## 주의사항
+- 다중 게이트웨이 환경에서는 부팅 시 프레즌스 정리 기능을 사용하지 말 것. 개발 또는 단일 인스턴스에서만 사용 권장.
