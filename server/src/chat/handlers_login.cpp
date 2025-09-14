@@ -5,6 +5,9 @@
 #include "server/core/util/log.hpp"
 #include "server/core/concurrent/job_queue.hpp"
 #include "wire.pb.h"
+// storage
+#include "server/core/storage/connection_pool.hpp"
+#include "server/core/storage/repositories.hpp"
 
 using namespace server::core;
 namespace proto = server::core::protocol;
