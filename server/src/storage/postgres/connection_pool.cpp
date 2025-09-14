@@ -22,6 +22,7 @@ using server::core::storage::IUserRepository;
 using server::core::storage::IRoomRepository;
 using server::core::storage::IMessageRepository;
 using server::core::storage::ISessionRepository;
+using server::core::storage::IMembershipRepository;
 using server::core::storage::User;
 using server::core::storage::Room;
 using server::core::storage::Message;
@@ -251,6 +252,7 @@ public:
                      const std::string& role) override {
 #if defined(HAVE_LIBPQXX)
         w_->exec_params(
+        w_->exec_params(
             "insert into memberships(user_id, room_id, role, joined_at, is_member) "
             "values (::uuid, ::uuid, , now(), true) "
             "on conflict (user_id, room_id) do update set role=excluded.role, joined_at=now(), is_member=true, left_at=null",
@@ -263,9 +265,9 @@ public:
     void update_last_seen(const std::string& user_id,
                           const std::string& room_id,
                           std::uint64_t last_seen_msg_id) override {
-#if defined(HAVE_LIBPQXX)
         w_->exec_params(
             "update memberships set last_seen_msg_id =  where user_id=::uuid and room_id=::uuid",
+            user_id, room_id, static_cast<long long>(last_seen_msg_id));
             user_id, room_id, static_cast<long long>(last_seen_msg_id));
 #else
         (void)user_id; (void)room_id; (void)last_seen_msg_id;
@@ -274,9 +276,9 @@ public:
 
     void leave(const std::string& user_id,
                const std::string& room_id) override {
-#if defined(HAVE_LIBPQXX)
         w_->exec_params(
             "update memberships set is_member=false, left_at=now() where user_id=::uuid and room_id=::uuid",
+            user_id, room_id);
             user_id, room_id);
 #else
         (void)user_id; (void)room_id;
