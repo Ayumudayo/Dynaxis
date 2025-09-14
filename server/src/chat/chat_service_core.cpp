@@ -31,11 +31,10 @@ ChatService::Strand& ChatService::strand_for(const std::string& room) {
     return *it->second;
 }
 
-std::string ChatService::gen_hex_name(Session& s) {
-    auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-    std::uint64_t v = (static_cast<std::uint64_t>(s.session_id()) << 32) ^ static_cast<std::uint64_t>(now64);
-    v &= 0xFFFFFFFFull; std::ostringstream oss; oss << std::hex; oss.width(8); oss.fill('0'); oss << v; return oss.str();
+std::string ChatService::gen_temp_name_uuid8() {
+    static thread_local std::mt19937_64 rng{std::random_device{}()};
+    std::uint32_t v = static_cast<std::uint32_t>(rng());
+    std::ostringstream oss; oss << std::hex; oss.width(8); oss.fill('0'); oss << v; return oss.str();
 }
 
 std::string ChatService::ensure_unique_or_error(Session& s, const std::string& desired) {
@@ -55,12 +54,12 @@ std::string ChatService::ensure_unique_or_error(Session& s, const std::string& d
         }
         return desired;
     }
-    // 임시 닉 생성
+    // 임시 닉 생성: UUID 앞 8자(랜덤 32비트 근사)
     for (int i=0;i<4;++i) {
-        std::string cand = gen_hex_name(s);
+        std::string cand = gen_temp_name_uuid8();
         if (!state_.by_user.count(cand) || state_.by_user[cand].empty()) return cand;
     }
-    return gen_hex_name(s);
+    return gen_temp_name_uuid8();
 }
 
 void ChatService::send_rooms_list(Session& s) {

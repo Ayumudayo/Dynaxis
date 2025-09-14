@@ -36,6 +36,15 @@ Session::Session(asio::ip::tcp::socket socket,
     if (state_) session_id_ = state_->next_session_id.fetch_add(1);
 }
 
+std::string Session::remote_ip() const {
+    try {
+        auto ep = socket_.remote_endpoint();
+        return ep.address().to_string();
+    } catch (...) {
+        return std::string();
+    }
+}
+
 void Session::start() {
     send_hello();
     do_read_header();

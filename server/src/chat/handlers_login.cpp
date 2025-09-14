@@ -41,6 +41,38 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             state_.cur_room[session_sp.get()] = room;
             state_.rooms[room].insert(session_sp);
         }
+
+        // 게스트/로그인 사용자 모두에 대해 UUID 부여 및 IP 기록(최소 경로)
+        if (db_pool_) {
+            try {
+                // UUID가 없으면 게스트 유저 생성
+                std::string uid;
+                {
+                    std::lock_guard<std::mutex> lk(state_.mu);
+                    auto it = state_.user_uuid.find(session_sp.get());
+                    if (it != state_.user_uuid.end()) uid = it->second;
+                }
+                if (uid.empty()) {
+                    auto uow = db_pool_->make_unit_of_work();
+                    auto u = uow->users().create_guest(new_user);
+                    uid = u.id;
+                    uow->commit();
+                    std::lock_guard<std::mutex> lk(state_.mu);
+                    state_.user_uuid[session_sp.get()] = uid;
+                }
+                // 현재 룸의 room_id 확보 후 시스템 메시지로 IP 기록
+                auto rid = ensure_room_id_ci("lobby");
+                if (!rid.empty()) {
+                    auto ip = session_sp->remote_ip();
+                    auto uow2 = db_pool_->make_unit_of_work();
+                    std::string sys = std::string("(login ip=") + ip + ")";
+                    (void)uow2->messages().create(rid, std::string("lobby"), std::nullopt, sys);
+                    uow2->commit();
+                }
+            } catch (const std::exception& e) {
+                corelog::warn(std::string("login audit persist failed: ") + e.what());
+            }
+        }
         server::wire::v1::LoginRes pb;
         pb.set_effective_user(new_user);
         pb.set_session_id(session_sp->session_id());

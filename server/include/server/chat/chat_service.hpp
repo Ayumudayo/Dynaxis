@@ -48,6 +48,7 @@ private:
         std::mutex mu;
         std::unordered_map<std::string, RoomSet> rooms;
         std::unordered_map<Session*, std::string> user;      // 세션별 사용자명
+        std::unordered_map<Session*, std::string> user_uuid;  // 세션별 사용자 UUID
         std::unordered_map<Session*, std::string> cur_room;  // 세션별 현재 룸
         std::unordered_set<Session*> authed;                 // 로그인 완료 세션
         std::unordered_map<std::string, RoomSet> by_user;    // 사용자명→세션들
@@ -63,7 +64,7 @@ private:
 
     // 내부 유틸
     std::string ensure_unique_or_error(Session& s, const std::string& desired);
-    std::string gen_hex_name(Session& s);
+    std::string gen_temp_name_uuid8();
     void broadcast_room(const std::string& room, const std::vector<std::uint8_t>& body, Session* self = nullptr);
     void send_room_users(Session& s, const std::string& room);
     void send_rooms_list(Session& s);

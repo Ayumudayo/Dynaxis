@@ -552,3 +552,6 @@ vcpkg_installed/
 info.txt
 inst.txt
 log.txt
+
+# Env
+.env

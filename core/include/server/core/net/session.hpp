@@ -60,6 +60,10 @@ private:
     void arm_read_timeout();
     void arm_heartbeat();
 
+public:
+    // 클라이언트 원격 IP 문자열 반환(예: "127.0.0.1"). 오류 시 빈 문자열.
+    std::string remote_ip() const;
+
     asio::ip::tcp::socket socket_;
     asio::strand<asio::any_io_executor> strand_;
     Dispatcher& dispatcher_;
@@ -79,4 +83,3 @@ private:
     std::uint32_t session_id_{0};
 };
 } // namespace server::core
-

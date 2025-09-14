@@ -29,15 +29,11 @@ using server::core::storage::Session;
 
 class PgUserRepository final : public IUserRepository {
 public:
-    PgUserRepository(
 #if defined(HAVE_LIBPQXX)
-        pqxx::work* w
+    explicit PgUserRepository(pqxx::work* w) : w_(w) {}
+#else
+    PgUserRepository() = default;
 #endif
-    )
-#if defined(HAVE_LIBPQXX)
-        : w_(w)
-#endif
-    {}
 
     std::optional<User> find_by_id(const std::string& user_id) override {
 #if defined(HAVE_LIBPQXX)
@@ -49,6 +45,7 @@ public:
         (void)user_id; return std::nullopt;
 #endif
     }
+
     std::vector<User> find_by_name_ci(const std::string& name, std::size_t limit) override {
 #if defined(HAVE_LIBPQXX)
         std::vector<User> out; out.reserve(limit);
@@ -59,6 +56,17 @@ public:
         (void)name; (void)limit; return {};
 #endif
     }
+
+    User create_guest(const std::string& name) override {
+#if defined(HAVE_LIBPQXX)
+        auto r = w_->exec_params("insert into users(id, name, password_hash, created_at) values (gen_random_uuid(), $1, '', now()) returning id::text, (extract(epoch from created_at)*1000)::bigint", name);
+        User u{}; u.id = r[0][0].c_str(); u.name = name; u.created_at_ms = r[0][1].as<std::int64_t>();
+        return u;
+#else
+        (void)name; return {};
+#endif
+    }
+
 #if defined(HAVE_LIBPQXX)
 private:
     pqxx::work* w_{};
@@ -140,13 +148,13 @@ public:
 #if defined(HAVE_LIBPQXX)
         std::vector<Message> out; out.reserve(limit);
         auto r = w_->exec_params(
-            "select id, room_id::text, coalesce(user_id::text, ''), content, (extract(epoch from created_at)*1000)::bigint, coalesce(room_name, '') "
+            "select id, room_id::text, coalesce(room_name, ''), coalesce(user_id::text, ''), content, (extract(epoch from created_at)*1000)::bigint "
             "from messages where room_id=$1::uuid and id > $2 order by id asc limit $3",
             room_id, static_cast<long long>(since_id), static_cast<int>(limit));
         for (const auto& row : r) {
-            Message m{}; m.id = row[0].as<std::uint64_t>(); m.room_id = row[1].c_str();
-            auto uid = row[2].c_str(); if (uid && *uid) m.user_id = std::string(uid);
-            m.content = row[3].c_str(); m.created_at_ms = row[4].as<std::int64_t>(); m.room_name = row[5].c_str();
+            Message m{}; m.id = row[0].as<std::uint64_t>(); m.room_id = row[1].c_str(); m.room_name = row[2].c_str();
+            auto uid = row[3].c_str(); if (uid && *uid) m.user_id = std::string(uid);
+            m.content = row[4].c_str(); m.created_at_ms = row[5].as<std::int64_t>();
             out.emplace_back(std::move(m));
         }
         return out;
@@ -327,3 +335,13 @@ make_connection_pool(const std::string& db_uri, const PoolOptions& opts) {
 }
 
 } // namespace server::storage::postgres
+
+    User create_guest(const std::string& name) override {
+#if defined(HAVE_LIBPQXX)
+        auto r = w_->exec_params("insert into users(id, name, password_hash, created_at) values (gen_random_uuid(), , '', now()) returning id::text, (extract(epoch from created_at)*1000)::bigint", name);
+        User u{}; u.id = r[0][0].c_str(); u.name = name; u.created_at_ms = r[0][1].as<std::int64_t>();
+        return u;
+#else
+        (void)name; return {};
+#endif
+    }

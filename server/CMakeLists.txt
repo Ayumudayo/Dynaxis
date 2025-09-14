@@ -55,10 +55,17 @@ add_library(server_storage_redis STATIC
 target_include_directories(server_storage_redis PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(server_storage_redis PUBLIC server_core)
 
-# Try to find redis-plus-plus; targets may be redis++ or redis++_static
+# Try to find redis-plus-plus; vcpkg exports namespaced targets
 find_package(redis++ CONFIG QUIET)
-if (TARGET redis++)
+if (TARGET redis++::redis++)
+    target_link_libraries(server_storage_redis PUBLIC redis++::redis++)
+    target_compile_definitions(server_storage_redis PUBLIC HAVE_REDIS_PLUS_PLUS)
+elseif (TARGET redis++)
+    # fallback: some older exports may use un-namespaced target
     target_link_libraries(server_storage_redis PUBLIC redis++)
+    target_compile_definitions(server_storage_redis PUBLIC HAVE_REDIS_PLUS_PLUS)
+elseif (TARGET redis++_static::redis++_static)
+    target_link_libraries(server_storage_redis PUBLIC redis++_static::redis++_static)
     target_compile_definitions(server_storage_redis PUBLIC HAVE_REDIS_PLUS_PLUS)
 elseif (TARGET redis++_static)
     target_link_libraries(server_storage_redis PUBLIC redis++_static)
