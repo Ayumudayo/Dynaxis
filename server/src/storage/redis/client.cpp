@@ -46,6 +46,37 @@ public:
         }
     }
 
+    bool sadd(const std::string& key, const std::string& member) override {
+        try { redis_->sadd(key, member); return true; } catch (const std::exception& e) { server::core::log::warn(std::string("Redis SADD failed: ") + e.what()); return false; } catch (...) { server::core::log::warn("Redis SADD failed: unknown"); return false; }
+    }
+    bool srem(const std::string& key, const std::string& member) override {
+        try { redis_->srem(key, member); return true; } catch (const std::exception& e) { server::core::log::warn(std::string("Redis SREM failed: ") + e.what()); return false; } catch (...) { server::core::log::warn("Redis SREM failed: unknown"); return false; }
+    }
+
+    bool del(const std::string& key) override {
+        try { redis_->del(key); return true; } catch (const std::exception& e) { server::core::log::warn(std::string("Redis DEL failed: ") + e.what()); return false; } catch (...) { server::core::log::warn("Redis DEL failed: unknown"); return false; }
+    }
+
+    bool scan_del(const std::string& pattern) override {
+        try {
+            long long cursor = 0;
+            do {
+                std::vector<std::string> keys;
+                cursor = redis_->scan(cursor, pattern, 100, std::back_inserter(keys));
+                if (!keys.empty()) {
+                    redis_->del(keys.begin(), keys.end());
+                }
+            } while (cursor != 0);
+            return true;
+        } catch (const std::exception& e) {
+            server::core::log::warn(std::string("Redis SCAN/DEL failed: ") + e.what());
+            return false;
+        } catch (...) {
+            server::core::log::warn("Redis SCAN/DEL failed: unknown");
+            return false;
+        }
+    }
+
 private:
     std::unique_ptr<sw::redis::Redis> redis_;
 };
@@ -56,6 +87,10 @@ public:
         : uri_(std::move(uri)), opts_(opts) {}
     bool health_check() override { (void)uri_; (void)opts_; return true; }
     bool lpush_trim(const std::string& key, const std::string& value, std::size_t maxlen) override { (void)key; (void)value; (void)maxlen; return true; }
+    bool sadd(const std::string& key, const std::string& member) override { (void)key; (void)member; return true; }
+    bool srem(const std::string& key, const std::string& member) override { (void)key; (void)member; return true; }
+    bool del(const std::string& key) override { (void)key; return true; }
+    bool scan_del(const std::string& pattern) override { (void)pattern; return true; }
 private:
     std::string uri_; Options opts_{};
 };

@@ -107,6 +107,16 @@ int run_server(int argc, char** argv) {
             if (const char* v = std::getenv("REDIS_POOL_MAX")) ropts.pool_max = static_cast<std::size_t>(std::strtoul(v, nullptr, 10));
             if (const char* v = std::getenv("REDIS_USE_STREAMS")) ropts.use_streams = (std::strcmp(v, "0") != 0);
             redis = server::storage::redis::make_redis_client(ruri, ropts);
+            // 최소 복원: PRESENCE_CLEAN_ON_START != 0 이면 presence:room:* 정리(개발/단일 게이트웨이 전제)
+            if (redis) {
+                if (const char* clean = std::getenv("PRESENCE_CLEAN_ON_START"); clean && std::strcmp(clean, "0") != 0) {
+                    std::string prefix;
+                    if (const char* p = std::getenv("REDIS_CHANNEL_PREFIX"); p && *p) prefix = p;
+                    std::string pattern = prefix + std::string("presence:room:*");
+                    corelog::warn(std::string("Presence cleanup on start: ") + pattern);
+                    (void)redis->scan_del(pattern);
+                }
+            }
             if (!redis || !redis->health_check()) {
                 corelog::error("Redis 헬스체크 실패 — REDIS_URI를 확인하세요.");
             } else {

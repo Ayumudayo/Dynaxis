@@ -5,6 +5,8 @@
 #include "server/core/util/log.hpp"
 #include "server/core/concurrent/job_queue.hpp"
 #include "wire.pb.h"
+#include <cstdlib>
+#include "server/storage/redis/client.hpp"
 // storage
 #include "server/core/storage/connection_pool.hpp"
 #include "server/core/storage/repositories.hpp"
@@ -90,7 +92,7 @@ void ChatService::on_join(Session& s, std::span<const std::uint8_t> payload) {
         }
         for (auto& t : targets) t->async_send(proto::MSG_CHAT_BROADCAST, body, 0);
 
-        // 멤버십 영속화(upsert)
+        // 멤버십 영속화(upsert) + Redis 프레즌스
         if (db_pool_) {
             try {
                 std::string uid;
@@ -110,6 +112,11 @@ void ChatService::on_join(Session& s, std::span<const std::uint8_t> payload) {
                             uow->memberships().update_last_seen(uid, rid, last_id);
                         }
                         uow->commit();
+                        if (redis_) {
+                            std::string pfx; if (const char* p = std::getenv("REDIS_CHANNEL_PREFIX")) if (*p) pfx = p;
+                            std::string pkey = pfx + std::string("presence:room:") + rid;
+                            redis_->sadd(pkey, uid);
+                        }
                     }
                 }
             } catch (...) {}
