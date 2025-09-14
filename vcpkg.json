@@ -5,7 +5,9 @@
   "homepage": "",
   "dependencies": [
     "ftxui",
-    "protobuf"
+    "protobuf",
+    "libpqxx",
+    "redis-plus-plus"
   ],
   "builtin-baseline": "b1e15efef6758eaa0beb0a8732cfa66f6a68a81d"
 }

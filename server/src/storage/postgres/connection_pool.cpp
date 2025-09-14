@@ -9,6 +9,10 @@
 #include "server/core/storage/unit_of_work.hpp"
 #include "server/core/storage/repositories.hpp"
 
+#if defined(HAVE_LIBPQXX)
+#include <pqxx/pqxx>
+#endif
+
 namespace server::storage::postgres {
 
 using server::core::storage::IConnectionPool;
@@ -25,65 +29,199 @@ using server::core::storage::Session;
 
 class PgUserRepository final : public IUserRepository {
 public:
-    std::optional<User> find_by_id(const std::string& /*user_id*/) override {
-        return std::nullopt; // TODO: implement
+    PgUserRepository(
+#if defined(HAVE_LIBPQXX)
+        pqxx::work* w
+#endif
+    )
+#if defined(HAVE_LIBPQXX)
+        : w_(w)
+#endif
+    {}
+
+    std::optional<User> find_by_id(const std::string& user_id) override {
+#if defined(HAVE_LIBPQXX)
+        auto r = w_->exec_params("select id::text, name, extract(epoch from created_at)*1000::bigint from users where id = $1::uuid", user_id);
+        if (r.empty()) return std::nullopt;
+        User u{}; u.id = r[0][0].c_str(); u.name = r[0][1].c_str(); u.created_at_ms = r[0][2].as<std::int64_t>();
+        return u;
+#else
+        (void)user_id; return std::nullopt;
+#endif
     }
-    std::vector<User> find_by_name_ci(const std::string& /*name*/, std::size_t /*limit*/) override {
-        return {}; // TODO: implement
+    std::vector<User> find_by_name_ci(const std::string& name, std::size_t limit) override {
+#if defined(HAVE_LIBPQXX)
+        std::vector<User> out; out.reserve(limit);
+        auto r = w_->exec_params("select id::text, name, extract(epoch from created_at)*1000::bigint from users where lower(name)=lower($1) limit $2", name, static_cast<int>(limit));
+        for (const auto& row : r) { User u{}; u.id = row[0].c_str(); u.name = row[1].c_str(); u.created_at_ms = row[2].as<std::int64_t>(); out.emplace_back(std::move(u)); }
+        return out;
+#else
+        (void)name; (void)limit; return {};
+#endif
     }
+#if defined(HAVE_LIBPQXX)
+private:
+    pqxx::work* w_{};
+#endif
 };
 
 class PgRoomRepository final : public IRoomRepository {
 public:
-    std::optional<Room> find_by_id(const std::string& /*room_id*/) override {
-        return std::nullopt; // TODO: implement
+    PgRoomRepository(
+#if defined(HAVE_LIBPQXX)
+        pqxx::work* w
+#endif
+    )
+#if defined(HAVE_LIBPQXX)
+        : w_(w)
+#endif
+    {}
+
+    std::optional<Room> find_by_id(const std::string& room_id) override {
+#if defined(HAVE_LIBPQXX)
+        auto r = w_->exec_params("select id::text, name, is_public, is_active, extract(epoch from closed_at)*1000::bigint, extract(epoch from created_at)*1000::bigint from rooms where id=$1::uuid", room_id);
+        if (r.empty()) return std::nullopt;
+        Room rm{}; rm.id = r[0][0].c_str(); rm.name = r[0][1].c_str(); rm.is_public = r[0][2].as<bool>(); rm.is_active = r[0][3].as<bool>(); if (!r[0][4].is_null()) rm.closed_at_ms = r[0][4].as<std::int64_t>(); rm.created_at_ms = r[0][5].as<std::int64_t>();
+        return rm;
+#else
+        (void)room_id; return std::nullopt;
+#endif
     }
-    std::vector<Room> search_by_name_ci(const std::string& /*query*/, std::size_t /*limit*/) override {
-        return {}; // TODO: implement
+    std::vector<Room> search_by_name_ci(const std::string& query, std::size_t limit) override {
+#if defined(HAVE_LIBPQXX)
+        std::vector<Room> out; out.reserve(limit);
+        auto r = w_->exec_params("select id::text, name, is_public, is_active, extract(epoch from created_at)*1000::bigint from rooms where lower(name) like lower($1) order by created_at desc limit $2", "%" + query + "%", static_cast<int>(limit));
+        for (const auto& row : r) { Room rm{}; rm.id = row[0].c_str(); rm.name = row[1].c_str(); rm.is_public = row[2].as<bool>(); rm.is_active = row[3].as<bool>(); rm.created_at_ms = row[4].as<std::int64_t>(); out.emplace_back(std::move(rm)); }
+        return out;
+#else
+        (void)query; (void)limit; return {};
+#endif
     }
+#if defined(HAVE_LIBPQXX)
+private:
+    pqxx::work* w_{};
+#endif
 };
 
 class PgMessageRepository final : public IMessageRepository {
 public:
-    std::vector<Message> fetch_recent_by_room(const std::string& /*room_id*/,
-                                              std::uint64_t /*since_id*/,
-                                              std::size_t /*limit*/) override {
-        return {}; // TODO: implement
+    PgMessageRepository(
+#if defined(HAVE_LIBPQXX)
+        pqxx::work* w
+#endif
+    )
+#if defined(HAVE_LIBPQXX)
+        : w_(w)
+#endif
+    {}
+
+    std::vector<Message> fetch_recent_by_room(const std::string& room_id,
+                                              std::uint64_t since_id,
+                                              std::size_t limit) override {
+#if defined(HAVE_LIBPQXX)
+        std::vector<Message> out; out.reserve(limit);
+        auto r = w_->exec_params(
+            "select id, room_id::text, user_id::text, content, extract(epoch from created_at)*1000::bigint "
+            "from messages where room_id=$1::uuid and id > $2 order by id asc limit $3",
+            room_id, static_cast<long long>(since_id), static_cast<int>(limit));
+        for (const auto& row : r) {
+            Message m{}; m.id = row[0].as<std::uint64_t>(); m.room_id = row[1].c_str(); if (!row[2].is_null()) m.user_id = std::string(row[2].c_str()); m.content = row[3].c_str(); m.created_at_ms = row[4].as<std::int64_t>(); out.emplace_back(std::move(m));
+        }
+        return out;
+#else
+        (void)room_id; (void)since_id; (void)limit; return {};
+#endif
     }
-    Message create(const std::string& /*room_id*/,
-                   const std::optional<std::string>& /*user_id*/,
-                   const std::string& /*content*/) override {
-        return {}; // TODO: implement
+    Message create(const std::string& room_id,
+                   const std::optional<std::string>& user_id,
+                   const std::string& content) override {
+#if defined(HAVE_LIBPQXX)
+        auto r = w_->exec_params(
+            "insert into messages(room_id, user_id, content) values ($1::uuid, $2::uuid, $3) returning id, extract(epoch from created_at)*1000::bigint",
+            room_id, user_id.has_value() ? pqxx::to_string(user_id.value()) : pqxx::to_string(nullptr), content);
+        Message m{}; m.id = r[0][0].as<std::uint64_t>(); m.room_id = room_id; if (user_id) m.user_id = *user_id; m.content = content; m.created_at_ms = r[0][1].as<std::int64_t>();
+        return m;
+#else
+        (void)room_id; (void)user_id; (void)content; return {};
+#endif
     }
+#if defined(HAVE_LIBPQXX)
+private:
+    pqxx::work* w_{};
+#endif
 };
 
 class PgSessionRepository final : public ISessionRepository {
 public:
-    std::optional<Session> find_by_token_hash(const std::string& /*token_hash*/) override {
-        return std::nullopt; // TODO: implement
+    PgSessionRepository(
+#if defined(HAVE_LIBPQXX)
+        pqxx::work* w
+#endif
+    )
+#if defined(HAVE_LIBPQXX)
+        : w_(w)
+#endif
+    {}
+
+    std::optional<Session> find_by_token_hash(const std::string& token_hash) override {
+#if defined(HAVE_LIBPQXX)
+        auto r = w_->exec_params("select id::text, user_id::text, encode(token_hash,'hex'), extract(epoch from created_at)*1000::bigint, extract(epoch from expires_at)*1000::bigint, extract(epoch from revoked_at)*1000::bigint from sessions where token_hash = decode($1,'hex') limit 1", token_hash);
+        if (r.empty()) return std::nullopt;
+        Session s{}; s.id = r[0][0].c_str(); s.user_id = r[0][1].c_str(); s.token_hash = r[0][2].c_str(); s.created_at_ms = r[0][3].as<std::int64_t>(); s.expires_at_ms = r[0][4].as<std::int64_t>(); if (!r[0][5].is_null()) s.revoked_at_ms = r[0][5].as<std::int64_t>();
+        return s;
+#else
+        (void)token_hash; return std::nullopt;
+#endif
     }
-    Session create(const std::string& /*user_id*/,
-                   const std::chrono::system_clock::time_point& /*expires_at*/,
-                   const std::optional<std::string>& /*client_ip*/,
-                   const std::optional<std::string>& /*user_agent*/,
-                   const std::string& /*token_hash*/) override {
-        return {}; // TODO: implement
+    Session create(const std::string& user_id,
+                   const std::chrono::system_clock::time_point& expires_at,
+                   const std::optional<std::string>& client_ip,
+                   const std::optional<std::string>& user_agent,
+                   const std::string& token_hash) override {
+#if defined(HAVE_LIBPQXX)
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(expires_at.time_since_epoch()).count();
+        auto r = w_->exec_params(
+            "insert into sessions(id, user_id, token_hash, client_ip, user_agent, created_at, expires_at) values (gen_random_uuid(), $1::uuid, decode($2,'hex'), $3::inet, $4, now(), to_timestamp($5/1000.0)) returning id::text, extract(epoch from created_at)*1000::bigint",
+            user_id, token_hash, client_ip.value_or(""), user_agent.value_or(""), static_cast<long long>(ms));
+        Session s{}; s.id = r[0][0].c_str(); s.user_id = user_id; s.token_hash = token_hash; s.created_at_ms = r[0][1].as<std::int64_t>(); s.expires_at_ms = ms; return s;
+#else
+        (void)user_id; (void)expires_at; (void)client_ip; (void)user_agent; (void)token_hash; return {};
+#endif
     }
-    void revoke(const std::string& /*session_id*/) override {
-        // TODO: implement
+    void revoke(const std::string& session_id) override {
+#if defined(HAVE_LIBPQXX)
+        w_->exec_params("update sessions set revoked_at = now() where id = $1::uuid", session_id);
+#else
+        (void)session_id;
+#endif
     }
+#if defined(HAVE_LIBPQXX)
+private:
+    pqxx::work* w_{};
+#endif
 };
 
 class PgUnitOfWork final : public IUnitOfWork {
 public:
-    PgUnitOfWork() = default;
-    ~PgUnitOfWork() override = default;
+    PgUnitOfWork(
+#if defined(HAVE_LIBPQXX)
+        std::shared_ptr<pqxx::connection> conn
+#endif
+    )
+#if defined(HAVE_LIBPQXX)
+        : conn_(std::move(conn)), w_(*conn_)
+#endif
+    {}
 
     void commit() override {
-        // TODO: implement transaction commit
+        #if defined(HAVE_LIBPQXX)
+        w_.commit();
+        #endif
     }
     void rollback() override {
-        // TODO: implement transaction rollback
+        #if defined(HAVE_LIBPQXX)
+        w_.abort();
+        #endif
     }
 
     IUserRepository& users() override { return users_; }
@@ -92,10 +230,30 @@ public:
     ISessionRepository& sessions() override { return sessions_; }
 
 private:
-    PgUserRepository users_{};
-    PgRoomRepository rooms_{};
-    PgMessageRepository messages_{};
-    PgSessionRepository sessions_{};
+    #if defined(HAVE_LIBPQXX)
+    std::shared_ptr<pqxx::connection> conn_{};
+    pqxx::work w_;
+    #endif
+    PgUserRepository users_
+    #if defined(HAVE_LIBPQXX)
+    { &w_ }
+    #endif
+    ;
+    PgRoomRepository rooms_
+    #if defined(HAVE_LIBPQXX)
+    { &w_ }
+    #endif
+    ;
+    PgMessageRepository messages_
+    #if defined(HAVE_LIBPQXX)
+    { &w_ }
+    #endif
+    ;
+    PgSessionRepository sessions_
+    #if defined(HAVE_LIBPQXX)
+    { &w_ }
+    #endif
+    ;
 };
 
 class PgConnectionPool final : public IConnectionPool {
@@ -104,13 +262,28 @@ public:
         : db_uri_(std::move(db_uri)), opts_(opts) {}
 
     std::unique_ptr<IUnitOfWork> make_unit_of_work() override {
-        // TODO: allocate/borrow a connection and start a transaction
+        #if defined(HAVE_LIBPQXX)
+        auto conn = std::make_shared<pqxx::connection>(db_uri_);
+        if (!conn->is_open()) throw std::runtime_error("PQXX connection failed");
+        return std::make_unique<PgUnitOfWork>(std::move(conn));
+        #else
         return std::make_unique<PgUnitOfWork>();
+        #endif
     }
 
     bool health_check() override {
-        // TODO: run lightweight query (e.g., SELECT 1)
+        #if defined(HAVE_LIBPQXX)
+        try {
+            pqxx::connection c(db_uri_);
+            if (!c.is_open()) return false;
+            pqxx::work w(c);
+            auto r = w.exec("select 1");
+            (void)r; w.commit();
+            return true;
+        } catch (...) { return false; }
+        #else
         return true;
+        #endif
     }
 
 private:
@@ -124,4 +297,3 @@ make_connection_pool(const std::string& db_uri, const PoolOptions& opts) {
 }
 
 } // namespace server::storage::postgres
-
