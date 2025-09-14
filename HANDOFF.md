@@ -118,6 +118,10 @@
   - 클래스/함수 재정의(C2011, C2084) 정리: 중복 정의 제거 상태 확인
   - 파일: `server/src/storage/postgres/connection_pool.cpp`
 
+## 다음 단계 로드맵
+- 상세 계획과 진행도, DoD, 리스크/의존성은 `docs/roadmap.md`를 참조.
+- DB 우선 과제(마일스톤 1~3)가 완료되면, 분산 브로드캐스트 수신/echo 필터 → Streams 확장 순으로 본격적인 분산 서버 구현 단계로 진입.
+
 ## 운영/설정 키(추가/변경)
 - Redis 정리 플래그: `PRESENCE_CLEAN_ON_START` — 0이 아니면 부팅 시 프레즌스 키 일괄 정리
 - 프레즌스 키 접두사: `REDIS_CHANNEL_PREFIX` — 예: `chat:dev:`
