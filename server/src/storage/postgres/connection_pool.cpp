@@ -252,7 +252,6 @@ public:
                      const std::string& role) override {
 #if defined(HAVE_LIBPQXX)
         w_->exec_params(
-        w_->exec_params(
             "insert into memberships(user_id, room_id, role, joined_at, is_member) "
             "values (::uuid, ::uuid, , now(), true) "
             "on conflict (user_id, room_id) do update set role=excluded.role, joined_at=now(), is_member=true, left_at=null",
