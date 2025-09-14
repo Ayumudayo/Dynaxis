@@ -155,9 +155,16 @@ public:
                    const std::optional<std::string>& user_id,
                    const std::string& content) override {
 #if defined(HAVE_LIBPQXX)
-        auto r = w_->exec_params(
-            "insert into messages(room_id, user_id, content) values ($1::uuid, $2::uuid, $3) returning id, extract(epoch from created_at)*1000::bigint",
-            room_id, user_id ? pqxx::to_string(*user_id) : pqxx::null(), content);
+        pqxx::result r;
+        if (user_id) {
+            r = w_->exec_params(
+                "insert into messages(room_id, user_id, content) values ($1::uuid, $2::uuid, $3) returning id, extract(epoch from created_at)*1000::bigint",
+                room_id, *user_id, content);
+        } else {
+            r = w_->exec_params(
+                "insert into messages(room_id, user_id, content) values ($1::uuid, NULL, $2) returning id, extract(epoch from created_at)*1000::bigint",
+                room_id, content);
+        }
         Message m{}; m.id = r[0][0].as<std::uint64_t>(); m.room_id = room_id; if (user_id) m.user_id = *user_id; m.content = content; m.created_at_ms = r[0][1].as<std::int64_t>();
         return m;
 #else
