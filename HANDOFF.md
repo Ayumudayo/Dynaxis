@@ -1,172 +1,96 @@
-# HANDOFF: Chat Client/Server Rework (FTXUI + Protocol)
+# HANDOFF: 현재 컨텍스트 요약 및 다음 단계 안내
 
-## Purpose
-- Hand-off note so the next session can resume work quickly.
-- Includes goals, design, verification checklist, remaining tasks, and acceptance criteria.
+본 문서는 현재까지의 설계 결정과 산출물, 남은 작업, 재개 절차를 한눈에 복원할 수 있도록 정리합니다. 구현은 사용자 승인 전까지 보류 상태입니다(문서만 작성됨).
 
-## Top Goals
-- Auto-connect to `localhost:5000`; remove `/connect` and `/disconnect`.
-- FTXUI client with status bar, left rooms, right logs, bottom input, F1 help overlay.
-- Server/client sync for rooms/users with a single `/refresh`.
-- Update UI even when window unfocused.
-- Correct “me” detection via `sender_sid` (with capability negotiation).
-- Block guest chat; assign 8-digit hex random nick if none on login.
-- Room preview (click room → fetch users).
-- Remove unnecessary buttons; rely on keyboard/commands.
-- Refactor to SOLID: server `ChatService`, client `NetClient` + `Store`.
-- Update docs, then commit.
+## 핵심 결정(요약)
+- SoR(System of Record): PostgreSQL 16, 드라이버는 `libpqxx`(C++17). ORM 미도입, Prepared Statement 사용.
+- 캐시/실시간 가속: Redis 사용(세션/프레즌스/최근 메시지/팬아웃). 장애 시 Postgres 폴백 가능.
+- 보안: 비밀번호 해시 Argon2id. 세션 토큰은 해시만 저장(`token_hash`).
+- 식별자: UUID 기반(`user_id`, `room_id`, `session_id`). 이름은 라벨로만 사용(룸 이름 중복 허용).
+- 스냅샷: 방 입장 시 최근 N(기본 20) 메시지 스냅샷 전송 후 입력 활성화. 단일 메시지 포맷(MSG_STATE_SNAPSHOT) 채택.
+- Write-behind(옵션): 세션 이벤트를 Redis Streams에 버퍼링 후 배치 커밋(at-least-once + 멱등)으로 RDB 부하 완화.
 
-## Architecture Decisions
+## 문서 지형도(중요 파일)
+- 아키텍처/결정
+  - `docs/db/decision-record.md` — DB/보안 선택 ADR(한글)
+  - `docs/db/architecture.md` — 계층/SPI/어댑터, Redis 연동, Write-behind, 폴백/복구
+  - `docs/identity.md` — UUID 식별 전략, 이름은 라벨
+- 데이터/마이그레이션
+  - `docs/db/schema.md` — 논리 모델 및 DDL 초안(rooms.name 중복 허용, sessions.client_ip 등)
+  - `docs/db/migrations.md` — 전략/러너 가이드/주요 스크립트 구성
+  - `docs/db/migrations/0001_init.sql.md` — 코어 테이블 생성
+  - `docs/db/migrations/0002_indexes.sql.md` — 인덱스/pg_trgm, CONCURRENTLY 주의
+  - `docs/db/migrations/0003_identity.sql.md` — 이름 고유 제약 제거/컬럼 추가
+  - `docs/db/migrations/0004_session_events.sql.md` — write-behind 이벤트 테이블
+- Redis 전략/운영
+  - `docs/db/redis-strategy.md` — 캐시/세션/프레즌스/팬아웃 설계
+  - `docs/db/cache-keys.md` — 키 네임스페이스/TTL/메모리 예산
+  - `docs/ops/fallback-and-alerts.md` — 장애 폴백/알람/런북
+  - `docs/ops/prewarm.md` — 캐시 프리워밍 절차
+- 프로토콜/흐름/클라이언트 UX
+  - `docs/protocol/snapshot.md` — 스냅샷 최종안과 바이너리 포맷
+  - `docs/chat/recent-history.md` — 입장 시 최근 20건 로딩/워터마크/중복 처리/UI 게이팅
+  - `docs/chat/sequence-join.md` — Join → Snapshot → Fanout 시퀀스(mermaid 포함)
+- 체크리스트
+  - `docs/db/checklist.md` — 구현 전 확인용(설정 키/문서 상태/Go-NoGo)
 
-### Server
-- Introduce `ChatService` for domain logic: login, join/leave, send chat, snapshot/list, and broadcasting.
-- `main` only registers handlers and wires transports to `ChatService`.
-- Track `Session.session_id()` via `SharedState.next_session_id`.
+## 설정 키(현 시점 기준)
+- Postgres: `DB_URI`, `DB_POOL_MIN`, `DB_POOL_MAX`, `DB_CONN_TIMEOUT_MS`, `DB_QUERY_TIMEOUT_MS`, `DB_HEALTHCHECK_INTERVAL_SEC`, `DB_PREPARE_STATEMENTS`
+- Redis: `REDIS_URI`, `REDIS_POOL_MAX`, `REDIS_CHANNEL_PREFIX`, `REDIS_USE_STREAMS`, `REDIS_STREAM_MAXLEN`
+- 캐시/스냅샷: `CACHE_TTL_SESSION`, `CACHE_TTL_RECENT_MSGS`, `CACHE_TTL_MEMBERS`, `RECENT_HISTORY_LIMIT`(20), `ROOM_RECENT_MAXLEN`(~200)
+- Write-behind: `WRITE_BEHIND_ENABLED`, `WB_BATCH_MAX_EVENTS`, `WB_BATCH_MAX_BYTES`, `WB_BATCH_MAX_DELAY_MS`, `WB_WORKER_CONCURRENCY`, `WB_DLOUT_STREAM`
+- 폴백 플래그: `REDIS_REQUIRED`, `USE_REDIS_CACHE`, `USE_REDIS_PUBSUB`
+- 프리워밍: `PREWARM_ENABLED`, `PREWARM_TOP_ROOMS`, `PREWARM_CONCURRENCY`
 
-### Client
-- `NetClient`: async transport (e.g., asio), callbacks: `on_hello/on_err/on_login_res/on_broadcast/on_room_users/on_snapshot`. Public `send_*` APIs.
-- `Store`: single source of truth (connected, username, current_room, preview_room, rooms, users, logs, my_sid, cap_sender_sid).
-- FTXUI UI reads `Store` snapshot; `NetClient` callbacks update `Store` and trigger `screen.PostEvent(Event::Custom)` to re-render.
+## 프로토콜 스냅샷(요약)
+- `MSG_STATE_SNAPSHOT` payload(순서 고정):
+  1) `room_id`(UUID 16B)
+  2) `wm`(u64 워터마크)
+  3) `count`(u16)
+  4) `messages[]` × count: `id(u64)`, `user_id(UUID)`, `created_at_ms(i64)`, `content(lp_utf8)`
+- 정렬/중복: 오름차순 전송, `id <= wm` 드랍. 스냅샷 완료 전 UI 비활성화.
 
-### Protocol
-- Messages:
-  - `MSG_HELLO(0x0001)`, `MSG_PING(0x0002)`, `MSG_PONG(0x0003)`, `MSG_ERR(0x0004)`
-  - `MSG_LOGIN_REQ(0x0010)`, `MSG_LOGIN_RES(0x0011)` with `effective_user`, `session_id`
-  - `MSG_CHAT_SEND(0x0100)`, `MSG_CHAT_BROADCAST(0x0101)` with `sender_sid` if `CAP_SENDER_SID`
-  - `MSG_JOIN_ROOM(0x0102)`, `MSG_LEAVE_ROOM(0x0103)`
-  - `MSG_STATE_SNAPSHOT(0x0200)` with `current_room + rooms + users`
-  - `MSG_ROOM_USERS(0x0201)` for room user list
-- Capabilities/flags:
-  - `CAP_SENDER_SID(0x0002)`
-  - `FLAG_SELF(0x0100)` kept temporarily for backward compatibility
-- Errors:
-  - `INTERNAL_ERROR(0x0001)`, `INVALID_PAYLOAD(0x0007)`
-  - `NAME_TAKEN(0x0100)`, `UNAUTHORIZED(0x0101)`, `NO_ROOM(0x0104)`, `NOT_MEMBER(0x0105)`, `ROOM_MISMATCH(0x0106)`
+## 데이터 모델 핵심 포인트
+- rooms: `name` 중복 허용, `is_active/closed_at`로 라이프사이클 표현, 이름 검색 인덱스는 0002에서 별도 생성
+- sessions: `client_ip inet`, `user_agent text` 추가(보안/운영 분석용)
+- messages: `id bigserial`, 룸당 페이징 인덱스(room_id, id)
 
-## Quick Verification Checklist
+## Redis 캐시/팬아웃
+- 키: `room:{room_id}:recent`(LIST/ZSET of id), `msg:{id}`(JSON), `presence:*`, `session:{token_hash}` 등 — 반드시 UUID 중심 설계
+- 팬아웃: 초기 Pub/Sub, 필요 시 Streams(내구/재처리)
+- 장애 시 폴백: 캐시는 Postgres로, 팬아웃은 인프로세스 축소(플래그 제어)
 
-### Server layout
-- `rg "class ChatService|struct ChatService|ChatService"` → confirm service boundary exists.
-- `rg "next_session_id|session_id\("` → confirm session id generator and accessor.
-- `rg "MSG_LOGIN_RES|effective_user|session_id"` → confirm login response fields.
+## Write-behind(세션 이벤트)
+- Redis Streams `session_events`에 적재 → 워커가 배치 커밋(at-least-once)
+- 멱등: `event_id` 고유 + 고유 제약으로 중복 삽입 방지
+- 모니터링: 배치 지연/크기/성공률, 펜딩 길이, DLQ
 
-### Client layout
-- `rg "class NetClient|struct NetClient"` → confirm transport wrapper exists.
-- `rg "class Store|struct Store"` → confirm single state holder exists.
-- `rg "screen.PostEvent|PostEvent\(Event::Custom"` → confirm UI refresh path on network events.
-- `rg "CAP_SENDER_SID|sender_sid|FLAG_SELF"` → confirm “me” detection logic.
-- `rg "F1|help|overlay"` → confirm help overlay wiring.
-- `rg "/refresh|snapshot|MSG_STATE_SNAPSHOT"` → confirm refresh flow.
+## 남은 작업(구현 승인 후)
+1) core SPI 추가: `server::core::storage`에 `IConnectionPool`, `IUnitOfWork`, `I*Repository`
+2) Postgres 어댑터: `server/storage/postgres` 구현(풀/유닛오브워크/리포지토리)
+3) 서버 주입: `server/app/bootstrap`에서 풀 생성/DI, 라우터/서비스에 주입
+4) Redis 클라이언트/풀: 캐시/세션/프레즌스/팬아웃 적용, 설정 키 연결
+5) 스냅샷 핸들러: 조인 시 Redis→Postgres 폴백 로직, 워터마크/정렬/멱등 처리
+6) Write-behind 워커(옵션): Streams 컨슈머/배치 커밋/멱등 삽입
+7) 마이그레이션 러너: `tools/migrations/` 적용(0002는 non-transactional 예외)
+8) 프리워밍 잡(옵션): 복구 시 상위 룸 캐시 재가열
+9) 문서/CI: 설정 키 검증, ‘이름 기반 식별 금지’ 린트, ‘knights’ 문자열 금지 규칙 등
 
-### UI/UX
-- Ensure no `/connect` `/disconnect` commands and auto-connect to `localhost:5000`.
-- Left panel: rooms; click → `preview_room` and fetch via `MSG_ROOM_USERS`.
-- Right panel: logs; “me” messages styled distinctly.
-- Status bar: show connection, user, room; guest highlighted (e.g., yellow).
-- Input: command parsing for `/refresh`, `/join <room>`, `/leave`, `/who [room]`.
+## 유의사항/제약
+- “구현 보류” 원칙: 사용자가 명시적으로 “구현 시작”을 승인하기 전에는 코드 변경 금지(문서만 업데이트)
+- 문서 언어: 한국어로 통일(기술 용어는 원문 병기 가능)
+- 식별자: 이름은 라벨. 프로토콜/키/조인/로그 레퍼런스는 모두 UUID 사용
+- 인덱스 생성: 운영 환경에선 `CREATE INDEX CONCURRENTLY` 사용, 러너 예외 처리 필요
 
-## What To Implement Next (High Priority)
-- Client refactor completion
-  - Remove any legacy direct asio/recv threads still in `main.cpp`; route all I/O via `NetClient`.
-  - Ensure UI reads only from `Store`; callbacks mutate `Store` and trigger `PostEvent`.
-  - Centralize message handlers in a table-like dispatch to improve OCP.
-- Capability-based “me” detection
-  - Prefer `sender_sid == Store.my_sid` when `Store.cap_sender_sid` is true.
-  - Fallback to `FLAG_SELF` only when capability missing.
-- Guest policy
-  - Server: assign 8-digit hex nick on login if none; deny `MSG_CHAT_SEND` for guests.
-  - Client: prevent sending when `Store.username` is guest; show hint to login/rename.
-- Snapshots and refresh
-  - Implement `/refresh`: request `MSG_STATE_SNAPSHOT`; reconcile `Store.rooms/users/current_room`.
-  - Update room/user lists immediately on broadcast or snapshot without focus.
-- Room preview
-  - On room list click/hover: set `preview_room`, send `MSG_ROOM_USERS(preview_room)`, render inline preview list.
-- Help overlay and shortcuts
-  - F1 toggles overlay with shortcuts: Join/Leave/Refresh/Who/Send/Scroll.
-  - Remove unused buttons; update footer hints accordingly.
+## 재개 절차(빠른 스타트)
+1) `docs/db/checklist.md`에서 Go/No-Go 항목 체크 후 “구현 단계 승인”
+2) 마이그레이션 러너 요구사항 문서 보강(필요 시) → 0001~0004 순서 적용
+3) core SPI → PG 어댑터 → 주입 → Redis 캐시 → 스냅샷 핸들러 →(옵션) write-behind 순으로 커밋 단위 구분해 진행
+4) 사용자가 빌드/실행 후 `info.txt`로 빌드 로그/스모크 결과 공유(문서 상 가정)
 
-## Server Work Items
-- Add `ChatService` with methods:
-  - `on_login`, `on_join`, `on_leave`, `on_chat_send`, `on_session_close`.
-  - `broadcast_room`, `send_room_users`, `send_rooms_list`, `send_snapshot`.
-- `MSG_LOGIN_RES`: include `effective_user`, `session_id`; set `CAP_SENDER_SID` in `HELLO` or `LOGIN_RES`.
-- Enforce errors:
-  - `UNAUTHORIZED` for guest sending chat.
-  - `NO_ROOM/NOT_MEMBER/ROOM_MISMATCH` as applicable.
-- Random nick generation:
-  - 8 hex chars; ensure uniqueness at time of assignment; collision retry.
+## 참고 네임스페이스/타깃(코드 스타일)
+- C++ 네임스페이스: `server::core::{net,concurrent,memory,config,state,protocol,storage}`, `server::app::chat`, `server::storage::postgres`
+- CMake 타깃: `server_core`, `server_app`, `server_storage_pg`, `dev_chat_cli`, `wire_proto`
 
-## Client Work Items
-- `NetClient`
-  - `set_on_hello/on_err/on_login_res/on_broadcast/on_room_users/on_snapshot`.
-  - `send_login(optional_nick)`: send empty nick to request server-assigned guest nick.
-  - `send_join/leave/chat/refresh/who`.
-- `Store`
-  - Fields: `connected, username, is_guest, current_room, preview_room, rooms{meta}, users{by room}, logs, my_sid, cap_sender_sid`.
-  - Reducer-like update helpers; expose immutable snapshot for UI render.
-- UI
-  - Status bar: connection LED, user, room; adapt to width.
-  - Left rooms: selectable; preview inline user list for `preview_room`.
-  - Right logs: colorize “me”, errors; timestamps; scrollable.
-  - Bottom input: parse `/join`, `/leave`, `/who`, `/refresh`; show error hints.
-  - F1 overlay: keyboard shortcuts and command cheatsheet.
-- Eventing
-  - From `NetClient` callbacks: update `Store`; call `screen.PostEvent(Event::Custom)`.
-
-## Acceptance Criteria
-- App auto-connects to `localhost:5000` on start; no `/connect` command available.
-- Logging in without a nick yields an 8-hex guest nick; guest cannot send messages.
-- Pressing F1 shows/hides help overlay; footer shows concise shortcut hints.
-- `/refresh` updates rooms/users/current room in UI immediately, even when app was unfocused.
-- Room click shows user preview; `/who <room>` shows structured list in logs.
-- “Me” marking is correct with `CAP_SENDER_SID`; falls back to `FLAG_SELF` otherwise.
-- No unused buttons present; keyboard-only operation viable.
-
-## Testing Guide
-
-### Manual
-- Start server and client; observe auto-connect and guest nick assignment.
-- As guest, attempt to chat → UI shows error with `UNAUTHORIZED`.
-- Join a room, send chat after named login → message marked as “me”.
-- Click different rooms → preview users; run `/who <room>` and compare.
-- Run `/refresh` then verify rooms/users reflect server state.
-
-### Programmatic (optional, if test harness exists)
-- Unit-test `ChatService` methods for error codes and broadcasts.
-- Unit-test `Store` reducers for merge logic on snapshot and broadcasts.
-
-## Implementation Hints
-- Random nick
-  - Use a secure PRNG if available; otherwise `random_device` + `mt19937`; format to 8 hex chars.
-- Threading
-  - Ensure `NetClient` callbacks do not directly mutate UI state from non-UI threads; use a thread-safe queue or post to UI thread then `PostEvent`.
-- Reconciliation
-  - On `MSG_STATE_SNAPSHOT`, replace room list wholesale; diff users per room to minimize UI churn if needed.
-- Error surface
-  - Map error codes to short, user-friendly Korean messages; log both code and hint.
-
-## Runbook
-- Server
-  - Build and run: `make server` or `cargo run -p server` or `bazel run //server` (adjust to repo).
-  - Confirm listening on `localhost:5000`.
-- Client
-  - Build and run: `make client` or `cargo run -p client` or `bazel run //client`.
-  - Client should auto-login as guest on connect.
-
-## Useful greps
-- `rg "MSG_STATE_SNAPSHOT|MSG_ROOM_USERS"`
-- `rg "CAP_SENDER_SID|sender_sid"`
-- `rg "PostEvent\\(Event::Custom"`
-
-## Open Questions To Resolve
-- Exact transport and message serialization format (JSON/CBOR/custom). If not fixed, standardize now.
-- Where to declare capability flags (in HELLO vs LOGIN_RES). Prefer HELLO, but LOGIN_RES acceptable if simpler.
-- UI color scheme for guest and self messages; decide consistent palette.
-
-## First 30 Minutes Next Session
-- Build server/client; run smoke test for auto-connect and guest nick.
-- `rg` the checklist to confirm `ChatService`, `NetClient`, `Store` presence.
-- If legacy networking remains in `main.cpp`, remove and wire through `NetClient`.
-- Implement `/refresh` end-to-end if missing; verify UI updates on unfocused window via `PostEvent`.
-- Hook F1 overlay and footer hints; remove stray buttons.
+이 문서만으로도 다음 담당자가 현재 설계 상태를 복원하고, 승인 후 구현 순서를 이어갈 수 있도록 작성했습니다. 추가 설명이 필요하면 `docs/` 내 세부 문서를 우선 참조하세요.
 
