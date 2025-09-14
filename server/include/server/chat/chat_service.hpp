@@ -16,13 +16,18 @@
 // Opcodes are defined in generated header
 #include "server/core/protocol/opcodes.hpp"
 
-namespace server::core { class JobQueue; } // Forward declaration
+namespace server::core { class JobQueue; }
+namespace server::core::storage { class IConnectionPool; }
+namespace server::storage::redis { class IRedisClient; }
 
 namespace server::app::chat {
 
 class ChatService {
 public:
-    ChatService(boost::asio::io_context& io, server::core::JobQueue& job_queue);
+    ChatService(boost::asio::io_context& io,
+                server::core::JobQueue& job_queue,
+                std::shared_ptr<server::core::storage::IConnectionPool> db_pool = {},
+                std::shared_ptr<server::storage::redis::IRedisClient> redis = {});
 
     void on_login(server::core::Session& s, std::span<const std::uint8_t> payload);
     void on_join(server::core::Session& s, std::span<const std::uint8_t> payload);
@@ -50,6 +55,8 @@ private:
 
     boost::asio::io_context* io_{};
     server::core::JobQueue& job_queue_;
+    std::shared_ptr<server::core::storage::IConnectionPool> db_pool_{}; // 선택 주입
+    std::shared_ptr<server::storage::redis::IRedisClient> redis_{};      // 선택 주입
     std::unordered_map<std::string, std::shared_ptr<Strand>> room_strands_;
     Strand& strand_for(const std::string& room);
 

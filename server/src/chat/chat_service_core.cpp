@@ -13,8 +13,11 @@ namespace corelog = server::core::log;
 
 namespace server::app::chat {
 
-ChatService::ChatService(boost::asio::io_context& io, server::core::JobQueue& job_queue)
-    : io_(&io), job_queue_(job_queue) {}
+ChatService::ChatService(boost::asio::io_context& io,
+                         server::core::JobQueue& job_queue,
+                         std::shared_ptr<server::core::storage::IConnectionPool> db_pool,
+                         std::shared_ptr<server::storage::redis::IRedisClient> redis)
+    : io_(&io), job_queue_(job_queue), db_pool_(std::move(db_pool)), redis_(std::move(redis)) {}
 
 ChatService::Strand& ChatService::strand_for(const std::string& room) {
     auto it = room_strands_.find(room);
@@ -134,4 +137,3 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
 }
 
 } // namespace server::app::chat
-

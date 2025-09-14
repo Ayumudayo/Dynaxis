@@ -88,7 +88,7 @@ int run_server(int argc, char** argv) {
             }
         }
 
-        server::app::chat::ChatService chat(io, job_queue);
+        server::app::chat::ChatService chat(io, job_queue, db_pool, redis);
         // TODO: ChatService에 저장소 주입(후속 단계)
 
         // Redis 클라이언트 구성(환경 변수 기반)
