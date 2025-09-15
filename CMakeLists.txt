@@ -13,10 +13,6 @@ if (MSVC)
     add_compile_options(/utf-8)
 endif()
 
-# Enforce libpqxx for migrations_runner target
-if (NOT TARGET libpqxx::pqxx AND NOT TARGET unofficial::libpqxx::libpqxx)
-  message(FATAL_ERROR "libpqxx not found — migrations_runner requires libpqxx")
-endif()
 
 # write-behind worker (optional)
 add_executable(wb_worker tools/wb_worker/main.cpp)
@@ -108,3 +104,4 @@ elseif (NOT libpqxx_FOUND)
     message(WARNING "libpqxx not found — migrations_runner will fail to link")
   endif()
 endif()
+
