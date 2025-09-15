@@ -4,6 +4,7 @@
 #include <string>
 #include <cstddef>
 #include <functional>
+#include <vector>
 
 namespace server::storage::redis {
 
@@ -32,6 +33,14 @@ public:
                                   std::function<void(const std::string& channel, const std::string& message)> on_message) = 0;
     // 구독 중지(소유 스레드 종료)
     virtual void stop_psubscribe() = 0;
+
+    // Streams API (write-behind 최소 구현)
+    virtual bool xgroup_create_mkstream(const std::string& key, const std::string& group) = 0;
+    virtual bool xadd(const std::string& key, const std::vector<std::pair<std::string, std::string>>& fields, std::string* out_id = nullptr) = 0;
+    struct StreamEntry { std::string id; std::vector<std::pair<std::string,std::string>> fields; };
+    virtual bool xreadgroup(const std::string& key, const std::string& group, const std::string& consumer,
+                            long long block_ms, std::size_t count, std::vector<StreamEntry>& out) = 0;
+    virtual bool xack(const std::string& key, const std::string& group, const std::string& id) = 0;
 };
 
 // Redis 클라이언트/풀 팩토리(스켈레톤)

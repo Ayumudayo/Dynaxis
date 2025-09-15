@@ -9,7 +9,7 @@
 // storage
 #include "server/core/storage/connection_pool.hpp"
 #include "server/core/storage/repositories.hpp"
-#include "server/storage/redis/client.hpp"
+#include "server/storage/redis/client.hpp"\n#include <vector>
 #include <cstdlib>
 
 using namespace server::core;
@@ -258,3 +258,4 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
 }
 
 } // namespace server::app::chat
+
