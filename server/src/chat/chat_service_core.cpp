@@ -11,6 +11,8 @@
 #include "server/core/storage/repositories.hpp"
 #include "server/storage/redis/client.hpp"
 
+#include <cstdlib>
+
 using namespace server::core;
 namespace proto = server::core::protocol;
 namespace corelog = server::core::log;
@@ -21,7 +23,11 @@ ChatService::ChatService(boost::asio::io_context& io,
                          server::core::JobQueue& job_queue,
                          std::shared_ptr<server::core::storage::IConnectionPool> db_pool,
                          std::shared_ptr<server::storage::redis::IRedisClient> redis)
-    : io_(&io), job_queue_(job_queue), db_pool_(std::move(db_pool)), redis_(std::move(redis)) {}
+    : io_(&io), job_queue_(job_queue), db_pool_(std::move(db_pool)), redis_(std::move(redis)) {
+    if (const char* gw = std::getenv("GATEWAY_ID"); gw && *gw) {
+        gateway_id_ = gw;
+    }
+}
 
 ChatService::Strand& ChatService::strand_for(const std::string& room) {
     auto it = room_strands_.find(room);

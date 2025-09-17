@@ -11,7 +11,7 @@ ThreadManager::~ThreadManager() {
 }
 
 void ThreadManager::Start(int num_threads) {
-    stopped_ = false;
+    stopped_.store(false, std::memory_order_relaxed);
     threads_.reserve(num_threads);
     for (int i = 0; i < num_threads; ++i) {
         threads_.emplace_back([this] { WorkerLoop(); });
@@ -19,9 +19,11 @@ void ThreadManager::Start(int num_threads) {
 }
 
 void ThreadManager::Stop() {
-    if (stopped_) return;
+    bool expected = false;
+    if (!stopped_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return;
+    }
 
-    stopped_ = true;
     job_queue_.Stop(); // Wake up any waiting threads
 
     for (auto& t : threads_) {
@@ -33,7 +35,7 @@ void ThreadManager::Stop() {
 }
 
 void ThreadManager::WorkerLoop() {
-    while (!stopped_) {
+    while (!stopped_.load(std::memory_order_acquire)) {
         Job job = job_queue_.Pop();
         if (!job) { // nullptr job is the signal to stop
             break;

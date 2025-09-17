@@ -62,6 +62,7 @@ private:
     server::core::JobQueue& job_queue_;
     std::shared_ptr<server::core::storage::IConnectionPool> db_pool_{}; // 선택 주입
     std::shared_ptr<server::storage::redis::IRedisClient> redis_{};      // 선택 주입
+    std::string gateway_id_{"gw-default"};
     std::unordered_map<std::string, std::shared_ptr<Strand>> room_strands_;
     Strand& strand_for(const std::string& room);
 

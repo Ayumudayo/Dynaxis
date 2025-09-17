@@ -235,7 +235,13 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
                 if (const char* use = std::getenv("USE_REDIS_PUBSUB"); use && std::strcmp(use, "0") != 0) {
                     std::string pfx; if (const char* p = std::getenv("REDIS_CHANNEL_PREFIX")) if (*p) pfx = p;
                     std::string ch = pfx + std::string("fanout:room:") + current_room;
-                    redis_->publish(ch, std::string(bytes.begin(), bytes.end()));
+                    std::string payload(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                    std::string message;
+                    message.reserve(3 + gateway_id_.size() + payload.size());
+                    message.append("gw=").append(gateway_id_);
+                    message.push_back('\n');
+                    message.append(payload);
+                    redis_->publish(ch, std::move(message));
                 }
             } catch (...) {}
         }

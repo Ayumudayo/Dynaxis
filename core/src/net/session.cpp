@@ -202,15 +202,21 @@ void Session::do_write() {
     }
     auto self = shared_from_this();
     auto& front_pair = send_queue_.front();
-    asio::async_write(socket_, asio::buffer(front_pair.first.get(), front_pair.second),
-        asio::bind_executor(strand_, [this, self](const error_code& ec, std::size_t /*n*/) {
+    const auto frame_size = front_pair.second;
+    asio::async_write(socket_, asio::buffer(front_pair.first.get(), frame_size),
+        asio::bind_executor(strand_, [this, self, frame_size](const error_code& ec, std::size_t /*n*/) {
             if (ec) {
                 log::debug(std::string("쓰기 실패: ") + ec.message());
                 stop();
                 return;
             }
-            send_queue_.pop(); // PooledBuffer will be released here
-            do_write();
+            if (self->queued_bytes_ >= frame_size) {
+                self->queued_bytes_ -= frame_size;
+            } else {
+                self->queued_bytes_ = 0;
+            }
+            self->send_queue_.pop(); // PooledBuffer will be released here
+            self->do_write();
         }));
 }
 

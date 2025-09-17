@@ -6,6 +6,7 @@
 #include <string_view>
 #include <vector>
 #include <span>
+#include <cstring>
 
 namespace server::core::protocol {
 

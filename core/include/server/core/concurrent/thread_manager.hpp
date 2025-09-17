@@ -2,6 +2,7 @@
 #include <vector>
 #include <thread>
 #include <memory>
+#include <atomic>
 
 namespace server::core {
 
@@ -20,7 +21,7 @@ private:
 
     JobQueue& job_queue_;
     std::vector<std::thread> threads_;
-    bool stopped_ = false;
+    std::atomic<bool> stopped_{true};
 };
 
 } // namespace server::core
