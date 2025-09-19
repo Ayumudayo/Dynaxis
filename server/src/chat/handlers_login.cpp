@@ -10,6 +10,7 @@
 #include "server/core/storage/repositories.hpp"
 #include <algorithm>
 #include <cstdlib>
+#include <optional>
 #include "server/storage/redis/client.hpp"
 
 using namespace server::core;
@@ -28,6 +29,10 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
 
     auto session_sp = s.shared_from_this();
     job_queue_.Push([this, session_sp, user, token]() {
+        const std::string session_id_str = std::to_string(session_sp->session_id());
+        std::string tracked_user_uuid;
+        std::string lobby_room_id;
+        std::string login_ip = session_sp->remote_ip();
         corelog::info("LOGIN_REQ 처리 시작 (워커 스레드)");
         bool guest_mode = (user.empty() || user == "guest");
         std::string new_user = ensure_unique_or_error(*session_sp, user);
@@ -86,7 +91,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
 
                 // users 테이블에 마지막 로그인 IP/시각 기록
                 {
-                    auto ip = session_sp->remote_ip();
+                    auto ip = login_ip;
                     auto uow3 = db_pool_->make_unit_of_work();
                     uow3->users().update_last_login(uid, ip);
                     uow3->commit();
@@ -94,7 +99,8 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 // 현재 룸의 room_id 확보 후 시스템 메시지로 IP 기록
                 auto rid = ensure_room_id_ci("lobby");
                 if (!rid.empty()) {
-                    auto ip = session_sp->remote_ip();
+                    lobby_room_id = rid;
+                    auto ip = login_ip;
                     auto uow2 = db_pool_->make_unit_of_work();
                     std::string sys = std::string("(login ip=") + ip + ")";
                     (void)uow2->messages().create(rid, std::string("lobby"), std::nullopt, sys);
@@ -133,7 +139,24 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 }
             } catch (...) {}
         }
+        std::optional<std::string> uid_opt;
+        if (!tracked_user_uuid.empty()) {
+            uid_opt = tracked_user_uuid;
+        }
+        std::optional<std::string> lobby_id_opt;
+        if (!lobby_room_id.empty()) {
+            lobby_id_opt = lobby_room_id;
+        }
+        std::vector<std::pair<std::string, std::string>> wb_fields;
+        wb_fields.emplace_back("room", "lobby");
+        wb_fields.emplace_back("user_name", new_user);
+        if (!login_ip.empty()) {
+            wb_fields.emplace_back("ip", login_ip);
+        }
+        emit_write_behind_event("session_login", session_id_str, uid_opt, lobby_id_opt, std::move(wb_fields));
     });
 }
 
 } // namespace server::app::chat
+
+

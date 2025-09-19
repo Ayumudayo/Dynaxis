@@ -4,6 +4,7 @@
 #include <string>
 #include <cstddef>
 #include <functional>
+#include <optional>
 #include <vector>
 
 namespace server::storage::redis {
@@ -36,7 +37,11 @@ public:
 
     // Streams API (write-behind 최소 구현)
     virtual bool xgroup_create_mkstream(const std::string& key, const std::string& group) = 0;
-    virtual bool xadd(const std::string& key, const std::vector<std::pair<std::string, std::string>>& fields, std::string* out_id = nullptr) = 0;
+    virtual bool xadd(const std::string& key,
+                      const std::vector<std::pair<std::string, std::string>>& fields,
+                      std::string* out_id = nullptr,
+                      std::optional<std::size_t> maxlen = std::nullopt,
+                      bool approximate = true) = 0;
     struct StreamEntry { std::string id; std::vector<std::pair<std::string,std::string>> fields; };
     virtual bool xreadgroup(const std::string& key, const std::string& group, const std::string& consumer,
                             long long block_ms, std::size_t count, std::vector<StreamEntry>& out) = 0;

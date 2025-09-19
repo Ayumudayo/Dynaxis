@@ -58,10 +58,10 @@
 - [done] Redis Streams 클라이언트 구현(XGROUP/XADD/XREADGROUP/XACK) — `server/src/storage/redis/client.cpp`
 - [done] 워커 스켈레톤 + .env 인식 — `tools/wb_worker/main.cpp`
 - [done] 키/옵션/운영 문서 정리 — `docs/db/write-behind.md`
-- [todo] 이벤트 필드/트림 정책 최종 확정(`session_login`, `room_join`, `room_leave`, `session_close`) 및 구성 키 기본값 동기화
+- [done] 이벤트 필드/트림 정책 최종 확정(`session_login`, `room_join`, `room_leave`, `session_close`) 및 구성 키 기본값 동기화
 
 ### 구현
-- [todo] 서버 Ingest 경로: `WRITE_BEHIND_ENABLED` 활성 시 XADD 생산(handlers_login/handlers_join/handlers_leave/session_events) + MAXLEN 적용
+- [done] 서버 Ingest 경로: `WRITE_BEHIND_ENABLED` 활성 시 XADD 생산(handlers_login/handlers_join/handlers_leave/session_events) + MAXLEN 적용
 - [todo] 워커 배치 커밋: `WB_BATCH_MAX_EVENTS/BYTES/DELAY_MS` 반영, Postgres 트랜잭션, 멱등 처리, ACK 플로우 확정
 - [todo] DLQ/재시도 경로: `WB_DLOUT_STREAM`, 재시도 백오프, 치명 오류 분기 구현
 
@@ -185,3 +185,5 @@
 ## 10) DB 파티셔닝/샤딩 PoC — [todo]
 - 작업: messages/memberships 파티션(room_id), Citus PoC, 크로스 샤드 최소화
 - DoD: 파티션 플랜 검증, 주요 쿼리 성능/정합 통과
+
+

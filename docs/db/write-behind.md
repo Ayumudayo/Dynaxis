@@ -91,6 +91,7 @@
     - 타이밍: 방 멤버셋에서 제거 직후(로비 이동 전/후 중 한 지점으로 표준화)
     - 필드 예: `type=room_leave`, `ts`, `user_id`, `session_id`, `room_id`
   - 세션 종료 → `session_close`
+    - 필드 해석: 공통 필드는 `type`, `ts_ms`, `session_id`, `user_id`, `room_id`, `gateway_id`; 상황별로 `ip`, `prev_room`, `next_room` 등을 추가합니다.
     - 파일: `server/src/chat/session_events.cpp`
     - 타이밍: 상태 정리 및 브로드캐스트 직후
     - 필드 예: `type=session_close`, `ts`, `user_id?`, `session_id`, `room_id?`
@@ -100,7 +101,6 @@
 - 멱등성: `idempotency_key`(예: `session_id + ts + type`) 또는 Streams ID 기반 처리. DB 고유 제약으로 중복 차단.
 
 ## 다음 과제(TODO)
-- 서버 생산자 경로: `WRITE_BEHIND_ENABLED`가 true일 때 주요 이벤트(Session/Presence/Typing/Ack 등) `XADD`로 적재
 - 배치 커밋: 워커에 `WB_BATCH_MAX_EVENTS/bytes/delay` 적용 + Postgres 트랜잭션 커밋 구현
 - 멱등성: `event_id` 또는 `idempotency_key` 기반 고유 제약으로 중복 방지, 성공 시에만 `XACK`
 - DLQ: 재시도 한계 초과 시 `WB_DLOUT_STREAM`으로 이동(원인, retry_count 포함)

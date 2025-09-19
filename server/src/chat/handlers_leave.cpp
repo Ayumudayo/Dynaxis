@@ -6,6 +6,7 @@
 #include "server/core/concurrent/job_queue.hpp"
 #include "wire.pb.h"
 #include <cstdlib>
+#include <optional>
 #include "server/storage/redis/client.hpp"
 
 using namespace server::core;
@@ -20,6 +21,10 @@ void ChatService::on_leave(Session& s, std::span<const std::uint8_t> payload) {
 
     auto session_sp = s.shared_from_this();
     job_queue_.Push([this, session_sp, room]() {
+        const std::string session_id_str = std::to_string(session_sp->session_id());
+        std::string user_uuid;
+        std::string room_uuid;
+        const std::string next_room = "lobby";
         std::vector<std::shared_ptr<Session>> targets;
         std::vector<std::uint8_t> body;
         std::string room_to_leave;
@@ -45,6 +50,7 @@ void ChatService::on_leave(Session& s, std::span<const std::uint8_t> payload) {
                 itroom->second.erase(session_sp);
                 auto it2 = state_.user.find(session_sp.get());
                 sender_name = (it2 != state_.user.end()) ? it2->second : std::string("guest");
+                if (auto it_uuid = state_.user_uuid.find(session_sp.get()); it_uuid != state_.user_uuid.end()) { user_uuid = it_uuid->second; }
                 auto itb = state_.rooms.find(room_to_leave);
                 if (itb != state_.rooms.end()) {
                     auto& set = itb->second;
@@ -86,6 +92,7 @@ void ChatService::on_leave(Session& s, std::span<const std::uint8_t> payload) {
                 }
                 if (!uid.empty()) {
                     auto rid = ensure_room_id_ci(room_to_leave);
+                    room_uuid = rid;
                     if (!rid.empty()) {
                         std::string pfx; if (const char* p = std::getenv("REDIS_CHANNEL_PREFIX")) if (*p) pfx = p;
                         std::string pkey = pfx + std::string("presence:room:") + rid;
@@ -121,6 +128,21 @@ void ChatService::on_leave(Session& s, std::span<const std::uint8_t> payload) {
             body2.assign(bytes2.begin(), bytes2.end());
         }
         for (auto& t : t2) t->async_send(proto::MSG_CHAT_BROADCAST, body2, 0);
+        if (!room_to_leave.empty()) {
+            std::optional<std::string> uid_opt;
+            if (!user_uuid.empty()) {
+                uid_opt = user_uuid;
+            }
+            std::optional<std::string> room_id_opt;
+            if (!room_uuid.empty()) {
+                room_id_opt = room_uuid;
+            }
+            std::vector<std::pair<std::string, std::string>> wb_fields;
+            wb_fields.emplace_back("room", room_to_leave);
+            wb_fields.emplace_back("user_name", sender_name);
+            wb_fields.emplace_back("next_room", next_room);
+            emit_write_behind_event("room_leave", session_id_str, uid_opt, room_id_opt, std::move(wb_fields));
+        }
     });
 }
 

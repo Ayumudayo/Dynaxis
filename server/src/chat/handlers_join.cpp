@@ -6,6 +6,7 @@
 #include "server/core/concurrent/job_queue.hpp"
 #include "wire.pb.h"
 #include <cstdlib>
+#include <optional>
 #include "server/storage/redis/client.hpp"
 // storage
 #include "server/core/storage/connection_pool.hpp"
@@ -27,6 +28,11 @@ void ChatService::on_join(Session& s, std::span<const std::uint8_t> payload) {
 
     auto session_sp = s.shared_from_this();
     job_queue_.Push([this, session_sp, room]() {
+        const std::string session_id_str = std::to_string(session_sp->session_id());
+        std::string user_uuid;
+        std::string joined_room_id;
+        std::string previous_room;
+        std::string sender;
         std::string room_to_join = room;
         if (room_to_join.empty()) room_to_join = "lobby";
         corelog::info(std::string("JOIN_ROOM: ") + room_to_join);
@@ -41,6 +47,7 @@ void ChatService::on_join(Session& s, std::span<const std::uint8_t> payload) {
             }
             // 기존 방에서 제거
             auto itold = state_.cur_room.find(session_sp.get());
+            if (itold != state_.cur_room.end()) { previous_room = itold->second; }
             if (itold != state_.cur_room.end() && itold->second != room_to_join) {
                 auto itroom = state_.rooms.find(itold->second);
                 if (itroom != state_.rooms.end()) {
@@ -59,9 +66,9 @@ void ChatService::on_join(Session& s, std::span<const std::uint8_t> payload) {
             state_.cur_room[session_sp.get()] = room_to_join;
             state_.rooms[room_to_join].insert(session_sp);
             // 입장 브로드캐스트(Protobuf)
-            std::string sender; 
             auto it2 = state_.user.find(session_sp.get()); 
             sender = (it2 != state_.user.end()) ? it2->second : std::string("guest");
+            if (auto it_uuid = state_.user_uuid.find(session_sp.get()); it_uuid != state_.user_uuid.end()) { user_uuid = it_uuid->second; }
             server::wire::v1::ChatBroadcast pb; 
             pb.set_room(room_to_join); 
             pb.set_sender("(system)"); 
@@ -104,6 +111,7 @@ void ChatService::on_join(Session& s, std::span<const std::uint8_t> payload) {
                 if (!uid.empty()) {
                     auto rid = ensure_room_id_ci(room_to_join);
                     if (!rid.empty()) {
+                        joined_room_id = rid;
                         auto uow = db_pool_->make_unit_of_work();
                         uow->memberships().upsert_join(uid, rid, "member");
                         // 방 입장 시점의 마지막 메시지까지 읽음 처리
@@ -121,6 +129,21 @@ void ChatService::on_join(Session& s, std::span<const std::uint8_t> payload) {
                 }
             } catch (...) {}
         }
+        std::optional<std::string> uid_opt;
+        if (!user_uuid.empty()) {
+            uid_opt = user_uuid;
+        }
+        std::optional<std::string> room_id_opt;
+        if (!joined_room_id.empty()) {
+            room_id_opt = joined_room_id;
+        }
+        std::vector<std::pair<std::string, std::string>> wb_fields;
+        wb_fields.emplace_back("room", room_to_join);
+        wb_fields.emplace_back("user_name", sender);
+        if (!previous_room.empty() && previous_room != room_to_join) {
+            wb_fields.emplace_back("prev_room", previous_room);
+        }
+        emit_write_behind_event("room_join", session_id_str, uid_opt, room_id_opt, std::move(wb_fields));
     });
 }
 

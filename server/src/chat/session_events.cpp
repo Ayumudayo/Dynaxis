@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include "server/storage/redis/client.hpp"
 #include "server/core/concurrent/job_queue.hpp"
+#include <optional>
 
 using namespace server::core;
 namespace proto = server::core::protocol;
@@ -13,6 +14,9 @@ namespace server::app::chat {
 
 void ChatService::on_session_close(std::shared_ptr<Session> s) {
     job_queue_.Push([this, s]() {
+        const std::string session_id_str = std::to_string(s->session_id());
+        std::string user_uuid;
+        std::string room_uuid;
         std::vector<std::shared_ptr<Session>> targets;
         std::vector<std::uint8_t> body;
         std::string name;
@@ -25,6 +29,7 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
                 name = "guest";
             }
             state_.authed.erase(s.get());
+            if (auto it_uuid = state_.user_uuid.find(s.get()); it_uuid != state_.user_uuid.end()) { user_uuid = it_uuid->second; }
             if (!name.empty()) {
                 auto itset = state_.by_user.find(name);
                 if (itset != state_.by_user.end()) { itset->second.erase(s); }
@@ -71,6 +76,7 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
                 }
                 if (!uid.empty()) {
                     auto rid = ensure_room_id_ci(room_left);
+                    room_uuid = rid;
                     if (!rid.empty()) {
                         std::string pfx; if (const char* p = std::getenv("REDIS_CHANNEL_PREFIX")) if (*p) pfx = p;
                         std::string pkey = pfx + std::string("presence:room:") + rid;
@@ -78,6 +84,20 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
                     }
                 }
             } catch (...) {}
+        }
+        if (!room_left.empty()) {
+            std::optional<std::string> uid_opt;
+            if (!user_uuid.empty()) {
+                uid_opt = user_uuid;
+            }
+            std::optional<std::string> room_id_opt;
+            if (!room_uuid.empty()) {
+                room_id_opt = room_uuid;
+            }
+            std::vector<std::pair<std::string, std::string>> wb_fields;
+            wb_fields.emplace_back("room", room_left);
+            wb_fields.emplace_back("user_name", name);
+            emit_write_behind_event("session_close", session_id_str, uid_opt, room_id_opt, std::move(wb_fields));
         }
     });
 }

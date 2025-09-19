@@ -8,6 +8,7 @@
 #include <mutex>
 #include <memory>
 #include <span>
+#include <optional>
 #include <unordered_map>
 
 #include <boost/asio.hpp>
@@ -47,6 +48,13 @@ private:
     using Exec = boost::asio::io_context::executor_type;
     using Strand = boost::asio::strand<Exec>;
 
+    struct WriteBehindConfig {
+        bool enabled{false};
+        std::string stream_key{"session_events"};
+        std::optional<std::size_t> maxlen{};
+        bool approximate{true};
+    };
+
     struct State {
         std::mutex mu;
         std::unordered_map<std::string, RoomSet> rooms;
@@ -65,6 +73,15 @@ private:
     std::string gateway_id_{"gw-default"};
     std::unordered_map<std::string, std::shared_ptr<Strand>> room_strands_;
     Strand& strand_for(const std::string& room);
+
+    WriteBehindConfig write_behind_;
+
+    bool write_behind_enabled() const;
+    void emit_write_behind_event(const std::string& type,
+                                 const std::string& session_id,
+                                 const std::optional<std::string>& user_id,
+                                 const std::optional<std::string>& room_id,
+                                 std::vector<std::pair<std::string, std::string>> extra_fields = {});
 
     // 내부 유틸
     std::string ensure_unique_or_error(Session& s, const std::string& desired);

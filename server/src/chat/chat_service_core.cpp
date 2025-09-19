@@ -27,6 +27,24 @@ ChatService::ChatService(boost::asio::io_context& io,
     if (const char* gw = std::getenv("GATEWAY_ID"); gw && *gw) {
         gateway_id_ = gw;
     }
+    if (const char* flag = std::getenv("WRITE_BEHIND_ENABLED"); flag && *flag && std::string(flag) != "0") {
+        write_behind_.enabled = true;
+    }
+    if (const char* key = std::getenv("REDIS_STREAM_KEY"); key && *key) {
+        write_behind_.stream_key = key;
+    }
+    if (const char* maxlen = std::getenv("REDIS_STREAM_MAXLEN"); maxlen && *maxlen) {
+        char* end = nullptr;
+        unsigned long long value = std::strtoull(maxlen, &end, 10);
+        if (end != maxlen && value > 0) {
+            write_behind_.maxlen = static_cast<std::size_t>(value);
+        }
+    }
+    if (const char* approx = std::getenv("REDIS_STREAM_APPROX"); approx && *approx) {
+        if (std::string(approx) == "0") {
+            write_behind_.approximate = false;
+        }
+    }
 }
 
 ChatService::Strand& ChatService::strand_for(const std::string& room) {
@@ -35,6 +53,44 @@ ChatService::Strand& ChatService::strand_for(const std::string& room) {
         it = room_strands_.emplace(room, std::make_shared<Strand>(io_->get_executor())).first;
     }
     return *it->second;
+}
+
+bool ChatService::write_behind_enabled() const {
+    return write_behind_.enabled && static_cast<bool>(redis_);
+}
+
+void ChatService::emit_write_behind_event(const std::string& type,
+                                           const std::string& session_id,
+                                           const std::optional<std::string>& user_id,
+                                           const std::optional<std::string>& room_id,
+                                           std::vector<std::pair<std::string, std::string>> extra_fields) {
+    if (!write_behind_enabled() || type.empty() || session_id.empty()) {
+        return;
+    }
+    std::vector<std::pair<std::string, std::string>> fields;
+    fields.reserve(6 + extra_fields.size());
+    fields.emplace_back("type", type);
+    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    fields.emplace_back("ts_ms", std::to_string(now_ms));
+    fields.emplace_back("session_id", session_id);
+    if (user_id && !user_id->empty()) {
+        fields.emplace_back("user_id", *user_id);
+    }
+    if (room_id && !room_id->empty()) {
+        fields.emplace_back("room_id", *room_id);
+    }
+    if (!gateway_id_.empty()) {
+        fields.emplace_back("gateway_id", gateway_id_);
+    }
+    for (auto& kv : extra_fields) {
+        if (!kv.first.empty() && !kv.second.empty()) {
+            fields.emplace_back(std::move(kv));
+        }
+    }
+    if (!redis_->xadd(write_behind_.stream_key, fields, nullptr, write_behind_.maxlen, write_behind_.approximate)) {
+        corelog::warn(std::string("write-behind XADD 실패: type=") + type);
+    }
 }
 
 std::string ChatService::gen_temp_name_uuid8() {
@@ -250,3 +306,6 @@ std::string ChatService::ensure_room_id_ci(const std::string& room_name) {
 }
 
 } // namespace server::app::chat
+
+
+

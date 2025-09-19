@@ -116,9 +116,16 @@ public:
 
     bool xadd(const std::string& key,
               const std::vector<std::pair<std::string, std::string>>& fields,
-              std::string* out_id) override {
+              std::string* out_id,
+              std::optional<std::size_t> maxlen,
+              bool approximate) override {
         try {
-            const std::string id = redis_->xadd(key, "*", fields.begin(), fields.end());
+            std::string id;
+            if (maxlen && *maxlen > 0) {
+                id = redis_->xadd(key, "*", fields.begin(), fields.end(), static_cast<long long>(*maxlen), approximate);
+            } else {
+                id = redis_->xadd(key, "*", fields.begin(), fields.end());
+            }
             if (out_id) *out_id = id;
             return true;
         } catch (const std::exception& e) {
@@ -223,7 +230,7 @@ public:
     bool start_psubscribe(const std::string& pattern, std::function<void(const std::string&, const std::string&)> on_message) override { (void)pattern; (void)on_message; return true; }
     void stop_psubscribe() override {}
     bool xgroup_create_mkstream(const std::string& key, const std::string& group) override { (void)key; (void)group; return true; }
-    bool xadd(const std::string& key, const std::vector<std::pair<std::string, std::string>>& fields, std::string* out_id) override { (void)key; (void)fields; if (out_id) *out_id = "0-0"; return true; }
+    bool xadd(const std::string& key, const std::vector<std::pair<std::string, std::string>>& fields, std::string* out_id, std::optional<std::size_t> maxlen, bool approximate) override { (void)key; (void)fields; (void)maxlen; (void)approximate; if (out_id) *out_id = "0-0"; return true; }
     bool xreadgroup(const std::string& key, const std::string& group, const std::string& consumer, long long block_ms, std::size_t count, std::vector<StreamEntry>& out) override { (void)key; (void)group; (void)consumer; (void)block_ms; (void)count; out.clear(); return true; }
     bool xack(const std::string& /*key*/, const std::string& /*group*/, const std::string& /*id*/) override { return true; }
     bool del(const std::string& key) override { (void)key; return true; }
@@ -247,4 +254,5 @@ std::shared_ptr<IRedisClient> make_redis_client(const std::string& uri, const Op
 }
 
 } // namespace server::storage::redis
+
 
