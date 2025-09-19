@@ -48,12 +48,22 @@ cmake --build build --config RelWithDebInfo -j
 - 바이너리
   - `server_app`: 테스트용 서버
   - `dev_chat_cli`: FTXUI 기반 CLI 클라이언트
+  - `wb_worker`: Redis Streams → Postgres 배치 커밋 워커
+  - `wb_dlq_replayer`: DLQ 재처리 도구(옵션)
+  - `wb_emit`/`wb_check`: 스모크 테스트 보조 도구
 - 실행 기본값
   - 서버: 기본 포트 `5000`
   - 클라: 인자 생략 시 `127.0.0.1:5000` 접속
 - 스크립트 실행 예
   - `scripts/build.ps1 -UseVcpkg -Run both` → 서버 백그라운드 실행 후 클라 시작
   - 개별 실행은 `-Run server | client` 활용
+
+## 빠른 시작(요약)
+- 환경 파일: 루트 `.env`에 DB_URI/REDIS_URI 등 설정(예시는 `docs/getting-started.md` 참조)
+- 서버 실행: `build-msvc/server/Debug/server_app.exe 5000`
+- 워커 실행: `build-msvc/Debug/wb_worker.exe`
+- 스모크: `scripts/smoke_wb.ps1`
+- 메트릭: `METRICS_PORT` 설정 시 `curl http://127.0.0.1:9090/metrics`
 
 ## 설치(옵션)
 ```

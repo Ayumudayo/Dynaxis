@@ -81,3 +81,21 @@ limits:
 - `GATEWAY_ID`는 Redis Pub/Sub Envelope에 포함되어 self-echo 필터에 사용된다.
 - 설정 파일의 `server.gateway_id` 또는 환경 변수 `GATEWAY_ID`로 지정하며, 미설정 시 기본값 `gw-default`가 사용된다.
 - 멀티 게이트웨이 환경에서는 인스턴스별 고유 값으로 설정하고 배포 시 확인 체크리스트에 포함한다.
+
+## 환경 변수(.env) 치트시트(현재 구현 기준)
+- DB/Redis
+  - `DB_URI` — Postgres 접속 URI
+  - `REDIS_URI` — Redis 접속 URI
+- Presence/브로드캐스트
+  - `PRESENCE_TTL_SEC`(기본 30), `PRESENCE_CLEAN_ON_START`(개발용)
+  - `USE_REDIS_PUBSUB`(1=활성), `GATEWAY_ID`, `REDIS_CHANNEL_PREFIX`
+- Write-behind(Streams)
+  - `WRITE_BEHIND_ENABLED`
+  - `REDIS_STREAM_KEY`(기본 session_events), `REDIS_STREAM_MAXLEN`
+  - `WB_GROUP`, `WB_CONSUMER`
+  - `WB_BATCH_MAX_EVENTS`, `WB_BATCH_MAX_BYTES`, `WB_BATCH_DELAY_MS`
+  - `WB_DLQ_STREAM`, `WB_DLQ_ON_ERROR`, `WB_ACK_ON_ERROR`
+- DLQ 재처리
+  - `WB_GROUP_DLQ`, `WB_DEAD_STREAM`, `WB_RETRY_MAX`, `WB_RETRY_BACKOFF_MS`
+- Metrics
+  - `METRICS_PORT` — 서버가 /metrics 텍스트 포맷을 노출하는 포트

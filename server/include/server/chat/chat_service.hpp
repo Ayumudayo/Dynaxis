@@ -34,6 +34,7 @@ public:
     void on_join(server::core::Session& s, std::span<const std::uint8_t> payload);
     void on_leave(server::core::Session& s, std::span<const std::uint8_t> payload);
     void on_chat_send(server::core::Session& s, std::span<const std::uint8_t> payload);
+    void on_ping(server::core::Session& s, std::span<const std::uint8_t> payload);
     void on_session_close(std::shared_ptr<server::core::Session> s);
 
     // 외부(분산 브로드캐스트 등)에서 준비된 브로드캐스트 payload를 룸에 전파

@@ -57,7 +57,9 @@
 - `REDIS_STREAM_KEY=session_events`, `REDIS_STREAM_MAXLEN`(approx trim)
 - `WB_BATCH_MAX_EVENTS`, `WB_BATCH_MAX_BYTES`, `WB_BATCH_MAX_DELAY_MS`
 - `WB_WORKER_CONCURRENCY`, `WB_RETRY_BACKOFF_MS`
-- `WB_DLOUT_STREAM=session_events_dlq`(옵션)
+- `WB_DLQ_STREAM=session_events_dlq`(옵션)
+- `WB_DLQ_ON_ERROR=1`(에러 시 DLQ로 포워드; 0이면 비활성)
+- `WB_ACK_ON_ERROR=1`(에러 시에도 ACK; 0이면 ACK 생략해 재시도 유도)
 
 ## Streams 운영 키/그룹/필드 정리
 - 생산 키: `session_events`(=`REDIS_STREAM_KEY`)
@@ -100,12 +102,26 @@
   - 타이핑 시작/중지(`typing_start/stop`) → 저중요 이벤트로 write-behind 1단계 도입에 적합
 - 멱등성: `idempotency_key`(예: `session_id + ts + type`) 또는 Streams ID 기반 처리. DB 고유 제약으로 중복 차단.
 
+## 현재 워커 동작(구현됨)
+- 배치 파라미터 적용: `WB_BATCH_MAX_EVENTS`, `WB_BATCH_MAX_BYTES`, `WB_BATCH_DELAY_MS`
+- 멱등성: `event_id`(Streams ID) 고유 제약으로 중복 삽입 무해
+- 부분 커밋: 이벤트별 개별 트랜잭션으로 성공분만 커밋/ACK
+- 에러 처리:
+  - `WB_DLQ_ON_ERROR=1`이고 `WB_DLQ_STREAM`이 지정되면 DLQ로 포워드 후 ACK
+  - DLQ 전송도 실패하면 ACK 생략(재시도)
+  - `WB_ACK_ON_ERROR=1`이면 DLQ 비활성이어도 에러 항목을 ACK하여 워크플로 차단 방지
+ - 펜딩 길이 관측: `metric=wb_pending value=<n>` 주기(1s) 로그
+
 ## 다음 과제(TODO)
-- 배치 커밋: 워커에 `WB_BATCH_MAX_EVENTS/bytes/delay` 적용 + Postgres 트랜잭션 커밋 구현
-- 멱등성: `event_id` 또는 `idempotency_key` 기반 고유 제약으로 중복 방지, 성공 시에만 `XACK`
-- DLQ: 재시도 한계 초과 시 `WB_DLOUT_STREAM`으로 이동(원인, retry_count 포함)
+- DLQ 메타: retry_count/last_error_ts 부여, 재처리 워커/런북
 - 트림: `REDIS_STREAM_MAXLEN`에 따른 approx trim 적용(`XADD MAXLEN ~`)
 - 관측성: `wb_batch_size`, `wb_commit_ms`, `wb_fail_total`, `wb_pending`, `wb_dlq_total` 등 메트릭 수집
+
+## DLQ 재처리 도구(wb_dlq_replayer)
+- 동작: DLQ에서 읽어 멱등 커밋, 실패 시 재시도/데드 이동
+- 설정: `WB_DLQ_STREAM`, `WB_DEAD_STREAM`, `WB_GROUP_DLQ`, `WB_CONSUMER`, `WB_RETRY_MAX`, `WB_RETRY_BACKOFF_MS`
+- 백오프: 재시도마다 2^n 배(상한 10초) 지연 후 재삽입
+- 로그: `metric=wb_dlq_replay*` 계열(성공/재시도/데드)
 
 ## 모니터링
 - 레이턴시 p50/p95, 배치 크기, 커밋율, 실패율, 재시도/펜딩 길이, DLQ 길이

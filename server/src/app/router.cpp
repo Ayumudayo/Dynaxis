@@ -15,10 +15,7 @@ void register_routes(server::core::Dispatcher& dispatcher, server::app::chat::Ch
     using server::core::protocol::MSG_LEAVE_ROOM;
 
     dispatcher.register_handler(MSG_PING,
-        [](server::core::Session& s, std::span<const std::uint8_t> payload) {
-            std::vector<std::uint8_t> body(payload.begin(), payload.end());
-            s.async_send(MSG_PONG, body, 0);
-        });
+        [&chat](server::core::Session& s, std::span<const std::uint8_t> payload) { chat.on_ping(s, payload); });
 
     dispatcher.register_handler(MSG_LOGIN_REQ,
         [&chat](server::core::Session& s, std::span<const std::uint8_t> payload) { chat.on_login(s, payload); });
@@ -34,4 +31,3 @@ void register_routes(server::core::Dispatcher& dispatcher, server::app::chat::Ch
 }
 
 } // namespace server::app
-

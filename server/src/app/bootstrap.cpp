@@ -29,6 +29,8 @@
 #include "server/core/concurrent/thread_manager.hpp"
 #include "server/core/memory/memory_pool.hpp"
 #include "server/chat/chat_service.hpp"
+// Protobuf (수신 payload ts_ms 파싱용)
+#include "wire.pb.h"
 // 저장소 DI: Postgres 커넥션 풀 팩토리
 #include "server/storage/postgres/connection_pool.hpp"
 #include "server/core/storage/connection_pool.hpp"
@@ -44,6 +46,11 @@ namespace protocol = server::core::protocol;
 namespace corelog = server::core::log;
 
 namespace server::app {
+
+// 간단 메트릭 카운터/게이지(HTTP /metrics 노출용)
+static std::atomic<std::uint64_t> g_subscribe_total{0};
+static std::atomic<std::uint64_t> g_self_echo_drop_total{0};
+static std::atomic<long long>     g_subscribe_last_lag_ms{0};
 
 int run_server(int argc, char** argv) {
     try {
@@ -170,19 +177,87 @@ int run_server(int argc, char** argv) {
                     if (message.rfind("gw=", 0) == 0) {
                         auto nl = message.find('\n'); if (nl == std::string::npos) return;
                         std::string from = message.substr(3, nl - 3);
-                        if (from == gwid) return; // self-echo 차단
+                        if (from == gwid) { // self-echo 차단
+                            auto d = ++g_self_echo_drop_total;
+                            corelog::info(std::string("metric=self_echo_drop_total value=") + std::to_string(d));
+                            return;
+                        }
                         std::string payload = message.substr(nl + 1);
                         std::string room = channel; auto pos = room.rfind(':'); if (pos != std::string::npos) room = room.substr(pos + 1);
                         std::vector<std::uint8_t> body(payload.begin(), payload.end());
+                        // subscribe lag 측정(ts_ms가 있으면 now - ts_ms)
+                        try {
+                            server::wire::v1::ChatBroadcast pb;
+                            if (pb.ParseFromArray(payload.data(), static_cast<int>(payload.size()))) {
+                                auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::system_clock::now().time_since_epoch()).count();
+                                if (pb.ts_ms() > 0 && now_ms >= static_cast<long long>(pb.ts_ms())) {
+                                    auto lag = static_cast<long long>(now_ms - static_cast<long long>(pb.ts_ms()));
+                                    g_subscribe_last_lag_ms.store(lag, std::memory_order_relaxed);
+                                    corelog::info(std::string("metric=subscribe_lag_ms value=") + std::to_string(lag) + " room=" + room);
+                                }
+                            }
+                        } catch (...) {}
                         chat.broadcast_room(room, body, nullptr);
+                        auto n = ++g_subscribe_total;
+                        corelog::info(std::string("metric=subscribe_total value=") + std::to_string(n) + " room=" + room);
                     }
                 });
                 corelog::info(std::string("Subscribed Redis pattern: ") + pattern);
             }
         }
+
+        // Metrics HTTP 엔드포인트(METRICS_PORT 설정 시 활성화)
+        std::unique_ptr<std::thread> metrics_thread;
+        std::shared_ptr<asio::io_context> metrics_io;
+        std::shared_ptr<tcp::acceptor> metrics_acc;
+        unsigned short metrics_port = 0;
+        if (const char* mp = std::getenv("METRICS_PORT"); mp && *mp) {
+            unsigned long v = std::strtoul(mp, nullptr, 10); if (v > 0 && v < 65536) metrics_port = static_cast<unsigned short>(v);
+        }
+        if (metrics_port != 0) {
+            metrics_io = std::make_shared<asio::io_context>();
+            metrics_acc = std::make_shared<tcp::acceptor>(*metrics_io, tcp::endpoint(tcp::v4(), metrics_port));
+            auto do_accept = std::make_shared<std::function<void()>>();
+            *do_accept = [metrics_io, metrics_acc, do_accept]() {
+                auto sock = std::make_shared<tcp::socket>(*metrics_io);
+                metrics_acc->async_accept(*sock, [metrics_io, metrics_acc, sock, do_accept](const boost::system::error_code& ec){
+                    if (!ec) {
+                        asio::post(metrics_io->get_executor(), [sock]() {
+                            try {
+                                std::string body;
+                                body.reserve(256);
+                                body += "# TYPE chat_subscribe_total counter\nchat_subscribe_total ";
+                                body += std::to_string(g_subscribe_total.load());
+                                body += "\n# TYPE chat_self_echo_drop_total counter\nchat_self_echo_drop_total ";
+                                body += std::to_string(g_self_echo_drop_total.load());
+                                body += "\n# TYPE chat_subscribe_last_lag_ms gauge\nchat_subscribe_last_lag_ms ";
+                                body += std::to_string(g_subscribe_last_lag_ms.load());
+                                body += "\n";
+                                std::string hdr = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\nContent-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n";
+                                std::vector<asio::const_buffer> bufs;
+                                bufs.emplace_back(asio::buffer(hdr));
+                                bufs.emplace_back(asio::buffer(body));
+                                asio::write(*sock, bufs);
+                            } catch (...) {}
+                        });
+                    }
+                    // 다음 accept
+                    asio::post(metrics_io->get_executor(), *do_accept);
+                });
+            };
+            (*do_accept)();
+            metrics_thread = std::make_unique<std::thread>([metrics_io](){
+                try { metrics_io->run(); } catch (...) {}
+            });
+            corelog::info(std::string("Metrics listening on :") + std::to_string(metrics_port));
+        }
         asio::signal_set signals(io, SIGINT, SIGTERM);
         signals.async_wait([&](const boost::system::error_code&, int) {
             corelog::info("서버 종료 신호 수신...");
+            // Redis Pub/Sub 구독 중지(있다면)
+            try { if (redis) { redis->stop_psubscribe(); } } catch (...) {}
+            if (metrics_io) { try { metrics_io->stop(); } catch (...) {} }
             acceptor->stop();
             io.stop();
             workers.Stop();
@@ -192,6 +267,7 @@ int run_server(int argc, char** argv) {
             t.join();
         }
 
+        if (metrics_thread && metrics_thread->joinable()) metrics_thread->join();
         return 0;
     } catch (const std::exception& ex) {
         corelog::error(std::string("server_app 예외: ") + ex.what());

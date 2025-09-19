@@ -205,28 +205,49 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
         try {
             std::string rid = ensure_room_id_ci(current);
             if (!rid.empty()) {
+                // 환경 기반 제한값
+                std::size_t limit = 20; if (const char* v = std::getenv("SNAPSHOT_RECENT_LIMIT")) { unsigned long n = std::strtoul(v, nullptr, 10); if (n >= 5 && n <= 200) limit = static_cast<std::size_t>(n); }
+                std::size_t fetch_factor = 3; if (const char* v = std::getenv("SNAPSHOT_FETCH_FACTOR")) { unsigned long n = std::strtoul(v, nullptr, 10); if (n >= 1 && n <= 10) fetch_factor = static_cast<std::size_t>(n); }
+
                 std::string uid;
                 {
-                    std::lock_guard<std::mutex> lk(state_.mu);
-                    auto it = state_.user_uuid.find(&s);
-                }
-                // last_seen은 저장소에서 조회(없으면 0)
-                auto uow = db_pool_->make_unit_of_work();
-                std::uint64_t last_seen = 0;
-                {
-                    // session 포인터 키 사용 대신 현재 세션의 user_uuid를 찾는다
                     std::lock_guard<std::mutex> lk(state_.mu);
                     auto itu = state_.user_uuid.find(&s);
                     if (itu != state_.user_uuid.end()) uid = itu->second;
                 }
+
+                auto uow = db_pool_->make_unit_of_work();
+                std::uint64_t last_seen = 0;
                 if (!uid.empty()) {
                     auto opt = uow->memberships().get_last_seen(uid, rid);
                     last_seen = opt.value_or(0);
                 }
-                const std::size_t limit = 20;
+
                 auto last_id = uow->messages().get_last_id(rid);
-                std::uint64_t since_id = (last_id > limit) ? (last_id - limit) : 0;
-                auto msgs = uow->messages().fetch_recent_by_room(rid, since_id, static_cast<std::size_t>(limit * 2));
+                std::uint64_t since_id = 0;
+                if (last_id > 0) {
+                    if (last_seen == 0) {
+                        since_id = (last_id > limit) ? (last_id - limit) : 0;
+                    } else if (last_seen >= last_id) {
+                        // 모두 읽은 상태: 최근 limit만
+                        since_id = (last_id > limit) ? (last_id - limit) : 0;
+                    } else {
+                        // 일부 미읽음 존재: 컨텍스트 포함하여 제한 배수만큼 여유롭게 조회
+                        std::uint64_t context = static_cast<std::uint64_t>(limit) * static_cast<std::uint64_t>(fetch_factor);
+                        if (last_id > context) {
+                            std::uint64_t cut = last_id - context;
+                            since_id = (last_seen > cut) ? last_seen : cut;
+                        } else {
+                            since_id = last_seen;
+                        }
+                    }
+                }
+
+                auto msgs = uow->messages().fetch_recent_by_room(rid, since_id, static_cast<std::size_t>(limit * fetch_factor));
+                // 필요한 만큼만(마지막 limit개) 응답에 포함
+                if (msgs.size() > limit) {
+                    msgs.erase(msgs.begin(), msgs.end() - static_cast<std::ptrdiff_t>(limit));
+                }
                 for (const auto& m : msgs) {
                     auto* sm = pb.add_messages();
                     sm->set_id(m.id);

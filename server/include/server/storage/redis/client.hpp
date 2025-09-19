@@ -46,6 +46,8 @@ public:
     virtual bool xreadgroup(const std::string& key, const std::string& group, const std::string& consumer,
                             long long block_ms, std::size_t count, std::vector<StreamEntry>& out) = 0;
     virtual bool xack(const std::string& key, const std::string& group, const std::string& id) = 0;
+    // Pending length 조회(컨슈머 그룹의 대기 메시지 총량)
+    virtual bool xpending(const std::string& key, const std::string& group, long long& total) = 0;
 };
 
 // Redis 클라이언트/풀 팩토리(스켈레톤)

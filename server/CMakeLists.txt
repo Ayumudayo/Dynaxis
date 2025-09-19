@@ -8,6 +8,7 @@ add_executable(server_app
     src/chat/handlers_join.cpp
     src/chat/handlers_leave.cpp
     src/chat/handlers_chat.cpp
+    src/chat/handlers_ping.cpp
 )
 target_include_directories(server_app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(server_app PRIVATE server_core wire_proto server_storage_pg server_storage_redis)
@@ -69,4 +70,3 @@ elseif (TARGET redis++_static)
 else()
     message(WARNING "redis-plus-plus not found ? Redis client stays as stub")
 endif()
-

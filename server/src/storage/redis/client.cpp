@@ -69,15 +69,50 @@ public:
                           std::function<void(const std::string& channel, const std::string& message)> on_message) override {
         try {
             if (sub_running_) return true;
+            // 콜백/패턴 저장(재연결 시 재사용)
+            sub_cb_ = std::move(on_message);
+            sub_pattern_ = pattern;
+
             subscriber_ = std::make_unique<sw::redis::Subscriber>(redis_->subscriber());
-            subscriber_->on_pmessage([cb = std::move(on_message)](std::string /*pat*/, std::string channel, std::string msg) mutable {
+            subscriber_->on_pmessage([this](std::string /*pat*/, std::string channel, std::string msg) mutable {
+                auto& cb = sub_cb_;
                 if (cb) cb(channel, msg);
             });
-            subscriber_->psubscribe(pattern);
+            subscriber_->psubscribe(sub_pattern_);
             sub_running_ = true;
             sub_thread_ = std::thread([this]() {
+                // 예외 시 점증 백오프(최대 1초), 필요 시 재구독
+                int backoff_ms = 10;
                 while (sub_running_) {
-                    try { subscriber_->consume(); } catch (...) { std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
+                    try {
+                        if (subscriber_) {
+                            subscriber_->consume();
+                            // 정상 소비 시 백오프 리셋
+                            backoff_ms = 10;
+                        } else {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
+                        }
+                    } catch (const std::exception&) {
+                        // 재구성/재구독 시도
+                        try {
+                            subscriber_.reset();
+                            auto sub = std::make_unique<sw::redis::Subscriber>(redis_->subscriber());
+                            sub->on_pmessage([this](std::string /*pat*/, std::string channel, std::string msg) mutable {
+                                auto& cb = sub_cb_;
+                                if (cb) cb(channel, msg);
+                            });
+                            sub->psubscribe(sub_pattern_);
+                            subscriber_ = std::move(sub);
+                            backoff_ms = 10;
+                        } catch (...) {
+                            // 실패 시 백오프 증가
+                            backoff_ms = std::min(1000, backoff_ms * 2);
+                            std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
+                        }
+                    } catch (...) {
+                        backoff_ms = std::min(1000, backoff_ms * 2);
+                        std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
+                    }
                 }
             });
             return true;
@@ -93,6 +128,8 @@ public:
             if (subscriber_) { try { subscriber_->punsubscribe(); } catch (...) {} }
             if (sub_thread_.joinable()) sub_thread_.join();
             subscriber_.reset();
+            sub_cb_ = nullptr;
+            sub_pattern_.clear();
         } catch (...) {}
     }
 
@@ -208,11 +245,28 @@ public:
         }
     }
 
+    bool xpending(const std::string& key, const std::string& group, long long& total) override {
+        try {
+            std::vector<std::pair<std::string, long long>> consumers;
+            auto tpl = redis_->xpending(key, group, std::back_inserter(consumers));
+            total = std::get<0>(tpl);
+            return true;
+        } catch (const std::exception& e) {
+            server::core::log::warn(std::string("Redis XPENDING failed: ") + e.what());
+            return false;
+        } catch (...) {
+            server::core::log::warn("Redis XPENDING failed: unknown");
+            return false;
+        }
+    }
+
 private:
     std::unique_ptr<sw::redis::Redis> redis_;
     std::unique_ptr<sw::redis::Subscriber> subscriber_;
     std::thread sub_thread_;
     std::atomic<bool> sub_running_{false};
+    std::function<void(const std::string&, const std::string&)> sub_cb_{};
+    std::string sub_pattern_{};
 };
 #endif
 
@@ -235,6 +289,7 @@ public:
     bool xack(const std::string& /*key*/, const std::string& /*group*/, const std::string& /*id*/) override { return true; }
     bool del(const std::string& key) override { (void)key; return true; }
     bool scan_del(const std::string& pattern) override { (void)pattern; return true; }
+    bool xpending(const std::string& key, const std::string& group, long long& total) override { (void)key; (void)group; total = 0; return true; }
 private:
     std::string uri_;
     Options opts_;

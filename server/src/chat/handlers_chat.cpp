@@ -12,6 +12,7 @@
 #include "server/storage/redis/client.hpp"
 #include <vector>
 #include <cstdlib>
+#include <atomic>
 
 using namespace server::core;
 namespace proto = server::core::protocol;
@@ -233,6 +234,7 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
         if (redis_) {
             try {
                 if (const char* use = std::getenv("USE_REDIS_PUBSUB"); use && std::strcmp(use, "0") != 0) {
+                    static std::atomic<std::uint64_t> publish_total{0};
                     std::string pfx; if (const char* p = std::getenv("REDIS_CHANNEL_PREFIX")) if (*p) pfx = p;
                     std::string ch = pfx + std::string("fanout:room:") + current_room;
                     std::string payload(reinterpret_cast<const char*>(bytes.data()), bytes.size());
@@ -242,6 +244,8 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
                     message.push_back('\n');
                     message.append(payload);
                     redis_->publish(ch, std::move(message));
+                    auto n = ++publish_total;
+                    corelog::info(std::string("metric=publish_total value=") + std::to_string(n) + " room=" + current_room);
                 }
             } catch (...) {}
         }
@@ -265,4 +269,3 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
 }
 
 } // namespace server::app::chat
-

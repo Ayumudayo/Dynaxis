@@ -41,7 +41,7 @@
 - [done] 룸 프레즌스: `prefix + presence:room:{room_id}` SADD/SREM
 - [done] 유저 프레즌스: `prefix + presence:user:{user_id}` SETEX TTL(기본 30s)
 - [done] 재시작 최소복원: `PRESENCE_CLEAN_ON_START` 시 `presence:room:*` 정리(개발/단일 노드)
-- [todo] heartbeat 전용 경량 경로(/ping 등)에서 user TTL 갱신
+- [done] heartbeat 경량 경로(MSG_PING)에서 user TTL 갱신
 - [todo] TTL 만료/로그아웃 시 memberships 정합(선택) — write-behind와 연계
 
 완료 기준(DoD)
@@ -62,11 +62,11 @@
 
 ### 구현
 - [done] 서버 Ingest 경로: `WRITE_BEHIND_ENABLED` 활성 시 XADD 생산(handlers_login/handlers_join/handlers_leave/session_events) + MAXLEN 적용
-- [todo] 워커 배치 커밋: `WB_BATCH_MAX_EVENTS/BYTES/DELAY_MS` 반영, Postgres 트랜잭션, 멱등 처리, ACK 플로우 확정
-- [todo] DLQ/재시도 경로: `WB_DLOUT_STREAM`, 재시도 백오프, 치명 오류 분기 구현
+- [done] 워커 배치 커밋: `WB_BATCH_MAX_EVENTS/BYTES/DELAY_MS` 반영, 이벤트별 트랜잭션(부분 커밋), 멱등 처리, ACK 확정
+- [wip] DLQ/재시도 경로: `WB_DLQ_STREAM`, `WB_DLQ_ON_ERROR`, `WB_ACK_ON_ERROR` 추가(DLQ 실패 시 재시도)
 
 ### 구현 후/운영
-- [todo] 관측성 지표 및 알람: `wb_batch_size`, `wb_commit_ms`, `wb_fail_total`, `wb_pending`, `wb_dlq_total` 수집·대시보드화
+- [wip] 관측성 지표 및 알람: 최소 로그(키=값) `wb_commit_ms`, `wb_batch_size`, `wb_fail_total`, `wb_dlq_total` 추가. `wb_pending`/대시보드는 후속.
 - [todo] 검증: 로컬 Redis 통합 테스트(XREADGROUP 블로킹/배치·ACK), 펜딩/재시도 시나리오, 이벤트 파싱 단위 테스트
 - [todo] 운영 가이드: 핸드오프 절차, 장애 폴백 전략, 배포 체크리스트 문서화
 
@@ -82,15 +82,15 @@
 ### 구현 전 준비
 - [done] 발행(publish): `USE_REDIS_PUBSUB!=0`일 때 `prefix + fanout:room:{room_name}`로 Protobuf 바이트 publish
 - [done] self-echo 방지: Envelope에 `gw=<gateway_id>\n<payload>` 적용, 로컬 `GATEWAY_ID`와 일치하면 드롭
-- [todo] 구독 루프 설계: reconnect/backoff 정책, shutdown 처리, 멀티 스레드 안전성 정리
+- [done] 구독 루프 설계: reconnect/backoff(최대 1s), shutdown(stop_psubscribe) 처리
 
 ### 구현
-- [todo] 구독(subscribe) 태스크: Redis Subscriber 연결, payload 파싱, 세션 fanout 연동
+- [done] 구독(subscribe) 태스크: Redis Subscriber 연결, envelope 파싱, self-echo 필터, 세션 fanout 연동
 - [todo] 장애 복구 흐름: 재연결(backoff), 누락 감지, 경고 로그/알람 수준 정의
 - [todo] 일관성 검증: 멀티 게이트웨이 환경 통합 테스트 스크립트 및 시뮬레이션 작성
 
 ### 구현 후/운영
-- [todo] 관측성: `publish_total`, `subscribe_total`, `subscribe_lag_ms`, `self_echo_drop_total` 지표 수집 및 경보 설정
+- [wip] 관측성: `publish_total`, `subscribe_total`, `self_echo_drop_total` 최소 로그 수집(키=값). `subscribe_lag_ms`는 후속.
 - [todo] 운영 가이드: GATEWAY_ID 배포 체크리스트, Pub/Sub 장애 시 폴백 전략 정리
 
 완료 기준(DoD)

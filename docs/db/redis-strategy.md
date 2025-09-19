@@ -69,11 +69,15 @@
 - 메시지 영속: Postgres, 브로드캐스트: Redis Pub/Sub → 필요 시 Streams
 
 ## Presence/PubSub 업데이트
-- User Presence: `presence:user:{user_id}` 키에 1을 SETEX로 저장하여 TTL로 온라인 상태 유지(기본 `PRESENCE_TTL_SEC=30`). 로그인/채팅 시 갱신한다.
+- User Presence: `presence:user:{user_id}` 키에 1을 SETEX로 저장하여 TTL로 온라인 상태 유지(기본 `PRESENCE_TTL_SEC=30`). 로그인/채팅/핑(PING) 시 갱신한다.
 - Room Presence: 입장 시 SADD `presence:room:{room_id}` `{user_id}`, 퇴장/세션 종료 시 SREM 처리한다.
 - Pub/Sub 채널: `fanout:room:{room_name}`. `USE_REDIS_PUBSUB!=0`이면 Protobuf ChatBroadcast payload를 publish하며 Envelope(`gw=<gateway_id>\n<payload>`) 규칙을 따른다.
 - self-echo 필터: 구독 측은 로컬 `GATEWAY_ID`와 비교해 동일한 gateway에서 온 메시지를 드롭한다.
 - `GATEWAY_ID`를 설정하지 않으면 기본값 `gw-default`가 적용되므로, 멀티 게이트웨이 환경에서는 고유 값을 지정한다.
+
+### 구독 안정성/운영
+- 구독 루프는 예외 발생 시 점증 백오프로 재연결/재구독한다(최대 1s).
+- 프로세스 종료 신호 수신 시 구독을 먼저 중단(stop_psubscribe)하여 중복/유실을 최소화한다.
 
 ## 운영/설정 키
 - `PRESENCE_TTL_SEC` (기본 30): `presence:user:{user_id}` TTL

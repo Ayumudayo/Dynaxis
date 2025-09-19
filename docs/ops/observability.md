@@ -29,10 +29,19 @@
 - 서버 단위: 처리량/지연/오류율/연결 수
 - 룸 단위: `msgs_per_sec`, 멤버 수, fanout 지연 분포
 - 분산 브로드캐스트: `publish_total`, `subscribe_total`, `subscribe_lag_ms`, `duplicates_dropped_total`, `self_echo_drop_total`
+  - 현재 구현된 최소 로그: `metric=publish_total value=<n> room=<name>`, `metric=subscribe_total value=<n> room=<name>`, `metric=self_echo_drop_total value=<n>`, `metric=subscribe_lag_ms value=<ms> room=<name>`
 
 ## 수집/표시
 - Prometheus pull 수집, Grafana 대시보드 구성
 - 권장 대시보드 패널: 서버별 처리량/지연 히스토그램, 룸별 멤버/메시지, 오류 heatmap, Redis/DB round-trip, 큐 길이/CPU/메모리
+
+## Metrics 노출(간단 HTTP)
+- 환경 `METRICS_PORT` 설정 시 server_app이 `:METRICS_PORT/metrics`로 텍스트 포맷 노출
+- 현재 노출되는 최소 지표(전역):
+  - `chat_subscribe_total` (Counter)
+  - `chat_self_echo_drop_total` (Counter)
+  - `chat_subscribe_last_lag_ms` (Gauge)
+- 예시: `METRICS_PORT=9090` → `curl http://127.0.0.1:9090/metrics`
 
 ## 트레이싱(선택)
 - OpenTelemetry SDK 계측 → OTLP 수집기 → Jaeger/Tempo
@@ -50,6 +59,12 @@
 - wb_fail_total: 배치 실패 건수 — Counter
 - wb_pending: 컨슈머 그룹 pending length — Gauge
 - wb_dlq_total: DLQ로 이동한 이벤트 수 — Counter
+  - 현재 구현된 최소 로그(키=값): `metric=wb_flush wb_commit_ms=<ms> wb_batch_size=<n> wb_ok_total=<n> wb_fail_total=<n> wb_dlq_total=<n>`, `metric=wb_pending value=<n>`
+
+## 로그 수집 가이드(키=값 패턴)
+- 형식: `metric=<name> k1=v1 k2=v2 ...` (공백 구분)
+- 수집기 파서: 공백으로 분리 후 `key=value`를 필드로 파싱, 숫자형은 정수/실수로 변환
+- 추천 필드: `server_id`, `gateway_id`, `room`, `stage`
 
 ## 메트릭 명세
 - pipeline_latency_ms: 히스토그램 또는 서머리. 단위 ms. 라벨 `stage`(accept|read_frame|decode|auth_check|route_lookup|repo_ops|redis_ops|build_payload|fanout_send|write_frame|total), `server_id` 선택.
