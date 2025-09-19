@@ -96,3 +96,5 @@ scripts/smoke_wb.ps1 -Config Debug -BuildDir build-msvc
 - Redis/DB 연결 실패: `.env`와 실제 인스턴스 주소/권한 확인
 - Streams 처리 지연: `wb_pending`(XPENDING) 로그 값과 Redis 부하 확인
 
+## 다음 단계
+- Docker Compose로 로컬 스택을 일괄 기동하고 싶다면 `docs/ops/deployment.md`의 예시를 참고하세요(매니지드 Redis 사용 시 REDIS_URI만 주입).

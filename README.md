@@ -18,6 +18,7 @@
 - 로드맵: `docs/roadmap.md`
 - Redis 전략/Write-behind: `docs/db/redis-strategy.md`, `docs/db/write-behind.md`
 - 관측성: `docs/ops/observability.md`, `docs/ops/dlq-retry.md`, `docs/ops/gateway-and-lb.md`
+- 배포 전략: `docs/ops/deployment.md`
 - 저장소 구조: `docs/repo-structure.md`
 - 테스트 가이드: `docs/tests.md`
 
@@ -30,4 +31,3 @@
 
 ## 라이선스
 - 리포지터리 라이선스/저작권 정책은 상위 정책을 따릅니다. 별도 표기가 없는 한 외부 배포를 전제로 하지 않습니다.
-
