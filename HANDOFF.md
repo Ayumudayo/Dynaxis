@@ -1,32 +1,101 @@
 # HANDOFF: 현재 컨텍스트 요약 및 다음 단계 안내
 
-본 문서는 현재까지의 설계 결정과 산출물, 남은 작업, 재개 절차를 한눈에 복원할 수 있도록 정리합니다. 구현은 사용자 승인 전까지 보류 상태입니다(문서만 작성됨).
+본 문서는 현재까지 구현된 기능과 설정, 실행·검증·트러블슈팅 절차를 한눈에 복원할 수 있도록 정리합니다. 이 문서를 기준으로 다른 개발자가 바로 이어서 작업/운영을 재개할 수 있습니다.
 
-## Streams 상태
-- 현재: Redis Streams 클라이언트 인터페이스 구현 완료(redis-plus-plus 1.3.15 기준)
-  - 구현: XGROUP CREATE(mkstream), XADD, XREADGROUP(block/limit), XACK
-  - 파일: `server/src/storage/redis/client.cpp`
-- 통합 상태: 서버에서 생산(XADD) 경로 미연결, 워커는 컨슈머 그룹으로 읽고 ACK까지의 스켈레톤 준비
-  - 파일: `tools/wb_worker/main.cpp` — .env 인식 추가(REDIS_URI, REDIS_STREAM_KEY, WB_GROUP, WB_CONSUMER)
-- 버전/트립릿: vcpkg `x64-windows`, redis-plus-plus 1.3.15. 변경 시 API 시그니처 차이에 맞춘 교체 가능.
- - 운영 키/필드 상세: `docs/db/write-behind.md` 참고(키, 그룹, 필드, 다음 과제)
+## 현재 상태(요약)
+- Write-behind 엔드투엔드 동작
+  - 서버가 로그인/룸 입장/퇴장/세션 종료 시 Redis Streams로 이벤트 생산(XADD)
+  - 워커가 컨슈머 그룹으로 소비 후 Postgres에 배치 커밋, 성공 시 ACK
+  - 세션 식별자는 세션별 UUID v4를 생성·캐시해 `session_id`로 사용(정합성/조인 용이)
+  - 비-UUID 값은 워커에서 NULL 정규화해 DB 캐스팅 오류 방지
+- 관측/운영
+  - 서버: 부팅 시 write-behind 설정 로그 출력, `/metrics` 노출(옵션)
+  - 워커: `wb_flush`, `wb_pending` 등 최소 메트릭 로그
+- 실행 스크립트
+  - 원클릭: `scripts/run_all.ps1`(Windows), `scripts/run_all.sh`(WSL/Linux)
+  - 수동: `server_app.exe`/`wb_worker.exe` 개별 실행 가능
 
-### 다음 과제(Streams)
-1) 서버: `WRITE_BEHIND_ENABLED` 시 세션/채팅 이벤트를 `XADD`로 생산
-2) 워커: 배치 커밋(크기/지연/바이트 임계) + Postgres 트랜잭션 처리
-3) 멱등/ACK: DB 커밋 성공 시에만 `XACK`, 고유 제약으로 중복 방지
-4) DLQ: 실패 시 `WB_DLOUT_STREAM`로 이동(원인/리트라이 카운트 포함)
-5) 트림: `REDIS_STREAM_MAXLEN` 사용한 approx trim 정책 적용
-6) 관측성: `wb_batch_size`, `wb_commit_ms`, `wb_fail_total`, `wb_pending` 등 메트릭 추가
+## 변경 사항(최근 스프린트)
+- 세션 UUID 도입 및 이벤트 반영
+  - ChatService 내부에 세션별 UUID v4 생성/캐시(`session_uuid`) 추가
+  - 모든 write-behind 이벤트의 `session_id`에 세션 UUID 적용
+  - 세션 종료 시 UUID 정리
+- 로그인 이벤트의 user_id 누락 수정
+  - 로그인 처리 시 확보한 `user_uuid`를 이벤트에 반영
+- 워커의 안정성 보강
+  - `user_id/session_id/room_id`가 UUID 형식이 아니면 빈 문자열→DB에서 NULL 저장
+- 빌드/실행 편의성 개선
+  - `run_all.ps1/sh` 추가, `build.ps1` 인자 전달/실패 처리 보강
+  - `wb_check`가 `.env` 자동 로드하도록 수정
+- 문서/설정 갱신
+  - `.env`에 write-behind/DLQ/metrics/presence/pubsub 키 추가
+  - Getting Started/Deployment에 원클릭 스크립트/마이그레이션 러너/트러블슈팅 반영
 
-### 검증 절차(로컬)
-- Redis 기동 후 `.env` 준비: `REDIS_URI=redis://127.0.0.1:6379`, `REDIS_STREAM_KEY=session_events`, `WB_GROUP=wb_group`, `WB_CONSUMER=wb_consumer`
-- `wb_worker` 실행(.env 자동 로드) → 블로킹 대기 확인
-- 임시 생산 스모크: `redis-cli XADD session_events * type login ts 0 user_id u1 session_id s1` → 워커 로그에 처리/ACK 표시 확인
-- 펜딩 확인: `XPENDING session_events wb_group` → 비어 있음(ACK 완료)
+## 소스 포인터(핵심 파일)
+- 서버 이벤트 생산/세션 UUID
+  - `server/include/server/chat/chat_service.hpp`
+  - `server/src/chat/chat_service_core.cpp`
+  - `server/src/chat/handlers_login.cpp`
+  - `server/src/chat/handlers_join.cpp`
+  - `server/src/chat/handlers_leave.cpp`
+  - `server/src/chat/session_events.cpp`
+- Redis Streams 클라이언트
+  - `server/include/server/storage/redis/client.hpp`
+  - `server/src/storage/redis/client.cpp`
+- 워커/도구
+  - `tools/wb_worker/main.cpp` — Streams 소비→DB 커밋
+  - `tools/wb_emit/main.cpp` — 테스트용 XADD 발행(더미 UUID)
+  - `tools/wb_check/main.cpp` — DB 반영 확인(.env 로드)
+- 스크립트/설정
+  - `scripts/run_all.ps1`, `scripts/run_all.sh`
+  - `scripts/build.ps1` (BuildDir/UseVcpkg/Fail-fast)
+  - 루트 `.env` 및 각 바이너리 폴더에 복사된 `.env`
 
-### 비상 운용
-- 장애/성능 이슈 시 `WRITE_BEHIND_ENABLED=0`으로 즉시 비활성화하고 동기 경로에 의존. 추후 재가동 시 재처리 대비.
+## 실행 절차(권장)
+- 원클릭(Windows): `scripts/run_all.ps1 -Config Debug -WithClient -Smoke`
+  - 서버(:5000) + 워커 기동 → 선택 스모크(wb_emit→wb_check)
+- 원클릭(WSL/Linux): `bash scripts/run_all.sh Debug build-linux 5000` (환경변수 `SMOKE=1`)
+- 수동
+  - 서버: `build-msvc/server/Debug/server_app.exe 5000`
+  - 워커: `build-msvc/Debug/wb_worker.exe`
+  - 클라: `build-msvc/devclient/Debug/dev_chat_cli.exe`
+  - 확인(SQL): `select id,event_id,type,ts,user_id,session_id,room_id from session_events order by id desc limit 20;`
+
+## 환경 변수(핵심)
+- Write-behind 게이트/Streams
+  - `WRITE_BEHIND_ENABLED=1`
+  - `REDIS_STREAM_KEY=session_events`, `REDIS_STREAM_MAXLEN=10000`, `REDIS_STREAM_APPROX(기본 ~)`
+- 워커 배치/그룹/DLQ
+  - `WB_BATCH_MAX_EVENTS`, `WB_BATCH_MAX_BYTES`, `WB_BATCH_DELAY_MS`
+  - `WB_GROUP`, `WB_CONSUMER`
+  - `WB_DLQ_STREAM`, `WB_ACK_ON_ERROR`, `WB_DLQ_ON_ERROR`, `WB_GROUP_DLQ`, `WB_DEAD_STREAM`, `WB_RETRY_MAX`, `WB_RETRY_BACKOFF_MS`
+- 기타
+  - `PRESENCE_TTL_SEC`, `PRESENCE_CLEAN_ON_START`, `GATEWAY_ID`, `REDIS_CHANNEL_PREFIX`, `USE_REDIS_PUBSUB`, `METRICS_PORT`
+
+## 검증 체크리스트
+- 서버 로그: `Write-behind enabled: stream=...` 가 보여야 함(비활성 시 `.env` 확인)
+- 워커 로그: `metric=wb_flush ... wb_ok_total>0` 증가, `wb_pending` 지표 출력
+- DB 반영: 최근 레코드에 실제 `user_id/room_id` UUID, `session_id`는 세션 UUID
+- 스모크(wb_emit)는 더미 UUID를 사용 — 서버 경로 검증은 실제 클라이언트 동작으로 확인할 것
+
+## 트러블슈팅
+- PowerShell 문자열 보간 오류 → `run_all.ps1` 고침(배열→해시테이블 splatting)
+- CMake `-B` 인자 미전달 → `BuildDir` 로그 및 인자 전달 보강
+- LNK2019(load_dotenv) → `wb_check`가 `server_core`에 링크되도록 CMake 보강
+- CMake 캐시 경로 불일치(WSL/Windows 혼용) → `scripts/build.ps1 -Clean` 또는 빌드 디렉터리 정리 후 재구성
+- Redis Cloud 연결 이슈 → `.env`의 `REDIS_URI`(인증 포함) 및 방화벽/SSL 스킴 확인
+
+## 운영 메모
+- 현재 배치 커밋은 `WB_BATCH_DELAY_MS`(기본 500ms)와 임계치에 의해 거의 실시간에 가깝게 반영됨
+  - 더 “주기형”으로 만들려면 지연/임계값 상향(또는 추가 파라미터 도입)으로 조정 가능
+- 장애 시 즉시 `WRITE_BEHIND_ENABLED=0`으로 폴백(동기 경로), 재가동 시 멱등 반영으로 복구
+
+## 다음 단계
+- (옵션) 주기형 배치 파라미터 노출(`WB_BLOCK_MS`, `WB_MIN_BATCH_EVENTS`) 및 관측 지표 확장
+- Compose/K8s 배포 자산 보강(Dockerfile 멀티스테이지/Helm 차트)
+- 대시보드/알람(
+  - 워커: `wb_flush`, `wb_fail_total`, `wb_pending`, DLQ 길이
+  - 서버: `/metrics` 지표 및 subscribe lag)
 
 ## 핵심 결정(요약)
 - SoR(System of Record): PostgreSQL 16, 드라이버는 `libpqxx`(C++17). ORM 미도입, Prepared Statement 사용.
@@ -34,7 +103,7 @@
 - 보안: 비밀번호 해시 Argon2id. 세션 토큰은 해시만 저장(`token_hash`).
 - 식별자: UUID 기반(`user_id`, `room_id`, `session_id`). 이름은 라벨로만 사용(룸 이름 중복 허용).
 - 스냅샷: 방 입장 시 최근 N(기본 20) 메시지 스냅샷 전송 후 입력 활성화. 단일 메시지 포맷(MSG_STATE_SNAPSHOT) 채택.
-- Write-behind(옵션): 세션 이벤트를 Redis Streams에 버퍼링 후 배치 커밋(at-least-once + 멱등)으로 RDB 부하 완화.
+- Write-behind: 세션 이벤트를 Redis Streams에 버퍼링 후 배치 커밋(at-least-once + 멱등)으로 RDB 부하 완화(현재 활성화 가능).
 
 ## 문서 지형도(중요 파일)
 - 아키텍처/결정

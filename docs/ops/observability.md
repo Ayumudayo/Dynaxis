@@ -61,6 +61,12 @@
 - wb_dlq_total: DLQ로 이동한 이벤트 수 — Counter
   - 현재 구현된 최소 로그(키=값): `metric=wb_flush wb_commit_ms=<ms> wb_batch_size=<n> wb_ok_total=<n> wb_fail_total=<n> wb_dlq_total=<n>`, `metric=wb_pending value=<n>`
 
+## 다음 단계(권장)
+- 서버/워커에 Prometheus 지표를 직접 추가(wb_* 계열 Counter/Gauge/Histogram)
+- 대시보드 초안: 워커 배치 크기/지연, 실패율, 펜딩 길이, DLQ 길이, 서버 subscribe lag 등
+- 알람 임계치: `wb_fail_total` 증분, `wb_pending` 장시간 상승, `subscribe_lag_ms` P95 상향, `/metrics` 응답 실패
+- 라벨 표준: `server_id`, `gateway_id`, `room_id`(가능 시), `env`, `build_version`
+
 ## 로그 수집 가이드(키=값 패턴)
 - 형식: `metric=<name> k1=v1 k2=v2 ...` (공백 구분)
 - 수집기 파서: 공백으로 분리 후 `key=value`를 필드로 파싱, 숫자형은 정수/실수로 변환

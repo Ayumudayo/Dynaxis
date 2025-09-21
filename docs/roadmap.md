@@ -63,10 +63,11 @@
 ### 구현
 - [done] 서버 Ingest 경로: `WRITE_BEHIND_ENABLED` 활성 시 XADD 생산(handlers_login/handlers_join/handlers_leave/session_events) + MAXLEN 적용
 - [done] 워커 배치 커밋: `WB_BATCH_MAX_EVENTS/BYTES/DELAY_MS` 반영, 이벤트별 트랜잭션(부분 커밋), 멱등 처리, ACK 확정
+- [done] 세션 UUID(v4) 도입: 이벤트 `session_id`를 세션별 UUID로 통일(서버/Redis/DB 일치)
 - [wip] DLQ/재시도 경로: `WB_DLQ_STREAM`, `WB_DLQ_ON_ERROR`, `WB_ACK_ON_ERROR` 추가(DLQ 실패 시 재시도)
 
 ### 구현 후/운영
-- [wip] 관측성 지표 및 알람: 최소 로그(키=값) `wb_commit_ms`, `wb_batch_size`, `wb_fail_total`, `wb_dlq_total` 추가. `wb_pending`/대시보드는 후속.
+- [wip] 관측성 지표 및 알람: 최소 로그(키=값) `wb_commit_ms`, `wb_batch_size`, `wb_fail_total`, `wb_dlq_total`, `wb_pending` 추가. 대시보드는 후속.
 - [todo] 검증: 로컬 Redis 통합 테스트(XREADGROUP 블로킹/배치·ACK), 펜딩/재시도 시나리오, 이벤트 파싱 단위 테스트
 - [todo] 운영 가이드: 핸드오프 절차, 장애 폴백 전략, 배포 체크리스트 문서화
 
@@ -137,7 +138,7 @@
 - DB 마이그레이션 러너 구현 및 작동 확인(dry-run/적용)
 - Redis Presence: 룸 SET(SADD/SREM), 유저 TTL(SETEX), 재시작 최소 복원 옵션
 - 분산 브로드캐스트(1차): Pub/Sub 발행 옵션(채널 `fanout:room:{room_name}`) + Envelope(`gw=<gateway_id>\n<payload>`) self-echo 필터 적용
-- Write-behind 워커: 스켈레톤 추가 및 빌드 통합
+- Write-behind: 서버 Ingest + 워커 배치 커밋 동작, 세션 UUID 통일
 - 문서: ROADMAP, HANDOFF, PROTOCOL, REDIS 전략, OBSERVABILITY 보강
 
 ---

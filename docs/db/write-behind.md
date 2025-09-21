@@ -23,14 +23,15 @@
   - `session_login`, `session_logout`, `presence_heartbeat`, `room_join`, `room_leave`, `message_ack`, `typing_start/stop`
 - 공통 필드:
   - `event_id`(Redis XADD ID), `ts`, `user_id`, `session_id`, `room_id?`, `payload`
+  - 세션 식별자(session_id)는 서버 측에서 세션별 UUID v4를 생성하여 사용한다(내부 숫자 세션 식별자와 분리됨)
 - 멱등성 키: `idempotency_key` 또는 `event_id`를 RDB에 기록하여 중복 삽입 방지
 
 ## 배치 커밋
 - 트랜잭션 범위: 동일 테이블/유형끼리 묶거나, 다중 테이블 시 단일 트랜잭션
 - 정책:
-  - `BATCH_MAX_EVENTS`(예: 500)
-  - `BATCH_MAX_BYTES`(예: 1–4 MiB)
-  - `BATCH_MAX_DELAY_MS`(예: 100–500ms)
+  - `BATCH_MAX_EVENTS`(예: 100–500)
+  - `BATCH_MAX_BYTES`(예: 512 KiB–4 MiB)
+  - `BATCH_MAX_DELAY_MS`(예: 500–3000ms). 기본값 500ms로 사실상 준실시간 반영.
 - 실패 처리: 전체 롤백 후 재시도(지수 백오프). 부분 실패는 레코드 단위로 분리 재시도 또는 DLQ로 이동
 
 ## 전달 보장
@@ -110,7 +111,8 @@
   - `WB_DLQ_ON_ERROR=1`이고 `WB_DLQ_STREAM`이 지정되면 DLQ로 포워드 후 ACK
   - DLQ 전송도 실패하면 ACK 생략(재시도)
   - `WB_ACK_ON_ERROR=1`이면 DLQ 비활성이어도 에러 항목을 ACK하여 워크플로 차단 방지
- - 펜딩 길이 관측: `metric=wb_pending value=<n>` 주기(1s) 로그
+- 펜딩 길이 관측: `metric=wb_pending value=<n>` 주기(1s) 로그
+ - UUID 정규화: `user_id/session_id/room_id`가 UUID 형식이 아니면 NULL 저장(워커에서 정규화)
 
 ## 다음 과제(TODO)
 - DLQ 메타: retry_count/last_error_ts 부여, 재처리 워커/런북

@@ -89,6 +89,13 @@ volumes:
 - 배포: 롤링 업데이트 + 드레인(runbook 참고), readinessProbe/livenessProbe
 - IaC: Terraform로 VPC/Subnet/SG/SecretManager/ElastiCache/RDS 등 관리
 
+## 다음 단계(개발→운영 연계)
+- Dockerfile(멀티스테이지) 작성: vcpkg 캐시 활용, 런타임 이미지는 슬림 구성
+- docker-compose.dev.yml: Postgres 포함, 매니지드 Redis는 REDIS_URI만 주입
+- CI 이미지 빌드/캐시 전략 수립: vcpkg binary cache, 레이어 캐시 최적화
+- Helm 차트 초안: server_app(Deployment/HPA/Service), wb_worker(Deployment), ConfigMap/Secret, ServiceMonitor
+- 런북/체크리스트: 환경 변수, readiness/liveness, 롤링업데이트/드레인, 알람 항목
+
 ## 현재 구성(하이브리드) 운영 팁
 - 매니지드 Redis + 로컬 Postgres 시
   - 네트워크 지연/방화벽 확인(SSL 필요 시 rediss 스킴)
