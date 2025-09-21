@@ -61,6 +61,7 @@ private:
         std::unordered_map<std::string, RoomSet> rooms;
         std::unordered_map<Session*, std::string> user;      // 세션별 사용자명
         std::unordered_map<Session*, std::string> user_uuid;  // 세션별 사용자 UUID
+        std::unordered_map<Session*, std::string> session_uuid; // 세션별 세션 UUID(v4)
         std::unordered_map<Session*, std::string> cur_room;  // 세션별 현재 룸
         std::unordered_set<Session*> authed;                 // 로그인 완료 세션
         std::unordered_map<std::string, RoomSet> by_user;    // 사용자명→세션들
@@ -78,6 +79,8 @@ private:
     WriteBehindConfig write_behind_;
 
     bool write_behind_enabled() const;
+    std::string generate_uuid_v4();
+    std::string get_or_create_session_uuid(Session& s);
     void emit_write_behind_event(const std::string& type,
                                  const std::string& session_id,
                                  const std::optional<std::string>& user_id,

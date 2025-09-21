@@ -43,6 +43,7 @@ if (-not $onWindows) { $onWindows = ($PSVersionTable.PSEdition -eq 'Desktop' -or
 if (-not $BuildDir -or $BuildDir -eq '') {
   if ($onWindows) { $BuildDir = 'build-msvc' } else { $BuildDir = 'build-linux' }
 }
+Info "BuildDir=$BuildDir"
 
 if ($Clean) {
   if (Test-Path $BuildDir) { Info "빌드 폴더 정리: $BuildDir"; Remove-Item -Recurse -Force $BuildDir }

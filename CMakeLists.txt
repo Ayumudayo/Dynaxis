@@ -145,6 +145,16 @@ if (TARGET wb_dlq_replayer)
     target_link_libraries(wb_dlq_replayer PRIVATE server_storage_redis)
   endif()
 endif()
+if (TARGET wb_check)
+  # 일부 환경에서 타깃 정의 순서 때문에 server_core 링크가 누락되어
+  # load_dotenv 심볼(LNK2019) 오류가 발생할 수 있어 보강 링크를 추가합니다.
+  if (TARGET server_core)
+    target_link_libraries(wb_check PRIVATE server_core)
+  endif()
+  if (TARGET server_storage_pg)
+    target_link_libraries(wb_check PRIVATE server_storage_pg)
+  endif()
+endif()
 add_subdirectory(devclient)
 add_subdirectory(tests)
 # add_subdirectory(devclient)  # 이후 단계

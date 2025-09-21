@@ -45,6 +45,13 @@ ChatService::ChatService(boost::asio::io_context& io,
             write_behind_.approximate = false;
         }
     }
+    if (write_behind_.enabled) {
+        corelog::info(std::string("Write-behind enabled: stream=") + write_behind_.stream_key +
+                      (write_behind_.maxlen ? (std::string(", maxlen=") + std::to_string(*write_behind_.maxlen)) : std::string(", maxlen=none")) +
+                      std::string(write_behind_.approximate ? ", approx=~" : ", approx=exact"));
+    } else {
+        corelog::warn("Write-behind disabled (set WRITE_BEHIND_ENABLED=1 to enable)");
+    }
 }
 
 ChatService::Strand& ChatService::strand_for(const std::string& room) {
@@ -57,6 +64,35 @@ ChatService::Strand& ChatService::strand_for(const std::string& room) {
 
 bool ChatService::write_behind_enabled() const {
     return write_behind_.enabled && static_cast<bool>(redis_);
+}
+
+std::string ChatService::generate_uuid_v4() {
+    std::array<unsigned char, 16> b{};
+    static thread_local std::mt19937_64 rng{std::random_device{}()};
+    for (size_t i = 0; i < b.size(); i += 8) {
+        auto v = rng();
+        for (int j = 0; j < 8 && (i + j) < b.size(); ++j) b[i + j] = static_cast<unsigned char>((v >> (j * 8)) & 0xFF);
+    }
+    // RFC 4122 variant & version
+    b[6] = static_cast<unsigned char>((b[6] & 0x0F) | 0x40); // version 4
+    b[8] = static_cast<unsigned char>((b[8] & 0x3F) | 0x80); // variant 10xx
+    auto hex = [](unsigned char c) { const char* d = "0123456789abcdef"; return std::pair<char,char>{d[(c>>4)&0xF], d[c&0xF]}; };
+    std::string s; s.resize(36);
+    int k = 0;
+    for (int i = 0; i < 16; ++i) {
+        auto [h,l] = hex(b[i]); s[k++] = h; s[k++] = l;
+        if (i==3 || i==5 || i==7 || i==9) s[k++] = '-';
+    }
+    return s;
+}
+
+std::string ChatService::get_or_create_session_uuid(Session& s) {
+    std::lock_guard<std::mutex> lk(state_.mu);
+    auto it = state_.session_uuid.find(&s);
+    if (it != state_.session_uuid.end() && !it->second.empty()) return it->second;
+    std::string id = generate_uuid_v4();
+    state_.session_uuid[&s] = id;
+    return id;
 }
 
 void ChatService::emit_write_behind_event(const std::string& type,

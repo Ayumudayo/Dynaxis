@@ -29,7 +29,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
 
     auto session_sp = s.shared_from_this();
     job_queue_.Push([this, session_sp, user, token]() {
-        const std::string session_id_str = std::to_string(session_sp->session_id());
+        const std::string session_id_str = get_or_create_session_uuid(*session_sp);
         std::string tracked_user_uuid;
         std::string lobby_room_id;
         std::string login_ip = session_sp->remote_ip();
@@ -72,6 +72,8 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                     std::lock_guard<std::mutex> lk(state_.mu);
                     state_.user_uuid[session_sp.get()] = uid;
                 }
+                // 추적용 user_uuid 세팅(Write-behind 이벤트에 반영)
+                if (!uid.empty()) { tracked_user_uuid = uid; }
                 // 게스트 모드라면 닉네임을 UUID 앞 8자로 정규화
                 if (guest_mode && !uid.empty()) {
                     std::string uuid8 = uid;
@@ -99,7 +101,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 // 현재 룸의 room_id 확보 후 시스템 메시지로 IP 기록
                 auto rid = ensure_room_id_ci("lobby");
                 if (!rid.empty()) {
-                    lobby_room_id = rid;
+                    lobby_room_id = rid; // write-behind 필드에 사용
                     auto ip = login_ip;
                     auto uow2 = db_pool_->make_unit_of_work();
                     std::string sys = std::string("(login ip=") + ip + ")";

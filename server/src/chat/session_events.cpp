@@ -14,7 +14,7 @@ namespace server::app::chat {
 
 void ChatService::on_session_close(std::shared_ptr<Session> s) {
     job_queue_.Push([this, s]() {
-        const std::string session_id_str = std::to_string(s->session_id());
+        const std::string session_id_str = get_or_create_session_uuid(*s);
         std::string user_uuid;
         std::string room_uuid;
         std::vector<std::shared_ptr<Session>> targets;
@@ -35,6 +35,8 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
                 if (itset != state_.by_user.end()) { itset->second.erase(s); }
             }
             state_.user.erase(s.get());
+            // 세션 UUID 정리
+            state_.session_uuid.erase(s.get());
             auto itcr = state_.cur_room.find(s.get());
             if (itcr != state_.cur_room.end()) {
                 room_left = itcr->second;

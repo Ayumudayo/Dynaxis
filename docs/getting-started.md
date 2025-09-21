@@ -50,6 +50,25 @@ METRICS_PORT=9090
 
 PostgreSQL에 `docs/db/migrations/0004_session_events.sql.md`의 테이블을 적용해 둡니다(session_events 등).
 
+## 2.5) DB 마이그레이션(빠른 적용)
+개발/스모크용 최소 스키마를 빠르게 적용하려면 제공된 러너를 사용할 수 있습니다.
+
+Windows 예시(빌드 산출물 사용):
+```
+build-msvc/Debug/migrations_runner.exe --db-uri "postgresql://user:pass@127.0.0.1:5432/appdb?sslmode=disable" --dry-run  # 보류 목록 확인
+build-msvc/Debug/migrations_runner.exe --db-uri "postgresql://user:pass@127.0.0.1:5432/appdb?sslmode=disable"
+```
+
+주의: `tools/migrations/0002_indexes.sql`은 `CREATE INDEX CONCURRENTLY`를 포함하므로 트랜잭션 블록 밖에서 실행됩니다(러너가 자동 처리).
+
+또는 `psql` 사용 시:
+```
+psql "$DB_URI" -f tools/migrations/0001_init.sql
+psql "$DB_URI" -f tools/migrations/0002_indexes.sql   -- 트랜잭션 밖에서 실행
+psql "$DB_URI" -f tools/migrations/0003_identity.sql
+psql "$DB_URI" -f tools/migrations/0004_session_events.sql
+```
+
 ## 3) 빌드
 Windows PowerShell:
 
@@ -85,6 +104,10 @@ scripts/smoke_wb.ps1 -Config Debug -BuildDir build-msvc
 내부 동작:
 - wb_worker를 백그라운드 기동 → wb_emit로 샘플 이벤트 XADD → wb_check로 Postgres 반영 확인 → wb_worker 종료
 
+메모:
+- `wb_check`는 이제 루트 `.env`를 자동 로드해 `DB_URI`를 읽습니다.
+- Redis Cloud 등 외부 Redis를 사용할 때는 `REDIS_URI`에 `tcp://host:port` 형태도 지원됩니다(redis-plus-plus URL 생성자).
+
 ## 6) 관측(Observability)
 - 서버 메트릭: `METRICS_PORT` 지정 시 `/metrics` 텍스트 포맷 노출
   - 예: `curl http://127.0.0.1:9090/metrics`
@@ -95,6 +118,8 @@ scripts/smoke_wb.ps1 -Config Debug -BuildDir build-msvc
 - 컴파일 오류(이스케이프/경로): 최신 MSVC/Boost 권장, `vcpkg.json` 기반으로 빌드
 - Redis/DB 연결 실패: `.env`와 실제 인스턴스 주소/권한 확인
 - Streams 처리 지연: `wb_pending`(XPENDING) 로그 값과 Redis 부하 확인
+ - 링크 오류 LNK2019(load_dotenv)로 `wb_check` 빌드 실패: 최신 CMake 설정에서 `wb_check`가 `server_core`에 링크되도록 보강되었습니다. 기존 빌드 캐시 문제가 의심되면 `scripts/build.ps1 -Clean`로 재구성하세요.
+ - CMake 캐시 경로 불일치 오류: 다른 쉘/경로에서 생성된 빌드 캐시가 섞였을 수 있습니다. `build-msvc` 디렉터리를 정리 후 `scripts/build.ps1`로 재설정하세요.
 
 ## 다음 단계
 - Docker Compose로 로컬 스택을 일괄 기동하고 싶다면 `docs/ops/deployment.md`의 예시를 참고하세요(매니지드 Redis 사용 시 REDIS_URI만 주입).

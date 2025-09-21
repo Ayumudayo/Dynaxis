@@ -76,6 +76,10 @@ volumes:
 - REDIS_URI는 매니지드(예: `rediss://…`) 주소를 그대로 사용합니다.
 - 보안: dev 스택은 공개 네트워크에 노출하지 않습니다.
 
+원클릭 대안(Windows/WSL)
+- Windows: `scripts/run_all.ps1 -Config Debug -WithClient -Smoke`
+- WSL/Linux: `bash scripts/run_all.sh Debug build-linux 5000` (환경변수 `SMOKE=1` 등으로 토글)
+
 ## Prod: 매니지드 + Kubernetes(권장)
 - 데이터 계층: 매니지드 Redis(예: ElastiCache) / 매니지드 Postgres(예: RDS)
 - 워크로드: Kubernetes + Helm 차트

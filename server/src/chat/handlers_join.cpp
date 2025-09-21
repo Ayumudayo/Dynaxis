@@ -28,7 +28,7 @@ void ChatService::on_join(Session& s, std::span<const std::uint8_t> payload) {
 
     auto session_sp = s.shared_from_this();
     job_queue_.Push([this, session_sp, room]() {
-        const std::string session_id_str = std::to_string(session_sp->session_id());
+        const std::string session_id_str = get_or_create_session_uuid(*session_sp);
         std::string user_uuid;
         std::string joined_room_id;
         std::string previous_room;

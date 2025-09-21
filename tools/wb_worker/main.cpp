@@ -55,6 +55,17 @@ int main(int, char**) {
         buf.reserve(batch_max);
         std::size_t buf_bytes = 0;
 
+        auto is_uuid = [](const std::string& s) -> bool {
+            if (s.size() != 36) return false;
+            auto hex = [](char c){ return (c>='0'&&c<='9')||(c>='a'&&c<='f')||(c>='A'&&c<='F'); };
+            const int dash[4] = {8,13,18,23};
+            for (int i=0,j=0;i<36;++i){
+                if (j<4 && i==dash[j]) { if (s[i] != '-') return false; ++j; }
+                else if (!hex(s[i])) return false;
+            }
+            return true;
+        };
+
         auto flush = [&](bool /*force*/){
             if (buf.empty()) return true;
             auto t0 = std::chrono::steady_clock::now();
@@ -81,6 +92,10 @@ int main(int, char**) {
                     std::string uidv = user_id ? *user_id : std::string();
                     std::string sidv = session_id ? *session_id : std::string();
                     std::string ridv = room_id ? *room_id : std::string();
+                    // UUID 형식이 아니면 빈 문자열로 정규화(NULL 저장)
+                    if (!uidv.empty() && !is_uuid(uidv)) uidv.clear();
+                    if (!sidv.empty() && !is_uuid(sidv)) sidv.clear();
+                    if (!ridv.empty() && !is_uuid(ridv)) ridv.clear();
                     long long ts_v = 0; try { ts_v = std::stoll(ts_ms); } catch (...) { ts_v = 0; }
                     w.exec_params(
                         "insert into session_events(event_id, type, ts, user_id, session_id, room_id, payload) "

@@ -3,9 +3,12 @@
 #include <string>
 #include <cstdlib>
 #include <pqxx/pqxx>
+#include "server/core/config/dotenv.hpp"
 
 int main(int argc, char** argv) {
     try {
+        // .env가 있으면 이를 우선(override=true), 없으면 OS 환경변수 사용
+        (void)server::core::config::load_dotenv(".env", true);
         if (argc < 2) { std::cerr << "usage: wb_check <event_id>" << std::endl; return 2; }
         std::string event_id = argv[1];
         const char* db = std::getenv("DB_URI");
