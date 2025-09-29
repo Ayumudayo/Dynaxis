@@ -8,6 +8,7 @@
 #include <cstring> // strcmp
 
 #include <boost/asio.hpp>
+#include <boost/asio/streambuf.hpp>
 #include <clocale>
 #if defined(_WIN32)
 #  include <windows.h>
@@ -225,6 +226,15 @@ int run_server(int argc, char** argv) {
                     if (!ec) {
                         asio::post(metrics_io->get_executor(), [sock]() {
                             try {
+                                asio::streambuf request_buf;
+                                boost::system::error_code read_ec;
+                                asio::read_until(*sock, request_buf, "\r\n\r\n", read_ec);
+                                if (read_ec && read_ec != asio::error::eof) {
+                                    boost::system::error_code ec;
+                                    sock->close(ec);
+                                    return;
+                                }
+
                                 std::string body;
                                 body.reserve(256);
                                 body += "# TYPE chat_subscribe_total counter\nchat_subscribe_total ";
@@ -239,6 +249,10 @@ int run_server(int argc, char** argv) {
                                 bufs.emplace_back(asio::buffer(hdr));
                                 bufs.emplace_back(asio::buffer(body));
                                 asio::write(*sock, bufs);
+                                boost::system::error_code ec;
+                                sock->shutdown(tcp::socket::shutdown_both, ec);
+                                if (ec) ec.clear();
+                                sock->close(ec);
                             } catch (...) {}
                         });
                     }
@@ -276,3 +290,4 @@ int run_server(int argc, char** argv) {
 }
 
 } // namespace server::app
+

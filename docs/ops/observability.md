@@ -80,3 +80,4 @@
 ## 게이트웨이/인증 단일 운용 가정
 - Gateway/Auth는 초기 단일(논리) 인스턴스로 운용하되, 헬스체크/드레인/설정/로그/메트릭 표준화로 active/passive 전환 용이성 확보
 - 필수 모니터링: 연결 수, 처리량, 오류율, P99 지연, 시스템 리소스, Redis/DB 헬스체크
+\n## Redis Pub/Sub 테스트 주의사항\n- 서버 인스턴스를 2개 이상 띄우고 분산 브로드캐스트를 검증하려면 USE_REDIS_PUBSUB=1, 동일한 REDIS_URI/REDIS_CHANNEL_PREFIX를 설정한다.\n- 각 인스턴스는 고유한 GATEWAY_ID와 겹치지 않는 METRICS_PORT를 사용해 /metrics 충돌을 피한다.\n- 두 인스턴스가 같은 Redis 채널을 통해 메시지를 주고받아야 chat_subscribe_total, chat_self_echo_drop_total, chat_subscribe_last_lag_ms 값이 변한다.\n- 현재 노출된 메트릭은 Pub/Sub 경로에 한정돼 있으므로 세션 처리, 핸들러 실행, DB/Redis I/O 지연 등을 측정하려면 추가 계측이 필요하다.\n
