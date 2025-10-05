@@ -84,6 +84,7 @@ void Acceptor::do_accept() {
             }
 
             // 새로운 세션을 생성하고 시작한다.
+            runtime_metrics::record_accept();
             try {
                 auto session = std::make_shared<Session>(std::move(socket), self->dispatcher_, self->buffer_manager_, self->options_, self->state_);
                 if (self->on_new_session_) self->on_new_session_(session);
