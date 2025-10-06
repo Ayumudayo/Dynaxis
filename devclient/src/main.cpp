@@ -194,13 +194,22 @@ int main() {
     // 도움말 패널(오버레이)
     auto help_box = [&] {
         auto lines = vbox({
-            text("단축키") | bold,
+            text(" 단축키") | bold,
             separator(),
-            text("F1  : 도움말 전환"),
-            text("F5  : 현재 방 새로고침(/refresh)"),
-            text("Enter: 메시지 전송  ESC/Ctrl+C: 종료  ←/→: 좌측 폭 조절"),
+            text(" F1  : 도움말 전환"),
+            text(" F5  : 현재 방 새로고침(/refresh)"),
+            text(" Enter: 메시지 전송  ESC/Ctrl+C: 종료  ←/→: 좌측 폭 조절"),
+            text("")
         });
-        return window(text(" 도움말 "), lines) | size(WIDTH, EQUAL, 56) | size(HEIGHT, GREATER_THAN, 10) | center | bgcolor(Color::Black) | color(Color::White);
+        auto panel = window(text(" 도움말 "), lines)
+            | bgcolor(Color::Black)
+            | color(Color::White)
+            | clear_under;
+        return vbox({
+            filler(),
+            hbox({ filler(), panel, filler() }),
+            filler(),
+        });
     };
 
     auto app = Renderer(main_container, [&] {
