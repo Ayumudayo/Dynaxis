@@ -286,11 +286,11 @@ int run_server(int argc, char** argv) {
                                 append_gauge("chat_memory_pool_in_use_peak", static_cast<long double>(snap.memory_pool_in_use_peak));
 
                                 if (!snap.opcode_counts.empty()) {
-                                    stream << "# TYPE chat_dispatch_opcode_total counter\r\n";
+                                    stream << "# TYPE chat_dispatch_opcode_total counter\n";
                                     for (const auto& [opcode, count] : snap.opcode_counts) {
                                         std::ostringstream label;
                                         label << std::hex << std::uppercase << std::setw(4) << std::setfill('0') << opcode;
-                                        stream << "chat_dispatch_opcode_total{opcode=\"0x" << label.str() << "\"} " << count << "\r\n";
+                                        stream << "chat_dispatch_opcode_total{opcode=\"0x" << label.str() << "\"} " << count << "\n";
                                     }
                                 }
 

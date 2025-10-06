@@ -297,6 +297,9 @@ void Session::arm_read_timeout() {
         read_timer_.async_wait(asio::bind_executor(strand_, [this, self](const error_code& ec) {
             if (ec || stopped_) return; // 취소되었거나 세션이 종료된 경우 무시한다.
             runtime_metrics::record_session_timeout();
+            if (options_ && options_->heartbeat_interval_ms > 0) {
+                runtime_metrics::record_heartbeat_timeout();
+            }
             log::warn("read timeout");
             stop();
         }));
@@ -312,9 +315,7 @@ void Session::arm_heartbeat() {
         heartbeat_timer_.expires_after(std::chrono::milliseconds(options_->heartbeat_interval_ms));
         heartbeat_timer_.async_wait(asio::bind_executor(strand_, [this, self](const error_code& ec) {
             if (ec || stopped_) return; // 타이머가 취소되었거나 세션이 이미 종료된 경우 무시한다.
-            runtime_metrics::record_heartbeat_timeout();
-            log::warn("heartbeat timeout");
-            stop();
+            arm_heartbeat();
         }));
     });
 }
