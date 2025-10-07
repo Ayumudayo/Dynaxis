@@ -88,17 +88,29 @@ void NetClient::recv_loop() {
                 } else {
                     std::string room; if (!proto::read_lp_utf8(in, room)) continue; if (in.size()<2) continue; std::uint16_t n=proto::read_be16(in.data()); in=in.subspan(2); std::vector<std::string> list; list.reserve(n); for (std::uint16_t i=0;i<n;++i){ std::string u; if (!proto::read_lp_utf8(in,u)){ list.clear(); break;} list.push_back(std::move(u)); } if (on_room_users_) on_room_users_(room, std::move(list));
                 }
+            } else if (hh.msg_id == proto::MSG_WHISPER_BROADCAST) {
+                server::wire::v1::WhisperNotice pb;
+                if (server::wire::codec::Decode(body.data(), body.size(), pb)) {
+                    if (on_whisper_) on_whisper_(pb.sender(), pb.recipient(), pb.text(), pb.outgoing());
+                }
+            } else if (hh.msg_id == proto::MSG_WHISPER_RES) {
+                server::wire::v1::WhisperResult pb;
+                if (server::wire::codec::Decode(body.data(), body.size(), pb)) {
+                    if (on_whisper_result_) on_whisper_result_(pb.ok(), pb.reason());
+                }
             } else if (hh.msg_id == proto::MSG_STATE_SNAPSHOT) {
                 server::wire::v1::StateSnapshot pb;
                 if (server::wire::codec::Decode(body.data(), body.size(), pb)) {
                     std::vector<std::string> rooms; rooms.reserve(pb.rooms_size());
-                    for (const auto& ri : pb.rooms()) rooms.emplace_back(ri.name());
+                    std::vector<bool> locks; locks.reserve(pb.rooms_size());
+                    for (const auto& ri : pb.rooms()) { rooms.emplace_back(ri.name()); locks.push_back(ri.locked()); }
                     std::vector<std::string> users(pb.users().begin(), pb.users().end());
-                    if (on_snapshot_) on_snapshot_(pb.current_room(), std::move(rooms), std::move(users));
+                    if (on_snapshot_) on_snapshot_(pb.current_room(), std::move(rooms), std::move(users), std::move(locks));
                 } else {
                     std::string current; if (!proto::read_lp_utf8(in,current)) continue; if (in.size()<2) continue; std::uint16_t rc=proto::read_be16(in.data()); in=in.subspan(2); std::vector<std::string> rooms; rooms.reserve(rc); for (std::uint16_t i=0;i<rc;++i){ std::string r; if(!proto::read_lp_utf8(in,r)) { rooms.clear(); break; } if (in.size()<2){ rooms.clear(); break;} in=in.subspan(2); rooms.push_back(std::move(r)); }
                     if (in.size()<2) continue; std::uint16_t uc=proto::read_be16(in.data()); in=in.subspan(2); std::vector<std::string> users; users.reserve(uc); for (std::uint16_t i=0;i<uc;++i){ std::string u; if(!proto::read_lp_utf8(in,u)){ users.clear(); break; } users.push_back(std::move(u)); }
-                    if (on_snapshot_) on_snapshot_(current, std::move(rooms), std::move(users));
+                    std::vector<bool> locks(rooms.size(), false);
+                    if (on_snapshot_) on_snapshot_(current, std::move(rooms), std::move(users), std::move(locks));
                 }
             }
         }
@@ -106,9 +118,10 @@ void NetClient::recv_loop() {
 }
 
 void NetClient::send_login(const std::string& user, const std::string& token) { std::vector<std::uint8_t> p; proto::write_lp_utf8(p,user); proto::write_lp_utf8(p,token); send_frame_simple(sock_, proto::MSG_LOGIN_REQ, 0, p, seq_, &send_mu_); }
-void NetClient::send_join(const std::string& room) { std::vector<std::uint8_t> p; proto::write_lp_utf8(p,room); send_frame_simple(sock_, proto::MSG_JOIN_ROOM, 0, p, seq_, &send_mu_); }
+void NetClient::send_join(const std::string& room, const std::string& password) { std::vector<std::uint8_t> p; proto::write_lp_utf8(p,room); if (!password.empty()) proto::write_lp_utf8(p,password); send_frame_simple(sock_, proto::MSG_JOIN_ROOM, 0, p, seq_, &send_mu_); }
 void NetClient::send_leave(const std::string& room) { std::vector<std::uint8_t> p; proto::write_lp_utf8(p,room); send_frame_simple(sock_, proto::MSG_LEAVE_ROOM, 0, p, seq_, &send_mu_); }
 void NetClient::send_chat(const std::string& room, const std::string& text) { std::vector<std::uint8_t> p; proto::write_lp_utf8(p,room); proto::write_lp_utf8(p,text); send_frame_simple(sock_, proto::MSG_CHAT_SEND, 0, p, seq_, &send_mu_); }
 void NetClient::send_refresh(const std::string& current_room) { std::vector<std::uint8_t> p; proto::write_lp_utf8(p,current_room); proto::write_lp_utf8(p,std::string("/refresh")); send_frame_simple(sock_, proto::MSG_CHAT_SEND, 0, p, seq_, &send_mu_); }
 void NetClient::send_who(const std::string& room) { std::vector<std::uint8_t> p; proto::write_lp_utf8(p,room); proto::write_lp_utf8(p,std::string("/who ")+room); send_frame_simple(sock_, proto::MSG_CHAT_SEND, 0, p, seq_, &send_mu_); }
 void NetClient::send_rooms(const std::string& current_room) { std::vector<std::uint8_t> p; proto::write_lp_utf8(p,current_room); proto::write_lp_utf8(p,std::string("/rooms")); send_frame_simple(sock_, proto::MSG_CHAT_SEND, 0, p, seq_, &send_mu_); }
+void NetClient::send_whisper(const std::string& user, const std::string& text) { std::vector<std::uint8_t> p; proto::write_lp_utf8(p,user); proto::write_lp_utf8(p,text); send_frame_simple(sock_, proto::MSG_WHISPER_REQ, 0, p, seq_, &send_mu_); }

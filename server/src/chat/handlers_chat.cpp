@@ -20,6 +20,21 @@ namespace corelog = server::core::log;
 
 namespace server::app::chat {
 
+
+void ChatService::on_whisper(Session& s, std::span<const std::uint8_t> payload) {
+    auto sp = std::span<const std::uint8_t>(payload.data(), payload.size());
+    std::string target;
+    std::string text;
+    if (!proto::read_lp_utf8(sp, target) || !proto::read_lp_utf8(sp, text)) {
+        s.send_error(proto::errc::INVALID_PAYLOAD, "bad whisper payload");
+        return;
+    }
+    auto session_sp = s.shared_from_this();
+    job_queue_.Push([this, session_sp, target = std::move(target), text = std::move(text)]() {
+        dispatch_whisper(session_sp, target, text);
+    });
+}
+
 void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload) {
     std::string room, text;
     auto sp = std::span<const std::uint8_t>(payload.data(), payload.size());
@@ -93,55 +108,31 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
                 send_room_users(*session_sp, target); 
                 return;
             }
-            if (text.rfind("/whisper ", 0) == 0) {
-                std::string rest = text.substr(9); auto spc = rest.find(' ');
+            if (text.rfind("/whisper ", 0) == 0 || text.rfind("/w ", 0) == 0) {
+                const bool long_form = text.rfind("/whisper ", 0) == 0;
+                std::string args = text.substr(long_form ? 9 : 3);
+                auto leading = args.find_first_not_of(' ');
+                if (leading != std::string::npos && leading > 0) {
+                    args.erase(0, leading);
+                }
+                auto spc = args.find(' ');
                 if (spc == std::string::npos) {
-                    std::vector<std::uint8_t> body; 
-                    proto::write_lp_utf8(body, std::string("(system)")); 
-                    proto::write_lp_utf8(body, std::string("server")); 
-                    proto::write_lp_utf8(body, std::string("usage: /whisper <user> <message>"));
-                    auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count(); 
-                    std::size_t off = body.size(); 
-                    body.resize(off + 8); 
-                    std::uint64_t ts = static_cast<std::uint64_t>(now64); 
-                    for (int i = 7; i >= 0; --i) { body[off + i] = static_cast<std::uint8_t>(ts & 0xFF); ts >>= 8; } 
-                    session_sp->async_send(proto::MSG_CHAT_BROADCAST, body, 0); 
+                    send_system_notice(*session_sp, "usage: /whisper <user> <message>");
+                    send_whisper_result(*session_sp, false, "invalid payload");
                     return;
                 }
-                std::string target_user = rest.substr(0, spc); 
-                std::string wtext = rest.substr(spc + 1);
-                std::vector<std::shared_ptr<Session>> targets;
-                {
-                    std::lock_guard<std::mutex> lk(state_.mu); 
-                    auto itset = state_.by_user.find(target_user); 
-                    if (itset != state_.by_user.end()) { 
-                        for (auto wit = itset->second.begin(); wit != itset->second.end(); ) { 
-                            if (auto p = wit->lock()) { 
-                                targets.emplace_back(std::move(p)); 
-                                ++wit; 
-                            } else { 
-                                wit = itset->second.erase(wit); 
-                            } 
-                        } 
-                    }
+                std::string target_user = args.substr(0, spc);
+                std::string wtext = args.substr(spc + 1);
+                auto msg_leading = wtext.find_first_not_of(' ');
+                if (msg_leading != std::string::npos && msg_leading > 0) {
+                    wtext.erase(0, msg_leading);
                 }
-                std::string sender; 
-                { 
-                    std::lock_guard<std::mutex> lk(state_.mu); 
-                    auto it2 = state_.user.find(session_sp.get()); 
-                    sender = (it2 != state_.user.end()) ? it2->second : std::string("guest"); 
+                if (target_user.empty() || wtext.empty()) {
+                    send_system_notice(*session_sp, "usage: /whisper <user> <message>");
+                    send_whisper_result(*session_sp, false, "invalid payload");
+                    return;
                 }
-                server::wire::v1::ChatBroadcast pb; 
-                pb.set_room("(direct)"); 
-                pb.set_sender(sender); 
-                pb.set_text(std::string("(to ") + target_user + ") " + wtext); 
-                pb.set_sender_sid(session_sp->session_id());
-                auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count(); 
-                pb.set_ts_ms(static_cast<std::uint64_t>(now64));
-                std::string bytes; pb.SerializeToString(&bytes);
-                std::vector<std::uint8_t> body(bytes.begin(), bytes.end());
-                targets.emplace_back(session_sp); 
-                for (auto& t : targets) t->async_send(proto::MSG_CHAT_BROADCAST, body, 0); 
+                dispatch_whisper(session_sp, target_user, wtext);
                 return;
             }
         }
@@ -269,4 +260,5 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
 }
 
 } // namespace server::app::chat
+
 

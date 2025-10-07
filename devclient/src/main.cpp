@@ -38,6 +38,7 @@ int main() {
     // 상태(임시: 네트워크 미연결, UI만 구성)
     std::atomic<bool> connected{false};
     std::vector<std::string> rooms; // 서버 스냅샷으로 동기화됨
+    std::vector<bool> rooms_locked;
     int rooms_selected = 0;
     std::vector<std::string> users = {"(미접속)"};
     int users_selected = 0;
@@ -51,6 +52,7 @@ int main() {
     std::string username = "guest";
     bool show_help = false; // F1로 토글되는 도움말 오버레이
     std::string pending_join_room;
+    const std::string lock_icon = "\xF0\x9F\x94\x92";
 
     // 네트워크 리소스(NetClient 사용)
     std::uint32_t my_sid = 0;
@@ -106,6 +108,18 @@ int main() {
             preview_room = rooms[rooms_selected];
             if (connected.load()) { net.send_who(preview_room); }
         }
+    };
+
+    rooms_opt.entries_option.transform = [&](const EntryState& state) {
+        std::string label = state.label;
+        if (state.index >= 0 && state.index < static_cast<int>(rooms_locked.size()) && rooms_locked[state.index]) {
+            label = lock_icon + " " + label;
+        }
+        auto elem = text(label);
+        if (state.focused) {
+            elem = elem | bold;
+        }
+        return elem;
     };
 
     // 컴포넌트 구성
@@ -199,6 +213,8 @@ int main() {
             text(" F1  : 도움말 전환"),
             text(" F5  : 현재 방 새로고침(/refresh)"),
             text(" Enter: 메시지 전송  ESC/Ctrl+C: 종료  ←/→: 좌측 폭 조절"),
+            text(" /join <room> [password]"),
+            text(" /whisper <user> <message>"),
             text("")
         });
         auto panel = window(text(" 도움말 "), lines)
@@ -237,8 +253,54 @@ int main() {
                             username = line.substr(7);
                             net.send_login(username, "");
                         } else if (line.rfind("/join ", 0) == 0) {
-                            pending_join_room = line.substr(6);
-                            net.send_join(pending_join_room);
+                            std::string args = line.substr(6);
+                            auto pos = args.find(' ');
+                            std::string room_arg = args;
+                            std::string password_arg;
+                            if (pos != std::string::npos) {
+                                room_arg = args.substr(0, pos);
+                                password_arg = args.substr(pos + 1);
+                                auto trim_pos = password_arg.find_first_not_of(' ');
+                                if (trim_pos != std::string::npos) password_arg.erase(0, trim_pos);
+                                else password_arg.clear();
+                            }
+                            if (room_arg.empty()) {
+                                append_log("usage: /join <room> [password]");
+                            } else {
+                                pending_join_room = room_arg;
+                                net.send_join(room_arg, password_arg);
+                            }
+                        } else if (line.rfind("/whisper ", 0) == 0 || line.rfind("/w ", 0) == 0) {
+                            const bool long_form = line.rfind("/whisper ", 0) == 0;
+                            std::string args = line.substr(long_form ? 9 : 3);
+                            auto leading = args.find_first_not_of(' ');
+                            if (leading == std::string::npos) {
+                                args.clear();
+                            } else if (leading > 0) {
+                                args.erase(0, leading);
+                            }
+                            auto pos = args.find(' ');
+                            if (pos == std::string::npos) {
+                                append_log("usage: /whisper <user> <message>");
+                            } else if (username == "guest") {
+                                append_log("[warn] 로그인 후에만 귓속말을 사용할 수 있습니다.");
+                            } else {
+                                std::string target = args.substr(0, pos);
+                                std::string message = args.substr(pos + 1);
+                                auto trim_pos = message.find_first_not_of(' ');
+                                if (trim_pos == std::string::npos) {
+                                    message.clear();
+                                } else if (trim_pos > 0) {
+                                    message.erase(0, trim_pos);
+                                }
+                                if (target.empty() || message.empty()) {
+                                    append_log("usage: /whisper <user> <message>");
+                                } else if (target == username) {
+                                    append_log("[warn] 자기 자신에게는 귓속말을 보낼 수 없습니다.");
+                                } else {
+                                    net.send_whisper(target, message);
+                                }
+                            }
                         } else if (line.rfind("/leave", 0) == 0) {
                             std::string room = current_room; if (line.size() > 6) { auto pos = line.find_first_not_of(' ', 6); if (pos != std::string::npos) room = line.substr(pos); }
                             net.send_leave(room);
@@ -309,12 +371,27 @@ int main() {
             if (text.rfind("rooms:", 0) == 0) {
                 std::string rest = text.substr(6);
                 std::vector<std::string> new_rooms;
+                std::vector<bool> new_locks;
                 std::istringstream iss(rest);
                 std::string tok;
-                while (iss >> tok) { auto p = tok.find('('); std::string name = (p==std::string::npos)?tok:tok.substr(0,p); if(!name.empty()) new_rooms.push_back(name); }
+                while (iss >> tok) {
+                    auto p = tok.find('(');
+                    std::string name = (p==std::string::npos)?tok:tok.substr(0,p);
+                    bool locked = false;
+                    if (!name.empty() && name.rfind(lock_icon, 0) == 0) {
+                        name = name.substr(lock_icon.size());
+                        locked = true;
+                    }
+                    if(!name.empty()) {
+                        new_rooms.push_back(name);
+                        new_locks.push_back(locked);
+                    }
+                }
                 if (!new_rooms.empty()) {
-                    screen.Post([&, new_rooms=std::move(new_rooms)]() mutable {
+                    screen.Post([&, new_rooms=std::move(new_rooms), new_locks=std::move(new_locks)]() mutable {
                         rooms = std::move(new_rooms);
+                        rooms_locked = std::move(new_locks);
+                        if (rooms_locked.size() != rooms.size()) rooms_locked.resize(rooms.size(), false);
                         int idx = 0; for (int i=0;i<(int)rooms.size();++i) if (rooms[i]==current_room) { idx=i; break; }
                         rooms_selected = std::clamp(idx, 0, (int)rooms.size()-1);
                     });
@@ -349,6 +426,13 @@ int main() {
         bool is_me = (cap_sender_sid && sender_sid && my_sid && sender_sid == my_sid) || ((flags & 0x0100 /*FLAG_SELF*/) != 0);
         append_log("[" + room + "] " + (is_me?"me":sender) + ": " + text);
     });
+    net.set_on_whisper([&](std::string sender, std::string recipient, std::string text, bool outgoing){
+        std::string prefix = outgoing ? ("[whisper to " + recipient + "] ") : ("[whisper from " + sender + "] ");
+        append_log(prefix + text);
+    });
+    net.set_on_whisper_result([&](bool ok, std::string reason){
+        if (!ok && !reason.empty()) append_log("[warn] whisper failed: " + reason);
+    });
     net.set_on_room_users([&](std::string room, std::vector<std::string> list){
         screen.Post([&, room=std::move(room), list=std::move(list)]() mutable {
             if (room == current_room || room == preview_room) {
@@ -359,12 +443,16 @@ int main() {
         });
         request_refresh();
     });
-    net.set_on_snapshot([&](std::string snap_room, std::vector<std::string> new_rooms, std::vector<std::string> new_users){
-        screen.Post([&, snap_room=std::move(snap_room), new_rooms=std::move(new_rooms), new_users=std::move(new_users)]() mutable {
+    net.set_on_snapshot([&](std::string snap_room, std::vector<std::string> new_rooms, std::vector<std::string> new_users, std::vector<bool> new_locked){
+        screen.Post([&, snap_room=std::move(snap_room), new_rooms=std::move(new_rooms), new_users=std::move(new_users), new_locked=std::move(new_locked)]() mutable {
             if (!new_rooms.empty()) {
                 rooms = std::move(new_rooms);
+                rooms_locked = std::move(new_locked);
                 int idx = 0; for (int i=0;i<(int)rooms.size();++i) if (rooms[i]==snap_room) { idx=i; break; }
                 rooms_selected = std::clamp(idx, 0, (int)rooms.size()-1);
+            } else {
+                rooms_locked = std::move(new_locked);
+                if (rooms_locked.size() != rooms.size()) rooms_locked.resize(rooms.size(), false);
             }
             current_room = std::move(snap_room);
             users = std::move(new_users); if (users.empty()) users.push_back("<none>");
@@ -374,7 +462,8 @@ int main() {
 
     // 초기 안내 로그 + 연결 시도
     append_log("[system] FTXUI 클라이언트가 시작되었습니다.");
-    append_log("[hint] 명령: /login <name>, /join <room>, /leave, /refresh");
+    append_log("[hint] 명령: /login <name>, /join <room> [password], /whisper <user> <message>, /leave, /refresh");
+    append_log("[hint] " + lock_icon + " 표시된 방은 비밀번호가 필요합니다.");
     append_log("[hint] 입력 후 Enter로 전송합니다.");
     if (net.connect("127.0.0.1", 5000)) { connected.store(true); append_log("접속됨: 127.0.0.1:5000"); net.send_login(username, ""); }
     else { append_log("연결 실패"); }

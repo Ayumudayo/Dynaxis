@@ -13,6 +13,7 @@ void register_routes(server::core::Dispatcher& dispatcher, server::app::chat::Ch
     using server::core::protocol::MSG_JOIN_ROOM;
     using server::core::protocol::MSG_CHAT_SEND;
     using server::core::protocol::MSG_LEAVE_ROOM;
+    using server::core::protocol::MSG_WHISPER_REQ;
 
     dispatcher.register_handler(MSG_PING,
         [&chat](server::core::Session& s, std::span<const std::uint8_t> payload) { chat.on_ping(s, payload); });
@@ -25,6 +26,9 @@ void register_routes(server::core::Dispatcher& dispatcher, server::app::chat::Ch
 
     dispatcher.register_handler(MSG_CHAT_SEND,
         [&chat](server::core::Session& s, std::span<const std::uint8_t> payload) { chat.on_chat_send(s, payload); });
+
+    dispatcher.register_handler(MSG_WHISPER_REQ,
+        [&chat](server::core::Session& s, std::span<const std::uint8_t> payload) { chat.on_whisper(s, payload); });
 
     dispatcher.register_handler(MSG_LEAVE_ROOM,
         [&chat](server::core::Session& s, std::span<const std::uint8_t> payload) { chat.on_leave(s, payload); });

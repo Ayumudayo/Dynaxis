@@ -29,6 +29,7 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
                 name = "guest";
             }
             state_.authed.erase(s.get());
+            state_.guest.erase(s.get());
             if (auto it_uuid = state_.user_uuid.find(s.get()); it_uuid != state_.user_uuid.end()) { user_uuid = it_uuid->second; }
             if (!name.empty()) {
                 auto itset = state_.by_user.find(name);

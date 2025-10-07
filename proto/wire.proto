@@ -22,6 +22,7 @@ message StateSnapshot {
   message RoomInfo {
     string name = 1;
     uint32 members = 2;
+    bool locked = 3;
   }
   repeated RoomInfo rooms = 2;
   repeated string users = 3; // users in current_room
@@ -38,4 +39,16 @@ message StateSnapshot {
 message RoomUsers {
   string room = 1;
   repeated string users = 2;
+}
+message WhisperNotice {
+  string sender = 1;
+  string recipient = 2;
+  string text = 3;
+  bool outgoing = 4;
+  uint64 ts_ms = 5;
+}
+
+message WhisperResult {
+  bool ok = 1;
+  string reason = 2;
 }

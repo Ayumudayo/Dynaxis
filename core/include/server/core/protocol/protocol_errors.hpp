@@ -13,9 +13,9 @@ static constexpr std::uint16_t NAME_TAKEN            = 0x0100; // 닉네임 중�
 
 // 인증/권한/룸 상태
 static constexpr std::uint16_t UNAUTHORIZED          = 0x0101;
+static constexpr std::uint16_t FORBIDDEN             = 0x0102;
 static constexpr std::uint16_t NO_ROOM               = 0x0104; // 현재 방 없음
 static constexpr std::uint16_t NOT_MEMBER            = 0x0105; // 해당 방 멤버가 아님
 static constexpr std::uint16_t ROOM_MISMATCH         = 0x0106; // 지정된 방과 현재 방 불일치
 
 } // namespace server::core::protocol::errc
-

@@ -13,6 +13,9 @@ static constexpr std::uint16_t MSG_CHAT_SEND            = 0x0100; // 채팅 전�
 static constexpr std::uint16_t MSG_CHAT_BROADCAST       = 0x0101; // 채팅 브로드캐스트
 static constexpr std::uint16_t MSG_JOIN_ROOM            = 0x0102; // 룸 입장
 static constexpr std::uint16_t MSG_LEAVE_ROOM           = 0x0103; // 룸 퇴장
+static constexpr std::uint16_t MSG_WHISPER_REQ          = 0x0104; // 귓속말 요청
+static constexpr std::uint16_t MSG_WHISPER_RES          = 0x0105; // 귓속말 응답
+static constexpr std::uint16_t MSG_WHISPER_BROADCAST    = 0x0106; // 귓속말 전달
 static constexpr std::uint16_t MSG_STATE_SNAPSHOT       = 0x0200; // 상태 스냅샷(방 목록+현재 방 유저)
 static constexpr std::uint16_t MSG_ROOM_USERS           = 0x0201; // 특정 방 유저 목록 응답
 } // namespace server::core::protocol

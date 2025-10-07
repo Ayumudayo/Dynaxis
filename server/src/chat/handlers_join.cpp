@@ -25,11 +25,19 @@ void ChatService::on_join(Session& s, std::span<const std::uint8_t> payload) {
         s.send_error(proto::errc::INVALID_PAYLOAD, "bad join payload"); 
         return; 
     }
+    std::string password;
+    if (!sp.empty()) {
+        if (!proto::read_lp_utf8(sp, password)) {
+            s.send_error(proto::errc::INVALID_PAYLOAD, "bad join payload");
+            return;
+        }
+    }
 
     auto session_sp = s.shared_from_this();
-    job_queue_.Push([this, session_sp, room]() {
+    job_queue_.Push([this, session_sp, room, password]() {
         const std::string session_id_str = get_or_create_session_uuid(*session_sp);
         std::string user_uuid;
+        std::string provided_password = password;
         std::string joined_room_id;
         std::string previous_room;
         std::string sender;
@@ -44,6 +52,17 @@ void ChatService::on_join(Session& s, std::span<const std::uint8_t> payload) {
             if (!state_.authed.count(session_sp.get())) { 
                 session_sp->send_error(proto::errc::UNAUTHORIZED, "unauthorized"); 
                 return; 
+            }
+            bool room_exists = state_.rooms.find(room_to_join) != state_.rooms.end();
+            auto pass_it = state_.room_passwords.find(room_to_join);
+            if (pass_it != state_.room_passwords.end()) {
+                const std::string& expected = pass_it->second;
+                if (provided_password.empty() || hash_room_password(provided_password) != expected) {
+                    session_sp->send_error(proto::errc::FORBIDDEN, "room locked");
+                    return;
+                }
+            } else if (!provided_password.empty() && room_to_join != "lobby") {
+                state_.room_passwords[room_to_join] = hash_room_password(provided_password);
             }
             // 기존 방에서 제거
             auto itold = state_.cur_room.find(session_sp.get());
@@ -60,6 +79,7 @@ void ChatService::on_join(Session& s, std::span<const std::uint8_t> payload) {
                     }
                     if (is_empty && itold->second != "lobby") {
                         state_.rooms.erase(itroom);
+                        state_.room_passwords.erase(itold->second);
                     }
                 }
             }

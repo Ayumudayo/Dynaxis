@@ -34,6 +34,7 @@ public:
     void on_join(server::core::Session& s, std::span<const std::uint8_t> payload);
     void on_leave(server::core::Session& s, std::span<const std::uint8_t> payload);
     void on_chat_send(server::core::Session& s, std::span<const std::uint8_t> payload);
+    void on_whisper(server::core::Session& s, std::span<const std::uint8_t> payload);
     void on_ping(server::core::Session& s, std::span<const std::uint8_t> payload);
     void on_session_close(std::shared_ptr<server::core::Session> s);
 
@@ -64,8 +65,10 @@ private:
         std::unordered_map<Session*, std::string> session_uuid; // 세션별 세션 UUID(v4)
         std::unordered_map<Session*, std::string> cur_room;  // 세션별 현재 룸
         std::unordered_set<Session*> authed;                 // 로그인 완료 세션
+        std::unordered_set<Session*> guest;                  // 게스트 세션
         std::unordered_map<std::string, RoomSet> by_user;    // 사용자명→세션들
         std::unordered_map<std::string, std::string> room_ids; // 룸 이름 -> room_id(UUID)
+        std::unordered_map<std::string, std::string> room_passwords;
     } state_;
 
     boost::asio::io_context* io_{};
@@ -95,6 +98,10 @@ private:
     void send_snapshot(Session& s, const std::string& current);
 
     // 저장소 보조: 룸 이름으로 UUID 확보(없으면 생성)
+    void dispatch_whisper(std::shared_ptr<Session> sender, const std::string& target_user, const std::string& text);
+    void send_system_notice(Session& s, const std::string& text);
+    std::string hash_room_password(const std::string& password);
+    void send_whisper_result(Session& s, bool ok, const std::string& reason);
     std::string ensure_room_id_ci(const std::string& room_name);
 };
 

@@ -12,6 +12,7 @@
 #include "server/storage/redis/client.hpp"
 
 #include <cstdlib>
+#include <sstream>
 
 using namespace server::core;
 namespace proto = server::core::protocol;
@@ -170,9 +171,13 @@ void ChatService::send_rooms_list(Session& s) {
             std::size_t alive = 0;
             for (auto wit = it->second.begin(); wit != it->second.end(); ) { if (auto p = wit->lock()) { ++alive; ++wit; } else { wit = it->second.erase(wit); } }
             if (alive == 0 && it->first != std::string("lobby")) { to_remove.push_back(it->first); continue; }
-            msg += " " + it->first + "(" + std::to_string(alive) + ")";
+            std::string display_name = it->first;
+            if (state_.room_passwords.count(it->first)) {
+                display_name = "🔒" + display_name;
+            }
+            msg += " " + display_name + "(" + std::to_string(alive) + ")";
         }
-        for (auto& name : to_remove) state_.rooms.erase(name);
+        for (auto& name : to_remove) { state_.rooms.erase(name); state_.room_passwords.erase(name); }
     }
     server::wire::v1::ChatBroadcast pb; pb.set_room("(system)"); pb.set_sender("(system)"); pb.set_text(msg); pb.set_sender_sid(0);
     {
@@ -188,25 +193,49 @@ void ChatService::send_rooms_list(Session& s) {
 }
 
 void ChatService::send_room_users(Session& s, const std::string& target) {
-    std::vector<std::uint8_t> body;
-    server::wire::v1::RoomUsers pb; pb.set_room(target);
+    std::vector<std::string> names;
+    bool allow = true;
     {
         std::lock_guard<std::mutex> lk(state_.mu);
         auto itroom = state_.rooms.find(target);
+        bool is_locked = state_.room_passwords.count(target) > 0;
+        bool is_member = false;
+        std::vector<std::string> collected;
         if (itroom != state_.rooms.end()) {
             for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) {
                 if (auto p = wit->lock()) {
                     auto itu = state_.user.find(p.get());
                     std::string name = (itu != state_.user.end()) ? itu->second : std::string("guest");
-                    pb.add_users(name); ++wit;
-                } else { wit = itroom->second.erase(wit); }
+                    if (p.get() == &s) {
+                        is_member = true;
+                    }
+                    collected.push_back(std::move(name));
+                    ++wit;
+                } else {
+                    wit = itroom->second.erase(wit);
+                }
             }
         }
+        if (is_locked && !is_member) {
+            allow = false;
+        } else {
+            names = std::move(collected);
+        }
     }
-    {
-        std::string bytes; pb.SerializeToString(&bytes);
-        body.assign(bytes.begin(), bytes.end());
+
+    if (!allow) {
+        send_system_notice(s, "room is locked");
+        return;
     }
+
+    server::wire::v1::RoomUsers pb;
+    pb.set_room(target);
+    for (const auto& name : names) {
+        pb.add_users(name);
+    }
+    std::string bytes;
+    pb.SerializeToString(&bytes);
+    std::vector<std::uint8_t> body(bytes.begin(), bytes.end());
     s.async_send(proto::MSG_ROOM_USERS, body, 0);
 }
 
@@ -219,9 +248,9 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
         for (auto it = state_.rooms.begin(); it != state_.rooms.end(); ++it) {
             std::uint32_t alive = 0; for (auto wit = it->second.begin(); wit != it->second.end(); ) { if (auto p = wit->lock()) { ++alive; ++wit; } else { wit = it->second.erase(wit); } }
             if (alive == 0 && it->first != std::string("lobby")) { to_remove.push_back(it->first); continue; }
-            auto* ri = pb.add_rooms(); ri->set_name(it->first); ri->set_members(alive);
+            auto* ri = pb.add_rooms(); ri->set_name(it->first); ri->set_members(alive); ri->set_locked(state_.room_passwords.count(it->first) > 0);
         }
-        for (auto& name : to_remove) state_.rooms.erase(name);
+        for (auto& name : to_remove) { state_.rooms.erase(name); state_.room_passwords.erase(name); }
     }
     {
         std::lock_guard<std::mutex> lk(state_.mu);
@@ -334,6 +363,148 @@ void ChatService::broadcast_room(const std::string& room, const std::vector<std:
 // 별도 구현부: 저장소 보조 함수
 namespace server::app::chat {
 
+void ChatService::send_system_notice(Session& s, const std::string& text) {
+    server::wire::v1::ChatBroadcast pb;
+    pb.set_room("(system)");
+    pb.set_sender("(system)");
+    pb.set_text(text);
+    pb.set_sender_sid(0);
+    auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    pb.set_ts_ms(static_cast<std::uint64_t>(now64));
+    std::string bytes;
+    pb.SerializeToString(&bytes);
+    std::vector<std::uint8_t> body(bytes.begin(), bytes.end());
+    s.async_send(proto::MSG_CHAT_BROADCAST, body, 0);
+}
+
+void ChatService::send_whisper_result(Session& s, bool ok, const std::string& reason) {
+    server::wire::v1::WhisperResult pb;
+    pb.set_ok(ok);
+    if (!reason.empty()) {
+        pb.set_reason(reason);
+    }
+    std::string bytes;
+    pb.SerializeToString(&bytes);
+    std::vector<std::uint8_t> body(bytes.begin(), bytes.end());
+    s.async_send(proto::MSG_WHISPER_RES, body, 0);
+}
+
+void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const std::string& target_user, const std::string& text) {
+    if (!session_sp) return;
+    if (target_user.empty() || text.empty()) {
+        send_system_notice(*session_sp, "usage: /whisper <user> <message>");
+        send_whisper_result(*session_sp, false, "invalid payload");
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(state_.mu);
+        if (!state_.authed.count(session_sp.get())) {
+            session_sp->send_error(proto::errc::UNAUTHORIZED, "unauthorized");
+            return;
+        }
+    }
+
+    std::string sender;
+    bool sender_is_guest = false;
+    {
+        std::lock_guard<std::mutex> lk(state_.mu);
+        auto it_sender = state_.user.find(session_sp.get());
+        sender = (it_sender != state_.user.end()) ? it_sender->second : std::string("guest");
+        sender_is_guest = state_.guest.count(session_sp.get()) > 0;
+    }
+    if (sender == "guest" || sender_is_guest) {
+        send_system_notice(*session_sp, "login required for whisper");
+        send_whisper_result(*session_sp, false, "login required");
+        session_sp->send_error(proto::errc::UNAUTHORIZED, "guest cannot whisper");
+        return;
+    }
+
+    if (target_user == sender) {
+        send_system_notice(*session_sp, "cannot whisper to yourself");
+        send_whisper_result(*session_sp, false, "cannot whisper to yourself");
+        corelog::info("[whisper] sender=" + sender + " target=" + target_user + " status=self_target");
+        return;
+    }
+
+    std::vector<std::shared_ptr<Session>> targets;
+    bool ineligible_found = false;
+    {
+        std::lock_guard<std::mutex> lk(state_.mu);
+        auto itset = state_.by_user.find(target_user);
+        if (itset != state_.by_user.end()) {
+            for (auto wit = itset->second.begin(); wit != itset->second.end(); ) {
+                if (auto p = wit->lock()) {
+                    if (p.get() == session_sp.get()) {
+                        ++wit;
+                        continue;
+                    }
+                    if (!state_.authed.count(p.get()) || state_.guest.count(p.get())) {
+                        ineligible_found = true;
+                        ++wit;
+                        continue;
+                    }
+                    if (p.get() != session_sp.get()) {
+                        targets.emplace_back(std::move(p));
+                    }
+                    ++wit;
+                } else {
+                    wit = itset->second.erase(wit);
+                }
+            }
+        }
+    }
+
+    if (targets.empty() && ineligible_found) {
+        send_system_notice(*session_sp, "user cannot receive whispers (login required): " + target_user);
+        send_whisper_result(*session_sp, false, "recipient not eligible");
+        corelog::info("[whisper] sender=" + sender + " target=" + target_user + " status=recipient_guest");
+        return;
+    }
+
+    if (targets.empty()) {
+        send_system_notice(*session_sp, "user not found: " + target_user);
+        send_whisper_result(*session_sp, false, "user not found");
+        corelog::info("[whisper] sender=" + sender + " target=" + target_user + " status=not_found");
+        return;
+    }
+
+    auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+
+    server::wire::v1::WhisperNotice notice;
+    notice.set_sender(sender);
+    notice.set_recipient(target_user);
+    notice.set_text(text);
+    notice.set_ts_ms(static_cast<std::uint64_t>(now64));
+
+    notice.set_outgoing(false);
+    std::string incoming_bytes;
+    notice.SerializeToString(&incoming_bytes);
+    std::vector<std::uint8_t> incoming(incoming_bytes.begin(), incoming_bytes.end());
+    for (auto& target : targets) {
+        target->async_send(proto::MSG_WHISPER_BROADCAST, incoming, 0);
+    }
+
+    notice.set_outgoing(true);
+    std::string outgoing_bytes;
+    notice.SerializeToString(&outgoing_bytes);
+    std::vector<std::uint8_t> outgoing(outgoing_bytes.begin(), outgoing_bytes.end());
+    session_sp->async_send(proto::MSG_WHISPER_BROADCAST, outgoing, 0);
+
+    send_whisper_result(*session_sp, true, "");
+    corelog::info("[whisper] sender=" + sender + " target=" + target_user + " recipients=" + std::to_string(targets.size()) + " text=" + text);
+}
+
+std::string ChatService::hash_room_password(const std::string& password) {
+    std::hash<std::string> hasher;
+    std::size_t value = hasher(password);
+    std::ostringstream oss;
+    oss << std::hex << value;
+    return oss.str();
+}
+
 std::string ChatService::ensure_room_id_ci(const std::string& room_name) {
     if (!db_pool_) return std::string();
     // 캐시 확인
@@ -363,7 +534,6 @@ std::string ChatService::ensure_room_id_ci(const std::string& room_name) {
 }
 
 } // namespace server::app::chat
-
 
 
 

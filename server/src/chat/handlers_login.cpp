@@ -49,6 +49,11 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             state_.user[session_sp.get()] = new_user;
             state_.by_user[new_user].insert(session_sp);
             state_.authed.insert(session_sp.get());
+            if (guest_mode) {
+                state_.guest.insert(session_sp.get());
+            } else {
+                state_.guest.erase(session_sp.get());
+            }
             std::string room = "lobby";
             state_.cur_room[session_sp.get()] = room;
             state_.rooms[room].insert(session_sp);

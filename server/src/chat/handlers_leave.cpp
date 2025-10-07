@@ -58,7 +58,7 @@ void ChatService::on_leave(Session& s, std::span<const std::uint8_t> payload) {
                         if (auto p = wit->lock()) { targets.emplace_back(std::move(p)); ++wit; }
                         else { wit = set.erase(wit); }
                     }
-                    if (set.empty() && room_to_leave != std::string("lobby")) state_.rooms.erase(itb);
+                    if (set.empty() && room_to_leave != std::string("lobby")) { state_.rooms.erase(itb); state_.room_passwords.erase(room_to_leave); }
                 }
             }
             state_.cur_room[session_sp.get()] = std::string("lobby");
