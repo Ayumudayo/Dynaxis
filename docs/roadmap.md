@@ -172,12 +172,12 @@
 - `docs/db/redis-strategy.md` — presence/publish/키 설계
 - `docs/protocol.md` — 브로드캐스트 포맷 규칙
 
-## 7) 귓속말/잠금 방 — [todo]
-- [todo] 로그인 사용자 간 `/whisper <user> <text>` 명령 지원 — 미로그인/대상 없음은 에러 응답
-- [todo] 서버 로그에 `[whisper]` 형태로 송신·수신 기록 남기기(추후 마스킹 정책 검토)
-- [todo] devclient 입력창 명령 파서 추가, 수신 메시지는 `[whisper from/to]` 접두어로 구분
-- [todo] 비밀번호 보호 방 생성/입장 흐름(`/join <room> <password>`), 참가자 목록 요청 차단
-- [todo] 잠금 방 표식(방 목록에서 `🔒 room` 형태) 및 잘못된 비밀번호 안내 메시지
+## 7) 귓속말/잠금 방 — [done]
+- [done] 로그인 사용자 간 `/whisper <user> <text>` 명령 지원 — 미로그인, 대상 미존재, 게스트는 명확한 오류 응답
+- [done] 서버 로그에 `[whisper]` 접두 로그 작성(추후 마스킹 정책 검토 대상)
+- [done] devclient 명령 파서/표시 개선: `/whisper`·`/w` 처리, `[whisper from/to]` 로그 출력
+- [done] 비밀번호 보호 방 생성/입장 흐름(`/join <room> <password>`), 비밀번호 누락 시 `FORBIDDEN`
+- [done] 잠금 방 표식(좌측 패널 `🔒 room`) 및 잘못된 비밀번호 안내 메시지
 
 완료 기준(DoD)
 - 인증된 사용자 간 귓속말이 정상 교환되고 로그에 남음

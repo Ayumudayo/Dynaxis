@@ -114,6 +114,16 @@ scripts/smoke_wb.ps1 -Config Debug -BuildDir build-msvc
   - 노출 예시: `chat_subscribe_total`, `chat_self_echo_drop_total`, `chat_subscribe_last_lag_ms`
 - 키=값 로그: 서버/워커/DLQ 재처리에서 최소 지표가 로그로 기록됩니다.
 
+## 7) 클라이언트 명령 요약
+CLI(`dev_chat_cli.exe`)를 실행하면 입력창에서 다음 명령을 사용할 수 있습니다.
+
+- `/login <name>`: 로그인(빈 값이면 게스트 UUID 8자 자동 부여)
+- `/join <room> [password]`: 방 입장. 잠금 방은 비밀번호가 일치하지 않으면 `room locked` 오류가 반환됩니다.
+- `/whisper <user> <message>` 또는 `/w <user> <message>`: 로그인 사용자 간 귓속말. 게스트/미존재 대상에게는 사유가 담긴 응답과 시스템 알림이 내려옵니다.
+- `/leave [room]`, `/refresh`, `/rooms`, `/who <room>` 등 기존 명령도 동일하게 동작합니다.
+
+로그 패널에는 `[whisper to ...]`, `[whisper from ...]` 형식으로 귓속말이 표시되고, 잠금 방은 좌측 리스트에서 `🔒` 아이콘으로 구분됩니다.
+
 ## 문제 해결(Troubleshooting)
 - 컴파일 오류(이스케이프/경로): 최신 MSVC/Boost 권장, `vcpkg.json` 기반으로 빌드
 - Redis/DB 연결 실패: `.env`와 실제 인스턴스 주소/권한 확인

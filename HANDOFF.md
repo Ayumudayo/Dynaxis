@@ -30,6 +30,10 @@
 - 문서/설정 갱신
   - `.env`에 write-behind/DLQ/metrics/presence/pubsub 키 추가
   - Getting Started/Deployment에 원클릭 스크립트/마이그레이션 러너/트러블슈팅 반영
+- 귓속말/잠금 방 기능
+  - 서버에 `/whisper` 전용 opcode 추가, 게스트/미대상 검증 및 `[whisper]` 로그 출력
+  - 클라이언트는 `/whisper`·`/w` 명령과 잠금 방 표식(`🔒`)을 지원하며, 비밀번호 누락 시 즉시 안내
+  - `/join <room> <password>`로 잠금 방 생성/입장, `/who`는 비회원에게 거부됨
 
 ## 소스 포인터(핵심 파일)
 - 서버 이벤트 생산/세션 UUID
