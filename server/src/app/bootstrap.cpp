@@ -11,6 +11,7 @@
 #include <chrono>
 #include <filesystem>
 #include <type_traits>
+#include <functional>
 
 #include <boost/asio.hpp>
 #include <boost/asio/streambuf.hpp>
@@ -68,6 +69,9 @@ static std::atomic<std::uint64_t> g_self_echo_drop_total{0};
 static std::atomic<long long>     g_subscribe_last_lag_ms{0};
 
 int run_server(int argc, char** argv) {
+    core::concurrent::TaskScheduler scheduler;
+    std::shared_ptr<asio::steady_timer> scheduler_timer;
+    std::shared_ptr<core::storage::DbWorkerPool> db_workers;
     try {
 #if defined(_WIN32)
         SetConsoleOutputCP(CP_UTF8);
@@ -160,11 +164,34 @@ int run_server(int argc, char** argv) {
         services::set(make_ref(buffer_manager));
         services::set(make_ref(dispatcher));
         services::set(options);
-        services::set(state);\n        core::concurrent::TaskScheduler scheduler;\n        services::set(make_ref(scheduler));\n\n        auto scheduler_timer = std::make_shared<asio::steady_timer>(io);\n        services::set(scheduler_timer);\n        auto scheduler_tick = std::make_shared<std::function<void()>>();\n        std::weak_ptr<std::function<void()>> scheduler_tick_weak = scheduler_tick;\n        *scheduler_tick = [scheduler_timer, scheduler_ptr = &scheduler, scheduler_tick_weak]() {\n            scheduler_ptr->poll(32);\n            scheduler_timer->expires_after(std::chrono::milliseconds(50));\n            scheduler_timer->async_wait([scheduler_timer, scheduler_ptr, scheduler_tick_weak](const boost::system::error_code& ec){\n                if (ec) return;\n                if (auto fn = scheduler_tick_weak.lock()) {\n                    (*fn)();\n                }\n            });\n        };\n        (*scheduler_tick)();\n
+        services::set(state);
+
+        services::set(make_ref(scheduler));
+
+        scheduler_timer = std::make_shared<asio::steady_timer>(io);
+        services::set(scheduler_timer);
+
+        auto scheduler_tick = std::make_shared<std::function<void()>>();
+        std::weak_ptr<std::function<void()>> scheduler_tick_weak = scheduler_tick;
+        *scheduler_tick = [scheduler_timer, scheduler_tick_weak, scheduler_ptr = &scheduler]() {
+            scheduler_ptr->poll(32);
+            scheduler_timer->expires_after(std::chrono::milliseconds(50));
+            scheduler_timer->async_wait([scheduler_timer, scheduler_tick_weak, scheduler_ptr](const boost::system::error_code& ec) {
+                if (ec == asio::error::operation_aborted) {
+                    return;
+                }
+                if (!ec) {
+                    scheduler_ptr->poll(32);
+                    if (auto locked = scheduler_tick_weak.lock()) {
+                        (*locked)();
+                    }
+                }
+            });
+        };
+        (*scheduler_tick)();
 
         // DB 커넥션 풀 구성(환경 변수 기반)
         std::shared_ptr<core::storage::IConnectionPool> db_pool;
-        std::shared_ptr<core::storage::DbWorkerPool> db_workers;
         {
             const char* uri = std::getenv("DB_URI");
             if (uri && *uri) {
@@ -202,7 +229,7 @@ int run_server(int argc, char** argv) {
             services::set(db_workers);
             corelog::info(std::string("DB worker pool started: ") + std::to_string(log_workers) + " threads.");
 
-            scheduler.schedule_every(std::chrono::seconds(60), [job_queue_ptr, db_pool]() {
+            scheduler.schedule_every([job_queue_ptr, db_pool]() {
                 job_queue_ptr->Push([db_pool]() {
                     try {
                         if (!db_pool->health_check()) {
@@ -214,7 +241,7 @@ int run_server(int argc, char** argv) {
                         corelog::error("Periodic DB health check unknown exception");
                     }
                 });
-            });
+            }, std::chrono::seconds(60));
         }
 
         // Redis 클라이언트 구성(환경 변수 기반)
@@ -245,7 +272,7 @@ int run_server(int argc, char** argv) {
         }
         if (redis) {
             services::set(redis);
-            scheduler.schedule_every(std::chrono::seconds(60), [job_queue_ptr, redis]() {
+            scheduler.schedule_every([job_queue_ptr, redis]() {
                 job_queue_ptr->Push([redis]() {
                     try {
                         if (!redis->health_check()) {
@@ -257,7 +284,7 @@ int run_server(int argc, char** argv) {
                         corelog::error("Periodic Redis health check unknown exception");
                     }
                 });
-            });
+            }, std::chrono::seconds(60));
         }
 
         server::app::chat::ChatService chat(io, job_queue, db_pool, redis);
