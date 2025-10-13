@@ -122,6 +122,8 @@ endif()
 add_subdirectory(core)
 add_subdirectory(proto)
 add_subdirectory(server)
+add_subdirectory(gateway)
+add_subdirectory(load_balancer)
 # Link wb_worker after server targets exist
 if (TARGET wb_worker)
   if (TARGET server_core)

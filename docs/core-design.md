@@ -34,6 +34,8 @@
 - `core/include/server/core/storage/` : Repository 및 UnitOfWork SPI
 - `core/include/server/wire/codec.hpp` : Protobuf ↔ msg_id 매핑 헬퍼
 - `core/src/**` : 각 인터페이스의 기본 구현
+- `gateway/` : Gateway ���� ���� ��Ż. Hive/Connection ����� ���� smoke test(`GatewayApp::run_smoke_test`)�� ����Ǿ� 있으며 TLS ��ȣ·세션 등록 로직을 ��� ������ �����Ѵ�.
+- `load_balancer/` : Load Balancer ���� ���� ��Ż. InMemory/Redis/Consul ��� ���� ������ `LoadBalancerApp::run_smoke_test()`���� ��Ű��ȭ�ϸ� ��후 샤딩·health probe ��å�� �����Ѵ�.
 
 ## 핵심 모듈 요약
 

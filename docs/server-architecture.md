@@ -108,6 +108,11 @@
 4. Core `ChatService`가 로그인 처리 후 Redis presence 업데이트 및 `DbWorkerPool`로 audit 로그를 기록한다.
 5. 메시지 송신 시 Core가 DB에 기록 → Redis Streams로 fan-out → 다른 Core/Gateway가 subscribe 하고, 최종적으로 대상 세션에 전달된다.
 
+### 별도 실행 프로그램 구성
+- **Gateway 애플리케이션(`gateway_app`)**: `gateway/` 모듈에서 Hive/Connection 스켈레톤을 활용해 TLS 종료·인증·세션 등록을 담당한다. 현재는 `GatewayApp::run_smoke_test()`로 Hive run/stop이 정상 동작하는지 확인하며, 이후 Listener/Connection 파생 클래스를 추가해 실제 세션 라우팅을 구현한다.
+- **Load Balancer 애플리케이션(`load_balancer_app`)**: `load_balancer/` 모듈은 InMemory → Redis/Consul 상태 저장소로 인스턴스 정보를 관리하고, Hive 기반 health probe를 확장할 준비가 되어 있다. Smoke 테스트는 `LoadBalancerApp::run_smoke_test()`에서 인스턴스 레코드를 upsert/touch 한 뒤 Hive를 graceful stop 하며 검증한다.
+- **빌드 구성**: 루트 `CMakeLists.txt`에서 `add_subdirectory(gateway)`, `add_subdirectory(load_balancer)`를 추가해 두 실행 파일을 생성한다. 두 타깃 모두 `server_core`를 링크하며, Load Balancer는 상태 저장소 공유를 위해 `server_state` 라이브러리도 링크한다.
+
 ### 실행 우선순위
 1. **단기**: Gateway 프로토타입 (TCP→Core IPC) + 기본 health probe + session registry 연동.
 2. **중기**: Load Balancer 샤딩 알고리즘 구현 및 backpressure 정책 시험.
@@ -116,6 +121,7 @@
 ## TODO (엔진화 준비)
 - [ ] Gateway → Load Balancer → Multi-instance 단계별 상세 설계(세션 라우팅, 상태 동기화, 장애 감지 플로우 포함)를 문서화한다.
 - [x] Hive/Connection 스타일 네트워크 추상화 PoC(`server/core/net/hive.hpp`, `connection.hpp`, `listener.hpp`)를 추가하고 기본 송수신·백프레셔 흐름을 검증했다.
+- [ ] Gateway/Session 계층에 Hive/Connection PoC를 통합하고 기존 `core::Session` 전환 계획을 수립한다.
 - [ ] 스크립팅/플러그인 확장을 위한 샌드박스 정책과 저장소 레이아웃을 정의한다.
 - [ ] 운영 배포 템플릿(k8s, systemd, Windows Service)을 마련하고 표준 프로비저닝 절차를 정리한다.
 - [ ] SLA/장애 대응 체크리스트(알람, 성공 지표, 롤백 플로우)를 구체화한다.
