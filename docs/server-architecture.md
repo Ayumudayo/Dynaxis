@@ -1,4 +1,4 @@
-# 서버 애플리케이션 구조
+ 서버 애플리케이션 구조
 
 `server/` 모듈은 `core/` 라이브러리에 구축된 공통 인프라를 재사용해 실행되는 실행 파일(`server_app`)로, 현재는 채팅 서비스를 중심으로 Gateway 역할과 도메인 서비스를 함께 담당한다. 네트워크 I/O는 Boost.Asio로 처리하고, 영속 계층은 PostgreSQL과 Redis에 의존한다. 장기적으로는 다른 실시간 서비스가 같은 코어를 활용할 수 있도록 공통 추상화를 유지한다.
 
@@ -63,11 +63,12 @@
 환경 변수는 `.env`와 CI 환경 변수 관리 도구를 통해 통합 관리하며, 운영 환경별 프로파일을 문서화한다.
 
 ## 운영 중점 사항 / 기존 TODO
-- `ThreadManager` + `JobQueue` 모니터링 개선 (핸들러별 대기 시간 기록)
-- write-behind 워커(`wb_worker`) 도입 및 Redis Streams schema 정비
-- PostgreSQL connection pool 모니터링 및 재시도 정책 구체화
-- TLS 지원과 인증서 자동 갱신(예: ACME) 파이프라인 추가
-- 테스트 스위트 확충: 통합 테스트를 `tests/`에 복원하고 CI에 포함
+- [ ] Gateway �� Load Balancer �� Multi-instance �ܰ躰 �� ����(���� �����, ���� ����ȭ, ��� ���� �÷ο� ����)�� ����ȭ�Ѵ�.
+- [x] Hive/Connection ��Ÿ�� ��Ʈ��ũ �߻�ȭ PoC(`server/core/net/hive.hpp`, `connection.hpp`, `listener.hpp`)�� �߰��ϰ� �⺻ �ۼ��š��������� �帧�� �����ߴ�.
+- [ ] Gateway/Session ��층에 Hive/Connection PoC를 통합하고 기존 `core::Session` 전환 계획을 수립한다.
+- [ ] ��ũ����/�÷����� Ȯ���� ���� ����ڽ� ��å�� ����� ���̾ƿ��� �����Ѵ�.
+- [ ] � ���� ���ø�(k8s, systemd, Windows Service)�� �����ϰ� ǥ�� ���κ����� ������ �����Ѵ�.
+- [ ] SLA/��� ���� üũ����Ʈ(�˶�, ���� ��ǥ, �ѹ� �÷ο�)�� ��üȭ�Ѵ�.
 
 ## 다단계 인프라 로드맵
 - **1단계 Gateway**: TLS termination, rate limit, JWT 검증 등 ingress 공통 로직을 Gateway 계층에서 흡수하고, `service_registry`를 통해 각 인스턴스의 IP·health·세션 수를 공유한다. 초기에는 채팅용 라우터로 시작하되 HTTP/gRPC proxy 형태로 확장 가능하도록 설계한다.
@@ -76,7 +77,7 @@
 - **Knights 적용 요약**: ServiceRegistry는 인스턴스 디스커버리를 담당하고, TaskScheduler는 health/keep-alive 스케줄링에 사용한다. LockedQueue는 gateway↔core 간 메시지 큐로 재사용해 백프레셔를 관리한다. Sapphire에서 차용한 구조를 채팅 서버 외의 실시간 서비스에도 적용할 수 있도록 가이드한다.
 
 ### Gateway 세부 설계
-- **수신 파이프라인**: `gateway::Acceptor`에서 TLS(선택) + TCP handshake → `gateway::Hive`(ASIO strand) → Core와의 IPC(ZeroMQ/Named pipe/gRPC 중 택일) 순으로 구성한다.
+- **수신 파이프라인**: 새 `server/core/net/hive.hpp`, `connection.hpp`, `listener.hpp` 구성요소로 Gateway 전용 Hive를 구성하고, TLS(선택) + TCP handshake → `gateway::Hive`(ASIO strand) → Core IPC(ZeroMQ/Named pipe/gRPC) 순으로 이어진다.
 - **세션 디렉터리**: `service_registry`를 통해 할당된 gateway id, connection id를 Core에 전달하고, Redis Hash(`gateway:{id}:sessions`)에 사용자·세션 메타데이터를 캐시한다.
 - **보안/검증**: JWT 또는 HMAC 토큰 검증, IP allowlist, rate limit(bucket4j 스타일)을 전처리 단계에서 수행해 Core 로직을 단순화한다.
 - **관측성**: Prometheus exporter에서 accept, TLS 오류, 인증 실패, backend 라우팅 시간을 측정하고 Core의 runtime_metrics와 결합한다.
@@ -95,6 +96,11 @@
 - **상태 동기화**: Presence, typing indicator 등 실시간 상태는 Redis Pub/Sub/Keyspace notification으로 교환하고, consistency 보장을 위해 TTL + periodic reconcile 작업을 TaskScheduler로 수행한다.
 - **장애 시나리오**: Core 다운 시 Load Balancer가 해당 shard를 블랙리스트 처리 → Gateway가 세션 재협상을 요청 → 새 Core가 Redis/DB에서 상태를 복원.
 
+### 상태 저장소 프로토타입
+- server/state/instance_registry.hpp�� InMemoryStateBackend�� ���� �ڷᱸ���Ե��� �ڵ����� ������ ���÷δ�. 테스트�� state_instance_registry_tests.cpp���� GTest�� ����/touch/삭제 플로우�� 검증한다.
+- RedisInstanceStateBackend�� Redis의 TTL(setex)을 활용해 gateway/instances/{id} 키에 JSON 메타데이터를 기록하고, 로컬 캐시로 즉시 조회를 지원한다. make_redis_state_client() 어댑터로 기존 server_storage_redis 클라이언트를 주입한다.
+- ConsulInstanceStateBackend�� HTTP PUT/DELETE 콜백을 주입받아 Consul KV와 연동하는 패턴을 시뮬레이션하며, 향후 실제 HTTP 클라이언트로 교체 가능하다.
+
 ### 흐름 예시 (Login → Chat)
 1. 클라이언트가 Gateway에 TLS 연결을 수립하고 JWT를 제시한다.
 2. Gateway가 토큰 검증 후 Load Balancer에 room/user id로 라우팅 질의를 수행한다.
@@ -109,7 +115,7 @@
 
 ## TODO (엔진화 준비)
 - [ ] Gateway → Load Balancer → Multi-instance 단계별 상세 설계(세션 라우팅, 상태 동기화, 장애 감지 플로우 포함)를 문서화한다.
-- [ ] Hive/Connection 스타일 네트워크 추상화 PoC를 작성하고 인증·프레이밍·백프레셔 시나리오를 검증한다.
+- [x] Hive/Connection 스타일 네트워크 추상화 PoC(`server/core/net/hive.hpp`, `connection.hpp`, `listener.hpp`)를 추가하고 기본 송수신·백프레셔 흐름을 검증했다.
 - [ ] 스크립팅/플러그인 확장을 위한 샌드박스 정책과 저장소 레이아웃을 정의한다.
 - [ ] 운영 배포 템플릿(k8s, systemd, Windows Service)을 마련하고 표준 프로비저닝 절차를 정리한다.
 - [ ] SLA/장애 대응 체크리스트(알람, 성공 지표, 롤백 플로우)를 구체화한다.

@@ -2,6 +2,9 @@ add_library(server_core
     src/net/acceptor.cpp
     src/net/session.cpp
     src/net/dispatcher.cpp
+    src/net/hive.cpp
+    src/net/connection.cpp
+    src/net/listener.cpp
     src/util/log.cpp
     src/metrics/metrics.cpp
     src/runtime_metrics.cpp

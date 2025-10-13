@@ -21,6 +21,7 @@
 ## 최근 품질 보강
 - 2025-10-13: TaskScheduler, DbWorkerPool GTest 케이스를 추가해 지연·예외 경로 회귀를 방지한다.
 - 2025-10-13: Gateway → Load Balancer → Multi-instance 아키텍처 로드맵을 docs/server-architecture.md에 반영했다.
+- 2025-10-13: `net/hive.hpp`, `net/connection.hpp`, `net/listener.hpp`�� Hive/Connection ���� �߻�ȭ PoC�� �����ϰ�, `server/state/instance_registry.hpp` ���� Redis/Consul ���� ���� ������Ʈ�� �����ߴ�.
 ## 디렉터리 구성
 - `core/include/server/core/net/` : `Acceptor`, `Session`, `Dispatcher` 등 I/O 계층
 - `core/include/server/core/memory/` : 고정 블록 `MemoryPool`, `BufferManager`

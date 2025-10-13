@@ -29,6 +29,19 @@ target_link_libraries(core_concurrency_tests PRIVATE
     server_core
 )
 
+add_executable(server_state_tests
+    state_instance_registry_tests.cpp
+)
+target_include_directories(server_state_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/server/include
+)
+target_link_libraries(server_state_tests PRIVATE
+    GTest::gtest_main
+    server_state
+)
+
 include(GoogleTest)
 gtest_discover_tests(storage_basic_tests)
 gtest_discover_tests(core_concurrency_tests)
+gtest_discover_tests(server_state_tests)
