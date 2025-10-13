@@ -1,13 +1,17 @@
 #include "gateway/gateway_app.hpp"
 
 #include <chrono>
+#include <cstdlib>
 #include <string>
+#include <string_view>
 #include <thread>
 
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/write.hpp>
+#include <grpcpp/grpcpp.h>
 
+#include "gateway_lb.grpc.pb.h"
 #include "server/core/util/log.hpp"
 
 namespace gateway {
@@ -22,11 +26,19 @@ using tcp = boost::asio::ip::tcp;
 GatewayApp::GatewayApp()
     : hive_(std::make_shared<server::core::net::Hive>(io_))
     , stop_timer_(io_)
-    , authenticator_(std::make_shared<auth::NoopAuthenticator>()) {}
+    , authenticator_(std::make_shared<auth::NoopAuthenticator>()) {
+    if (const char* lb_env = std::getenv("LB_GRPC_ENDPOINT")) {
+        if (std::string_view(lb_env).length() > 0) {
+            lb_endpoint_ = lb_env;
+            server::core::log::info("GatewayApp configured LB gRPC endpoint: " + lb_endpoint_);
+        }
+    }
+}
 
 bool GatewayApp::run_smoke_test() {
     payload_received_.store(false, std::memory_order_relaxed);
     watchdog_fired_.store(false, std::memory_order_relaxed);
+    lb_forward_ok_.store(false, std::memory_order_relaxed);
     last_payload_.clear();
 
     const auto port = setup_listener(kSmokeTestPort);
@@ -71,12 +83,15 @@ bool GatewayApp::run_smoke_test() {
     }
     const std::string payload_str(payload_copy.begin(), payload_copy.end());
     const bool payload_ok = payload_received_.load(std::memory_order_relaxed) && payload_str == "chat:ping";
-    const bool ok = payload_ok && !watchdog_fired_.load(std::memory_order_relaxed);
+    const bool require_lb = !lb_endpoint_.empty() && (std::getenv("LB_GRPC_REQUIRED") != nullptr);
+    const bool lb_ok = !require_lb || lb_forward_ok_.load(std::memory_order_relaxed);
+    const bool ok = payload_ok && lb_ok && !watchdog_fired_.load(std::memory_order_relaxed);
     if (ok) {
         server::core::log::info("GatewayApp Hive/Connection smoke test completed");
     } else {
         server::core::log::warn("GatewayApp smoke test failed (payload_ok="
-            + std::string(payload_ok ? "true" : "false") + ", watchdog="
+            + std::string(payload_ok ? "true" : "false") + ", lb_ok="
+            + std::string(lb_ok ? "true" : "false") + ", watchdog="
             + std::string(watchdog_fired_.load(std::memory_order_relaxed) ? "true" : "false") + ")");
     }
     return ok;
@@ -100,10 +115,13 @@ void GatewayApp::arm_stop_timer() {
 std::uint16_t GatewayApp::setup_listener(std::uint16_t port) {
     auto payload_callback = [this](std::vector<std::uint8_t> payload) {
         payload_received_.store(true, std::memory_order_relaxed);
+        std::string payload_str(payload.begin(), payload.end());
         {
             std::lock_guard<std::mutex> lock(payload_mutex_);
-            last_payload_ = std::move(payload);
+            last_payload_ = payload;
         }
+        bool forwarded = forward_to_load_balancer(payload_str);
+        lb_forward_ok_.store(forwarded, std::memory_order_relaxed);
         stop_timer_.cancel();
         hive_->stop();
     };
@@ -121,6 +139,33 @@ std::uint16_t GatewayApp::setup_listener(std::uint16_t port) {
     auto bound_endpoint = listener_->local_endpoint();
     server::core::log::info("GatewayApp listener bound to port " + std::to_string(bound_endpoint.port()));
     return bound_endpoint.port();
+}
+
+bool GatewayApp::forward_to_load_balancer(const std::string& payload) {
+    if (lb_endpoint_.empty()) {
+        return true;
+    }
+
+    auto channel = grpc::CreateChannel(lb_endpoint_, grpc::InsecureChannelCredentials());
+    auto stub = gateway::lb::LoadBalancerService::NewStub(channel);
+
+    gateway::lb::RouteRequest request;
+    request.set_session_id("session-smoke");
+    request.set_gateway_id("gateway-smoke");
+    request.set_payload(payload);
+
+    grpc::ClientContext context;
+    gateway::lb::RouteResponse response;
+    auto status = stub->Forward(&context, request, &response);
+    if (!status.ok()) {
+        server::core::log::warn(std::string("GatewayApp gRPC forward failed: ") + status.error_message());
+        return false;
+    }
+    if (!response.accepted()) {
+        server::core::log::warn(std::string("GatewayApp gRPC forward rejected: ") + response.reason());
+        return false;
+    }
+    return true;
 }
 
 } // namespace gateway

@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package gateway.lb;
+
+message RouteRequest {
+  string session_id = 1;
+  bytes payload = 2;
+  string gateway_id = 3;
+}
+
+message RouteResponse {
+  bool accepted = 1;
+  string reason = 2;
+}
+
+service LoadBalancerService {
+  rpc Forward(RouteRequest) returns (RouteResponse);
+}
