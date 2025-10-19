@@ -2,10 +2,13 @@
 
 #include <atomic>
 #include <chrono>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <boost/asio/io_context.hpp>
@@ -15,6 +18,7 @@
 #include <grpcpp/grpcpp.h>
 
 #include "gateway_lb.grpc.pb.h"
+#include "load_balancer/session_directory.hpp"
 #include "server/core/net/hive.hpp"
 #include "server/state/instance_registry.hpp"
 
@@ -48,10 +52,12 @@ private:
 
     void configure();
     void configure_backends(std::string_view list);
+    void rebuild_hash_ring();
     void schedule_heartbeat();
     void publish_heartbeat();
     std::unique_ptr<server::state::IInstanceStateBackend> create_backend();
-    std::optional<BackendEndpoint> select_backend();
+    std::optional<BackendEndpoint> select_backend(const std::string& client_id);
+    std::optional<BackendEndpoint> find_backend_by_id(const std::string& backend_id) const;
     grpc::Status handle_stream(grpc::ServerContext* context,
                                grpc::ServerReaderWriter<gateway::lb::RouteMessage, gateway::lb::RouteMessage>* stream);
     bool connect_backend(const BackendEndpoint& endpoint,
@@ -67,6 +73,8 @@ private:
     boost::asio::steady_timer heartbeat_timer_;
     boost::asio::signal_set signals_;
     std::unique_ptr<server::state::IInstanceStateBackend> state_backend_;
+    std::shared_ptr<server::storage::redis::IRedisClient> redis_client_;
+    std::unique_ptr<SessionDirectory> session_directory_;
 
     std::string grpc_listen_address_;
     std::unique_ptr<GrpcServiceImpl> grpc_service_;
@@ -76,9 +84,13 @@ private:
 
     std::string instance_id_;
     std::vector<BackendEndpoint> backends_;
+    std::unordered_map<std::string, std::size_t> backend_index_map_;
+    std::map<std::uint32_t, std::size_t> hash_ring_;
+    std::mutex hash_mutex_;
     std::atomic<std::size_t> backend_index_{0};
     std::chrono::seconds heartbeat_interval_{std::chrono::seconds{5}};
     std::chrono::seconds backend_state_ttl_{std::chrono::seconds{30}};
+    std::chrono::seconds session_binding_ttl_{std::chrono::seconds{45}};
 };
 
 } // namespace load_balancer

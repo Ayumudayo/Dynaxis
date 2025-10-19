@@ -6,6 +6,7 @@
 #include <atomic>
 #include <functional>
 #include <initializer_list>
+#include <optional>
 
 #if defined(HAVE_REDIS_PLUS_PLUS)
 #include <sw/redis++/redis++.h>
@@ -225,6 +226,22 @@ public:
         try { redis_->del(key); return true; } catch (const std::exception& e) { server::core::log::warn(std::string("Redis DEL failed: ") + e.what()); return false; } catch (...) { server::core::log::warn("Redis DEL failed: unknown"); return false; }
     }
 
+    std::optional<std::string> get(const std::string& key) override {
+        try {
+            auto value = redis_->get(key);
+            if (value) {
+                return *value;
+            }
+            return std::nullopt;
+        } catch (const std::exception& e) {
+            server::core::log::warn(std::string("Redis GET failed: ") + e.what());
+            return std::nullopt;
+        } catch (...) {
+            server::core::log::warn("Redis GET failed: unknown");
+            return std::nullopt;
+        }
+    }
+
     bool scan_del(const std::string& pattern) override {
         try {
             long long cursor = 0;
@@ -288,6 +305,7 @@ public:
     bool xreadgroup(const std::string& key, const std::string& group, const std::string& consumer, long long block_ms, std::size_t count, std::vector<StreamEntry>& out) override { (void)key; (void)group; (void)consumer; (void)block_ms; (void)count; out.clear(); return true; }
     bool xack(const std::string& /*key*/, const std::string& /*group*/, const std::string& /*id*/) override { return true; }
     bool del(const std::string& key) override { (void)key; return true; }
+    std::optional<std::string> get(const std::string& key) override { (void)key; return std::optional<std::string>{}; }
     bool scan_del(const std::string& pattern) override { (void)pattern; return true; }
     bool xpending(const std::string& key, const std::string& group, long long& total) override { (void)key; (void)group; total = 0; return true; }
 private:

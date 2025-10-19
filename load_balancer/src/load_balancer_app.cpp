@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <functional>
 #include <cstdlib>
 #include <filesystem>
 #include <mutex>
@@ -18,6 +19,7 @@
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/write.hpp>
 
+#include "load_balancer/session_directory.hpp"
 #include "server/core/config/dotenv.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/util/paths.hpp"
@@ -144,6 +146,25 @@ void LoadBalancerApp::configure() {
         configure_backends(kDefaultBackendEndpoint);
     }
 
+    if (const char* ttl_env = std::getenv("LB_SESSION_TTL"); ttl_env && *ttl_env) {
+        try {
+            auto parsed = std::stoul(ttl_env);
+            if (parsed > 0) {
+                session_binding_ttl_ = std::chrono::seconds{static_cast<long long>(parsed)};
+            }
+        } catch (const std::exception& ex) {
+            server::core::log::warn(std::string("LoadBalancerApp invalid LB_SESSION_TTL: ") + ex.what());
+        }
+    }
+
+    if (redis_client_) {
+        session_directory_ = std::make_unique<SessionDirectory>(redis_client_, "gateway/session", session_binding_ttl_);
+    } else {
+        session_directory_.reset();
+    }
+
+    rebuild_hash_ring();
+
     server::core::log::info("LoadBalancerApp grpc_listen=" + grpc_listen_address_
         + " instance_id=" + instance_id_
         + " backends=" + std::to_string(backends_.size()));
@@ -151,6 +172,7 @@ void LoadBalancerApp::configure() {
 
 void LoadBalancerApp::configure_backends(std::string_view list) {
     backends_.clear();
+    backend_index_map_.clear();
     std::size_t index = 0;
     std::size_t start = 0;
     while (start < list.size()) {
@@ -165,6 +187,8 @@ void LoadBalancerApp::configure_backends(std::string_view list) {
             endpoint.id = "backend-" + std::to_string(index++);
             endpoint.host = std::move(host);
             endpoint.port = port;
+            std::size_t position = backends_.size();
+            backend_index_map_[endpoint.id] = position;
             backends_.push_back(std::move(endpoint));
         }
         start = end + 1;
@@ -219,6 +243,7 @@ std::unique_ptr<server::state::IInstanceStateBackend> LoadBalancerApp::create_ba
             server::storage::redis::Options opts;
             auto client = server::storage::redis::make_redis_client(uri, opts);
             if (client) {
+                redis_client_ = client;
                 auto state_client = server::state::make_redis_state_client(client);
                 server::core::log::info("LoadBalancerApp using Redis state backend");
                 return std::make_unique<server::state::RedisInstanceStateBackend>(
@@ -227,21 +252,76 @@ std::unique_ptr<server::state::IInstanceStateBackend> LoadBalancerApp::create_ba
                     backend_state_ttl_);
             }
         } catch (const std::exception& ex) {
+            redis_client_.reset();
             server::core::log::warn(std::string("LoadBalancerApp Redis backend init failed: ") + ex.what());
         }
     }
 
     server::core::log::warn("LoadBalancerApp falling back to in-memory state backend");
+    redis_client_.reset();
     return std::make_unique<server::state::InMemoryStateBackend>();
 }
 
-std::optional<LoadBalancerApp::BackendEndpoint> LoadBalancerApp::select_backend() {
+void LoadBalancerApp::rebuild_hash_ring() {
+    std::lock_guard<std::mutex> lock(hash_mutex_);
+    hash_ring_.clear();
+    if (backends_.empty()) {
+        return;
+    }
+    constexpr int kReplicas = 128;
+    for (std::size_t i = 0; i < backends_.size(); ++i) {
+        const auto& backend = backends_[i];
+        for (int replica = 0; replica < kReplicas; ++replica) {
+            std::string key = backend.id + "#" + std::to_string(replica);
+            auto hash = static_cast<std::uint32_t>(std::hash<std::string>{}(key));
+            hash_ring_.emplace(hash, i);
+        }
+    }
+}
+
+std::optional<LoadBalancerApp::BackendEndpoint> LoadBalancerApp::find_backend_by_id(const std::string& backend_id) const {
+    if (backend_id.empty()) {
+        return std::nullopt;
+    }
+    auto it = backend_index_map_.find(backend_id);
+    if (it == backend_index_map_.end()) {
+        return std::nullopt;
+    }
+    if (it->second >= backends_.size()) {
+        return std::nullopt;
+    }
+    return backends_[it->second];
+}
+
+std::optional<LoadBalancerApp::BackendEndpoint> LoadBalancerApp::select_backend(const std::string& client_id) {
     if (backends_.empty()) {
         return std::nullopt;
     }
+
+    if (session_directory_ && !client_id.empty()) {
+        if (auto existing = session_directory_->find_backend(client_id)) {
+            if (auto backend = find_backend_by_id(*existing)) {
+                return backend;
+            }
+        }
+    }
+
+    if (!client_id.empty()) {
+        std::lock_guard<std::mutex> lock(hash_mutex_);
+        if (!hash_ring_.empty()) {
+            auto hash = static_cast<std::uint32_t>(std::hash<std::string>{}(client_id));
+            auto it = hash_ring_.lower_bound(hash);
+            if (it == hash_ring_.end()) {
+                it = hash_ring_.begin();
+            }
+            if (it != hash_ring_.end()) {
+                return backends_[it->second];
+            }
+        }
+    }
+
     auto idx = backend_index_.fetch_add(1, std::memory_order_relaxed);
-    auto selected = backends_[idx % backends_.size()];
-    return selected;
+    return backends_[idx % backends_.size()];
 }
 
 bool LoadBalancerApp::connect_backend(const BackendEndpoint& endpoint,
@@ -274,7 +354,7 @@ grpc::Status LoadBalancerApp::handle_stream(
     auto gateway_id = request.gateway_id();
     auto client_id = request.client_id();
 
-    auto backend_opt = select_backend();
+    auto backend_opt = select_backend(client_id);
     if (!backend_opt) {
         gateway::lb::RouteMessage error_msg;
         error_msg.set_kind(gateway::lb::ROUTE_KIND_SERVER_ERROR);
@@ -306,6 +386,14 @@ grpc::Status LoadBalancerApp::handle_stream(
 
     std::atomic<bool> running{true};
     std::mutex write_mutex;
+    bool session_bound = false;
+
+    auto release_session = [&]() {
+        if (session_bound && session_directory_ && !client_id.empty()) {
+            session_directory_->release_backend(client_id);
+            session_bound = false;
+        }
+    };
 
     auto send_to_gateway = [&](gateway::lb::RouteMessage message) {
         message.set_session_id(session_id);
@@ -318,6 +406,13 @@ grpc::Status LoadBalancerApp::handle_stream(
         }
         return true;
     };
+
+    if (session_directory_ && !client_id.empty()) {
+        session_bound = session_directory_->bind_backend(client_id, backend.id);
+        if (!session_bound) {
+            session_bound = true;
+        }
+    }
 
     auto forward_to_backend = [&](const std::string& payload) {
         boost::system::error_code write_ec;
@@ -369,6 +464,7 @@ grpc::Status LoadBalancerApp::handle_stream(
             break;
         case gateway::lb::ROUTE_KIND_CLIENT_CLOSE:
             running.store(false, std::memory_order_relaxed);
+            release_session();
             break;
         case gateway::lb::ROUTE_KIND_HEARTBEAT:
             // no-op for now
@@ -392,6 +488,7 @@ grpc::Status LoadBalancerApp::handle_stream(
     if (backend_reader.joinable()) {
         backend_reader.join();
     }
+    release_session();
     return grpc::Status::OK;
 }
 

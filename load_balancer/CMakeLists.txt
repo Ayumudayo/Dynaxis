@@ -1,6 +1,7 @@
 find_package(gRPC CONFIG REQUIRED)
 add_executable(load_balancer_app
     src/load_balancer_app.cpp
+    src/session_directory.cpp
     src/main.cpp
 )
 
