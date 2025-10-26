@@ -39,6 +39,11 @@ private:
         std::uint16_t port{0};
     };
 
+    struct BackendHealth {
+        int failure_count{0};
+        std::chrono::steady_clock::time_point retry_at{};
+    };
+
     class GrpcServiceImpl final : public gateway::lb::LoadBalancerService::Service {
     public:
         explicit GrpcServiceImpl(LoadBalancerApp& owner);
@@ -53,6 +58,9 @@ private:
     void configure();
     void configure_backends(std::string_view list);
     void rebuild_hash_ring();
+    bool is_backend_available(const BackendEndpoint& endpoint, std::chrono::steady_clock::time_point now);
+    void mark_backend_success(const std::string& backend_id);
+    void mark_backend_failure(const std::string& backend_id);
     void schedule_heartbeat();
     void publish_heartbeat();
     std::unique_ptr<server::state::IInstanceStateBackend> create_backend();
@@ -87,10 +95,14 @@ private:
     std::unordered_map<std::string, std::size_t> backend_index_map_;
     std::map<std::uint32_t, std::size_t> hash_ring_;
     std::mutex hash_mutex_;
+    std::unordered_map<std::string, BackendHealth> backend_health_;
+    mutable std::mutex health_mutex_;
     std::atomic<std::size_t> backend_index_{0};
     std::chrono::seconds heartbeat_interval_{std::chrono::seconds{5}};
     std::chrono::seconds backend_state_ttl_{std::chrono::seconds{30}};
     std::chrono::seconds session_binding_ttl_{std::chrono::seconds{45}};
+    std::size_t backend_failure_threshold_{3};
+    std::chrono::seconds backend_retry_cooldown_{std::chrono::seconds{5}};
 };
 
 } // namespace load_balancer

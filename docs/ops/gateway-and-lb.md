@@ -17,7 +17,7 @@ gateway_app  ── gRPC(Stream) ──►  load_balancer_app  ── TCP ──
 2. **Gateway → LoadBalancer**  
    세션마다 gRPC 스트림을 개설하고 `RouteMessage`(`CLIENT_HELLO`/`CLIENT_PAYLOAD`) 메시지를 전송한다. Gateway는 스트림에서 `SERVER_PAYLOAD`/`SERVER_CLOSE`/`SERVER_ERROR` 를 역으로 수신해 클라이언트에 write 한다.
 3. **LoadBalancer → Server**  
-   Load Balancer는 Redis 세션 디렉터리(`LB_SESSION_TTL`)와 Consistent Hash ring으로 고정 백엔드를 우선 배정하고, 매핑이 없을 때만 라운드로빈으로 백엔드를 선택한다. 클라이언트에서 받은 바이트 시퀀스를 그대로 server_app에 중계하며, 서버에서 오는 응답도 gRPC 스트림을 통해 Gateway로 되돌린다.
+   Load Balancer는 Redis 세션 디렉터리(`LB_SESSION_TTL`)와 Consistent Hash ring으로 고정 백엔드를 우선 배정하고, 매핑이 없을 때만 라운드로빈으로 백엔드를 선택한다. 장애가 반복되면 `LB_BACKEND_FAILURE_THRESHOLD`·`LB_BACKEND_COOLDOWN` 설정으로 해당 백엔드를 일정 시간 제외한다. 클라이언트에서 받은 바이트 시퀀스를 그대로 server_app에 중계하며, 서버에서 오는 응답도 gRPC 스트림을 통해 Gateway로 되돌린다.
 4. **상태 보고**  
    Load Balancer는 Redis 기반 `gateway/instances/*` 키에 인스턴스 정보를 주기적으로 갱신(기본 5초)한다. Redis가 비활성화된 경우 인메모리 백엔드를 사용한다.
 
@@ -63,6 +63,9 @@ gateway_app  ── gRPC(Stream) ──►  load_balancer_app  ── TCP ──
 | `LB_INSTANCE_ID` | 상태 레지스트리에 기록할 ID | `lb-<timestamp>` |
 | `LB_REDIS_URI` / `REDIS_URI` | 상태 백엔드(Redis) 연결 문자열 | 비활성 시 메모리 |
 | `LB_SESSION_TTL` | 세션→백엔드 매핑 TTL(초) | `45` |
+| `LB_BACKEND_FAILURE_THRESHOLD` | 백엔드 연속 실패 허용 횟수 | `3` |
+| `LB_BACKEND_COOLDOWN` | 실패 후 재시도 대기(초) | `5` |
+| `LB_SESSION_TTL` | 세션→백엔드 매핑 TTL(초) | `45` |
 
 ### server_app (변경 없음)
 | 변수 | 설명 |
@@ -79,7 +82,7 @@ gateway_app  ── gRPC(Stream) ──►  load_balancer_app  ── TCP ──
 
 ### 다중 인스턴스 점검
 - `.env`에서 `LB_BACKEND_ENDPOINTS`에 두 개 이상의 server_app 포트를 명시하고, 각 server_app은 고유 `SERVER_PORT`/`METRICS_PORT`를 사용한다.
-- `LB_SESSION_TTL`과 `GATEWAY_ID`가 모두 노드별로 일관되게 설정되어 있는지 확인한다.
+- `LB_SESSION_TTL`, `LB_BACKEND_FAILURE_THRESHOLD`, `LB_BACKEND_COOLDOWN`, `GATEWAY_ID`가 노드별로 일관되게 설정되어 있는지 확인한다.
 - Redis Pub/Sub 브로드캐스트를 활용하려면 `USE_REDIS_PUBSUB=1`, `REDIS_CHANNEL_PREFIX`, `GATEWAY_ID`를 모든 인스턴스에서 동일하게 설정한다.
 - Gateway를 통해 동일한 클라이언트 ID로 여러 번 접속해 `load_balancer.log`의 `backend=` 라우팅이 동일한지 확인한다.
 - 서버 인스턴스 중 하나를 중지하면 TTL 만료 후 동일 클라이언트가 다른 인스턴스로 재배치되는지 검증한다.

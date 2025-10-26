@@ -157,6 +157,28 @@ void LoadBalancerApp::configure() {
         }
     }
 
+    if (const char* threshold_env = std::getenv("LB_BACKEND_FAILURE_THRESHOLD"); threshold_env && *threshold_env) {
+        try {
+            auto parsed = std::stoul(threshold_env);
+            if (parsed > 0) {
+                backend_failure_threshold_ = parsed;
+            }
+        } catch (const std::exception& ex) {
+            server::core::log::warn(std::string("LoadBalancerApp invalid LB_BACKEND_FAILURE_THRESHOLD: ") + ex.what());
+        }
+    }
+
+    if (const char* cooldown_env = std::getenv("LB_BACKEND_COOLDOWN"); cooldown_env && *cooldown_env) {
+        try {
+            auto parsed = std::stoul(cooldown_env);
+            if (parsed > 0) {
+                backend_retry_cooldown_ = std::chrono::seconds{static_cast<long long>(parsed)};
+            }
+        } catch (const std::exception& ex) {
+            server::core::log::warn(std::string("LoadBalancerApp invalid LB_BACKEND_COOLDOWN: ") + ex.what());
+        }
+    }
+
     if (redis_client_) {
         session_directory_ = std::make_unique<SessionDirectory>(redis_client_, "gateway/session", session_binding_ttl_);
     } else {
@@ -194,6 +216,16 @@ void LoadBalancerApp::configure_backends(std::string_view list) {
         start = end + 1;
     }
     rebuild_hash_ring();
+    {
+        std::lock_guard<std::mutex> lock(health_mutex_);
+        for (auto it = backend_health_.begin(); it != backend_health_.end(); ) {
+            if (backend_index_map_.find(it->first) == backend_index_map_.end()) {
+                it = backend_health_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
 }
 
 void LoadBalancerApp::schedule_heartbeat() {
@@ -280,6 +312,45 @@ void LoadBalancerApp::rebuild_hash_ring() {
     }
 }
 
+bool LoadBalancerApp::is_backend_available(const BackendEndpoint& endpoint, std::chrono::steady_clock::time_point now) {
+    std::lock_guard<std::mutex> lock(health_mutex_);
+    auto it = backend_health_.find(endpoint.id);
+    if (it == backend_health_.end()) {
+        return true;
+    }
+    if (it->second.retry_at != std::chrono::steady_clock::time_point{} && now >= it->second.retry_at) {
+        it->second.retry_at = std::chrono::steady_clock::time_point{};
+        it->second.failure_count = 0;
+        return true;
+    }
+    if (it->second.retry_at != std::chrono::steady_clock::time_point{} && now < it->second.retry_at) {
+        return false;
+    }
+    return true;
+}
+
+void LoadBalancerApp::mark_backend_success(const std::string& backend_id) {
+    if (backend_id.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(health_mutex_);
+    auto& health = backend_health_[backend_id];
+    health.failure_count = 0;
+    health.retry_at = std::chrono::steady_clock::time_point{};
+}
+
+void LoadBalancerApp::mark_backend_failure(const std::string& backend_id) {
+    if (backend_id.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(health_mutex_);
+    auto& health = backend_health_[backend_id];
+    health.failure_count += 1;
+    if (health.failure_count >= static_cast<int>(backend_failure_threshold_)) {
+        health.retry_at = std::chrono::steady_clock::now() + backend_retry_cooldown_;
+    }
+}
+
 std::optional<LoadBalancerApp::BackendEndpoint> LoadBalancerApp::find_backend_by_id(const std::string& backend_id) const {
     if (backend_id.empty()) {
         return std::nullopt;
@@ -299,24 +370,43 @@ std::optional<LoadBalancerApp::BackendEndpoint> LoadBalancerApp::select_backend(
         return std::nullopt;
     }
 
+    auto now = std::chrono::steady_clock::now();
+
     if (!client_id.empty()) {
         std::lock_guard<std::mutex> lock(hash_mutex_);
         if (!hash_ring_.empty()) {
             auto hash = static_cast<std::uint32_t>(std::hash<std::string>{}(client_id));
             auto it = hash_ring_.lower_bound(hash);
+            std::size_t inspected = 0;
             if (it == hash_ring_.end()) {
                 it = hash_ring_.begin();
             }
-            if (it != hash_ring_.end()) {
-                if (it->second < backends_.size()) {
-                    return backends_[it->second];
+            while (inspected < backends_.size() && !hash_ring_.empty()) {
+                if (it == hash_ring_.end()) {
+                    it = hash_ring_.begin();
                 }
+                auto idx = it->second;
+                if (idx < backends_.size()) {
+                    const auto& candidate = backends_[idx];
+                    if (is_backend_available(candidate, now)) {
+                        return candidate;
+                    }
+                }
+                ++inspected;
+                ++it;
             }
         }
     }
 
-    auto idx = backend_index_.fetch_add(1, std::memory_order_relaxed);
-    return backends_[idx % backends_.size()];
+    for (std::size_t attempt = 0; attempt < backends_.size(); ++attempt) {
+        auto idx = backend_index_.fetch_add(1, std::memory_order_relaxed);
+        const auto& candidate = backends_[idx % backends_.size()];
+        if (is_backend_available(candidate, now)) {
+            return candidate;
+        }
+    }
+
+    return backends_.front();
 }
 
 bool LoadBalancerApp::connect_backend(const BackendEndpoint& endpoint,
@@ -373,31 +463,53 @@ grpc::Status LoadBalancerApp::handle_stream(
         }
     };
 
+    auto now = std::chrono::steady_clock::now();
     if (session_directory_ && !client_id.empty()) {
         bool resolved = false;
         if (auto existing = session_directory_->find_backend(client_id)) {
             if (auto mapped = find_backend_by_id(*existing)) {
-                backend = *mapped;
-                assigned_backend_id = backend.id;
-                session_directory_->refresh_backend(client_id, assigned_backend_id);
-                resolved = true;
+                if (is_backend_available(*mapped, now)) {
+                    backend = *mapped;
+                    assigned_backend_id = backend.id;
+                    session_directory_->refresh_backend(client_id, assigned_backend_id);
+                    resolved = true;
+                } else {
+                    session_directory_->release_backend(client_id, *existing);
+                }
             } else {
                 session_directory_->release_backend(client_id, *existing);
             }
         }
         if (!resolved) {
             if (auto resolved_id = session_directory_->ensure_backend(client_id, backend.id)) {
+                bool bind_ok = false;
                 if (auto mapped = find_backend_by_id(*resolved_id)) {
-                    backend = *mapped;
-                    assigned_backend_id = backend.id;
-                    resolved = true;
+                    if (is_backend_available(*mapped, now)) {
+                        backend = *mapped;
+                        assigned_backend_id = backend.id;
+                        bind_ok = true;
+                    } else {
+                        session_directory_->release_backend(client_id, *resolved_id);
+                    }
                 } else {
                     session_directory_->release_backend(client_id, *resolved_id);
+                }
+                if (!bind_ok) {
                     if (auto retry_id = session_directory_->ensure_backend(client_id, backend.id)) {
-                        assigned_backend_id = backend.id;
-                        resolved = true;
+                        if (auto mapped_retry = find_backend_by_id(*retry_id)) {
+                            if (is_backend_available(*mapped_retry, now)) {
+                                backend = *mapped_retry;
+                                assigned_backend_id = backend.id;
+                                bind_ok = true;
+                            } else {
+                                session_directory_->release_backend(client_id, *retry_id);
+                            }
+                        } else {
+                            session_directory_->release_backend(client_id, *retry_id);
+                        }
                     }
                 }
+                resolved = bind_ok;
             }
         }
         session_bound = resolved;
@@ -407,6 +519,7 @@ grpc::Status LoadBalancerApp::handle_stream(
     boost::asio::ip::tcp::socket backend_socket(backend_io);
     std::string connect_error;
     if (!connect_backend(backend, backend_socket, connect_error)) {
+        mark_backend_failure(assigned_backend_id);
         gateway::lb::RouteMessage error_msg;
         error_msg.set_kind(gateway::lb::ROUTE_KIND_SERVER_ERROR);
         error_msg.set_session_id(session_id);
@@ -418,6 +531,7 @@ grpc::Status LoadBalancerApp::handle_stream(
         return grpc::Status(grpc::StatusCode::UNAVAILABLE, connect_error);
     }
 
+    mark_backend_success(assigned_backend_id);
     server::core::log::info("LoadBalancerApp routed session=" + session_id
         + " gateway=" + gateway_id + " client=" + client_id
         + " backend=" + backend.host + ":" + std::to_string(backend.port)
@@ -442,6 +556,7 @@ grpc::Status LoadBalancerApp::handle_stream(
             gateway::lb::RouteMessage error_msg;
             error_msg.set_kind(gateway::lb::ROUTE_KIND_SERVER_ERROR);
             error_msg.set_error(write_ec.message());
+            mark_backend_failure(assigned_backend_id);
             send_to_gateway(std::move(error_msg));
             running.store(false, std::memory_order_relaxed);
             return false;
@@ -459,6 +574,7 @@ grpc::Status LoadBalancerApp::handle_stream(
                     gateway::lb::RouteMessage msg;
                     msg.set_kind(gateway::lb::ROUTE_KIND_SERVER_CLOSE);
                     msg.set_error(read_ec.message());
+                    mark_backend_failure(assigned_backend_id);
                     send_to_gateway(std::move(msg));
                 }
                 break;

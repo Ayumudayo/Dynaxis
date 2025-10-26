@@ -203,6 +203,5 @@
 
 ## 11) DB 파티셔닝/샤딩 PoC — [todo]
 - 작업: messages/memberships 파티션(room_id), Citus PoC, 크로스 샤드 최소화
-- DoD: 파티션 플랜 검증, 주요 쿼리 성능/정합 통과
-
+- DoD: 파티션 플랜 검증, 주요 쿼리 성능/정합 통과\n---\n\n## 6) 다중 인스턴스 안정화 [wip]\n- [done][P1] Redis 세션 매핑 원자성 강화: SessionDirectory에 조건부 SET/DEL을 도입해 동시 접속 레이스를 차단\n- [done][P1] LoadBalancer 헬스/격리 로직: 연속 실패 감지 후 LB_BACKEND_FAILURE_THRESHOLD·LB_BACKEND_COOLDOWN으로 일시 제외\n- [priority][P1] Consistent Hash 자동 재구성: Redis heartbeat(gateway/instances/*) 변화 감시 → hash ring 재빌드 및 세션 매핑 재검증\n- [priority][P2] Redis Pub/Sub 정합성: 룸 생성/잠금을 분산 락으로 보호하고 캐시 초기화·충돌 처리 전략 확립\n- [priority][P2] Sticky routing 통합 테스트: 멀티 서버 /join, /chat, TTL 만료 재배치 시나리오를 자동화 스크립트로 검증\n- [priority][P3] 관측성 강화: 세션 매핑 수, 재배치 빈도, backend 상태를 Prometheus 메트릭으로 노출\n- [priority][P3] Gateway 인증 확장 설계: 토큰 검증 및 Redis 세션 레지스트리 연동 방안 초안 작성\n\n완료 조건 (DoD)\n- 동일 client_id 반복 접속 시 동일 backend가 배정되고, backend 장애/TTL 만료 시 안전하게 재배치된다.\n- Sticky routing 및 Redis Pub/Sub 분산 브로드캐스트에 대한 통합 테스트가 통과한다.\n- LoadBalancer 메트릭/로그에서 backend health와 세션 매핑 현황을 확인할 수 있다.\n
 
