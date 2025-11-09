@@ -114,11 +114,12 @@
 - 펜딩 길이 관측: `metric=wb_pending value=<n>` 주기(1s) 로그
  - UUID 정규화: `user_id/session_id/room_id`가 UUID 형식이 아니면 NULL 저장(워커에서 정규화)
 
-## 다음 과제(TODO)
-- DLQ 메타: retry_count/last_error_ts 부여, 재처리 워커/런북
-- 트림: `REDIS_STREAM_MAXLEN`에 따른 approx trim 적용(`XADD MAXLEN ~`)
-- 관측성: `wb_batch_size`, `wb_commit_ms`, `wb_fail_total`, `wb_pending`, `wb_dlq_total` 등 메트릭 수집
-
+## 모니터링 및 개선 항목
+- DLQ 항목은 
+etry_count, last_error_ts, 원인 코드를 payload에 포함해 재처리 대상을 빠르게 파악한다.
+- Streams 길이는 XINFO STREAM과 REDIS_STREAM_MAXLEN 설정으로 관리하고, XADD MAXLEN ~을 사용해 기하급수적으로 늘어나지 않도록 한다.
+- /metrics에 wb_batch_size, wb_commit_ms, wb_fail_total, wb_pending, wb_dlq_total을 내보내고 알람 기준을 정한다. (예: wb_pending > 500 5분 지속 시 경보)
+- 워커는 batch commit 후 metric=wb_flush(commit_ms, batch_size, ok/fail/dlq)을 INFO 로그에 남기고, DLQ 재처리 결과는 wb_dlq_replay 키워드로 집계한다.
 ## DLQ 재처리 도구(wb_dlq_replayer)
 - 동작: DLQ에서 읽어 멱등 커밋, 실패 시 재시도/데드 이동
 - 설정: `WB_DLQ_STREAM`, `WB_DEAD_STREAM`, `WB_GROUP_DLQ`, `WB_CONSUMER`, `WB_RETRY_MAX`, `WB_RETRY_BACKOFF_MS`

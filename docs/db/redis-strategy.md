@@ -1,86 +1,66 @@
 # Redis Strategy: Cache, Sessions, Fanout
 
-목표: RDB(PostgreSQL) I/O를 줄이고, 핫패스 지연을 낮추며, 멀티 인스턴스 팬아웃을 효율화한다. Redis는 보조 계층이며, 영속성의 소스 오브 트루스는 Postgres다.
+목표: PostgreSQL을 SoR로 유지하면서 Redis를 세션/프레즌스/브로드캐스트/레이트리밋 캐시로 사용해 대기시간을 줄이고 백오프 전략을 단순화한다. Redis 장애 시에는 Postgres 경로로 폴백해도 무방하도록 write-through/write-behind 구성을 병행한다.
 
-## 언제 Redis를 쓰는가
-- 세션/프레즌스와 같은 휘발 데이터
-- 최근 데이터 캐시(방 최근 메시지, 룸 멤버십)
-- 레이트 리미팅/아이도템포턴시 키(idempotency)
-- 팬아웃: Pub/Sub 또는 Streams를 통한 멀티 인스턴스 브로드캐스트
+## 핵심 역할
+- **세션/토큰 저장소**: Postgres는 장기 보관, Redis는 `session:{token_hash}` 키에 TTL을 둔 캐시.
+- **Presence/멤버십 캐시**: 실시간 상태는 Redis SET/TTL을 사용하고, 만료/재시작 시 Postgres 이벤트로 재동기화.
+- **브로드캐스트 팬아웃**: Redis Pub/Sub은 저지연 팬아웃, Streams는 내구성과 재처리를 담당.
+- **최근 메시지**: 룸 입장 시 Redis 캐시(LIST/JSON)에서 로딩, 누락 시 Postgres 보충.
+- **레이트리밋/멱등성**: `rate:{user_id}:{bucket}`, `idem:{client_id}:{nonce}` 키를 활용해 브루트포스·중복을 방지.
 
-## 사용 패턴
-- Cache-aside: 캐시 미스 시 Postgres 조회 → Redis 채움 → 응답
-- Write-through(선택): Postgres 커밋 성공 후 Redis 갱신
-- Write-behind는 초기에 미도입(일관성/복잡도 고려)
+## 구성 요소 별 상세
+### 1) 세션(Session Store)
+- Redis: `SETEX session:{token_hash} user_id ttl`로 토큰↔사용자를 매핑한다. TTL은 웹 세션 요구사항에 맞게 1~24h.
+- Postgres: 세션 테이블은 생성/만료 기록을 보존하고, 감사·로그아웃 시 authoritative 하게 사용한다.
+- 흐름: 로그인 성공 → Postgres INSERT → Redis SETEX. 로그아웃/만료 → Redis DEL + Postgres 업데이트.
 
-## 유스케이스 설계
-1) 세션(Session Store)
-- Redis: `SETEX session:{token_hash} user_id ttl` (server/src/chat/handlers_login.cpp:140, TODO)
-- Postgres: 감사를 위해 세션 레코드 유지(토큰 해시, 만료, 철회 시간)
-- 흐름: 로그인 성공 → Postgres INSERT → Redis SETEX → 응답
+### 2) Presence
+- 키: `presence:user:{user_id}` (SETEX), `presence:room:{room_id}` (SET of user_id).
+- 로그인/heartbeat 시 `SETEX presence:user`와 `SADD presence:room`을 수행하고, 퇴장/세션종료 시 `SREM`/`DEL`을 호출한다.
+- `PRESENCE_CLEAN_ON_START=1`이면 단일 인스턴스 개발 환경에서만 사용해 재시작 시 `presence:room:*`를 정리한다. 다중 인스턴스에서는 비활성화.
 
-2) 프레즌스(Presence) (TODO)
-- 키: `presence:room:{room_id}` (SET) / `presence:user:{user_id}` (key with TTL)
-- 입장 시 SADD, 퇴장/타임아웃 시 SREM 또는 TTL 만료
-- 소스 오브 트루스는 Redis(휘발), 통계/감사는 필요 시 Postgres 이벤트 테이블로 적재
+### 3) 룸 멤버십 캐시
+- 키: `room:{room_id}:members` (SET). TTL을 두거나, 쓰기 시점에 항상 `SADD/SREM`을 사용해 write-through.
+- Postgres `memberships` 테이블을 authoritative 로 사용하되, Redis 캐시는 `/who` 응답과 UI 표시를 빠르게 하기 위한 용도.
 
-3) 룸 멤버십 캐시 (TODO)
-- 키: `room:{room_id}:members` (SET of user_id), TTL 혹은 만료 없음 + 변경 시 갱신
-- 소스 오브 트루스: Postgres; 변경 트랜잭션 커밋 후 Redis 갱신(write-through)
-- 미스 시 Postgres에서 로드하여 캐시 채움
+### 4) 팬아웃
+- Pub/Sub: `fanout:room:{room_name}` 채널에 `gw=<id>\n<payload>` 형식으로 publish. 다중 Gateway 환경에서 self-echo를 막기 위해 `GATEWAY_ID`를 반드시 지정.
+- Streams: `stream:room:{room_id}`를 사용해 내구성과 backlog 재처리를 지원한다. `REDIS_USE_STREAMS=1`, `REDIS_STREAM_MAXLEN`으로 approximate trimming 적용.
 
-4) 메시지 팬아웃
-- Pub/Sub: `fanout:room:{room_name}` 채널. 저지연, 비내구. 서버 인스턴스가 구독 → 세션에 브로드캐스트 (server/src/chat/handlers_chat.cpp:246, server/src/app/bootstrap.cpp:175)
-- Streams: `stream:room:{room_id}`. 내구 + 컨슈머 그룹으로 백프레셔/재처리. 보관 기간/길이 정책 설정(trim) (TODO)
-- 권장: 초기에는 Postgres에 메시지 영속화 + Redis Pub/Sub로 브로드캐스트. 재전송/복구가 중요해지면 Streams로 전환 (server/src/chat/handlers_chat.cpp:246, server/src/app/bootstrap.cpp:175)
+### 5) 최근 메시지 캐시
+- 키: `room:{room_id}:recent`, `msg:{message_id}`. 상세는 `docs/chat/recent-history.md` 참고.
+- 설정: `RECENT_HISTORY_LIMIT` 기본 20, `ROOM_RECENT_MAXLEN` 200, `CACHE_TTL_RECENT_MSGS` 6h.
 
-5) 최근 메시지 캐시
-- 키: `room:{room_id}:recent` (LIST or ZSET of message_id), `msg:{id}` (HASH/JSON) (server/src/chat/handlers_chat.cpp:210)
-- 정책: 최근 N개만 유지(예: `ROOM_RECENT_MAXLEN=200`), TTL(예: 1–6시간). 미스 시 Postgres 페이징
-- 조인 시 로딩: 기본 20개(`RECENT_HISTORY_LIMIT=20`), 워터마크와 오름차순 정렬로 순서 안정화. 세부는 `docs/chat/recent-history.md` 참조 (server/src/chat/chat_service_core.cpp:282)
+### 6) 레이트리밋 / 멱등성
+- 레이트리밋: `rate:{scope}:{bucket}`(예: `rate:user:{user_id}:5s`) 키에 counter + TTL을 둔다.
+- 멱등성: `idem:{client_id}:{nonce}`를 SETEX로 기록해 중복 요청을 무시한다.
 
-6) 레이트 리미팅/아이도템포턴시
-- 토큰 버킷: Lua 스크립트로 `rate:{user_id}` 카운터/윈도우
-- 아이도템포턴시: `idem:{client_id}:{nonce}`를 TTL로 저장하여 중복 처리 방지
+## 운영/환경 변수
+| 변수 | 설명 |
+| --- | --- |
+| `REDIS_URI` | `redis://user:pass@host:6379/db` 형식. 미지정 시 Redis 기능 비활성화 |
+| `REDIS_POOL_MAX` | 클라이언트 풀 최대 연결 수 |
+| `REDIS_CHANNEL_PREFIX` | Pub/Sub prefix. 예: `knights:` |
+| `REDIS_USE_STREAMS`, `REDIS_STREAM_MAXLEN` | Streams 사용 여부와 maxlen(approx) |
+| `CACHE_TTL_SESSION`, `CACHE_TTL_RECENT_MSGS`, `CACHE_TTL_MEMBERS` | 각 캐시 TTL(초) |
+| `PRESENCE_TTL_SEC`, `PRESENCE_CLEAN_ON_START` | Presence TTL 및 재시작 클린업 옵션 |
+| `USE_REDIS_PUBSUB` | 1이면 브로드캐스트를 Redis로 보내고, 0이면 단일 서버 로컬 브로드캐스트 |
+| `WRITE_BEHIND_ENABLED` | Streams 기반 write-behind 활성화 여부 |
+| `GATEWAY_ID` | Pub/Sub Envelope용 gateway 식별자 |
 
-## 내구성/가용성
-- Redis는 보조 캐시/큐로 사용. 데이터 유실 허용 범위 내에서 설계(Pub/Sub는 유실 가능, Streams는 보존)
-- 설정: AOF everysec + RDB 스냅샷, 레플리카 구성 고려. 클러스터는 키 설계와 멀티키 연산 제약을 인지
+## 키 이름 규칙
+- 기본 패턴: `chat:{env}:{domain}:{id}`.
+- 예: `chat:dev:session:{token_hash}`, `chat:prod:room:{room_id}:members`, `chat:prod:presence:user:{user_id}`.
+- UUID 기반 ID를 사용하고, 문자열(닉네임 등)을 키에 직접 쓰지 않는다.
 
-## 장애/폴백
-- Redis 장애 시: 캐시 미스 증가 → Postgres로 폴백, 기능 지속. 팬아웃은 일시적으로 서버 내부 브로드캐스트로 축소
-- 과부하 시: TTL 단축/캐시 범위 축소, Pub/Sub 대신 Streams로 백프레셔 적용 검토
+## 운영 체크리스트
+- Redis ping p95 > 20ms, Streams pending length 급증, Pub/Sub lag 상승 등을 `/metrics`와 `redis-cli monitor`로 점검.
+- AOF everysec + RDB snapshot을 병행하고, 장애시에는 Postgres를 통해 재구축한다.
+- Pub/Sub 구독자가 없을 때 fallback 경로(로컬 브로드캐스트) 로그를 WARN 수준으로 남긴다.
+- `gateway/session/*` 키 수를 SCAN해 sticky 세션이 정상 갱신되는지 모니터링한다.
 
-## 설정 키 제안
-- `REDIS_URI` (예: `redis://localhost:6379/0`) (TODO)
-- `REDIS_POOL_MAX` (연결 풀 최대치)
-- `REDIS_CHANNEL_PREFIX` (예: `chat:`) (server/src/app/bootstrap.cpp:121)
-- `REDIS_USE_STREAMS` (bool), `REDIS_STREAM_MAXLEN` (approx trim)
-- `CACHE_TTL_SESSION`, `CACHE_TTL_RECENT_MSGS`, `CACHE_TTL_MEMBERS` (TODO)
-
-## 키 스키마 가이드
-- 네임스페이스: `chat:{env}:{domain}:{id}` 형태 권장
-- 키는 반드시 UUID 기반 식별자를 사용하며, 이름 기반 키를 금지한다
-- 예: `chat:dev:session:{token_hash}`, `chat:dev:room:{room_id}:members`, `chat:dev:presence:room:{room_id}`
-
-## 선택 요약
-- 소스 오브 트루스: Postgres
-- 성능/지연 최적화: Redis (세션/프레즌스/캐시/팬아웃)
-- 메시지 영속: Postgres, 브로드캐스트: Redis Pub/Sub → 필요 시 Streams
-
-## Presence/PubSub 업데이트
-- User Presence: `presence:user:{user_id}` 키에 1을 SETEX로 저장하여 TTL로 온라인 상태 유지(기본 `PRESENCE_TTL_SEC=30`). 로그인/채팅/핑(PING) 시 갱신한다. (server/src/chat/handlers_login.cpp:140)
-- Room Presence: 입장 시 SADD `presence:room:{room_id}` `{user_id}`, 퇴장/세션 종료 시 SREM 처리한다. (server/src/chat/handlers_join.cpp:126, server/src/chat/handlers_leave.cpp:99)
-- Pub/Sub 채널: `fanout:room:{room_name}`. `USE_REDIS_PUBSUB!=0`이면 Protobuf ChatBroadcast payload를 publish하며 Envelope(`gw=<gateway_id>\n<payload>`) 규칙을 따른다. (server/src/chat/handlers_chat.cpp:246, server/src/app/bootstrap.cpp:175)
-- self-echo 필터: 구독 측은 로컬 `GATEWAY_ID`와 비교해 동일한 gateway에서 온 메시지를 드롭한다. (server/src/app/bootstrap.cpp:175)
-- `GATEWAY_ID`를 설정하지 않으면 기본값 `gw-default`가 적용되므로, 멀티 게이트웨이 환경에서는 고유 값을 지정한다. (server/src/app/bootstrap.cpp:175)
-
-### 구독 안정성/운영
-- 구독 루프는 예외 발생 시 점증 백오프로 재연결/재구독한다(최대 1s).
-- 프로세스 종료 신호 수신 시 구독을 먼저 중단(stop_psubscribe)하여 중복/유실을 최소화한다.
-
-## 운영/설정 키
-- `PRESENCE_TTL_SEC` (기본 30): `presence:user:{user_id}` TTL (server/src/chat/handlers_login.cpp:140)
-- `USE_REDIS_PUBSUB` (기본 0): 0이 아니면 Pub/Sub 발행 활성화 (server/src/app/bootstrap.cpp:172)
-- `PRESENCE_CLEAN_ON_START` (기본 0): 부팅 시 `presence:room:*` 정리(개발/단일 인스턴스 사용 권장) (TODO)
-- `GATEWAY_ID`: Pub/Sub Envelope에 삽입할 Gateway 식별자, 미설정 시 `gw-default`. (server/src/app/bootstrap.cpp:175)
+## 장애 대비
+- Redis 장애 시: 캐시 miss시 Postgres 직접 조회, Streams 대신 write-through로 전환(`WRITE_BEHIND_ENABLED=0`).
+- TTL 설정 오류로 캐시가 자주 비면 `CACHE_TTL_*` 값을 늘리고, 필요 시 key-space notifications로 슬로우패스를 추적한다.
+- Pub/Sub 장애 시: Streams 소비자로 대체하거나, Gateway간 direct gRPC 브리지로 임시 전환한다.
