@@ -1,36 +1,44 @@
-# Pre-warm 절차
+# Pre-warm 절차 (상세)
 
-신규 서버를 배포하거나 대규모 재시작이 필요할 때 초기 트래픽을 안전하게 받아들이기 위한 준비 절차를 정리한다.
+새로운 서버/게이트웨이/로드밸런서 인스턴스를 투입할 때, 실제 트래픽을 받기 전에 미리 워밍업하는 절차를 정의한다.
 
-## 1. 사전 준비
-1. `.env.server` 확인 – `DB_URI`, `REDIS_URI`, `METRICS_PORT`  
-2. schema migration 수행: `./migrations_runner migrate`
-3. Redis 캐시 초기화가 필요한 경우(`flushall` 금지) 스크립트로 필요한 키만 삭제
+## 1. 체크리스트
+| 항목 | 내용 |
+| --- | --- |
+| 이미지 | 최신 태그인지, 취약점 스캔 완료인지 확인 |
+| 구성 | `.env.server`, `.env.gateway`, `.env.lb` 각자 유효성 검사 |
+| 데이터 | Schema migration 선적용 (`migrations_runner migrate`) |
+| 모니터링 | `/metrics`, 로그 파이프라인 연결 상태 확인 |
 
 ## 2. Pre-warm 단계
-| 단계 | 내용 | 확인 |
-| --- | --- | --- |
-| 1 | 서버 프로세스 기동 (readiness off) | `/healthz` 200 |
-| 2 | `server_app --prewarm` 모드로 snapshot + Redis 채널을 미리 로드 | 로그 `prewarm complete` 확인 |
-| 3 | `/metrics` 확인, `chat_session_active`=0, 오류 없음 | curl |
-| 4 | 로드밸런서에서 새 backend를 링에 추가 | `lb_hash_rebuild_total` 증가 |
-| 5 | 게이트웨이 라우팅 테스트 (smoke) | devclient `connect → /rooms` |
-| 6 | readiness on, HPA/Service에 편입 | `kubectl rollout status` |
+1. **베이스 Pod 기동** – Deployment replica=1, readinessProbe 비활성화 상태로 시작
+2. **캐시 로딩**
+   - `server_app --prewarm` → 최근 스냅샷 + Redis 키 생성
+   - `load_balancer_app --prewarm` (TODO) → Consistent Hash 링과 Sticky Cache warm-up
+3. **헬스체크** – `/healthz`, `/metrics` 확인, `chat_session_active`=0 로그 확인
+4. **프록시 연결 테스트** – Gateway ↔ Load Balancer ↔ server_app 로 테스트 클라이언트 연결
+5. **readinessProbe 활성화** – Helm values 또는 `kubectl patch` 로 readiness 를 다시 true
+6. **HPA/Service 합류** – 스케일 아웃 시 기존 replica 의 1/3 간격으로 순차 배포
 
-## 3. 자동화 스크립트 예시
+## 3. 운영 자동화 스크립트
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-
-kubectl rollout restart deploy/server-app
-kubectl rollout status deploy/server-app
-
-for pod in $(kubectl get pod -l app=server-app -o jsonpath='{.items[*].metadata.name}'); do
+APP=server-app
+helm upgrade --install $APP charts/$APP -f values/prod.yaml --set prewarm=true
+kubectl rollout status deploy/$APP
+for pod in $(kubectl get pod -l app=$APP -o name); do
   kubectl exec "$pod" -- /app/server_app --prewarm
+  kubectl exec "$pod" -- curl -sf http://localhost:9090/metrics >/dev/null
+  kubectl patch "$pod" -p '{"metadata":{"labels":{"prewarm":"done"}}}'
 done
 ```
+`prewarm=true` 플래그는 readinessProbe 를 일시적으로 끄고, 완료 후 다시 켜도록 Helm 템플릿에서 처리한다.
 
-## 4. 주의 사항
-- Pre-warm 중에는 외부에서 트래픽이 유입되지 않도록 게이트웨이에서 backend를 disable 한다.  
-- Redis Pub/Sub 채널을 미리 구독해 두면 첫 메시지 손실을 막을 수 있다.  
-- runbook에 해당 절차를 기록하고 배포 자동화와 연계한다.
+## 4. 롤백 시 주의
+- Pre-warm 도중 배포를 중단하면 readiness 가 off 인 Pod 가 남을 수 있으므로 `kubectl delete pod -l prewarm=init` 로 정리
+- Sticky session 캐시는 오래된 backend 를 가리킬 수 있으므로 Redis `gateway/session/*` 키를 스캔해 TTL 을 줄인다.
+
+## 5. 참고
+- `docs/ops/deployment.md`
+- `docs/ops/runbook.md`

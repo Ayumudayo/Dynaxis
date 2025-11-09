@@ -1,34 +1,56 @@
-# 운영 체크리스트 (Runbook)
+# 운영 체크리스트 (Runbook – Expanded)
 
-## 1. 배포 전 점검
-- [ ] `.env` / Secrets 값 확인 (`GATEWAY_ID`, `DB_URI`, `REDIS_URI`, `METRICS_PORT`)  
-- [ ] `./migrations_runner status` 로 스키마 최신 여부 확인  
-- [ ] `/metrics` HTTP 200, 주요 지표 존재 확인  
-- [ ] Redis/PubSub 연결 확인 (`redis-cli PING`, `XINFO`)  
-- [ ] 로그 파이프라인에서 `metric=*` 형식이 수집되는지 검증
+## 1. 배포 전/후 공통 점검
+1. `.env` / Secrets 확인 (`DB_URI`, `REDIS_URI`, `METRICS_PORT`, `JWT_SECRET`)
+2. `migrations_runner status` → pending 없음 확인
+3. `/metrics` 200 OK (`curl http://svc:9090/metrics`)
+4. Grafana "Active Sessions" 정상, `lb_backend_idle_close_total` 증가 없음
+5. Alertmanager silence 설정 여부 확인 (배포 중엔 silence ON, 완료 후 OFF)
 
-## 2. 배포 절차 (Helm 예시)
-1. `helm upgrade --install server-app charts/server-app -f values/prod.yaml`  
-2. `kubectl rollout status deploy/server-app`  
-3. Smoke 테스트: devclient로 `/rooms`, 기본 채팅 시나리오  
-4. Grafana “Active Sessions”, “LB Idle Close Rate” 를 5분간 모니터링
+## 2. 알람 대응 매트릭스
+| 알람 | 증상 | 조치 순서 |
+| --- | --- | --- |
+| LB Idle Spike | `sum(increase(lb_backend_idle_close_total[5m])) > 5` | (1) backend pod CPU 확인 (2) Redis latency (3) `LB_BACKEND_IDLE_TIMEOUT` 조정 |
+| Redis Lag | `chat_subscribe_last_lag_ms p95 > 200ms` | (1) Redis INFO latency (2) Pub/Sub 사용량 (3) 게이트웨이 로그 |
+| Write-behind backlog | `wb_pending > 500` | (1) DB 세션 확인 (2) `wb_worker` 로그 (3) DLQ 상태 |
+| Dispatch Exception | `chat_dispatch_exception_total` 급증 | (1) server_app 로그 (2) 최근 배포 롤백 |
 
-## 3. 알람 대응
-| Alert | 점검 순서 |
-| --- | --- |
-| `sum(increase(lb_backend_idle_close_total[5m])) > 5` | ① gateway ↔ backend 포트 ② Redis sticky 상태 ③ backend 로그 |
-| `chat_subscribe_last_lag_ms p95 > 200ms` | ① Redis latency ② 게이트웨이 CPU ③ Pub/Sub 채널 누락 |
-| `wb_pending > 500 (5m)` | ① DB 상태 ② 워커 로그(`metric=wb_fail_total`) ③ DLQ 재처리 |
-| `chat_session_active == 0` | ① HPA 축소 여부 ② Load Balancer 링 구성을 확인 |
+## 3. 장애 시나리오
+### 3.1 Redis 장애
+1. `redis-cli -h <endpoint> PING`
+2. 실패 시 ElastiCache 상태/보안그룹 확인
+3. 임시 조치: `LB_REDIS_URI` 비우고 Load Balancer 재배포 → sticky off
+4. 복구 후 Redis TTL 상태 확인, stale sticky 제거
 
-## 4. 장애 복구 흐름
-1. AlertManager → Slack → 온콜 담당자  
-2. 이 문서의 체크리스트 따라 원인 파악  
-3. 필요한 경우 fallback 실행 (`docs/ops/fallback-and-alerts.md`)  
-4. 해결 후 Incident Report 작성 (원인/조치/재발 방지)
+### 3.2 PostgreSQL 장애
+1. `psql` 로 health 체크
+2. RDS failover 또는 read replica 승격
+3. `WRITE_BEHIND_ENABLED=0` 로 서버 재배포 → 메모리 snapshot 모드
+4. DB 복구 후 write-behind 재개, DLQ 모니터링
 
-## 5. 참조 링크
-- `docs/ops/observability.md` – 메트릭/대시보드  
-- `docs/ops/distributed_routing_draft.md` – 라우팅 구조  
-- `docs/ops/dlq-retry.md` – DLQ 복구  
-- `docs/db/write-behind.md` – write-behind 설계
+### 3.3 Gateway-LB 연결 문제
+1. Gateway pod 로그 `metric=gateway_lb_reconnect_total` (TODO) 확인
+2. gRPC endpoint/Secret 값이 최신인지 확인
+3. 필요 시 Gateway와 LB 를 순서대로 재시작 (LB → Gateway)
+
+## 4. Smoke 테스트 절차
+1. devclient 실행 → `/login runbook` → `/join lobby` → `/chat runbook-check`
+2. `/refresh` 로 snapshot 정상 반환 여부 확인
+3. `wb_emit` 로 write-behind 이벤트 발행 → `wb_worker` 로그 확인
+4. Grafana 대시보드 스크린샷 저장 (배포 후 5분)
+
+## 5. Incident Report 작성 템플릿
+```
+- 날짜/시간:
+- 탐지 경로 (Alert, 고객, 내부 모니터링):
+- 영향 범위:
+- 원인 요약:
+- 조치 내용:
+- 재발 방지:
+```
+모든 주요 장애는 24시간 내 Incident Report 를 작성한다.
+
+## 6. 참고
+- `docs/ops/fallback-and-alerts.md`
+- `docs/ops/deployment.md`
+- `docs/ops/observability.md`

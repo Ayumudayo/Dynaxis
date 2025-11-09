@@ -48,6 +48,8 @@ class TokenAuthenticator : public gateway::auth::IAuthenticator {
 ## 빌드 & 실행
 ```powershell
 cmake --build build-msvc --target gateway_app
-.uild-msvc\gateway\Debug\gateway_app.exe
+.build-msvc\gateway\Debug\gateway_app.exe
 ```
 Load Balancer가 먼저 올라 있어야 하며, `.env.gateway` 에 gRPC 엔드포인트를 정확히 설정해야 합니다.
+
+

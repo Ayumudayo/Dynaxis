@@ -1,86 +1,76 @@
-# 배포 전략 – Dev(Compose)와 Prod(Kubernetes/AWS)
+# Deployment Guide
 
-개발·테스트 환경에서 빠르게 반복하면서도 운영 배포 시 일관성을 유지하기 위해 두 가지 흐름을 사용한다. Compose는 로컬 복제 환경을, Kubernetes는 AWS 인프라에 가까운 구성을 제공한다.
+이 문서는 Dev(Compose)와 Prod(Kubernetes/AWS) 환경을 모두 아우르는 배포 절차를 정리한다. “왜 이 단계를 수행하는가?” 까지 설명해 운영자가 그대로 따라할 수 있도록 작성했다.
 
-## 환경 구분
-| 환경 | 설명 |
-| --- | --- |
-| Dev | Docker Compose로 Postgres, (선택) Redis, `server_app`, write-behind 워커 등을 한 번에 기동 |
-| Stage/DR | AWS 관리형 Redis, 자체 Postgres 또는 RDS를 혼합해 운영과 동일한 네트워크에서 검증 |
-| Prod | AWS(VPC + ElastiCache + RDS) + Kubernetes/Helm + Terraform(IaC)로 완전 자동화 |
+## 1. 공통 준비물
+| 항목 | Dev | Stage/Prod |
+| --- | --- | --- |
+| OS | Windows 11 + PowerShell 7 / WSL2 Ubuntu | Amazon Linux 2 / Ubuntu 22.04 |
+| 필수 도구 | CMake 3.20+, vcpkg, Docker Desktop | kubectl, helm, terraform, aws cli |
+| 외부 서비스 | Redis 6+, PostgreSQL 13+ | Amazon ElastiCache, Amazon RDS |
+| 필수 Secrets | `DB_URI`, `REDIS_URI`, `JWT_SECRET` | AWS Secrets Manager 또는 KMS |
 
-## Dev: Docker Compose
-> 목적: 빠른 코드-테스트 반복, smoke 테스트, 클라이언트/서버 동시 기동
+`.env` 예시는 `docs/configuration.md` 를 참고한다. 환경별로 `.env.server`, `.env.gateway`, `.env.lb` 를 분리해 ConfigMap/Secret 에 주입하는 것을 권장한다.
 
-- Redis는 기본적으로 관리형 인스턴스를 바라본다. Compose에서 로컬 Redis를 쓰고 싶다면 `.env` 의 `REDIS_URI` 를 `redis://redis:6379` 형태로 지정한다.
-- 서버/워커 이미지는 `Dockerfile.dev`를 통해 vcpkg 캐시를 활용해 빌드한다.
-- 대표 구성:
+## 2. Dev 환경 (Docker Compose)
+### 2.1 실행 방법
+```bash
+# Windows PowerShell
+scripts/run_all.ps1 -Config Debug -WithClient
 
-```yaml
-services:
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: example
-      POSTGRES_DB: appdb
-    ports: ["5432:5432"]
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U app"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    volumes: [pgdata:/var/lib/postgresql/data]
-
-  server:
-    build: .
-    command: ["/app/server_app", "5000"]
-    env_file: [".env"]
-    environment:
-      DB_URI: postgres://app:example@postgres:5432/appdb
-      REDIS_URI: ${REDIS_URI?set in .env}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    ports: ["5000:5000"]
-
-  wb_worker:
-    build: .
-    command: ["/app/wb_worker"]
-    env_file: [".env"]
-    environment:
-      DB_URI: postgres://app:example@postgres:5432/appdb
-    depends_on:
-      postgres:
-        condition: service_healthy
+# WSL/Linux
+bash scripts/run_all.sh -c Debug -b build-linux -p 5000
 ```
+위 스크립트는 Postgres 컨테이너를 올린 뒤 `server_app`, `load_balancer_app`, `gateway_app`, `dev_chat_cli` 까지 한 번에 기동한다. Redis는 기본적으로 외부 인스턴스를 바라보므로, 로컬 Redis 를 쓰고 싶다면 `.env` 에 `REDIS_URI=redis://redis:6379` 를 지정하고 compose 파일에 redis 서비스를 추가한다.
 
-- Windows 개발자는 `scripts/run_all.ps1 -Config Debug -WithClient -Smoke` 를, WSL/Linux는 `scripts/run_all.sh -c Debug -b build-linux -p 5000` 을 사용해 전체 파이프라인을 한번에 확인할 수 있다.
+### 2.2 Compose 파일 핵심
+- `depends_on.condition=service_healthy` 로 Postgres 준비 여부를 보장
+- `volumes: pgdata` 로 데이터 유지
+- 서버 컨테이너에 `METRICS_PORT=9090` 노출 후 `docker-compose logs -f server` 로 확인
 
-## Prod: AWS + Kubernetes
-1. **데이터 계층**  
-   - Redis: Amazon ElastiCache (cluster 모드 off, TLS/rediss 권장)  
-   - Postgres: Amazon RDS (multi-AZ, 자동 백업, pgBouncer 옵션)
-2. **애플리케이션 계층**  
-   - `server_app`, `wb_worker`, `wb_dlq_replayer`를 각각 Helm 차트로 배포 (Deployment + HPA)  
-   - ConfigMap: `.env` 공통 값, Secret: DB/Redis 자격 증명  
-   - ServiceMonitor 및 `/metrics` 엔드포인트를 통해 Prometheus 스크랩
-3. **IaC**  
-   - Terraform으로 VPC/Subnet/Security Group/Secrets/ElastiCache/RDS를 선언  
-   - ArgoCD 혹은 Flux로 Helm 배포를 GitOps 형태로 관리
-4. **배포 절차**  
-   - `helm upgrade --install server-app charts/server-app -f values/prod.yaml`  
-   - 배포 전후 runbook 체크(릴리스 알림, readiness/liveness, smoke 시나리오)
+### 2.3 Dev 검증 체크리스트
+1. `curl http://localhost:9090/metrics` 200 OK
+2. devclient 로 `/login dev` → `/chat hello` 성공
+3. `scripts/smoke_wb.ps1` 실행 시 write-behind ok
 
-## 운영 체크리스트 요약
-1. Dockerfile은 vcpkg 바이너리 캐시를 활용해 빌드 시간을 줄이고, 보안 스캔 통과 여부를 파악한다.  
-2. Compose 환경에서도 TLS/Secrets를 동일하게 사용하는 것이 좋다.  
-3. Helm 차트에는 다음 리소스가 포함되어야 한다: Deployment/HPA/Service/ConfigMap/Secret/ServiceMonitor.  
-4. `/metrics` 와 `metric=*` 로그가 수집되는지 Prometheus·Fluent Bit 파이프라인을 통해 확인한다.  
-5. Failover나 DR을 대비해 runbook (`docs/ops/runbook.md`) 의 단계별 체크 항목을 최신 상태로 유지한다.
+## 3. Prod 환경 (AWS + Kubernetes)
+### 3.1 인프라 (Terraform)
+1. `terraform init && terraform apply` 로 VPC/Subnet/SecurityGroup/ElastiCache/RDS/SecretsManager 생성
+2. 출력물: `redis_endpoint`, `postgres_endpoint`, `server_advertise_host`
+3. SecretsManager 에 DB/Redis URI 저장 → Helm values 에 reference
 
-## 참고 문서
-- `docs/getting-started.md` – 로컬 개발 환경 준비  
-- `docs/ops/observability.md` – 지표/로그/트레이싱  
-- `docs/db/redis-strategy.md`, `docs/db/write-behind.md` – 데이터 계층 전략  
-- `docs/ops/runbook.md` – 장애 대응 및 점검 프로세스
+### 3.2 애플리케이션 배포 (Helm)
+```bash
+helm upgrade --install server-app charts/server-app -f values/prod.yaml \
+  --set env.DB_URI=secret://knights/db_uri \
+  --set env.REDIS_URI=secret://knights/redis_uri
+helm upgrade --install load-balancer charts/load-balancer -f values/prod.yaml
+helm upgrade --install gateway charts/gateway -f values/prod.yaml
+```
+각 차트에는 Deployment(+HPA), Service, ConfigMap(.env), Secret(DB/Redis), ServiceMonitor(/metrics), PodDisruptionBudget가 포함돼야 한다.
+
+### 3.3 배포 검증 순서
+1. `kubectl rollout status deploy/server-app`
+2. `kubectl port-forward svc/server-metrics 9090:9090` 후 `/metrics` 확인
+3. devclient 혹은 e2e 테스트로 `/login` → `/join lobby` → `/chat` 시나리오 수행
+4. Grafana 대시보드에서 Active Sessions, LB Idle Close Rate, wb_pending 을 5분간 모니터링
+
+### 3.4 롤백
+```bash
+helm rollback server-app <REV>
+helm rollback load-balancer <REV>
+helm rollback gateway <REV>
+```
+롤백 후에도 `/metrics` 와 runbook 체크리스트를 반드시 수행한다.
+
+## 4. 배포 전략 요약
+| 상황 | 전략 |
+| --- | --- |
+| 소규모 수정 | rolling update (Deployment) + readinessProbe 조절 |
+| 대규모 schema 변경 | ① migration ② server_app 배포 ③ 워커 배포 순으로 진행 |
+| 긴급 Hotfix | Helm Chart 의 `canary` values 로 1대만 교체 후 smoke -> 전체 롤아웃 |
+
+## 5. 참고 자료
+- `docs/ops/prewarm.md` – 새 인스턴스 pre-warm
+- `docs/ops/runbook.md` – 알람 대응 순서
+- `docs/ops/fallback-and-alerts.md` – 장애 시 fallback
