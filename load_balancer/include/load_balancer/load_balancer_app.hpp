@@ -113,8 +113,10 @@ private:
     std::chrono::seconds heartbeat_interval_{std::chrono::seconds{5}};
     std::chrono::seconds backend_state_ttl_{std::chrono::seconds{30}};
     std::chrono::seconds session_binding_ttl_{std::chrono::seconds{45}};
+    std::chrono::seconds backend_idle_timeout_{std::chrono::seconds{30}};
     std::size_t backend_failure_threshold_{3};
     std::chrono::seconds backend_retry_cooldown_{std::chrono::seconds{5}};
+    std::atomic<std::uint64_t> backend_idle_close_total_{0};
 };
 
 } // namespace load_balancer

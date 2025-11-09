@@ -40,9 +40,9 @@ constexpr const char* kEnvInstanceId = "LB_INSTANCE_ID";
 constexpr const char* kEnvDynamicBackends = "LB_DYNAMIC_BACKENDS";
 constexpr const char* kEnvBackendRefreshInterval = "LB_BACKEND_REFRESH_INTERVAL";
 constexpr const char* kEnvBackendRegistryPrefix = "LB_BACKEND_REGISTRY_PREFIX";
+constexpr const char* kEnvBackendIdleTimeout = "LB_BACKEND_IDLE_TIMEOUT";
 constexpr const char* kDefaultGrpcListen = "127.0.0.1:7001";
 constexpr const char* kDefaultBackendEndpoint = "127.0.0.1:5000";
-constexpr auto kBackendIdleTimeout = std::chrono::seconds(30);
 
 std::pair<std::string, std::uint16_t> parse_endpoint(std::string_view value, std::uint16_t fallback_port) {
     if (value.empty()) {
@@ -206,6 +206,22 @@ void LoadBalancerApp::configure() {
         }
     }
 
+    if (const char* idle_env = std::getenv(kEnvBackendIdleTimeout); idle_env && *idle_env) {
+        try {
+            auto parsed = std::stoul(idle_env);
+            if (parsed >= 5 && parsed <= 3600) {
+                backend_idle_timeout_ = std::chrono::seconds{static_cast<long long>(parsed)};
+            } else {
+                server::core::log::warn("LoadBalancerApp LB_BACKEND_IDLE_TIMEOUT out of range (5~3600)");
+            }
+        } catch (const std::exception& ex) {
+            server::core::log::warn(std::string("LoadBalancerApp invalid LB_BACKEND_IDLE_TIMEOUT: ") + ex.what());
+        }
+    }
+    if (backend_idle_timeout_ <= std::chrono::seconds::zero()) {
+        backend_idle_timeout_ = std::chrono::seconds{30};
+    }
+
     const bool dynamic_requested = [&]() {
         if (const char* dynamic_env = std::getenv(kEnvDynamicBackends); dynamic_env && *dynamic_env) {
             return std::strcmp(dynamic_env, "0") != 0;
@@ -236,7 +252,8 @@ void LoadBalancerApp::configure() {
     server::core::log::info("LoadBalancerApp grpc_listen=" + grpc_listen_address_
         + " instance_id=" + instance_id_
         + " backends=" + std::to_string(active_backends > 0 ? active_backends : initial_count)
-        + " dynamic_backends=" + std::string(dynamic_backends_active_ ? "1" : "0"));
+        + " dynamic_backends=" + std::string(dynamic_backends_active_ ? "1" : "0")
+        + " idle_timeout=" + std::to_string(backend_idle_timeout_.count()) + "s");
 }
 
 void LoadBalancerApp::configure_backends(std::string_view list) {
@@ -784,16 +801,22 @@ grpc::Status LoadBalancerApp::handle_stream(
         backend_socket.close(close_ec);
     });
 
-    std::thread idle_watcher([&]() {
+    std::thread idle_watcher([&, session_id, gateway_id]() {
         while (running.load(std::memory_order_relaxed)) {
-            std::this_thread::sleep_for(kBackendIdleTimeout / 2);
+            auto sleep = backend_idle_timeout_ / 2;
+            if (sleep <= std::chrono::seconds::zero()) {
+                sleep = std::chrono::seconds{1};
+            }
+            std::this_thread::sleep_for(sleep);
             if (!running.load(std::memory_order_relaxed)) {
                 break;
             }
             auto idle = std::chrono::steady_clock::now() - last_backend_activity.load(std::memory_order_relaxed);
-            if (idle >= kBackendIdleTimeout) {
+            if (idle >= backend_idle_timeout_) {
+                auto total = ++backend_idle_close_total_;
                 server::core::log::warn("LoadBalancerApp closing idle backend session session_id=" + session_id +
-                                        " gateway=" + gateway_id + " backend=" + assigned_backend_id);
+                                        " gateway=" + gateway_id + " backend=" + assigned_backend_id +
+                                        " metric=lb_backend_idle_close_total value=" + std::to_string(total));
                 running.store(false, std::memory_order_relaxed);
                 boost::system::error_code close_ec;
                 backend_socket.close(close_ec);

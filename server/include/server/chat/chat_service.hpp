@@ -120,6 +120,8 @@ private:
     bool load_recent_messages_from_cache(const std::string& room_id,
                                          std::vector<server::wire::v1::StateSnapshot::SnapshotMessage>& out);
 
+    friend struct ChatServiceHistoryTester;
+
     static void collect_room_sessions(RoomSet& set, std::vector<std::shared_ptr<Session>>& out);
     unsigned int presence_ttl() const;
     std::string make_presence_key(std::string_view category, const std::string& id) const;

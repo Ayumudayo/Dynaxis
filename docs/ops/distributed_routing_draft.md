@@ -50,6 +50,8 @@
 - **알림 체계**: Redis 연결 단절, sticky session miss, 재바인딩 실패 등 주요 실패에 대해 Alert 룰을 정의한다.
 - **테스트 매트릭스**: `/join`, `/chat` 반복 호출로 여러 backend를 순회하는 스모크 테스트를 CI에 포함한다.
 
+- **백엔드 유휴 타임아웃**: LB_BACKEND_IDLE_TIMEOUT(기본 30초)으로 gateway- backend 스트림이 멈추지 않도록 하고, 종료 시 metric=lb_backend_idle_close_total 로그를 관측한다.
+
 ## 4. 우선순위 로드맵
 1. **P1 – Consistent Hash 고도화**
    - Redis heartbeat watcher (`LB_HASH_RECONFIG_INTERVAL`) 구현

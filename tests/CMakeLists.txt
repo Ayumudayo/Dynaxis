@@ -41,7 +41,24 @@ target_link_libraries(server_state_tests PRIVATE
     server_state
 )
 
+add_executable(chat_history_tests
+    chat_history_tests.cpp
+    ${CMAKE_SOURCE_DIR}/server/src/chat/chat_service_core.cpp
+)
+target_include_directories(chat_history_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/server/include
+    ${CMAKE_SOURCE_DIR}/server
+)
+target_link_libraries(chat_history_tests PRIVATE
+    GTest::gtest_main
+    server_core
+    server_storage_redis
+    wire_proto
+)
+
 include(GoogleTest)
 gtest_discover_tests(storage_basic_tests)
 gtest_discover_tests(core_concurrency_tests)
 gtest_discover_tests(server_state_tests)
+gtest_discover_tests(chat_history_tests)
