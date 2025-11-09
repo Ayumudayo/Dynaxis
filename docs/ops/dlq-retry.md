@@ -1,53 +1,37 @@
-# Write-behind DLQ 재처리 런북
+# DLQ 재처리 가이드
 
-목표: `WB_DLQ_STREAM`에 쌓인 이벤트를 재처리하여 DB(session_events)에 반영한다. 반복 실패 시 `WB_DEAD_STREAM`으로 이동한다.
+write-behind 워커는 실패한 이벤트를 DLQ(Dead Letter Queue)에 적재한다. 이 문서는 DLQ에 쌓인 메시지를 재처리하는 방법과 운영 시 주의사항을 설명한다.
 
-## 구성
-- 스트림
-  - DLQ: `WB_DLQ_STREAM` (기본 `session_events_dlq`)
-  - DEAD: `WB_DEAD_STREAM` (기본 `session_events_dead`)
-- 그룹/컨슈머
-  - 그룹: `WB_GROUP_DLQ` (기본 `wb_dlq_group`)
-  - 컨슈머: `WB_CONSUMER` (기본 `wb_dlq_consumer`)
-- 재시도
-  - `WB_RETRY_MAX` (기본 5)
+## 1. DLQ 구조
+- Redis Streams 키: `wb:dlq:<stream>`  
+- 필드: `payload`(JSON), `retry_count`, `last_error`  
+- `retry_count` 가 `WB_RETRY_MAX` 를 초과하면 dead 스트림(`wb:dlq:dead`)으로 이동한다.
 
-## 실행 바이너리
-- 빌드 산출물: `wb_dlq_replayer`
-- 환경 변수: `DB_URI`, `REDIS_URI`, `WB_DLQ_STREAM`, `WB_DEAD_STREAM`, `WB_GROUP_DLQ`, `WB_CONSUMER`, `WB_RETRY_MAX`
+## 2. 재처리 프로세스
+1. `wb_dlq_replayer` 실행  
+   ```bash
+   WB_RETRY_MAX=5 \
+   DB_URI=postgres://app:example@db:5432/appdb \
+   ./wb_dlq_replayer
+   ```
+2. 최신 DLQ 항목을 읽고 DB/외부 시스템에 다시 기록한다.  
+3. 재처리 성공 시 ACK 후 로그: `metric=wb_dlq_replay ok=1 event_id=<id>`  
+4. 실패 시 `retry_count` 를 증가시키고 DLQ에 다시 삽입, 로그: `metric=wb_dlq_replay retry=1 ...`  
+5. `retry_count >= WB_RETRY_MAX` 이면 dead 스트림으로 이동, 로그: `metric=wb_dlq_replay_dead move=1 ...`
 
-## 동작 요약
-1) DLQ 스트림을 컨슈머 그룹으로 블로킹 읽기(XREADGROUP)
-2) 각 항목 처리:
-   - `orig_event_id`가 있으면 이를 이벤트 고유키로 사용, 없으면 DLQ 항목 id 사용
-   - 원본 필드를 JSON(payload)로 직렬화(`error`,`retry_count` 제외)
-   - `insert into session_events(event_id, ...) on conflict do nothing` 멱등 커밋
-   - 성공 시 ACK, 로그: `metric=wb_dlq_replay ok=1 event_id=...`
-   - 실패 시 `retry_count+1`
-     - `retry_count >= WB_RETRY_MAX` → DEAD 스트림으로 이동 후 ACK, 로그: `metric=wb_dlq_replay_dead ...`
-     - 아니면 DLQ에 재삽입 후 ACK, 로그: `metric=wb_dlq_replay retry=1 ...`
+## 3. 운영 체크리스트
+- `wb_pending` 지표를 통해 실시간 적체량을 감시한다.  
+- DLQ 재처리 전에는 애플리케이션 오류(스키마 변경, 외부 API 문제)를 먼저 해결해야 한다.  
+- dead 스트림은 수동 점검 후 롤백 또는 데이터 패치를 진행한다.  
+- runbook에는 DLQ 재처리 절차와 “언제 중단할 것인지” 기준을 명시한다.
 
-## 운영 명령 예시
-```
-# 환경 준비(.env 권장) 후 실행
-set DB_URI=postgres://...
-set REDIS_URI=redis://127.0.0.1:6379
-set WB_DLQ_STREAM=session_events_dlq
-set WB_DEAD_STREAM=session_events_dead
-set WB_GROUP_DLQ=wb_dlq_group
-set WB_CONSUMER=host-a:worker-1
-set WB_RETRY_MAX=5
+## 4. FAQ
+- **Q. DLQ가 급격히 쌓일 때?**  
+  A. write-behind 워커 로그에서 `wb_fail_total` 변화를 확인하고, 같은 시각의 애플리케이션 에러/DB 에러와 상관관계를 찾는다.
+- **Q. 재처리 중 또 실패한다면?**  
+  A. `last_error` 필드를 참고해 idempotent 한지 검토 후, 필요 시 수동으로 payload 를 수정한다.
 
-./wb_dlq_replayer
-```
-
-## 모니터링 지표(로그)
-- `metric=wb_dlq_replay ok=1 event_id=...`
-- `metric=wb_dlq_replay retry=1 event_id=... retry_count=N`
-- `metric=wb_dlq_replay_dead move=1 event_id=...`
-
-## 주의사항
-- DLQ 항목에는 원본 필드와 `orig_event_id`, `error`, 선택적으로 `retry_count`가 포함된다.
-- DEAD 스트림은 수동 점검/삭제 정책을 정해 주기적으로 청소한다.
-- 재처리 논리는 session_events 스키마를 가정한다. 스키마 변경 시 replayer를 함께 갱신한다.
-
+## 5. 참고
+- 워커 메트릭: `tools/wb_worker/main.cpp`  
+- Observability: `docs/ops/observability.md`  
+- Runbook: `docs/ops/runbook.md`

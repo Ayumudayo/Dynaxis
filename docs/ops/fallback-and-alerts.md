@@ -1,43 +1,33 @@
-# Operations: Redis Fallback and Recovery
+# Fallback 및 알림 전략
 
-목표: Redis 장애 시 서비스 기능을 유지하고, Postgres로 폴백/복구하는 절차를 정의한다.
+장애 상황에서 서비스가 중단되지 않도록 하기 위해 다음과 같은 fallback/알람 체계를 사용한다.
 
-## 장애 모드
-- Redis 완전 다운/네트워크 분리
-- 부분 장애(응답 지연/메모리 압박/쓰기 실패)
-- 데이터 손실(캐시/Streams 트림 과도)
+## 1. Redis/DB 장애
+- **Redis**  
+  - sticky session은 Redis를 신뢰하지만, 장애 시 `SessionDirectory` 는 로컬 캐시에 있는 값을 한 번 더 사용한 후 fallback backend를 새로 선택한다.  
+  - `metric=lb_backend_idle_close_total` 이 급증하면 gateway-backend 연결이 비정상임을 의미하므로 Alertmanager에서 5분 누적 5건 이상일 때 경고를 보낸다.
+- **Postgres**  
+  - write-behind 워커가 실패하면 DLQ에 적재하고 `metric=wb_fail_total` 이 증가한다. 1분 동안 0이 아닌 상태가 지속되면 경고 알람을 발송한다.  
+  - 서버는 snapshot 조회 실패 시 Redis 캐시만으로 응답하되, 관리자에게 “DB fallback 사용 중” 로그를 남긴다.
 
-## 폴백 정책
-- 기본: 기능 지속이 우선. 캐시 미스→Postgres로 폴백, 팬아웃은 인프로세스/지역 브로드캐스트로 축소
-- 플래그(예시):
-  - `REDIS_REQUIRED=false` (true면 하드 페일)
-  - `USE_REDIS_CACHE=true` (false면 캐시 접근 비활성)
-  - `USE_REDIS_PUBSUB=true` (false면 노드 로컬 브로드캐스트)
-  - `WRITE_BEHIND_ENABLED=false` (장애 시 write-through 전환)
+## 2. 게이트웨이·로드밸런서
+- gRPC 스트림이 끊기면 게이트웨이는 재연결을 시도하고, 3회 연속 실패 시 `SESSION_MOVED` 알림을 클라이언트에 전달한다.  
+- 로드밸런서는 backend 연결에 실패하면 `mark_backend_failure()` 를 호출해 링에서 일시적으로 제외한다.
 
-## Redis 복구/재가동 시
-- 히스토리 캐시 재가열: 백그라운드에서 최근 N개 메시지 재적재(우선순위: 활성 룸)
-- 프레즌스 재구성: 클라이언트 heartbeat 재수신을 통해 점진 복원. 초기에는 프레즌스 기능 제한 안내
-- Streams 재동기화: 컨슈머 그룹의 펜딩/누락 재처리, DLQ 모니터링
+## 3. 알림 규칙 예시
+| 지표 | 조건 | 조치 |
+| --- | --- | --- |
+| `sum(increase(lb_backend_idle_close_total[5m]))` | 5 이상 | gateway ↔ backend 포트 확인, Redis sticky 상태 확인 |
+| `aiops_pg_connect_error_total` | 3분 연속 증가 | RDS 상태 점검 후 필요 시 failover |
+| `chat_subscribe_last_lag_ms` | p95 > 200ms (5분) | Pub/Sub 채널 점검, gateway 로그 확인 |
+| `wb_pending` | 500 이상 (5분) | DLQ 확인, 배포 중단 |
 
-## 경보(알람) 임계
-- Redis ping latency p95 > 20ms (5m)
-- 에러율(커맨드 실패) > 1% (1m)
-- Pool exhaustion > 80% (5m)
-- Streams pending length 증가 추세(원인 역추적)
-- 폴백 모드 진입 이벤트(즉시)
+## 4. Runbook 연계
+1. Alertmanager → Slack/Webhook  
+2. on-call 엔지니어는 `docs/ops/runbook.md` 의 체크리스트에 따라 조치  
+3. 조치 결과와 재발 방지를 issue tracker에 기록
 
-## 대시보드 지표
-- 캐시 히트율, 키공간 메모리/eviction
-- 쿼리 레이턴시(p50/p95/p99), Postgres 폴백 비율
-- 팬아웃 방식(REDIS vs LOCAL) 및 메시지 지연
-- Write-behind 배치 크기/지연/성공률
-
-## 런북(요약)
-- 장애 감지 → 폴백 플래그 적용 확인(`REDIS_REQUIRED=false`, `USE_REDIS_*` 조정)
-- Postgres 부하 모니터링(풀/CPU/슬로 쿼리) — 필요 시 `RECENT_HISTORY_LIMIT` 축소
-- Redis 복구 후:
-  - Streams 컨슈머 재시작 → 펜딩 처리
-  - 캐시 재가열 잡 실행(활성 룸부터)
-  - 플래그 원복, 알람 정상화 확인
-
+## 5. 참고
+- `docs/ops/observability.md` – 지표/로그 수집  
+- `docs/ops/runbook.md` – 장애 대응 절차  
+- `docs/ops/dlq-retry.md` – DLQ 처리 흐름

@@ -1,32 +1,36 @@
-# 캐시 프리워밍(Prewarming) 절차
+# Pre-warm 절차
 
-목표: Redis 복구/재시작 또는 대규모 배포 이후, 자주 사용되는 데이터(최근 메시지/멤버십/세션)를 선제적으로 채워 초기 지연과 DB 부하를 줄인다.
+신규 서버를 배포하거나 대규모 재시작이 필요할 때 초기 트래픽을 안전하게 받아들이기 위한 준비 절차를 정리한다.
 
-## 대상 및 우선순위
-- 1순위: 활성 사용자 수가 많은 룸의 최근 메시지(`room:{room_id}:recent`, `msg:{id}`)
-- 2순위: 룸 멤버십 집합(`room:{room_id}:members`)
-- 3순위: 세션/프레즌스는 트래픽에 의해 자연 복원되므로 별도 워밍 불필요(옵션)
+## 1. 사전 준비
+1. `.env.server` 확인 – `DB_URI`, `REDIS_URI`, `METRICS_PORT`  
+2. schema migration 수행: `./migrations_runner migrate`
+3. Redis 캐시 초기화가 필요한 경우(`flushall` 금지) 스크립트로 필요한 키만 삭제
 
-## 소스와 일관성
-- 소스 오브 트루스는 Postgres다. 프리워밍은 Postgres에서 읽어 Redis에 적재한다.
-- 트랜잭션 시점 스냅샷을 사용하거나, `wm`(워터마크) 기준으로 범위를 고정한다.
+## 2. Pre-warm 단계
+| 단계 | 내용 | 확인 |
+| --- | --- | --- |
+| 1 | 서버 프로세스 기동 (readiness off) | `/healthz` 200 |
+| 2 | `server_app --prewarm` 모드로 snapshot + Redis 채널을 미리 로드 | 로그 `prewarm complete` 확인 |
+| 3 | `/metrics` 확인, `chat_session_active`=0, 오류 없음 | curl |
+| 4 | 로드밸런서에서 새 backend를 링에 추가 | `lb_hash_rebuild_total` 증가 |
+| 5 | 게이트웨이 라우팅 테스트 (smoke) | devclient `connect → /rooms` |
+| 6 | readiness on, HPA/Service에 편입 | `kubectl rollout status` |
 
-## 절차
-1) 룸 랭킹 선정: 최근 1h 트래픽/동접 기준 상위 N개 룸
-2) 각 룸에 대해:
-   - `SELECT id DESC LIMIT recent_len`으로 메시지 id/본문 조회
-   - Redis 파이프라인으로 `LPUSH/LTRIM room:recent`와 `SETEX msg:{id}` 수행
-3) 검증: 표본 룸에 대해 `LRANGE`와 DB 결과 대조(샘플링)
+## 3. 자동화 스크립트 예시
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-## 스로틀링/병렬성
-- 동시 작업 수를 제한(`PREWARM_CONCURRENCY`), DB/Redis CPU/IO 모니터링
-- 배치 크기 조절: 룸당 메시지 개수(`ROOM_RECENT_MAXLEN`)와 파이프라인 크기 조정
+kubectl rollout restart deploy/server-app
+kubectl rollout status deploy/server-app
 
-## 트리거
-- 수동 실행(런북) 또는 Redis 복구 이벤트 감지 시 자동 실행(플래그 제어)
+for pod in $(kubectl get pod -l app=server-app -o jsonpath='{.items[*].metadata.name}'); do
+  kubectl exec "$pod" -- /app/server_app --prewarm
+done
+```
 
-## 구성 값
-- `PREWARM_ENABLED` (bool)
-- `PREWARM_TOP_ROOMS` (예: 100~1000)
-- `PREWARM_CONCURRENCY` (예: 2~8)
-
+## 4. 주의 사항
+- Pre-warm 중에는 외부에서 트래픽이 유입되지 않도록 게이트웨이에서 backend를 disable 한다.  
+- Redis Pub/Sub 채널을 미리 구독해 두면 첫 메시지 손실을 막을 수 있다.  
+- runbook에 해당 절차를 기록하고 배포 자동화와 연계한다.
