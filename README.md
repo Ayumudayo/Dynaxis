@@ -1,33 +1,43 @@
-# Server Project — 개요 및 빠른 시작
+# Knights Chat Stack
 
-본 저장소는 C++20 기반의 서버 애플리케이션과 부속 워커/도구/문서를 포함합니다. Redis(Pub/Sub, Streams)와 PostgreSQL을 활용해 채팅/프레즌스/브로드캐스트/이벤트 적재를 제공합니다.
+Knights는 C++20로 작성된 실시간 채팅 서버/게이트웨이/로드밸런서/CLI 클라이언트 묶음입니다. Redis(Streams, Pub/Sub)와 PostgreSQL을 조합해 스냅샷, write-behind, DLQ 복구까지 지원합니다.
 
-## 빠른 시작
-- 필수: CMake 3.20+, MSVC 19.3x+/GCC 11+/Clang 14+, vcpkg, Redis, PostgreSQL
-- .env 작성: DB_URI, REDIS_URI 등 — 예시는 `docs/getting-started.md`
-- 빌드/실행(Windows PowerShell 예시)
-  - `scripts/build.ps1 -UseVcpkg -Config Debug -Target server_app`
-  - `scripts/build.ps1 -UseVcpkg -Config Debug -Target wb_worker`
-  - 서버 실행: `build-msvc/server/Debug/server_app.exe 5000`
-  - 워커 실행: `build-msvc/Debug/wb_worker.exe`
-- 스모크 테스트: `scripts/smoke_wb.ps1`
-- 지표 노출: `METRICS_PORT=9090` 설정 후 `curl http://127.0.0.1:9090/metrics`
+## 필수 요구 사항
+- CMake ≥ 3.20, MSVC 19.3x+/Clang 14+/GCC 11+
+- vcpkg (의존성 관리)
+- Redis 6+, PostgreSQL 13+
+- .env 파일에 DB_URI, REDIS_URI, METRICS_PORT 등을 정의
 
-## 문서 바로가기
-- 설정/실행: `docs/getting-started.md`, `docs/build.md`, `docs/configuration.md`
-- 로드맵: `docs/roadmap.md`
-- Redis 전략/Write-behind: `docs/db/redis-strategy.md`, `docs/db/write-behind.md`
-- 관측성: `docs/ops/observability.md`, `docs/ops/dlq-retry.md`, `docs/ops/gateway-and-lb.md`
-- 배포 전략: `docs/ops/deployment.md`
-- 저장소 구조: `docs/repo-structure.md`
-- 테스트 가이드: `docs/tests.md`
+## 빠른 빌드 & 실행
+`powershell
+# Windows PowerShell 예시
+scripts/build.ps1 -UseVcpkg -Config Debug -Target server_app
+scripts/build.ps1 -UseVcpkg -Config Debug -Target load_balancer_app
+scripts/build.ps1 -UseVcpkg -Config Debug -Target gateway_app
 
-## 구성 요소
-- `server_app`: 테스트용 서버(채팅/프레즌스/브로드캐스트)
-- `wb_worker`: Redis Streams → Postgres 배치 커밋 워커
-- `wb_dlq_replayer`: DLQ 재처리 도구(재시도/데드 이동)
-- `wb_emit`/`wb_check`: 스모크 보조 도구
-- `dev_chat_cli`: FTXUI 기반 개발용 클라이언트
+# 서버 실행
+.uild-msvc\server\Debug\server_app.exe 5000
+.uild-msvc\load_balancer\Debug\load_balancer_app.exe
+.uild-msvc\gateway\Debug\gateway_app.exe
+`
 
-## 라이선스
-- 리포지터리 라이선스/저작권 정책은 상위 정책을 따릅니다. 별도 표기가 없는 한 외부 배포를 전제로 하지 않습니다.
+Metrics는 METRICS_PORT(기본 9090)에서 curl http://127.0.0.1:9090/metrics 로 확인할 수 있고, write-behind는 scripts/smoke_wb.ps1로 빠르게 검증합니다.
+
+## 문서 모음
+- 시작하기: docs/getting-started.md, docs/build.md, docs/configuration.md
+- 설계/로드맵: docs/repo-structure.md, docs/roadmap.md
+- 데이터 계층: docs/db/redis-strategy.md, docs/db/write-behind.md
+- 운영: docs/ops/deployment.md, docs/ops/gateway-and-lb.md, docs/ops/observability.md, docs/ops/runbook.md, docs/ops/fallback-and-alerts.md
+- 테스트: docs/tests.md
+
+## 서브 프로젝트
+| 경로 | 설명 |
+| --- | --- |
+| core/ | 공용 라이브러리(server_core) – Asio 기반 네트워크, job queue, storage 래퍼 |
+| server/ | 채팅 서버(server_app) – 방/스냅샷/Redis PubSub/write-behind |
+| gateway/ | TCP ↔ gRPC 브리지(gateway_app) |
+| load_balancer/ | Consistent Hash + sticky 세션(load_balancer_app) |
+| devclient/ | FTXUI 기반 CLI(dev_chat_cli) |
+| 	ools/ | write-behind 워커, DLQ 재처리 등 유틸리티 |
+
+각 디렉터리의 README에서 세부 빌드법과 운영 팁을 확인할 수 있습니다. 운영 관련 최신 정보는 docs/ops 폴더를 참고하세요.
