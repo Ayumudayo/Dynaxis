@@ -1,6 +1,7 @@
 #include "load_balancer/load_balancer_app.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <chrono>
 #include <functional>
@@ -41,6 +42,7 @@ constexpr const char* kEnvBackendRefreshInterval = "LB_BACKEND_REFRESH_INTERVAL"
 constexpr const char* kEnvBackendRegistryPrefix = "LB_BACKEND_REGISTRY_PREFIX";
 constexpr const char* kDefaultGrpcListen = "127.0.0.1:7001";
 constexpr const char* kDefaultBackendEndpoint = "127.0.0.1:5000";
+constexpr auto kBackendIdleTimeout = std::chrono::seconds(30);
 
 std::pair<std::string, std::uint16_t> parse_endpoint(std::string_view value, std::uint16_t fallback_port) {
     if (value.empty()) {
@@ -704,6 +706,7 @@ grpc::Status LoadBalancerApp::handle_stream(
 
     boost::asio::io_context backend_io;
     boost::asio::ip::tcp::socket backend_socket(backend_io);
+    std::atomic<std::chrono::steady_clock::time_point> last_backend_activity{std::chrono::steady_clock::now()};
     std::string connect_error;
     if (!connect_backend(backend, backend_socket, connect_error)) {
         mark_backend_failure(assigned_backend_id);
@@ -723,6 +726,7 @@ grpc::Status LoadBalancerApp::handle_stream(
         + " gateway=" + gateway_id + " client=" + client_id
         + " backend=" + backend.host + ":" + std::to_string(backend.port)
         + " sticky=" + (session_bound ? "1" : "0"));
+    last_backend_activity.store(std::chrono::steady_clock::now(), std::memory_order_relaxed);
 
     auto send_to_gateway = [&](gateway::lb::RouteMessage message) {
         message.set_session_id(session_id);
@@ -748,6 +752,7 @@ grpc::Status LoadBalancerApp::handle_stream(
             running.store(false, std::memory_order_relaxed);
             return false;
         }
+        last_backend_activity.store(std::chrono::steady_clock::now(), std::memory_order_relaxed);
         return true;
     };
 
@@ -766,6 +771,7 @@ grpc::Status LoadBalancerApp::handle_stream(
                 }
                 break;
             }
+            last_backend_activity.store(std::chrono::steady_clock::now(), std::memory_order_relaxed);
             gateway::lb::RouteMessage response;
             response.set_kind(gateway::lb::ROUTE_KIND_SERVER_PAYLOAD);
             response.set_payload(reinterpret_cast<const char*>(buffer.data()), static_cast<int>(bytes));
@@ -776,6 +782,24 @@ grpc::Status LoadBalancerApp::handle_stream(
         running.store(false, std::memory_order_relaxed);
         boost::system::error_code close_ec;
         backend_socket.close(close_ec);
+    });
+
+    std::thread idle_watcher([&]() {
+        while (running.load(std::memory_order_relaxed)) {
+            std::this_thread::sleep_for(kBackendIdleTimeout / 2);
+            if (!running.load(std::memory_order_relaxed)) {
+                break;
+            }
+            auto idle = std::chrono::steady_clock::now() - last_backend_activity.load(std::memory_order_relaxed);
+            if (idle >= kBackendIdleTimeout) {
+                server::core::log::warn("LoadBalancerApp closing idle backend session session_id=" + session_id +
+                                        " gateway=" + gateway_id + " backend=" + assigned_backend_id);
+                running.store(false, std::memory_order_relaxed);
+                boost::system::error_code close_ec;
+                backend_socket.close(close_ec);
+                break;
+            }
+        }
     });
 
     auto process_message = [&](const gateway::lb::RouteMessage& message) {
@@ -811,6 +835,9 @@ grpc::Status LoadBalancerApp::handle_stream(
     backend_socket.close(shutdown_ec);
     if (backend_reader.joinable()) {
         backend_reader.join();
+    }
+    if (idle_watcher.joinable()) {
+        idle_watcher.join();
     }
     release_session();
     return grpc::Status::OK;

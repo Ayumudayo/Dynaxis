@@ -145,7 +145,7 @@ void GatewayConnection::on_error(const boost::system::error_code& ec) {
     using boost::asio::error::eof;
     using boost::asio::error::operation_aborted;
     using boost::asio::error::connection_reset;
-    if (ec == eof || ec == operation_aborted || connection_reset) {
+    if (ec == eof || ec == operation_aborted || ec == connection_reset) {
         server::core::log::info(std::string("GatewayConnection closed: ") + ec.message());
         return;
     }

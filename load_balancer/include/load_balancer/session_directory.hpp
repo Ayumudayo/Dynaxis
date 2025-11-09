@@ -27,11 +27,16 @@ public:
 private:
     std::string make_key(const std::string& client_id) const;
 
+    struct CacheEntry {
+        std::string backend;
+        std::chrono::steady_clock::time_point expires;
+    };
+
     std::shared_ptr<server::storage::redis::IRedisClient> redis_;
     std::string key_prefix_;
     std::chrono::seconds ttl_;
     mutable std::mutex mutex_;
-    std::unordered_map<std::string, std::string> cache_;
+    std::unordered_map<std::string, CacheEntry> cache_;
 };
 
 } // namespace load_balancer

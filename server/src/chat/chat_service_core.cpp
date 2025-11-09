@@ -373,6 +373,7 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
     }
 
     bool loaded_from_cache = false;
+    std::size_t cached_messages = 0;
     if (redis_ && !rid.empty()) {
         std::vector<server::wire::v1::StateSnapshot::SnapshotMessage> cached;
         if (load_recent_messages_from_cache(rid, cached)) {
@@ -380,10 +381,13 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
                 auto* sm = pb.add_messages();
                 *sm = message;
             }
-            loaded_from_cache = true;
+            cached_messages = cached.size();
+            loaded_from_cache = (cached_messages >= history_.recent_limit);
         }
     }
 
+    std::uint64_t last_seen_value = 0;
+    bool last_seen_loaded = false;
     if (db_pool_ && !rid.empty()) {
         try {
             std::string uid;
@@ -394,46 +398,53 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
             }
 
             auto uow = db_pool_->make_unit_of_work();
-            std::uint64_t last_seen = 0;
             if (!uid.empty()) {
                 auto opt = uow->memberships().get_last_seen(uid, rid);
-                last_seen = opt.value_or(0);
+                last_seen_value = opt.value_or(0);
             }
-            pb.set_last_seen_id(last_seen);
+            last_seen_loaded = true;
+            pb.set_last_seen_id(last_seen_value);
 
-            if (!loaded_from_cache) {
+            if (!loaded_from_cache || cached_messages < history_.recent_limit) {
                 const std::size_t limit = history_.recent_limit;
                 const std::size_t fetch_factor = history_.fetch_factor;
-                const std::size_t fetch_count = std::min(history_.max_list_len, limit * fetch_factor);
+                const std::size_t fetch_span = limit * fetch_factor;
+                const std::size_t fetch_count = std::min(history_.max_list_len, std::max(limit, fetch_span));
 
                 auto last_id = uow->messages().get_last_id(rid);
                 std::uint64_t since_id = 0;
                 if (last_id > 0) {
-                    if (last_seen == 0) {
+                    if (last_seen_value == 0) {
                         since_id = (last_id > limit) ? (last_id - limit) : 0;
-                    } else if (last_seen >= last_id) {
+                    } else if (last_seen_value >= last_id) {
                         since_id = (last_id > limit) ? (last_id - limit) : 0;
                     } else {
                         std::uint64_t context = static_cast<std::uint64_t>(limit) * static_cast<std::uint64_t>(fetch_factor);
                         if (last_id > context) {
                             std::uint64_t cut = last_id - context;
-                            since_id = (last_seen > cut) ? last_seen : cut;
+                            since_id = (last_seen_value > cut) ? last_seen_value : cut;
                         } else {
-                            since_id = last_seen;
+                            since_id = last_seen_value;
                         }
                     }
                 }
 
-                auto msgs = uow->messages().fetch_recent_by_room(rid, since_id, fetch_count ? fetch_count : limit);
+                auto msgs = uow->messages().fetch_recent_by_room(rid, since_id, fetch_count);
                 if (msgs.size() > limit) {
                     msgs.erase(msgs.begin(), msgs.end() - static_cast<std::ptrdiff_t>(limit));
+                }
+                std::size_t budget = (cached_messages >= limit) ? 0 : (limit - cached_messages);
+                if (budget == 0) {
+                    msgs.clear();
+                } else if (msgs.size() > budget) {
+                    msgs.erase(msgs.begin(), msgs.end() - static_cast<std::ptrdiff_t>(budget));
                 }
                 for (const auto& m : msgs) {
                     auto* sm = pb.add_messages();
                     sm->set_id(m.id);
                     std::string sender;
                     if (m.user_name && !m.user_name->empty()) sender = *m.user_name;
-                    else sender = std::string('(system)');
+                    else sender = std::string("(system)");
                     sm->set_sender(sender);
                     sm->set_text(m.content);
                     sm->set_ts_ms(static_cast<std::uint64_t>(m.created_at_ms));
@@ -442,7 +453,14 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
                     }
                 }
             }
-        } catch (...) {}
+        } catch (const std::exception& e) {
+            corelog::warn(std::string("recent history DB fallback failed: ") + e.what());
+        } catch (...) {
+            corelog::warn("recent history DB fallback failed: unknown error");
+        }
+    }
+    if (!last_seen_loaded) {
+        pb.set_last_seen_id(last_seen_value);
     }
 
     {
@@ -690,26 +708,35 @@ bool ChatService::load_recent_messages_from_cache(
     }
     std::vector<server::wire::v1::StateSnapshot::SnapshotMessage> parsed;
     parsed.reserve(ids.size());
+    bool partial_hit = false;
     for (const auto& id_str : ids) {
         char* endptr = nullptr;
         auto value = std::strtoull(id_str.c_str(), &endptr, 10);
         if (endptr == id_str.c_str() || value == 0) {
+            partial_hit = true;
             corelog::warn("recent history cache miss: invalid id entry=" + id_str);
-            return false;
+            continue;
         }
         auto payload = redis_->get(make_recent_message_key(value));
         if (!payload) {
-            return false;
+            partial_hit = true;
+            continue;
         }
         server::wire::v1::StateSnapshot::SnapshotMessage message;
         if (!message.ParseFromString(*payload)) {
+            partial_hit = true;
             corelog::warn("recent history cache miss: corrupted payload");
-            return false;
+            continue;
         }
         parsed.emplace_back(std::move(message));
     }
     if (parsed.empty()) {
         return false;
+    }
+    if (partial_hit) {
+        corelog::info("recent history cache partial hit: room_id=" + room_id +
+                      " kept=" + std::to_string(parsed.size()) +
+                      " requested=" + std::to_string(ids.size()));
     }
     out = std::move(parsed);
     return true;
