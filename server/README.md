@@ -19,10 +19,19 @@ server/
 
 ## 특징
 - **Opcode 라우팅**: `core::Dispatcher` 가 wire opcode 에 따라 `/login`, `/join`, `/chat`, `/whisper` 를 처리합니다.
-- **Snapshot + Redis Cache**: 최근 N개 메시지는 Redis LIST/LRU 에서 우선 조회 후 DB로 폴백합니다.
+- **Snapshot + Redis Cache**: 최근 N개 메시지는 Redis LIST/LRU 를 우선 조회 후 DB로 폴백합니다.
 - **Write-behind**: `WRITE_BEHIND_ENABLED=1`이면 Redis Streams 로 이벤트를 남기고 `wb_worker`가 DB로 flush 합니다.
 - **Instance Registry**: `SERVER_ADVERTISE_HOST/PORT` 를 기준으로 Redis registry에 heartbeat를 올려 Load Balancer가 backend를 자동 감지합니다.
 - **Metrics**: `/metrics` HTTP 엔드포인트에 `chat_*` 지표를 노출합니다.
+
+### Metrics 예시
+```
+# TYPE chat_session_active gauge
+chat_session_active 42
+chat_dispatch_total 123456
+chat_dispatch_latency_avg_ms 12.3
+```
+자세한 목록은 `docs/ops/observability.md` 를 참고하세요.
 
 ## 주요 환경 변수
 | 이름 | 설명 | 기본값 |
@@ -34,7 +43,6 @@ server/
 | `USE_REDIS_PUBSUB` | Redis Pub/Sub fan-out 사용 | `0` |
 | `SERVER_ADVERTISE_HOST/PORT` | Instance Registry에 노출할 주소 | listen 값 |
 | `METRICS_PORT` | `/metrics` 포트 | `9090` |
-
 전체 목록은 `docs/configuration.md` 에 정리되어 있습니다.
 
 ## 빌드 & 실행
@@ -43,6 +51,13 @@ cmake --build build-msvc --target server_app
 .uild-msvc\server\Debug\server_app.exe 5000
 ```
 PowerShell 스크립트: `scripts/build.ps1 -UseVcpkg -Config Debug -Target server_app -Run`.
+
+## 테스트
+```powershell
+cmake --build build-msvc --target chat_history_tests
+ctest --test-dir build-msvc/tests -R chat_history
+```
+또는 smoke 테스트: `scripts/run_all.ps1 -Config Debug -WithClient -Smoke`.
 
 ## 참고 자료
 - 구조: `docs/server-architecture.md`

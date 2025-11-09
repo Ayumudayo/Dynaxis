@@ -13,10 +13,20 @@ devclient/
    └─ net_client.cpp (wire codec)
 ```
 
-## 주요 기능
-- `/login`, `/join`, `/chat`, `/whisper` 명령 지원
-- 스크롤 로그, 방/사용자 목록, 자동 새로고침
-- `Ctrl+C` 종료 시 `/leave` 를 자동 전송해 서버에 정상 종료를 알립니다.
+## 명령 & 단축키
+| 명령 | 설명 |
+| --- | --- |
+| `/login <name>` | 로그인 및 세션 SID 확인 |
+| `/join <room>` | 방 이동 |
+| `/chat <text>` 또는 그냥 입력 | 채팅 메시지 전송 |
+| `/whisper <user> <msg>` | 귓속말 |
+| `/rooms`, `/who` | 방/사용자 목록 |
+| `/refresh` | snapshot 다시 요청 |
+
+키보드 단축키: `Ctrl+C` 또는 `Esc` 로 종료하면 `/leave` 를 자동으로 전송합니다. `PgUp/PgDn` 으로 로그 스크롤, `Tab` 으로 입력창 전환이 가능합니다.
+
+## 로그
+- 기본적으로 표준 출력으로 로그가 남고, `devclient.log` 파일(루트 디렉터리)에 최근 실행 기록을 append 합니다. 버그 제보 시 이 로그를 함께 첨부해 주세요.
 
 ## 환경 변수
 | 이름 | 설명 | 기본값 |

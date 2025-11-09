@@ -14,11 +14,22 @@ load_balancer/
    └─ main.cpp
 ```
 
+## 동작 흐름
+1. Gateway 가 `Stream` RPC 를 열고 HELLO 메시지를 보냅니다.
+2. LB는 sticky 캐시/Consistent Hash를 참고해 backend 를 선택합니다.
+3. Backend TCP 소켓을 연 뒤 Gateway ↔ Backend 사이를 프락시합니다.
+4. 데이터가 일정 시간 이상 흐르지 않으면 `LB_BACKEND_IDLE_TIMEOUT` 만큼 기다렸다가 세션을 정리하고 `metric=lb_backend_idle_close_total` 로그를 남깁니다.
+
+```
+[Gateway] ==gRPC==> [LB Stream] --TCP--> [Backend(server_app)]
+                  ↘ Redis SessionDirectory (gateway/session/<client>)
+```
+
 ## 특징
-- **Consistent Hash**: `LB_BACKEND_ENDPOINTS` + Instance Registry(`gateway/instances/*`)를 조합해 링을 구성합니다.
-- **Sticky Session**: Redis `gateway/session/<client>` 키를 TTL 기반으로 관리하며, 로컬 캐시에도 만료 시각을 저장합니다.
-- **Idle 감시**: `LB_BACKEND_IDLE_TIMEOUT` 초 이상 데이터가 흐르지 않으면 TCP를 강제로 끊고 `lb_backend_idle_close_total` 로그를 남깁니다.
-- **동적 백엔드**: `LB_DYNAMIC_BACKENDS=1`이면 registry 스냅샷을 주기적으로 갱신합니다.
+- **Dynamic Backend Discovery**: `LB_DYNAMIC_BACKENDS=1` 이면 Instance Registry(`gateway/instances/*`) 를 주기적으로 읽어 링을 갱신합니다.
+- **Consistent Hash + Failover**: 실패 횟수가 `LB_BACKEND_FAILURE_THRESHOLD` 를 넘으면 `LB_BACKEND_COOLDOWN` 동안 링에서 제외합니다.
+- **Sticky Session**: Redis 에 client_id → backend_id 를 TTL 기반으로 저장하고, 로컬 캐시에도 만료 시각을 기록합니다.
+- **Idle 감시**: `LB_BACKEND_IDLE_TIMEOUT` 초 이상 활동이 없으면 backend 소켓을 강제 종료합니다.
 
 ## 환경 변수 요약
 | 이름 | 설명 | 기본값 |
@@ -30,6 +41,11 @@ load_balancer/
 | `LB_BACKEND_FAILURE_THRESHOLD` | 실패 허용 횟수 | `3` |
 | `LB_BACKEND_COOLDOWN` | 실패 후 재시도 대기(초) | `5` |
 | `LB_BACKEND_IDLE_TIMEOUT` | backend 유휴 종료(초) | `30` |
+| `LB_BACKEND_REFRESH_INTERVAL` | Registry 스냅샷 주기 | `5` |
+
+## Metrics / 로그
+- `metric=lb_backend_idle_close_total value=<n>` : idle 강제 종료 횟수(로그 기반). Prometheus에서 `sum(increase(lb_backend_idle_close_total[5m]))` 을 감시하세요.
+- 기타 지표는 `/metrics` HTTP 엔드포인트(향후 TODO)에서 노출 예정입니다.
 
 ## 빌드 & 실행
 ```powershell

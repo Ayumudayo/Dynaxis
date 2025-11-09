@@ -7,7 +7,7 @@
 gateway/
 ├─ include/gateway/
 │  ├─ auth/              # IAuthenticator, NoopAuthenticator
-│  ├─ gateway_app.hpp    # 앱 수명주기/설정 로딩
+│  ├─ gateway_app.hpp    # 앱 수명주기/환경 변수 로딩
 │  └─ gateway_connection.hpp # TCP 세션 처리
 └─ src/
    ├─ gateway_app.cpp
@@ -16,9 +16,24 @@ gateway/
 ```
 
 ## 특징
-- Boost.Asio Hive 위에서 다수의 TCP 세션을 처리하며, 각 세션은 Load Balancer의 `Stream` RPC와 1:1 로 매칭됩니다.
-- 인증은 `auth::IAuthenticator` 인터페이스로 커스터마이즈할 수 있습니다 (`ALLOW_ANONYMOUS`, `AUTH_PROVIDER` 등).
-- Redis Presence 및 Pub/Sub self-echo를 막기 위해 `GATEWAY_ID` 를 로그에 남기고, heartbeat 시 Presence TTL을 갱신합니다.
+- Boost.Asio Hive 위에서 다수의 TCP 세션을 처리하며, 각 세션은 Load Balancer `Stream` RPC 와 1:1 매칭됩니다.
+- 인증은 `auth::IAuthenticator` 를 구현해 확장할 수 있습니다 (`ALLOW_ANONYMOUS`, `AUTH_PROVIDER`, `AUTH_ENDPOINT`).
+- Redis Presence 및 Pub/Sub self-echo를 막기 위해 `GATEWAY_ID` 를 로그에 남기고 heartbeat 시 Presence TTL을 갱신합니다.
+- gRPC 스트림이 끊기면 `LB_RETRY_DELAY_MS` 간격으로 재연결을 시도하며, 3회 이상 실패 시 클라이언트에 `SESSION_MOVED` 알림을 전송하도록 설계되어 있습니다.
+
+### Auth 확장 예시
+```cpp
+class TokenAuthenticator : public gateway::auth::IAuthenticator {
+ public:
+  gateway::auth::AuthResult authenticate(const AuthRequest& req) override {
+    if (req.token == "secret") {
+      return {true, req.client_id.empty() ? "token-user" : req.client_id, {}};
+    }
+    return {false, {}, "invalid token"};
+  }
+};
+```
+`gateway_app` 초기화 시 `set_authenticator(std::make_shared<TokenAuthenticator>())` 로 주입합니다.
 
 ## 환경 변수
 | 이름 | 설명 | 기본값 |
