@@ -15,6 +15,8 @@ std::unordered_map<std::string, NoopGauge>& gauges() { static std::unordered_map
 std::unordered_map<std::string, NoopHistogram>& histos() { static std::unordered_map<std::string, NoopHistogram> m; return m; }
 }
 
+// 아직 Prometheus와 통합되지 않은 환경에서도 동일 API를 호출할 수 있도록
+// Noop 객체를 리턴한다. 실제 exporter가 연결되면 이 구현을 대체한다.
 Counter& get_counter(const std::string& name) {
     std::lock_guard<std::mutex> lk(mu());
     return counters().try_emplace(name).first->second;

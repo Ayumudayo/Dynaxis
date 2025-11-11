@@ -17,6 +17,9 @@ using boost::system::error_code;
 
 namespace server::core {
 
+// Session은 단일 TCP 연결을 비동기적으로 관리하는 핵심 객체다.
+// 모든 작업이 strand 위에서 진행되어 송수신 경합이 발생하지 않으며,
+// SharedState는 총 연결 수와 session_id를 추적해 관측 지표를 제공한다.
 Session::Session(asio::ip::tcp::socket socket,
                  Dispatcher& dispatcher,
                  BufferManager& buffer_manager,
@@ -45,6 +48,8 @@ std::string Session::remote_ip() const {
 }
 
 void Session::start() {
+    // 서버와 클라이언트의 버전/옵션을 맞추기 위해 HELLO를 가장 먼저 보낸다.
+    // 이후 read/ping 타이머를 동시에 설정해 두면 I/O 경합 없이 진행된다.
     send_hello();
     do_read_header();
     arm_read_timeout();

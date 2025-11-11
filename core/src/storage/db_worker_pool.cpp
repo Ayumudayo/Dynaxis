@@ -28,6 +28,9 @@ DbWorkerPool::~DbWorkerPool() {
     stop();
 }
 
+// DB 작업을 네트워크 스레드에서 직접 실행하면 지연이 급증하므로
+// 별도의 워커 풀에서 직렬 처리한다. start()는 worker_count(0이면 HW 동시성)를
+// 기준으로 스레드를 띄우고, stop() 전까지 큐를 poll 한다.
 void DbWorkerPool::start(std::size_t worker_count) {
     if (running_) {
         return;
@@ -129,4 +132,3 @@ void DbWorkerPool::process_job(const Job& job) {
 }
 
 } // namespace server::core::storage
-
