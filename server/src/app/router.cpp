@@ -6,6 +6,8 @@
 
 namespace server::app {
 
+// Gateway/LoadBalancer가 Session을 accept하면 이 함수가 opcode→핸들러 매핑을 등록한다.
+// ChatService가 대부분의 메시지를 처리하므로 dispatcher는 단순한 라우팅 테이블 역할을 한다.
 void register_routes(server::core::Dispatcher& dispatcher, server::app::chat::ChatService& chat) {
     using server::core::protocol::MSG_PING;
     using server::core::protocol::MSG_PONG;

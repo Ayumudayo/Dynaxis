@@ -63,14 +63,14 @@ void ChatService::on_join(Session& s, std::span<const std::uint8_t> payload) {
             } else if (!provided_password.empty() && room_to_join != "lobby") {
                 state_.room_passwords[room_to_join] = hash_room_password(provided_password);
             }
-            // 기존 방에서 세션을 제거한다.
+        // 기존 방에서 세션을 제거한다.
             auto itold = state_.cur_room.find(session_sp.get());
             if (itold != state_.cur_room.end()) { previous_room = itold->second; }
             if (itold != state_.cur_room.end() && itold->second != room_to_join) {
                 auto itroom = state_.rooms.find(itold->second);
                 if (itroom != state_.rooms.end()) {
                     itroom->second.erase(session_sp);
-                    // 기존 방이 비어 있다면(lobby 제외) 방과 비밀번호 정보를 제거한다.
+            // 기존 방이 비어 있다면(lobby 제외) 방과 비밀번호 정보를 제거한다.
                     bool is_empty = true;
                     for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) {
                         if (wit->expired()) wit = itroom->second.erase(wit); 

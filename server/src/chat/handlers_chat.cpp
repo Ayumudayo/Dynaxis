@@ -45,7 +45,7 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
     auto session_sp = s.shared_from_this();
     job_queue_.Push([this, session_sp, room, text]() {
         corelog::info(std::string("CHAT_SEND: room=") + (room.empty()?"(empty)":room) + ", text=" + text);
-        // 채팅 입력에서 /refresh 명령을 직접 처리해 현재 방 스냅샷을 갱신한다.
+        // 슬래시 명령으로 들어온 /refresh는 서버에서 즉시 스냅샷을 전송해 준다.
         if (text == "/refresh") {
             handle_refresh(session_sp);
             return;

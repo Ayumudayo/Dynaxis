@@ -58,7 +58,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             state_.rooms[room].insert(session_sp);
         }
 
-        // 게스트와 로그인 사용자를 모두 UUID로 식별하고 IP를 기록한다.
+        // 게스트와 로그인 사용자를 모두 UUID로 일관되게 식별하고 IP/로그를 남긴다.
         if (db_pool_) {
             try {
                 // UUID가 없으면 게스트 사용자 레코드를 생성한다.
@@ -124,7 +124,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         std::vector<std::uint8_t> res(bytes.begin(), bytes.end());
         session_sp->async_send(proto::MSG_LOGIN_RES, res, 0);
 
-        // 프레즌스 TTL 유지를 위해 presence:user:{user_id} 키를 갱신한다.
+        // Redis presence:user:{uid} TTL을 주기적으로 갱신해 세션 유지를 표시한다.
         if (redis_) {
             try {
                 std::string uid;
