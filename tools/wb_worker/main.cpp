@@ -14,6 +14,7 @@
 #include "server/core/config/dotenv.hpp"
 #include <pqxx/pqxx>
 
+// wb_worker는 Redis Stream → PostgreSQL write-behind 경로를 담당한다.
 int main(int, char**) {
     using server::core::log::info;
     try {
@@ -37,6 +38,7 @@ int main(int, char**) {
         std::string stream = std::getenv("REDIS_STREAM_KEY") ? std::getenv("REDIS_STREAM_KEY") : std::string("session_events");
         std::string group  = std::getenv("WB_GROUP") ? std::getenv("WB_GROUP") : std::string("wb_group");
         std::string consumer = std::getenv("WB_CONSUMER") ? std::getenv("WB_CONSUMER") : std::string("wb_consumer");
+        // 배치 임계치(개수/바이트/지연)를 env로 조정 가능하게 해 운영 환경에 맞게 튜닝한다.
         std::size_t batch_max = 100; if (const char* v = std::getenv("WB_BATCH_MAX_EVENTS")) { auto n = std::strtoul(v, nullptr, 10); if (n>0 && n<=10000) batch_max = static_cast<std::size_t>(n); }
         std::size_t batch_max_bytes = 512*1024; if (const char* v = std::getenv("WB_BATCH_MAX_BYTES")) { auto n = std::strtoul(v, nullptr, 10); if (n>=16*1024 && n<=16*1024*1024) batch_max_bytes = static_cast<std::size_t>(n); }
         long long batch_delay_ms = 500; if (const char* v = std::getenv("WB_BATCH_DELAY_MS")) { auto n = std::strtoul(v, nullptr, 10); if (n>=50 && n<=10000) batch_delay_ms = static_cast<long long>(n); }
@@ -66,6 +68,7 @@ int main(int, char**) {
             return true;
         };
 
+        // flush()는 Redis로부터 수집한 StreamEntry를 PostgreSQL에 기록하고, 실패 시 DLQ로 넘긴다.
         auto flush = [&](bool /*force*/){
             if (buf.empty()) return true;
             auto t0 = std::chrono::steady_clock::now();
@@ -141,6 +144,7 @@ int main(int, char**) {
             return true;
         };
 
+        // XREADGROUP -> batch -> flush 사이클을 반복하며, pending log는 주기적으로 기록한다.
         while (true) {
             std::vector<server::storage::redis::IRedisClient::StreamEntry> entries;
             if (!redis->xreadgroup(stream, group, consumer, 500, static_cast<std::size_t>(batch_max), entries)) {
@@ -149,6 +153,7 @@ int main(int, char**) {
             }
             if (!entries.empty()) {
                 for (auto& e : entries) {
+                    // Redis에서 받은 StreamEntry를 메모리 버퍼에 모아 두었다가 flush()로 일괄 처리한다.
                     // 간단한 크기 추정: 필드 누계
                     std::size_t est = e.id.size();
                     for (auto& f : e.fields) est += f.first.size() + f.second.size() + 4;
@@ -165,6 +170,7 @@ int main(int, char**) {
             if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_pending_log).count() >= 1000) {
                 long long pending = 0;
                 if (redis->xpending(stream, group, pending)) {
+                    // pending 값은 Redis 소비자 그룹 큐에 남은 메시지 개수로, Grafana 경보와 동일하게 맞춘다.
                     server::core::log::info(std::string("metric=wb_pending value=") + std::to_string(pending));
                 }
                 last_pending_log = now;

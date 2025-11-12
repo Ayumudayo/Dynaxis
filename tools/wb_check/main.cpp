@@ -16,6 +16,7 @@ int main(int argc, char** argv) {
         pqxx::connection c(db);
         if (!c.is_open()) { std::cerr << "wb_check: DB open failed" << std::endl; return 4; }
         pqxx::work w(c);
+        // session_events 테이블에서 event_id 존재 여부만 빠르게 확인한다.
         auto r = w.exec_params("select 1 from session_events where event_id=$1 limit 1", event_id);
         if (r.empty()) { std::cerr << "not found" << std::endl; return 5; }
         std::cout << "found" << std::endl; return 0;

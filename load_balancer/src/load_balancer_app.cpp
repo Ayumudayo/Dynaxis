@@ -29,6 +29,10 @@
 
 namespace load_balancer {
 
+// LoadBalancerApp는 gRPC Stream을 통해 Gateway와 통신하고, 각 스트림마다 TCP backend 세션을
+// 생성해 바이트를 그대로 브릿지한다. Redis 기반 session_directory가 활성화되면 클라이언트별로
+// backend를 sticky하게 유지하고, health/idle 정책은 `mark_backend_*` 및 idle_watcher가 담당한다.
+
 namespace {
 
 using namespace std::chrono_literals;
@@ -44,6 +48,8 @@ constexpr const char* kEnvBackendIdleTimeout = "LB_BACKEND_IDLE_TIMEOUT";
 constexpr const char* kDefaultGrpcListen = "127.0.0.1:7001";
 constexpr const char* kDefaultBackendEndpoint = "127.0.0.1:5000";
 
+// LB_GRPC_LISTEN / LB_BACKEND_ENDPOINTS는 host 또는 host:port 둘 다 허용하므로,
+// 포트가 생략되면 fallback을 사용해 구성 실수를 방지한다.
 std::pair<std::string, std::uint16_t> parse_endpoint(std::string_view value, std::uint16_t fallback_port) {
     if (value.empty()) {
         return {"127.0.0.1", fallback_port};
@@ -535,6 +541,7 @@ bool LoadBalancerApp::is_backend_available(const BackendEndpoint& endpoint, std:
     return true;
 }
 
+// backend 호출이 성공하면 실패 카운터를 리셋해 health window를 갱신한다.
 void LoadBalancerApp::mark_backend_success(const std::string& backend_id) {
     if (backend_id.empty()) {
         return;
@@ -545,6 +552,7 @@ void LoadBalancerApp::mark_backend_success(const std::string& backend_id) {
     health.retry_at = std::chrono::steady_clock::time_point{};
 }
 
+// 실패 카운터가 임계치를 넘으면 backend_retry_cooldown 이후에만 후속 요청을 받게 한다.
 void LoadBalancerApp::mark_backend_failure(const std::string& backend_id) {
     if (backend_id.empty()) {
         return;
@@ -571,6 +579,8 @@ std::optional<LoadBalancerApp::BackendEndpoint> LoadBalancerApp::find_backend_by
     return backends_[it->second];
 }
 
+// 클라이언트 ID가 있으면 consistent hash ring으로 sticky routing을 시도하고,
+// 없으면 round-robin + health 상태로 backend를 고른다.
 std::optional<LoadBalancerApp::BackendEndpoint> LoadBalancerApp::select_backend(const std::string& client_id) {
     if (backends_.empty()) {
         return std::nullopt;
@@ -615,6 +625,7 @@ std::optional<LoadBalancerApp::BackendEndpoint> LoadBalancerApp::select_backend(
     return backends_.front();
 }
 
+// gateway 당 gRPC 스트림은 단일 backend와의 TCP 터널을 생성하므로 동기 connect로 충분하다.
 bool LoadBalancerApp::connect_backend(const BackendEndpoint& endpoint,
                                       boost::asio::ip::tcp::socket& socket,
                                       std::string& error) const {
@@ -662,6 +673,7 @@ grpc::Status LoadBalancerApp::handle_stream(
     std::mutex write_mutex;
     bool session_bound = false;
 
+    // sticky session을 유지하기 위해 session_directory에 backend 할당 상태를 기록/해제한다.
     auto release_session = [&]() {
         if (session_bound && session_directory_ && !client_id.empty()) {
             session_directory_->release_backend(client_id, assigned_backend_id);
@@ -670,7 +682,11 @@ grpc::Status LoadBalancerApp::handle_stream(
     };
 
     auto now = std::chrono::steady_clock::now();
+    // sticky 세션을 지원하기 위해 Redis session_directory에서 기존 backend를 찾는다.
     if (session_directory_ && !client_id.empty()) {
+        // session_directory는 "client_id -> backend_id" 매핑을 Redis에 저장해
+        // gateway 재연결 시에도 같은 backend를 선택하게 한다. backend가 죽었거나 health 체크에
+        // 실패하면 release_backend를 호출해 매핑을 제거하고 새 backend를 배정한다.
         bool resolved = false;
         if (auto existing = session_directory_->find_backend(client_id)) {
             if (auto mapped = find_backend_by_id(*existing)) {
@@ -745,6 +761,7 @@ grpc::Status LoadBalancerApp::handle_stream(
         + " sticky=" + (session_bound ? "1" : "0"));
     last_backend_activity.store(std::chrono::steady_clock::now(), std::memory_order_relaxed);
 
+    // gRPC 스트림은 다중 쓰레드에서 write할 수 있으므로, 모든 송신을 mutex로 직렬화한다.
     auto send_to_gateway = [&](gateway::lb::RouteMessage message) {
         message.set_session_id(session_id);
         message.set_gateway_id(gateway_id);
@@ -757,6 +774,7 @@ grpc::Status LoadBalancerApp::handle_stream(
         return true;
     };
 
+    // gateway→backend 패킷은 TCP로 그대로 전달하되, 오류 시 LB가 metric/재시도 정책을 결정한다.
     auto forward_to_backend = [&](const std::string& payload) {
         boost::system::error_code write_ec;
         boost::asio::write(backend_socket, boost::asio::buffer(payload), write_ec);
@@ -773,6 +791,7 @@ grpc::Status LoadBalancerApp::handle_stream(
         return true;
     };
 
+    // backend_reader는 backend→gateway 데이터 흐름을 중계하고, 소켓 종료 원인을 gateway에 알린다.
     std::thread backend_reader([&]() {
         std::array<std::uint8_t, 8192> buffer{};
         while (running.load(std::memory_order_relaxed)) {
@@ -788,6 +807,7 @@ grpc::Status LoadBalancerApp::handle_stream(
                 }
                 break;
             }
+            // backend로부터 응답을 받은 시간은 idle watcher가 참고하므로 즉시 갱신한다.
             last_backend_activity.store(std::chrono::steady_clock::now(), std::memory_order_relaxed);
             gateway::lb::RouteMessage response;
             response.set_kind(gateway::lb::ROUTE_KIND_SERVER_PAYLOAD);
@@ -801,6 +821,7 @@ grpc::Status LoadBalancerApp::handle_stream(
         backend_socket.close(close_ec);
     });
 
+    // idle_watcher는 backend가 장시간 payload를 보내지 않을 때 세션을 정리해 리소스를 회수한다.
     std::thread idle_watcher([&, session_id, gateway_id]() {
         while (running.load(std::memory_order_relaxed)) {
             auto sleep = backend_idle_timeout_ / 2;
@@ -816,6 +837,7 @@ grpc::Status LoadBalancerApp::handle_stream(
                 auto total = ++backend_idle_close_total_;
                 server::core::log::warn("LoadBalancerApp closing idle backend session session_id=" + session_id +
                                         " gateway=" + gateway_id + " backend=" + assigned_backend_id +
+                                        " idle_ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(idle).count()) +
                                         " metric=lb_backend_idle_close_total value=" + std::to_string(total));
                 running.store(false, std::memory_order_relaxed);
                 boost::system::error_code close_ec;

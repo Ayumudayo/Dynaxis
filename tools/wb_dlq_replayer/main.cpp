@@ -16,6 +16,7 @@
 
 using server::core::log::info;
 
+// Redis Stream 엔트리를 map으로 변환해 JSON/SQL 직렬화 시 키를 빠르게 조회한다.
 static std::unordered_map<std::string, std::string>
 to_map(const std::vector<std::pair<std::string, std::string>>& fields) {
     std::unordered_map<std::string, std::string> m; m.reserve(fields.size());
@@ -51,6 +52,7 @@ int main(int, char**) {
 
         auto esc_json = [](const std::string& s){ std::string o; o.reserve(s.size()+8); for (char c: s){ if (c=='"'||c=='\\') o.push_back('\\'); o.push_back(c);} return o; };
 
+        // DLQ → (재시도/DEAD) 파이프라인을 무한 루프로 돌리며, 각 이벤트는 개별 트랜잭션으로 처리한다.
         while (true) {
             std::vector<server::storage::redis::IRedisClient::StreamEntry> entries;
             if (!redis->xreadgroup(dlq, group, consumer, 1000, 100, entries)) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); continue; }
@@ -82,6 +84,7 @@ int main(int, char**) {
                         orig_id, type, ts_v, uid, sid, rid, js.str()
                     );
                     w.commit();
+                    // 성공적으로 적재했으면 DLQ에서 ACK하여 중복 처리를 방지한다.
                     (void)redis->xack(dlq, group, e.id);
                     info(std::string("metric=wb_dlq_replay ok=1 event_id=") + orig_id);
                 } catch (const std::exception& ex) {

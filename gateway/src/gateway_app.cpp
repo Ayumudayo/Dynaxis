@@ -29,6 +29,9 @@ constexpr const char* kDefaultGatewayListen = "0.0.0.0:6000";
 constexpr const char* kDefaultGatewayId = "gateway-default";
 constexpr const char* kDefaultLbEndpoint = "127.0.0.1:7001";
 
+// GATEWAY_LISTEN은 "host:port" 형식을 허용하고, 일부 필드가 비어 있어도 합리적인 기본값으로 보정한다.
+// GATEWAY_LISTEN은 "host:port" 또는 "host" 형태를 모두 허용한다. 운영 환경에서
+// 잘못된 포트가 들어올 수 있으므로, 파싱 실패 시 지정된 fallback 포트로 복구한다.
 std::pair<std::string, std::uint16_t> parse_listen(std::string_view value, std::uint16_t fallback_port) {
     if (value.empty()) {
         return {"0.0.0.0", fallback_port};
@@ -55,6 +58,7 @@ std::pair<std::string, std::uint16_t> parse_listen(std::string_view value, std::
 
 } // namespace
 
+// LbSession은 단일 gateway 클라이언트와 LB gRPC 스트림 사이의 stateful bridge를 캡슐화한다.
 GatewayApp::LbSession::LbSession(GatewayApp& app,
                                  std::string session_id,
                                  std::string client_id,
@@ -72,6 +76,7 @@ bool GatewayApp::LbSession::start() {
     if (!app_.lb_stub_) {
         return false;
     }
+    // 각 세션은 독립적인 ClientContext/stream을 갖고, 읽기 루프는 백엔드 응답을 gateway로 fan-out 한다.
     context_ = std::make_unique<grpc::ClientContext>();
     stream_ = app_.lb_stub_->Stream(context_.get());
     if (!stream_) {
@@ -108,6 +113,7 @@ bool GatewayApp::LbSession::send(gateway::lb::RouteMessageKind kind,
             return false;
         }
         if (kind == gateway::lb::ROUTE_KIND_CLIENT_CLOSE) {
+            // 클라이언트 종료는 더 이상 쓸 데이터가 없음을 명시하기 위해 WritesDone()까지 호출한다.
             stream_->WritesDone();
         }
     }
@@ -147,6 +153,7 @@ void GatewayApp::LbSession::read_loop() {
     while (!stopped_.load(std::memory_order_relaxed) && stream_ && stream_->Read(&response)) {
         switch (response.kind()) {
         case gateway::lb::ROUTE_KIND_SERVER_PAYLOAD: {
+            // LB가 backend에서 읽은 바이트를 전달하면 GatewayConnection을 통해 TCP 클라이언트로 재전송한다.
             auto payload = response.payload();
             if (auto connection = connection_.lock()) {
                 std::vector<std::uint8_t> data(payload.begin(), payload.end());
@@ -156,6 +163,7 @@ void GatewayApp::LbSession::read_loop() {
         }
         case gateway::lb::ROUTE_KIND_SERVER_CLOSE:
         case gateway::lb::ROUTE_KIND_SERVER_ERROR: {
+            // backend 측에서 세션을 닫거나 에러가 발생하면 GatewayConnection에도 동일 reason을 알린다.
             const std::string reason = response.error();
             if (auto connection = connection_.lock()) {
                 connection->handle_backend_close(reason);
@@ -164,6 +172,7 @@ void GatewayApp::LbSession::read_loop() {
             return;
         }
         default:
+            // 추가 kind가 도입될 수 있으므로 현재는 무시하고 다음 메시지를 대기한다.
             break;
         }
     }
@@ -174,6 +183,7 @@ void GatewayApp::LbSession::read_loop() {
     stopped_.store(true, std::memory_order_relaxed);
 }
 
+// GatewayApp은 단일 io_context에서 Listener+Signal 핸들링과 LB gRPC 클라이언트를 묶어 관리한다.
 GatewayApp::GatewayApp()
     : hive_(std::make_shared<server::core::net::Hive>(io_))
     , signals_(io_)
@@ -198,6 +208,7 @@ int GatewayApp::run() {
 }
 
 void GatewayApp::stop() {
+    // stop()은 listener와 모든 LbSession을 차례로 중단해 dangling gRPC stream을 방지한다.
     if (listener_) {
         listener_->stop();
     }
@@ -226,6 +237,7 @@ GatewayApp::LbSessionPtr GatewayApp::create_lb_session(const std::string& client
     }
 
     const auto seq = session_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
+    // gateway_id-증가값으로 세션 ID를 만들면 LB 쪽에서 gateway별 세션을 쉽게 그룹화할 수 있다.
     std::string session_id = gateway_id_ + "-" + std::to_string(seq);
 
     auto session = std::make_shared<LbSession>(*this, session_id, client_id, std::move(connection));
@@ -282,6 +294,7 @@ void GatewayApp::configure_load_balancer() {
         lb_endpoint_ = kDefaultLbEndpoint;
     }
 
+    // LB는 gRPC 스트림 API만 사용하므로 간단한 insecure 채널로 충분하다.
     auto channel = grpc::CreateChannel(lb_endpoint_, grpc::InsecureChannelCredentials());
     lb_stub_ = gateway::lb::LoadBalancerService::NewStub(channel);
 
@@ -303,6 +316,7 @@ void GatewayApp::start_listener() {
     }
 
     tcp::endpoint endpoint{address, listen_port_};
+    // Listener는 GatewayConnection을 생성해 TCP 세션을 gRPC 브리지로 넘겨주는 역할만 수행한다.
     listener_ = std::make_shared<server::core::net::Listener>(
         hive_,
         endpoint,
@@ -326,6 +340,7 @@ void GatewayApp::handle_signals() {
 #if defined(SIGTERM)
     signals_.add(SIGTERM);
 #endif
+    // ctrl+c / SIGTERM을 받아 graceful stop을 호출한다. multiple signal에도 재진입하지 않는다.
     signals_.async_wait([this](const boost::system::error_code& ec, int) {
         if (ec == boost::asio::error::operation_aborted) {
             return;
@@ -339,6 +354,7 @@ void GatewayApp::handle_signals() {
 
 void GatewayApp::load_environment() {
     namespace paths = server::core::util::paths;
+    // 실행 파일 옆 .env → 리포지터리 루트 .env 순으로 탐색하여 운영/개발 환경 모두 대응한다.
     try {
         auto exe_dir = paths::executable_dir();
         auto exe_env = exe_dir / ".env";

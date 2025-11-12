@@ -1,5 +1,6 @@
 // UTF-8, 한국어 주석
 #include <iostream>
+#include <iostream>
 #include <string>
 #include <vector>
 #include <chrono>
@@ -8,6 +9,7 @@
 #include "server/core/config/dotenv.hpp"
 #include "server/storage/redis/client.hpp"
 
+// Redis write-behind 스트림에 수동 이벤트를 넣어 파이프라인을 점검하는 CLI.
 int main(int argc, char** argv) {
     try {
         (void)server::core::config::load_dotenv(".env", true);
@@ -18,6 +20,7 @@ int main(int argc, char** argv) {
         auto redis = server::storage::redis::make_redis_client(ruri, ropts);
         if (!redis || !redis->health_check()) { std::cerr << "wb_emit: redis health failed" << std::endl; return 3; }
         std::vector<std::pair<std::string,std::string>> fields;
+        // 기본 필드는 session_login과 동일한 스키마를 따르므로 실서비스 파이프라인을 그대로 타게 된다.
         fields.emplace_back("type", (argc>1? std::string(argv[1]) : std::string("session_login")));
         auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
