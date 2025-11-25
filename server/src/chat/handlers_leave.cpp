@@ -13,6 +13,17 @@ namespace proto = server::core::protocol;
 
 namespace server::app::chat {
 
+// -----------------------------------------------------------------------------
+// 방 퇴장 (Leave) 핸들러
+// -----------------------------------------------------------------------------
+// 사용자가 현재 방에서 나갈 때 호출됩니다.
+// 1. 페이로드 파싱 (선택적 방 이름)
+// 2. 현재 방 확인 및 퇴장 처리
+// 3. 빈 방 정리 (세션이 없으면 방 제거)
+// 4. 로비로 이동 처리
+// 5. 퇴장 알림 및 로비 입장 알림 브로드캐스트
+// 6. Redis Presence 제거 및 Write-behind 이벤트 발행
+
 void ChatService::on_leave(Session& s, std::span<const std::uint8_t> payload) {
     auto sp = std::span<const std::uint8_t>(payload.data(), payload.size());
     std::string room;
@@ -31,36 +42,49 @@ void ChatService::on_leave(Session& s, std::span<const std::uint8_t> payload) {
         std::string sender_name;
         {
             std::lock_guard<std::mutex> lk(state_.mu);
+            // 인증 여부 확인
             if (!state_.authed.count(session_sp.get())) {
                 session_sp->send_error(proto::errc::UNAUTHORIZED, "unauthorized");
                 return;
             }
+            // 현재 참여 중인 방 확인
             auto itcr = state_.cur_room.find(session_sp.get());
             if (itcr == state_.cur_room.end()) {
                 session_sp->send_error(proto::errc::NO_ROOM, "no current room");
                 return;
             }
+            // 요청된 방 이름이 있다면 현재 방과 일치하는지 검증
             if (!room.empty() && itcr->second != room) {
                 session_sp->send_error(proto::errc::ROOM_MISMATCH, "room mismatch");
                 return;
             }
             room_to_leave = itcr->second;
+            
+            // 방에서 세션 제거
             auto itroom = state_.rooms.find(room_to_leave);
             if (itroom != state_.rooms.end()) {
                 itroom->second.erase(session_sp);
                 auto it2 = state_.user.find(session_sp.get());
                 sender_name = (it2 != state_.user.end()) ? it2->second : std::string("guest");
                 if (auto it_uuid = state_.user_uuid.find(session_sp.get()); it_uuid != state_.user_uuid.end()) { user_uuid = it_uuid->second; }
+                
+                // 퇴장 알림을 보낼 대상(방에 남은 사람들) 수집
                 auto itb = state_.rooms.find(room_to_leave);
                 if (itb != state_.rooms.end()) {
                     auto& set = itb->second;
                     collect_room_sessions(set, targets);
-                    if (set.empty() && room_to_leave != std::string("lobby")) { state_.rooms.erase(itb); state_.room_passwords.erase(room_to_leave); }
+                    // 방이 비었으면 방 정보와 비밀번호 삭제 (로비 제외)
+                    if (set.empty() && room_to_leave != std::string("lobby")) { 
+                        state_.rooms.erase(itb); 
+                        state_.room_passwords.erase(room_to_leave); 
+                    }
                 }
             }
+            // 사용자를 로비로 이동시킴
             state_.cur_room[session_sp.get()] = std::string("lobby");
             state_.rooms["lobby"].insert(session_sp);
         }
+
         // 방 퇴장 브로드캐스트 메시지를 구성한다.
         // 해당 방 참여자에게 퇴장 알림을 먼저 팬아웃한다.
         if (!room_to_leave.empty()) {
@@ -79,6 +103,7 @@ void ChatService::on_leave(Session& s, std::span<const std::uint8_t> payload) {
                 t->async_send(proto::MSG_CHAT_BROADCAST, body, f);
             }
         }
+
         // Redis presence SET에서도 사용자를 제거해 TTL 기반 알림과 일치시킨다.
         if (redis_ && !room_to_leave.empty()) {
             try {
@@ -97,6 +122,7 @@ void ChatService::on_leave(Session& s, std::span<const std::uint8_t> payload) {
                 }
             } catch (...) {}
         }
+
         // 로비 입장 알림 메시지를 전송한다.
         // 로비에 입장했다는 알림을 전체 로비 인원에게 재전송한다.
         std::vector<std::shared_ptr<Session>> t2;
@@ -122,6 +148,8 @@ void ChatService::on_leave(Session& s, std::span<const std::uint8_t> payload) {
             body2.assign(bytes2.begin(), bytes2.end());
         }
         for (auto& t : t2) t->async_send(proto::MSG_CHAT_BROADCAST, body2, 0);
+
+        // Write-behind 이벤트 발행
         if (!room_to_leave.empty()) {
             std::optional<std::string> uid_opt;
             if (!user_uuid.empty()) {

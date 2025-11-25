@@ -14,7 +14,12 @@ namespace {
 constexpr const char* kContentTypeHeader = "application/json";
 } // namespace
 
-// 테스트나 단일 프로세스용 인메모리 레지스트리 구현.
+// -----------------------------------------------------------------------------
+// InMemoryStateBackend 구현
+// -----------------------------------------------------------------------------
+// 테스트나 단일 프로세스 환경에서 사용되는 인메모리 레지스트리입니다.
+// 별도의 외부 저장소 없이 메모리 상의 맵(Map)으로 인스턴스 정보를 관리합니다.
+
 bool InMemoryStateBackend::upsert(const InstanceRecord& record) {
     std::lock_guard<std::mutex> lock(mutex_);
     records_[record.instance_id] = record;
@@ -49,6 +54,7 @@ std::vector<InstanceRecord> InMemoryStateBackend::list_instances() const {
 namespace detail {
 
 // Redis registry와 통신하기 위해 간단한 JSON 직렬화를 구현한다.
+// 외부 라이브러리 의존성을 줄이기 위해 직접 문자열 파싱/생성을 수행합니다.
 std::string serialize_json(const InstanceRecord& record) {
     std::ostringstream oss;
     oss << '{';
@@ -62,15 +68,19 @@ std::string serialize_json(const InstanceRecord& record) {
     oss << '}';
     return oss.str();
 }
+
 // Redis에서 가져온 문자열을 InstanceRecord로 역직렬화한다.
+// 단순한 JSON 파서로, 중첩된 객체나 배열은 처리하지 않습니다.
 std::optional<InstanceRecord> deserialize_json(std::string_view payload) {
     InstanceRecord record{};
     std::string json(payload);
+    // 괄호 제거
     for (char& ch : json) {
         if (ch == '{' || ch == '}') {
             ch = ' ';
         }
     }
+    // 공백 제거 람다
     auto trim_copy = [](std::string_view view) -> std::string {
         std::size_t start = 0;
         std::size_t end = view.size();
@@ -84,6 +94,7 @@ std::optional<InstanceRecord> deserialize_json(std::string_view payload) {
     };
     std::stringstream ss(json);
     std::string item;
+    // 쉼표로 구분된 키-값 쌍을 파싱
     while (std::getline(ss, item, ',')) {
         auto colon = item.find(':');
         if (colon == std::string::npos) {
@@ -91,18 +102,12 @@ std::optional<InstanceRecord> deserialize_json(std::string_view payload) {
         }
         std::string key = trim_copy(std::string_view(item).substr(0, colon));
         std::string value = trim_copy(std::string_view(item).substr(colon + 1));
-        if (!key.empty() && key.front() == '"') {
-            key.erase(0, 1);
-        }
-        if (!key.empty() && key.back() == '"') {
-            key.pop_back();
-        }
-        if (!value.empty() && value.front() == '"') {
-            value.erase(0, 1);
-        }
-        if (!value.empty() && value.back() == '"') {
-            value.pop_back();
-        }
+        // 따옴표 제거
+        if (!key.empty() && key.front() == '"') { key.erase(0, 1); }
+        if (!key.empty() && key.back() == '"') { key.pop_back(); }
+        if (!value.empty() && value.front() == '"') { value.erase(0, 1); }
+        if (!value.empty() && value.back() == '"') { value.pop_back(); }
+        
         try {
             if (key == "instance_id") {
                 record.instance_id = value;
@@ -120,7 +125,7 @@ std::optional<InstanceRecord> deserialize_json(std::string_view payload) {
                 record.last_heartbeat_ms = static_cast<std::uint64_t>(std::stoull(value));
             }
         } catch (...) {
-            // ignore parse errors for individual fields
+            // 파싱 에러 무시 (유연한 처리)
         }
     }
     return record;
@@ -131,6 +136,7 @@ std::optional<InstanceRecord> deserialize_json(std::string_view payload) {
 namespace {
 
 // 기존 redis::IRedisClient를 instance registry 인터페이스로 감싸는 어댑터.
+// 의존성 주입을 용이하게 하기 위해 사용됩니다.
 class RedisClientAdapter final : public RedisInstanceStateBackend::IRedisClient {
 public:
     explicit RedisClientAdapter(std::shared_ptr<server::storage::redis::IRedisClient> client)
@@ -170,7 +176,13 @@ private:
 
 } // namespace
 
-// Redis 키 prefix와 TTL을 표준화해 instance heartbeat 정보를 저장한다.
+// -----------------------------------------------------------------------------
+// RedisInstanceStateBackend 구현
+// -----------------------------------------------------------------------------
+// Redis를 백엔드로 사용하는 인스턴스 레지스트리입니다.
+// 각 인스턴스는 고유한 키에 JSON 형태로 저장되며, TTL(Time-To-Live)을 통해
+// 비정상 종료 시 자동으로 목록에서 제거됩니다.
+
 RedisInstanceStateBackend::RedisInstanceStateBackend(std::shared_ptr<IRedisClient> client,
                                                      std::string key_prefix,
                                                      std::chrono::seconds ttl)
@@ -188,14 +200,15 @@ RedisInstanceStateBackend::RedisInstanceStateBackend(std::shared_ptr<IRedisClien
     }
 }
 
-// 캐시를 최신으로 갱신한 뒤 Redis에도 써 넣는다.
+// 인스턴스 정보를 갱신하거나 새로 등록합니다.
+// 로컬 캐시를 먼저 갱신하고, Redis에 쓰기 작업을 수행합니다.
 bool RedisInstanceStateBackend::upsert(const InstanceRecord& record) {
     std::lock_guard<std::mutex> lock(mutex_);
     cache_[record.instance_id] = record;
     return write_record(record);
 }
 
-// 캐시에서 제거하고 Redis 키를 삭제한다.
+// 인스턴스를 목록에서 제거합니다.
 bool RedisInstanceStateBackend::remove(const std::string& instance_id) {
     std::lock_guard<std::mutex> lock(mutex_);
     cache_.erase(instance_id);
@@ -205,7 +218,8 @@ bool RedisInstanceStateBackend::remove(const std::string& instance_id) {
     return client_->del(key_prefix_ + instance_id);
 }
 
-// heartbeat 시각만 갱신해 TTL을 연장한다.
+// 하트비트 시각만 갱신하여 Redis 키의 TTL을 연장합니다.
+// 전체 레코드를 다시 쓰지만, 이는 TTL 갱신을 위한 가장 확실한 방법입니다.
 bool RedisInstanceStateBackend::touch(const std::string& instance_id, std::uint64_t heartbeat_ms) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = cache_.find(instance_id);
@@ -216,7 +230,8 @@ bool RedisInstanceStateBackend::touch(const std::string& instance_id, std::uint6
     return write_record(it->second);
 }
 
-// Redis 키를 스캔해 캐시를 재구성한다 (게이트웨이 장애 복구 대비).
+// Redis의 모든 인스턴스 키를 스캔하여 로컬 캐시를 재구성합니다.
+// 게이트웨이 재시작 시 또는 주기적인 동기화에 사용됩니다.
 bool RedisInstanceStateBackend::reload_cache_from_backend() const {
     if (!client_) {
         return false;
@@ -236,6 +251,7 @@ bool RedisInstanceStateBackend::reload_cache_from_backend() const {
         if (!record) {
             continue;
         }
+        // ID가 누락된 경우 키에서 추출
         if (record->instance_id.empty() && key.size() > key_prefix_.size()) {
             record->instance_id = key.substr(key_prefix_.size());
         }
@@ -271,6 +287,11 @@ bool RedisInstanceStateBackend::write_record(const InstanceRecord& record) {
     const auto ttl = static_cast<unsigned int>(ttl_.count());
     return client_->setex(key, payload, ttl);
 }
+
+// -----------------------------------------------------------------------------
+// ConsulInstanceStateBackend 구현
+// -----------------------------------------------------------------------------
+// Consul KV 저장소를 이용한 백엔드입니다. (현재는 HTTP 콜백으로 추상화됨)
 
 ConsulInstanceStateBackend::ConsulInstanceStateBackend(std::string base_path,
                                                        http_callback put_callback,

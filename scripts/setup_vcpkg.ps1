@@ -16,6 +16,10 @@ function Info($msg){ Write-Host "[info] $msg" -ForegroundColor Cyan }
 function Warn($msg){ Write-Host "[warn] $msg" -ForegroundColor Yellow }
 function Fail($msg){ Write-Host "[fail] $msg" -ForegroundColor Red; exit 1 }
 
+if (-not (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) {
+    $IsWindows = $env:OS -like '*Windows*'
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $vcpkgRoot = Join-Path $repoRoot "external/vcpkg"
 
@@ -31,10 +35,12 @@ if (-not (Test-Path $vcpkgRoot)) {
   Info "기존 vcpkg 경로 사용: $vcpkgRoot"
 }
 
-$exeName = $IsWindows ? 'vcpkg.exe' : 'vcpkg'
+$exeName = 'vcpkg'
+if ($IsWindows) { $exeName = 'vcpkg.exe' }
 $exePath = Join-Path $vcpkgRoot $exeName
 if (-not (Test-Path $exePath)) {
-  $bootstrap = $IsWindows ? 'bootstrap-vcpkg.bat' : 'bootstrap-vcpkg.sh'
+  $bootstrap = 'bootstrap-vcpkg.sh'
+  if ($IsWindows) { $bootstrap = 'bootstrap-vcpkg.bat' }
   $bootstrapPath = Join-Path $vcpkgRoot $bootstrap
   if (-not (Test-Path $bootstrapPath)) { Fail "bootstrap 스크립트를 찾지 못했습니다: $bootstrapPath" }
   Info "vcpkg bootstrap 실행: $bootstrapPath"
@@ -53,7 +59,7 @@ if (-not (Test-Path $exePath)) {
 
 if (-not $SkipInstall) {
   Info "manifest 의존성 설치(vcpkg install --triplet $Triplet)"
-  & $exePath install --triplet $Triplet
+  & $exePath install --triplet $Triplet | Out-Host | Out-Host
   if ($LASTEXITCODE -ne 0) { Fail "vcpkg install 실패" }
 }
 

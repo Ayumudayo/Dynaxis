@@ -1,65 +1,86 @@
-# server_app
+# Server App
 
-`server/` 는 채팅 서버 실행 파일(server_app)을 포함합니다. 방 관리, snapshot, Redis Pub/Sub, write-behind, Instance Registry 등을 담당합니다.
+`server_app`은 Knights 프로젝트의 메인 채팅 서버 애플리케이션입니다.
+`core` 라이브러리를 기반으로 구축되었으며, 클라이언트 연결 관리, 채팅 로직 처리, 데이터 저장(DB/Redis), 그리고 인스턴스 레지스트리 등록 등의 역할을 수행합니다.
 
-## 디렉터리 개요
+## 아키텍처 (Architecture)
+
+서버는 크게 **Bootstrap**, **Router**, **Service** 계층으로 구성됩니다.
+
+1.  **Bootstrap (`src/app/bootstrap.cpp`)**:
+    - 서버 초기화의 진입점입니다.
+    - `.env` 파일 로드, 환경 변수 파싱.
+    - `io_context`, `JobQueue`, `ThreadManager` 등 코어 컴포넌트 초기화.
+    - DB/Redis 연결 풀 생성.
+    - `Listener`를 시작하여 클라이언트 연결 수락.
+
+2.  **Router (`src/app/router.cpp`)**:
+    - `Dispatcher`에 Opcode별 핸들러를 등록합니다.
+    - 예: `MSG_LOGIN` -> `ChatService::on_login`
+
+3.  **ChatService (`src/chat/`)**:
+    - 핵심 비즈니스 로직을 담당합니다.
+    - **State Management**: 현재 접속한 유저, 활성화된 방, 인증 상태 등을 메모리(`State` 구조체)에서 관리합니다.
+    - **Storage Interaction**:
+        - **Redis**: 실시간 메시지 캐싱, Pub/Sub(분산 채팅), Presence(접속 현황), Write-behind(이벤트 스트림).
+        - **PostgreSQL**: 영구적인 데이터 저장(유저 정보, 채팅 기록 등). Write-behind 워커에 의해 비동기적으로 저장될 수도 있습니다.
+
+## 주요 기능 (Features)
+
+- **Opcode 라우팅**: 패킷의 Opcode에 따라 적절한 핸들러로 분기합니다.
+- **Snapshot + Redis Cache**: 방 입장 시 최근 메시지를 Redis(LIST/LRU)에서 우선 조회하여 빠르게 로딩하고, 부족하면 DB에서 가져옵니다.
+- **Write-behind**: `WRITE_BEHIND_ENABLED=1` 설정 시, 중요한 이벤트(채팅 등)를 Redis Streams에 먼저 기록하고, 별도의 워커(`wb_worker`)가 이를 DB에 반영하여 쓰기 성능을 최적화합니다.
+- **Instance Registry**: 서버 시작 시 자신의 주소(Host/Port)를 Redis에 등록하고 주기적으로 Heartbeat를 갱신합니다. 로드 밸런서(`gateway`)는 이를 통해 활성 서버 목록을 파악합니다.
+- **Metrics**: `/metrics` 엔드포인트(HTTP)를 통해 Prometheus 호환 지표를 노출합니다.
+
+## 빌드 및 실행 (Build & Run)
+
+### 빌드
+프로젝트 루트에서 CMake Presets를 사용하여 빌드합니다.
+
+```powershell
+# Debug 빌드
+cmake --build --preset windows-vs2022-debug --target server_app
+
+# Release 빌드
+cmake --build --preset windows-vs2022-relwithdebinfo --target server_app
+```
+
+### 실행
+실행 파일은 `build-vs2022/server/Debug/server_app.exe` 경로에 생성됩니다.
+실행 시 포트 번호를 인자로 전달할 수 있습니다.
+
+```powershell
+.\build-vs2022\server\Debug\server_app.exe 5000
+```
+
+## 환경 변수 설정 (Configuration)
+
+`.env` 파일 또는 환경 변수를 통해 서버 동작을 제어할 수 있습니다.
+
+| 변수명 | 설명 | 기본값/예시 |
+| --- | --- | --- |
+| `SERVER_PORT` | 서버가 수신 대기할 포트 | `5000` |
+| `DB_URI` | PostgreSQL 연결 문자열 (필수) | `postgresql://user:pass@localhost:5432/knights` |
+| `REDIS_URI` | Redis 연결 문자열 (선택) | `redis://localhost:6379` |
+| `WRITE_BEHIND_ENABLED` | Write-behind 패턴 사용 여부 (`1`: 사용, `0`: 미사용) | `1` |
+| `USE_REDIS_PUBSUB` | Redis Pub/Sub을 이용한 분산 채팅 활성화 여부 | `0` |
+| `SERVER_ADVERTISE_HOST` | 레지스트리에 등록할 호스트 주소 (게이트웨이가 접근 가능한 주소) | `127.0.0.1` |
+| `METRICS_PORT` | 메트릭 수집을 위한 HTTP 포트 | `9090` |
+| `LOG_BUFFER_CAPACITY` | 메모리 내 로그 버퍼 크기 | `256` |
+
+## 디렉터리 구조
+
 ```
 server/
 ├─ include/server/
-│  ├─ app/      # 부트스트랩, 라우터, 메트릭
-│  ├─ chat/     # 채팅 로직, 스냅샷, 핸들러
-│  ├─ state/    # Presence/Instance registry
+│  ├─ app/      # Bootstrap, Router
+│  ├─ chat/     # ChatService 및 핸들러 선언
+│  ├─ state/    # Instance Registry 관련
 │  └─ storage/  # DB/Redis 어댑터
 └─ src/
-   ├─ app/
-   ├─ chat/
-   ├─ state/
-   └─ storage/
+   ├─ app/      # main.cpp, bootstrap.cpp 구현
+   ├─ chat/     # 비즈니스 로직 구현 (핸들러 포함)
+   ├─ state/    # 레지스트리 백엔드 구현
+   └─ storage/  # 저장소 구현체
 ```
-
-## 특징
-- **Opcode 라우팅**: `core::Dispatcher` 가 wire opcode 에 따라 `/login`, `/join`, `/chat`, `/whisper` 를 처리합니다.
-- **Snapshot + Redis Cache**: 최근 N개 메시지는 Redis LIST/LRU 를 우선 조회 후 DB로 폴백합니다.
-- **Write-behind**: `WRITE_BEHIND_ENABLED=1`이면 Redis Streams 로 이벤트를 남기고 `wb_worker`가 DB로 flush 합니다.
-- **Instance Registry**: `SERVER_ADVERTISE_HOST/PORT` 를 기준으로 Redis registry에 heartbeat를 올려 Load Balancer가 backend를 자동 감지합니다.
-- **Metrics**: `/metrics` HTTP 엔드포인트에 `chat_*` 지표를 노출합니다.
-
-### Metrics 예시
-```
-# TYPE chat_session_active gauge
-chat_session_active 42
-chat_dispatch_total 123456
-chat_dispatch_latency_avg_ms 12.3
-```
-자세한 목록은 `docs/ops/observability.md` 를 참고하세요.
-
-## 주요 환경 변수
-| 이름 | 설명 | 기본값 |
-| --- | --- | --- |
-| `SERVER_BIND_ADDR`, `SERVER_PORT` | 서버 listen 주소/포트 | `0.0.0.0`, `5000` |
-| `DB_URI` | PostgreSQL 연결 문자열 | (필수) |
-| `REDIS_URI` | Redis 연결 문자열 | 선택 |
-| `WRITE_BEHIND_ENABLED` | Redis Streams write-behind | `1` |
-| `USE_REDIS_PUBSUB` | Redis Pub/Sub fan-out 사용 | `0` |
-| `SERVER_ADVERTISE_HOST/PORT` | Instance Registry에 노출할 주소 | listen 값 |
-| `METRICS_PORT` | `/metrics` 포트 | `9090` |
-전체 목록은 `docs/configuration.md` 에 정리되어 있습니다.
-
-## 빌드 & 실행
-```powershell
-cmake --build build-msvc --target server_app
-.\build-msvc\server\Debug\server_app.exe 5000
-```
-PowerShell 스크립트: `scripts/build.ps1 -Config Debug -Target server_app -Run`.
-
-## 테스트
-```powershell
-cmake --build build-msvc --target chat_history_tests
-ctest --test-dir build-msvc/tests -R chat_history
-```
-또는 smoke 테스트: `scripts/run_all.ps1 -Config Debug -WithClient -Smoke`.
-
-## 참고 자료
-- 구조: `docs/server-architecture.md`
-- 운영: `docs/ops/deployment.md`, `docs/ops/runbook.md`
-- 데이터 플로우: `docs/db/write-behind.md`

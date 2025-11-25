@@ -7,11 +7,12 @@
   },
   "configurePresets": [
     {
-      "name": "windows-vcpkg",
-      "displayName": "Windows | MSVC + vcpkg",
-      "description": "VS2022/Ninja Multi-Config preset that always consumes the repository vcpkg manifest.",
-      "generator": "Ninja Multi-Config",
-      "binaryDir": "${sourceDir}/build-msvc",
+      "name": "windows-base",
+      "hidden": true,
+      "displayName": "Windows Base",
+      "description": "Base configuration for Windows using VS2022 and vcpkg",
+      "generator": "Visual Studio 17 2022",
+      "binaryDir": "${sourceDir}/build-windows",
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",
@@ -23,9 +24,10 @@
       }
     },
     {
-      "name": "linux-vcpkg-debug",
-      "displayName": "Linux/WSL | Debug + vcpkg",
-      "description": "Debug build using the manifest with the default x64-linux triplet.",
+      "name": "linux-base",
+      "hidden": true,
+      "displayName": "Linux Base",
+      "description": "Base configuration for Linux using Ninja and vcpkg",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-linux",
       "condition": {
@@ -40,60 +42,56 @@
       }
     },
     {
-      "name": "windows-vs2022",
-      "displayName": "Windows | VS2022 + vcpkg",
-      "description": "Visual Studio 2022 generator using the repository vcpkg manifest.",
-      "generator": "Visual Studio 17 2022",
-      "binaryDir": "${sourceDir}/build-vs2022",
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Windows"
-      },
-      "toolchainFile": "${sourceDir}/cmake/knights_vcpkg_toolchain.cmake",
-      "cacheVariables": {
-        "VCPKG_TARGET_TRIPLET": "x64-windows"
-      }
+      "name": "windows",
+      "inherits": "windows-base",
+      "displayName": "Windows (VS2022)",
+      "description": "Windows configuration using Visual Studio 2022"
+    },
+    {
+      "name": "linux",
+      "inherits": "linux-base",
+      "displayName": "Linux (Ninja)",
+      "description": "Linux configuration using Ninja"
     }
   ],
   "buildPresets": [
     {
-      "name": "windows-vcpkg-debug",
-      "configurePreset": "windows-vcpkg",
-      "configuration": "Debug"
+      "name": "windows-debug",
+      "configurePreset": "windows",
+      "configuration": "Debug",
+      "displayName": "Windows Debug"
     },
     {
-      "name": "windows-vcpkg-relwithdebinfo",
-      "configurePreset": "windows-vcpkg",
-      "configuration": "RelWithDebInfo"
+      "name": "windows-release",
+      "configurePreset": "windows",
+      "configuration": "RelWithDebInfo",
+      "displayName": "Windows Release"
     },
     {
-      "name": "linux-vcpkg-debug",
-      "configurePreset": "linux-vcpkg-debug"
+      "name": "linux-debug",
+      "configurePreset": "linux",
+      "configuration": "Debug",
+      "displayName": "Linux Debug"
     },
     {
-      "name": "windows-vs2022-debug",
-      "configurePreset": "windows-vs2022",
-      "configuration": "Debug"
-    },
-    {
-      "name": "windows-vs2022-relwithdebinfo",
-      "configurePreset": "windows-vs2022",
-      "configuration": "RelWithDebInfo"
+      "name": "linux-release",
+      "configurePreset": "linux",
+      "configuration": "RelWithDebInfo",
+      "displayName": "Linux Release"
     }
   ],
   "testPresets": [
     {
-      "name": "windows-vcpkg-tests",
-      "configurePreset": "windows-vcpkg",
+      "name": "windows-test",
+      "configurePreset": "windows",
       "configuration": "Debug",
       "output": {
         "outputOnFailure": true
       }
     },
     {
-      "name": "linux-vcpkg-tests",
-      "configurePreset": "linux-vcpkg-debug",
+      "name": "linux-test",
+      "configurePreset": "linux",
       "output": {
         "outputOnFailure": true
       }

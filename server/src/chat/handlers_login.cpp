@@ -18,9 +18,21 @@ namespace corelog = server::core::log;
 
 namespace server::app::chat {
 
+// -----------------------------------------------------------------------------
+// 로그인 처리 핸들러
+// -----------------------------------------------------------------------------
+// 사용자의 로그인 요청을 처리합니다.
+// 1. 페이로드 파싱 (닉네임, 토큰)
+// 2. 세션 UUID 생성 및 할당
+// 3. 닉네임 중복 검사 및 게스트 처리
+// 4. DB에 사용자 정보(게스트 포함) 등록 및 로그인 기록
+// 5. 로비(Lobby) 입장 처리
+// 6. Write-behind 이벤트 발행 (로그인 감사 로그)
+
 void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
     auto sp = std::span<const std::uint8_t>(payload.data(), payload.size());
     std::string user, token;
+    // 페이로드 파싱: 닉네임, 토큰(현재는 미사용)
     if (!proto::read_lp_utf8(sp, user) || !proto::read_lp_utf8(sp, token)) {
         s.send_error(proto::errc::INVALID_PAYLOAD, "bad login payload");
         return;
@@ -28,19 +40,23 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
 
     auto session_sp = s.shared_from_this();
     // 로그인은 DB/Redis 작업과 write-behind 이벤트가 함께 수행되므로 job_queue로 넘긴다.
+    // I/O 바운드 작업이 많으므로 비동기 처리가 필수적입니다.
     job_queue_.Push([this, session_sp, user, token]() {
         const std::string session_id_str = get_or_create_session_uuid(*session_sp);
         std::string tracked_user_uuid;
         std::string lobby_room_id;
         std::string login_ip = session_sp->remote_ip();
         corelog::info("LOGIN_REQ handling started (worker thread)");
+        
+        // 게스트 모드 판별: 닉네임이 없거나 "guest"인 경우
         bool guest_mode = (user.empty() || user == "guest");
         std::string new_user = ensure_unique_or_error(*session_sp, user);
-        if (new_user.empty()) return;
+        if (new_user.empty()) return; // 중복 등으로 실패 시 종료
 
         {
             std::lock_guard<std::mutex> lk(state_.mu);
             // 동일 세션이 이전에 사용했던 이름/guest 상태를 정리하고 새 사용자 맵을 구성한다.
+            // 재로그인 시 이전 정보를 정리합니다.
             if (auto itold = state_.user.find(session_sp.get()); itold != state_.user.end()) {
                 auto itset = state_.by_user.find(itold->second);
                 if (itset != state_.by_user.end()) {
@@ -55,6 +71,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             } else {
                 state_.guest.erase(session_sp.get());
             }
+            // 기본적으로 로비에 입장시킵니다.
             std::string room = "lobby";
             state_.cur_room[session_sp.get()] = room;
             state_.rooms[room].insert(session_sp);
@@ -80,7 +97,9 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 }
                 // write-behind 이벤트용 user_uuid를 저장한다.
                 if (!uid.empty()) { tracked_user_uuid = uid; }
+                
                 // 게스트라면 닉네임을 UUID 앞 8자로 정규화한다.
+                // 고유한 닉네임을 보장하기 위함입니다.
                 if (guest_mode && !uid.empty()) {
                     std::string uuid8 = uid;
                     uuid8.erase(std::remove(uuid8.begin(), uuid8.end(), '-'), uuid8.end());
@@ -105,6 +124,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                     uow3->commit();
                 }
                 // 현재 방의 room_id를 확보한 뒤 시스템 메시지로 IP를 남긴다.
+                // 로비 채팅창에 접속 로그를 남깁니다 (관리 목적).
                 auto rid = ensure_room_id_ci("lobby");
                 if (!rid.empty()) {
                     lobby_room_id = rid; // write-behind 이벤트에 활용한다.
@@ -118,6 +138,8 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 corelog::warn(std::string("login audit persist failed: ") + e.what());
             }
         }
+        
+        // 로그인 응답 전송
         server::wire::v1::LoginRes pb;
         pb.set_effective_user(new_user);
         pb.set_session_id(session_sp->session_id());
@@ -138,6 +160,9 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 touch_user_presence(uid);
             } catch (...) {}
         }
+        
+        // Write-behind 이벤트 발행
+        // 로그인 이벤트를 스트림에 기록하여 추후 분석이나 알림 등에 활용합니다.
         std::optional<std::string> uid_opt;
         if (!tracked_user_uuid.empty()) {
             uid_opt = tracked_user_uuid;

@@ -47,7 +47,8 @@ function Ensure-Directory([string]$Path) {
 
 function Resolve-BinaryPath([string]$Name, [bool]$IsWindows) {
   if (-not $Name -or $Name -eq '') { return $null }
-  $ext = $IsWindows ? '.exe' : ''
+  $ext = ''
+  if ($IsWindows) { $ext = '.exe' }
   $candidates = @(
     (Join-Path $BuildDir "$Name$ext"),
     (Join-Path $BuildDir (Join-Path $Config "$Name$ext"))
@@ -82,13 +83,21 @@ if ($Clean) {
   if (Test-Path $BuildDir) { Info "빌드 폴더 정리: $BuildDir"; Remove-Item -Recurse -Force $BuildDir }
 }
 
-# 제너레이터 설정
+# 제너레이터 설정 및 프리셋 선택
 if (-not $Generator -or $Generator -eq '') {
-  if ($onWindows) { $Generator = 'Visual Studio 17 2022' } else { $Generator = 'Unix Makefiles' }
+  if ($onWindows) { 
+      $Preset = "windows"
+      $BuildPreset = "windows-debug"
+      if ($Config -eq "RelWithDebInfo") { $BuildPreset = "windows-release" }
+  } else { 
+      $Preset = "linux"
+      $BuildPreset = "linux-debug"
+      if ($Config -eq "RelWithDebInfo") { $BuildPreset = "linux-release" }
+  }
 }
 
-$cmakeArgs = @('-S','.', '-B', $BuildDir, '-G', $Generator, "-DCMAKE_BUILD_TYPE=$Config")
-if ($onWindows -and $Generator -like 'Visual Studio*') { $cmakeArgs += @('-A','x64') }
+$cmakeArgs = @('--preset', $Preset)
+
 # vcpkg toolchain (local checkout)
 $vcpkgJsonExists = Test-Path 'vcpkg.json'
 if (-not $VcpkgTriplet -or $VcpkgTriplet -eq '') {
@@ -100,38 +109,25 @@ if ($UseVcpkg -or $vcpkgJsonExists) {
   $vcpkgRoot = & $setupScript -Triplet $VcpkgTriplet
   if (-not $vcpkgRoot) { Fail "vcpkg root 경로를 확인할 수 없습니다." }
   Info "vcpkg root: $vcpkgRoot"
-  $toolchain = Join-Path $vcpkgRoot 'scripts/buildsystems/vcpkg.cmake'
-  if (-not (Test-Path $toolchain)) { Fail "vcpkg toolchain 스크립트를 찾지 못했습니다: $toolchain" }
-  $cmakeArgs += @("-DCMAKE_TOOLCHAIN_FILE=$toolchain", "-DVCPKG_TARGET_TRIPLET=$VcpkgTriplet")
-  try {
-    $prefix = Join-Path (Resolve-Path .) "vcpkg_installed/$VcpkgTriplet"
-    if (Test-Path $prefix) { $cmakeArgs += @("-DCMAKE_PREFIX_PATH=$prefix") }
-  } catch {}
-}
-# Windows/MSVC + vcpkg + FTXUI: 일부 패키지가 RelWithDebInfo 매핑을 제공하지 않아 Debug 런타임과의 링크 충돌이 있을 수 있음
-if ($onWindows -and ($UseVcpkg -or $vcpkgJsonExists) -and $Generator -like 'Visual Studio*' -and $Config -eq 'RelWithDebInfo') {
-  Info "MSVC+vcpkg 환경에서 RelWithDebInfo 대신 Debug 구성으로 빌드(런타임 불일치 회피)"
-  $Config = 'Debug'
+  # Presets handle toolchain file, but we might need to ensure vcpkg is bootstrapped
 }
 
-Info "CMake 구성 중..."
+Info "CMake 구성 중... (Preset: $Preset)"
 & cmake @cmakeArgs
 if ($LASTEXITCODE -ne 0) { Fail "CMake 구성 실패" }
 
-Info "빌드 중..."
-if (-not $Target -or $Target -eq '') {
-  if ($onWindows -and $Generator -like 'Visual Studio*') { $Target = 'ALL_BUILD' } else { $Target = 'all' }
+Info "빌드 중... (Preset: $BuildPreset)"
+$buildArgs = @('--build', '--preset', $BuildPreset)
+if ($Target -and $Target -ne '') {
+    $buildArgs += @('--target', $Target)
 }
-$buildArgs = @('--build', $BuildDir, '--config', $Config, '--target', $Target)
+
 if ($MaxJobs -gt 0) {
-  if ($onWindows -and $Generator -like 'Visual Studio*') {
-    $buildArgs += @('--', "/m:$MaxJobs")
-  } else {
-    $buildArgs += @('--', "-j$MaxJobs")
-  }
-} elseif (-not ($onWindows -and $Generator -like 'Visual Studio*')) {
-  $buildArgs += @('--', '-j')
+  $buildArgs += @('--parallel', $MaxJobs)
+} else {
+  $buildArgs += @('--parallel')
 }
+
 & cmake @buildArgs
 if ($LASTEXITCODE -ne 0) { Fail "빌드 실패" }
 

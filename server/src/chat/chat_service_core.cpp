@@ -16,7 +16,6 @@
 #include <cstdlib>
 #include <sstream>
 #include <utility>
-
 using namespace server::core;
 namespace proto = server::core::protocol;
 namespace corelog = server::core::log;
@@ -24,20 +23,29 @@ namespace services = server::core::util::services;
 
 namespace server::app::chat {
 
+// ChatService 생성자: 주요 의존성을 주입받고 환경 변수로부터 설정을 로드합니다.
 ChatService::ChatService(boost::asio::io_context& io,
                          server::core::JobQueue& job_queue,
                          std::shared_ptr<server::core::storage::IConnectionPool> db_pool,
                          std::shared_ptr<server::storage::redis::IRedisClient> redis)
     : io_(&io), job_queue_(job_queue), db_pool_(std::move(db_pool)), redis_(std::move(redis)) {
+    
+    // 의존성이 주입되지 않은 경우 ServiceRegistry에서 가져옵니다.
     if (!db_pool_) {
         db_pool_ = services::get<server::core::storage::IConnectionPool>();
     }
     if (!redis_) {
         redis_ = services::get<server::storage::redis::IRedisClient>();
     }
+
+    // 게이트웨이 ID 설정 (분산 환경 식별용)
     if (const char* gw = std::getenv("GATEWAY_ID"); gw && *gw) {
         gateway_id_ = gw;
     }
+
+    // Write-behind 설정 로드
+    // WRITE_BEHIND_ENABLED=1 이면 채팅 이벤트를 Redis Streams에 먼저 기록하고,
+    // 별도의 워커가 이를 DB에 반영합니다.
     if (const char* flag = std::getenv("WRITE_BEHIND_ENABLED"); flag && *flag && std::string(flag) != "0") {
         write_behind_.enabled = true;
     }
@@ -56,6 +64,8 @@ ChatService::ChatService(boost::asio::io_context& io,
             write_behind_.approximate = false;
         }
     }
+
+    // Presence(접속 현황) TTL 설정
     if (const char* ttl = std::getenv("PRESENCE_TTL_SEC"); ttl && *ttl) {
         unsigned long t = std::strtoul(ttl, nullptr, 10);
         if (t > 0 && t < 3600) {
@@ -65,6 +75,8 @@ ChatService::ChatService(boost::asio::io_context& io,
     if (const char* prefix = std::getenv("REDIS_CHANNEL_PREFIX"); prefix && *prefix) {
         presence_.prefix = prefix;
     }
+
+    // 환경 변수 읽기 헬퍼 함수
     const auto read_env = [](const char* primary, const char* secondary = nullptr) -> const char* {
         if (primary) {
             if (const char* value = std::getenv(primary); value && *value) {
@@ -78,6 +90,8 @@ ChatService::ChatService(boost::asio::io_context& io,
         }
         return nullptr;
     };
+
+    // 최근 대화 내역(History) 관련 설정
     if (const char* limit_env = read_env("RECENT_HISTORY_LIMIT", "SNAPSHOT_RECENT_LIMIT")) {
         char* end = nullptr;
         unsigned long value = std::strtoul(limit_env, &end, 10);
@@ -109,6 +123,7 @@ ChatService::ChatService(boost::asio::io_context& io,
     if (history_.max_list_len < history_.recent_limit) {
         history_.max_list_len = history_.recent_limit;
     }
+
     if (write_behind_.enabled) {
         corelog::info(std::string("Write-behind enabled: stream=") + write_behind_.stream_key +
                       (write_behind_.maxlen ? (std::string(", maxlen=") + std::to_string(*write_behind_.maxlen)) : std::string(", maxlen=none")) +
@@ -118,6 +133,8 @@ ChatService::ChatService(boost::asio::io_context& io,
     }
 }
 
+// 방별 Strand(직렬화된 실행 컨텍스트)를 반환합니다.
+// 동일한 방에 대한 작업은 동일한 스레드에서 순차적으로 실행됨을 보장합니다.
 ChatService::Strand& ChatService::strand_for(const std::string& room) {
     auto it = room_strands_.find(room);
     if (it == room_strands_.end()) {
@@ -130,6 +147,7 @@ bool ChatService::write_behind_enabled() const {
     return write_behind_.enabled && static_cast<bool>(redis_);
 }
 
+// UUID v4 생성 (난수 기반)
 std::string ChatService::generate_uuid_v4() {
     std::array<unsigned char, 16> b{};
     static thread_local std::mt19937_64 rng{std::random_device{}()};
@@ -150,6 +168,7 @@ std::string ChatService::generate_uuid_v4() {
     return s;
 }
 
+// 세션별 고유 UUID를 조회하거나 생성합니다.
 std::string ChatService::get_or_create_session_uuid(Session& s) {
     std::lock_guard<std::mutex> lk(state_.mu);
     auto it = state_.session_uuid.find(&s);
@@ -159,6 +178,8 @@ std::string ChatService::get_or_create_session_uuid(Session& s) {
     return id;
 }
 
+// Write-behind 이벤트를 Redis Stream에 발행합니다.
+// 이 이벤트들은 별도의 워커 프로세스에 의해 DB에 비동기적으로 저장됩니다.
 void ChatService::emit_write_behind_event(const std::string& type,
                                            const std::string& session_id,
                                            const std::optional<std::string>& user_id,
@@ -188,11 +209,13 @@ void ChatService::emit_write_behind_event(const std::string& type,
             fields.emplace_back(std::move(kv));
         }
     }
+    // XADD 명령을 사용하여 스트림에 추가
     if (!redis_->xadd(write_behind_.stream_key, fields, nullptr, write_behind_.maxlen, write_behind_.approximate)) {
         corelog::warn(std::string("write-behind XADD failed: type=") + type);
     }
 }
 
+// WeakPtr로 관리되는 세션 목록에서 유효한 세션만 수집합니다.
 void ChatService::collect_room_sessions(RoomSet& set, std::vector<std::shared_ptr<Session>>& out) {
     for (auto it = set.begin(); it != set.end(); ) {
         if (auto session_sp = it->lock()) {
@@ -217,6 +240,7 @@ std::string ChatService::make_presence_key(std::string_view category, const std:
     return key;
 }
 
+// 사용자의 접속 상태(Presence)를 갱신합니다. (Redis SETEX)
 void ChatService::touch_user_presence(const std::string& uid) {
     if (!redis_ || uid.empty()) {
         return;
@@ -224,12 +248,16 @@ void ChatService::touch_user_presence(const std::string& uid) {
     redis_->setex(make_presence_key("presence:user:", uid), "1", presence_ttl());
 }
 
+// 임시 닉네임 생성 (UUID 기반 8자리)
 std::string ChatService::gen_temp_name_uuid8() {
     static thread_local std::mt19937_64 rng{std::random_device{}()};
     std::uint32_t v = static_cast<std::uint32_t>(rng());
     std::ostringstream oss; oss << std::hex; oss.width(8); oss.fill('0'); oss << v; return oss.str();
 }
 
+// 닉네임 중복 검사 및 임시 닉네임 할당
+// desired가 비어있거나 "guest"인 경우 고유한 임시 닉네임을 생성하여 반환합니다.
+// 이미 사용 중인 닉네임인 경우 에러를 전송하고 빈 문자열을 반환합니다.
 std::string ChatService::ensure_unique_or_error(Session& s, const std::string& desired) {
     std::lock_guard<std::mutex> lk(state_.mu);
     if (!desired.empty() && desired != "guest") {
@@ -255,6 +283,8 @@ std::string ChatService::ensure_unique_or_error(Session& s, const std::string& d
     return gen_temp_name_uuid8();
 }
 
+// 현재 활성화된 방 목록을 클라이언트에게 전송합니다.
+// (system) 발신자로 채팅 메시지 형식을 빌려 목록을 전송합니다.
 void ChatService::send_rooms_list(Session& s) {
     std::vector<std::uint8_t> body;
     std::string msg = "rooms:";
@@ -286,6 +316,8 @@ void ChatService::send_rooms_list(Session& s) {
     s.async_send(proto::MSG_CHAT_BROADCAST, body, 0);
 }
 
+// 특정 방의 사용자 목록을 클라이언트에게 전송합니다.
+// 잠긴 방의 경우 멤버가 아니면 목록을 볼 수 없습니다.
 void ChatService::send_room_users(Session& s, const std::string& target) {
     std::vector<std::string> names;
     bool allow = true;
@@ -333,12 +365,14 @@ void ChatService::send_room_users(Session& s, const std::string& target) {
     s.async_send(proto::MSG_ROOM_USERS, body, 0);
 }
 
+// 방 입장 시 현재 상태(방 목록, 유저 목록, 최근 메시지)를 스냅샷으로 전송합니다.
 void ChatService::send_snapshot(Session& s, const std::string& current) {
     std::vector<std::uint8_t> body;
     server::wire::v1::StateSnapshot pb; pb.set_current_room(current);
     {
         std::lock_guard<std::mutex> lk(state_.mu);
         std::vector<std::string> to_remove;
+        // 활성 방 목록 구성
         for (auto it = state_.rooms.begin(); it != state_.rooms.end(); ++it) {
             std::uint32_t alive = 0; for (auto wit = it->second.begin(); wit != it->second.end(); ) { if (auto p = wit->lock()) { ++alive; ++wit; } else { wit = it->second.erase(wit); } }
             if (alive == 0 && it->first != std::string("lobby")) { to_remove.push_back(it->first); continue; }
@@ -359,7 +393,8 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
             }
         }
     }
-    // 최근 메시지를 Redis에서 우선 조회하고 필요 시 DB로 폴백한다.
+    
+    // 최근 메시지를 Redis에서 우선 조회하고, 부족하면 DB에서 가져옵니다 (Fallback).
     std::string rid;
     {
         std::lock_guard<std::mutex> lk(state_.mu);
@@ -405,6 +440,7 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
             last_seen_loaded = true;
             pb.set_last_seen_id(last_seen_value);
 
+            // 캐시된 메시지가 부족하면 DB에서 추가로 조회합니다.
             if (!loaded_from_cache || cached_messages < history_.recent_limit) {
                 const std::size_t limit = history_.recent_limit;
                 const std::size_t fetch_factor = history_.fetch_factor;
@@ -413,6 +449,7 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
 
                 auto last_id = uow->messages().get_last_id(rid);
                 std::uint64_t since_id = 0;
+                // 마지막으로 읽은 메시지(last_seen)를 기준으로 가져올 범위를 계산합니다.
                 if (last_id > 0) {
                     if (last_seen_value == 0) {
                         since_id = (last_id > limit) ? (last_id - limit) : 0;
@@ -448,6 +485,7 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
                     sm->set_sender(sender);
                     sm->set_text(m.content);
                     sm->set_ts_ms(static_cast<std::uint64_t>(m.created_at_ms));
+                    // DB에서 가져온 메시지를 Redis 캐시에 채워넣습니다 (Read-Repair).
                     if (redis_) {
                         cache_recent_message(rid, *sm);
                     }
@@ -470,11 +508,7 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
     s.async_send(proto::MSG_STATE_SNAPSHOT, body, 0);
 }
 
-} // namespace server::app::chat
-
-// 외부에서 수신한 브로드캐스트를 방에 전달한다.
-namespace server::app::chat {
-
+// 외부에서 수신한 브로드캐스트(예: Redis Pub/Sub)를 해당 방의 로컬 세션들에게 전달합니다.
 void ChatService::broadcast_room(const std::string& room, const std::vector<std::uint8_t>& body, Session* self) {
     std::vector<std::shared_ptr<Session>> targets;
     {
@@ -490,11 +524,7 @@ void ChatService::broadcast_room(const std::string& room, const std::vector<std:
     }
 }
 
-} // namespace server::app::chat
-
-// 저장소 보조 함수를 별도 섹션으로 분리한다.
-namespace server::app::chat {
-
+// 시스템 공지 메시지를 전송합니다.
 void ChatService::send_system_notice(Session& s, const std::string& text) {
     server::wire::v1::ChatBroadcast pb;
     pb.set_room("(system)");
@@ -510,6 +540,7 @@ void ChatService::send_system_notice(Session& s, const std::string& text) {
     s.async_send(proto::MSG_CHAT_BROADCAST, body, 0);
 }
 
+// 귓속말 전송 결과를 클라이언트에게 알립니다.
 void ChatService::send_whisper_result(Session& s, bool ok, const std::string& reason) {
     server::wire::v1::WhisperResult pb;
     pb.set_ok(ok);
@@ -522,6 +553,8 @@ void ChatService::send_whisper_result(Session& s, bool ok, const std::string& re
     s.async_send(proto::MSG_WHISPER_RES, body, 0);
 }
 
+// 귓속말(1:1 채팅)을 처리합니다.
+// 대상 사용자가 같은 서버에 있으면 직접 전송하고, 없으면 Redis Pub/Sub을 통해 전파할 수도 있습니다(현재 구현은 로컬 우선).
 void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const std::string& target_user, const std::string& text) {
     if (!session_sp) return;
     if (target_user.empty() || text.empty()) {
@@ -629,6 +662,7 @@ void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const st
     corelog::info("[whisper] sender=" + sender + " target=" + target_user + " recipients=" + std::to_string(targets.size()) + " text=" + text);
 }
 
+// 방 비밀번호 해싱 (간단한 std::hash 사용, 실제 서비스에선 더 강력한 해시 권장)
 std::string ChatService::hash_room_password(const std::string& password) {
     std::hash<std::string> hasher;
     std::size_t value = hasher(password);
@@ -637,6 +671,7 @@ std::string ChatService::hash_room_password(const std::string& password) {
     return oss.str();
 }
 
+// 방 이름으로 Room ID(UUID)를 조회하거나 생성합니다. (Case-Insensitive)
 std::string ChatService::ensure_room_id_ci(const std::string& room_name) {
     if (!db_pool_) return std::string();
     // 캐시 확인
@@ -674,6 +709,7 @@ std::string ChatService::make_recent_message_key(std::uint64_t message_id) const
     return std::string("msg:") + std::to_string(message_id);
 }
 
+// 최근 메시지를 Redis 캐시에 저장합니다. (LIST + Key-Value)
 bool ChatService::cache_recent_message(
     const std::string& room_id,
     const server::wire::v1::StateSnapshot::SnapshotMessage& message) {
@@ -692,6 +728,7 @@ bool ChatService::cache_recent_message(
                               history_.max_list_len);
 }
 
+// Redis 캐시에서 최근 메시지 목록을 로드합니다.
 bool ChatService::load_recent_messages_from_cache(
     const std::string& room_id,
     std::vector<server::wire::v1::StateSnapshot::SnapshotMessage>& out) {
