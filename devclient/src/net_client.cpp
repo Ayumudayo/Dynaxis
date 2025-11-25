@@ -17,7 +17,11 @@ namespace asio = boost::asio;
 using tcp = asio::ip::tcp;
 namespace proto = server::core::protocol;
 
-// 단일 io_context 위에서 strand로 I/O 순서를 보장한다.
+// -----------------------------------------------------------------------------
+// NetClient 생성자
+// -----------------------------------------------------------------------------
+// 단일 io_context 위에서 strand를 사용하여 모든 I/O 핸들러의 순차적 실행을 보장합니다.
+// 이는 멀티스레드 환경에서도 동기화 문제 없이 소켓 I/O를 처리할 수 있게 해줍니다.
 NetClient::NetClient() : socket_(io_), strand_(io_.get_executor()) {
     read_header_.resize(proto::k_header_bytes);
 }
@@ -26,34 +30,48 @@ NetClient::~NetClient() {
     close();
 }
 
+// -----------------------------------------------------------------------------
+// 서버 연결
+// -----------------------------------------------------------------------------
+// 지정된 호스트와 포트로 TCP 연결을 시도합니다.
+// 연결 성공 시 I/O 스레드를 시작하고, 헤더 읽기 및 핑 타이머를 가동합니다.
 bool NetClient::connect(const std::string& host, unsigned short port) {
-    close();
+    close(); // 기존 연결이 있다면 정리
     boost::system::error_code ec;
-    io_.restart();
+    io_.restart(); // io_context 재사용을 위해 리셋
 
+    // 호스트 이름 해석 (DNS Lookup)
     auto endpoints = resolver_.resolve(host, std::to_string(port), ec);
     if (ec) return false;
 
+    // 연결 시도
     asio::connect(socket_, endpoints, ec);
     if (ec) return false;
 
+    // Nagle 알고리즘 비활성화 (지연 시간 최소화)
     socket_.set_option(tcp::no_delay(true));
     running_.store(true);
     connected_.store(true);
     seq_ = 1;
 
+    // io_context가 작업이 없어도 종료되지 않도록 WorkGuard 생성
     work_guard_ = std::make_unique<WorkGuard>(asio::make_work_guard(io_));
     ping_timer_ = std::make_unique<Timer>(io_);
 
-    start_read_header(); // 연결 직후 서버 HELLO를 기다린다.
-    schedule_ping();
+    start_read_header(); // 연결 직후 서버로부터의 메시지 수신 대기
+    schedule_ping();     // 주기적인 핑 전송 예약
 
+    // 별도 스레드에서 io_context 실행 (비동기 I/O 처리)
     io_thread_ = std::thread([this] { io_.run(); });
     return true;
 }
 
+// -----------------------------------------------------------------------------
+// 연결 종료
+// -----------------------------------------------------------------------------
+// 소켓을 닫고, 타이머와 I/O 스레드를 정리합니다.
 void NetClient::close() {
-    // 연결 상태 플래그를 내려두면 enqueue_frame 등이 더 이상 새 요청을 보내지 않는다.
+    // 연결 상태 플래그를 false로 설정하여 추가적인 요청 전송을 막습니다.
     running_.store(false);
     connected_.store(false);
 
@@ -79,8 +97,12 @@ void NetClient::close() {
     write_queue_.clear();
 }
 
+// -----------------------------------------------------------------------------
+// 헤더 읽기 시작
+// -----------------------------------------------------------------------------
+// 고정 길이 헤더(4바이트 등)를 비동기로 읽습니다.
+// 헤더를 다 읽으면 콜백에서 파싱 후 본문(Body) 읽기를 시작합니다.
 void NetClient::start_read_header() {
-    // 고정 길이 헤더를 읽어 길이/ID를 파싱한 뒤 본문을 이어서 읽는다.
     asio::async_read(
         socket_,
         asio::buffer(read_header_),
@@ -93,14 +115,20 @@ void NetClient::start_read_header() {
                 }
                 proto::FrameHeader header{};
                 proto::decode_header(read_header_.data(), header);
+                
+                // 헤더에 명시된 길이만큼 본문 버퍼 할당
                 read_body_.assign(header.length, 0);
                 start_read_body(header);
             }));
 }
 
+// -----------------------------------------------------------------------------
+// 본문 읽기 시작
+// -----------------------------------------------------------------------------
+// 헤더에서 파싱한 길이만큼 본문 데이터를 비동기로 읽습니다.
 void NetClient::start_read_body(const proto::FrameHeader& header) {
     if (read_body_.empty()) {
-        // payload가 없는 메시지는 바로 처리하고 다음 헤더로 이동한다.
+        // 페이로드가 없는 메시지(예: PING)는 바로 처리하고 다음 헤더 읽기로 넘어갑니다.
         handle_frame(header, std::span<const std::uint8_t>{});
         start_read_header();
         return;
@@ -116,14 +144,20 @@ void NetClient::start_read_body(const proto::FrameHeader& header) {
                     handle_disconnect(ec, "async_read(body)");
                     return;
                 }
+                // 메시지 처리 핸들러 호출
                 handle_frame(header, std::span<const std::uint8_t>(read_body_.data(), read_body_.size()));
+                // 다음 메시지 헤더 읽기 시작
                 start_read_header();
             }));
 }
 
+// -----------------------------------------------------------------------------
+// 핑 스케줄링
+// -----------------------------------------------------------------------------
+// 서버와의 연결 유지를 위해 주기적으로 PING 메시지를 보냅니다.
 void NetClient::schedule_ping() {
     if (!ping_timer_) return;
-    // 서버 타임아웃을 피하기 위해 8초 간격으로 ping을 보낸다.
+    // 8초마다 PING 전송 (서버 타임아웃 방지)
     ping_timer_->expires_after(std::chrono::seconds(8));
     ping_timer_->async_wait(boost::asio::bind_executor(
         strand_,
@@ -132,10 +166,15 @@ void NetClient::schedule_ping() {
                 return;
             }
             enqueue_frame(proto::MSG_PING, 0);
-            schedule_ping();
+            schedule_ping(); // 다음 핑 예약
         }));
 }
 
+// -----------------------------------------------------------------------------
+// 프레임 전송 큐에 추가
+// -----------------------------------------------------------------------------
+// 메시지를 직렬화하여 전송 큐에 추가하고, 전송 중이 아니라면 전송을 시작합니다.
+// strand를 사용하여 스레드 안전성을 보장합니다.
 void NetClient::enqueue_frame(std::uint16_t msg_id, std::uint16_t flags, std::vector<std::uint8_t> payload) {
     asio::post(strand_, [this, msg_id, flags, payload = std::move(payload)]() mutable {
         if (!connected_.load()) {
@@ -165,7 +204,10 @@ void NetClient::enqueue_frame(std::uint16_t msg_id, std::uint16_t flags, std::ve
     });
 }
 
-// async_write 완료 시까지 큐를 유지하며 순차적으로 전송한다.
+// -----------------------------------------------------------------------------
+// 전송 큐 처리
+// -----------------------------------------------------------------------------
+// 큐에 있는 메시지를 하나씩 순차적으로 비동기 전송합니다.
 void NetClient::drain_send_queue() {
     if (write_queue_.empty()) return;
     auto buffer = write_queue_.front();
@@ -182,22 +224,27 @@ void NetClient::drain_send_queue() {
                 }
                 write_queue_.pop_front();
                 if (!write_queue_.empty()) {
-                    drain_send_queue();
+                    drain_send_queue(); // 남은 메시지가 있다면 계속 전송
                 }
             }));
 }
 
+// -----------------------------------------------------------------------------
+// 수신 프레임 처리
+// -----------------------------------------------------------------------------
+// 수신된 메시지의 ID(Opcode)에 따라 적절한 처리를 수행합니다.
 void NetClient::handle_frame(const proto::FrameHeader& hh, std::span<const std::uint8_t> in) {
     if (hh.msg_id == proto::MSG_PING) {
-        // 서버에서 ping이 오면 pong으로 즉시 응답해 RTT를 맞춘다.
+        // 서버에서 PING이 오면 PONG으로 즉시 응답 (RTT 측정 및 연결 확인용)
         enqueue_frame(proto::MSG_PONG, 0);
         return;
     }
 
     if (hh.msg_id == proto::MSG_PONG) {
-        return;
+        return; // PONG은 별도 처리 없음
     }
 
+    // 에러 메시지 처리
     if (hh.msg_id == proto::MSG_ERR) {
         std::uint16_t code = 0, len = 0;
         std::string msg;
@@ -213,11 +260,13 @@ void NetClient::handle_frame(const proto::FrameHeader& hh, std::span<const std::
         return;
     }
 
+    // 로그인 응답 처리
     if (hh.msg_id == proto::MSG_LOGIN_RES) {
         server::wire::v1::LoginRes pb;
         if (server::wire::codec::Decode(in.data(), in.size(), pb)) {
             if (on_login_) on_login_(pb.effective_user(), pb.session_id());
         } else {
+            // Protobuf 디코딩 실패 시 레거시 포맷 파싱 시도 (하위 호환성)
             auto cur = in;
             if (!cur.empty()) cur = cur.subspan(1);
             std::string m;
@@ -238,6 +287,7 @@ void NetClient::handle_frame(const proto::FrameHeader& hh, std::span<const std::
         return;
     }
 
+    // 채팅 브로드캐스트 처리
     if (hh.msg_id == proto::MSG_CHAT_BROADCAST) {
         std::string room; std::string sender; std::string text;
         std::uint32_t sender_sid = 0;
@@ -250,6 +300,7 @@ void NetClient::handle_frame(const proto::FrameHeader& hh, std::span<const std::
         return;
     }
 
+    // 방 사용자 목록 처리
     if (hh.msg_id == proto::MSG_ROOM_USERS) {
         std::string room;
         proto::read_lp_utf8(in, room);
@@ -263,6 +314,7 @@ void NetClient::handle_frame(const proto::FrameHeader& hh, std::span<const std::
         return;
     }
 
+    // 상태 스냅샷 처리 (로그인/조인 직후 상태 동기화)
     if (hh.msg_id == proto::MSG_STATE_SNAPSHOT) {
         server::wire::v1::StateSnapshot pb;
         if (server::wire::codec::Decode(in.data(), in.size(), pb)) {
@@ -286,6 +338,7 @@ void NetClient::handle_frame(const proto::FrameHeader& hh, std::span<const std::
         return;
     }
 
+    // 귓속말 수신 처리
     if (hh.msg_id == proto::MSG_WHISPER_BROADCAST) {
         std::string sender; std::string recipient; std::string text;
         bool outgoing = false;
@@ -297,6 +350,7 @@ void NetClient::handle_frame(const proto::FrameHeader& hh, std::span<const std::
         return;
     }
 
+    // 귓속말 결과 처리 (성공/실패)
     if (hh.msg_id == proto::MSG_WHISPER_RES) {
         bool ok = false;
         std::string reason;
@@ -309,6 +363,7 @@ void NetClient::handle_frame(const proto::FrameHeader& hh, std::span<const std::
         return;
     }
 
+    // 서버 HELLO 메시지 처리 (기능 협상 등)
     if (hh.msg_id == proto::MSG_HELLO) {
         std::uint16_t caps = 0;
         if (in.size() >= 12) {
@@ -319,6 +374,9 @@ void NetClient::handle_frame(const proto::FrameHeader& hh, std::span<const std::
     }
 }
 
+// -----------------------------------------------------------------------------
+// 연결 끊김 처리
+// -----------------------------------------------------------------------------
 void NetClient::handle_disconnect(const boost::system::error_code& ec, const char* context) {
     if (!running_.exchange(false)) {
         return;
@@ -342,6 +400,10 @@ void NetClient::handle_disconnect(const boost::system::error_code& ec, const cha
         on_disconnected_(std::move(reason));
     }
 }
+
+// -----------------------------------------------------------------------------
+// 각종 요청 전송 메서드들
+// -----------------------------------------------------------------------------
 
 void NetClient::send_login(const std::string& user, const std::string& token) {
     std::vector<std::uint8_t> p;

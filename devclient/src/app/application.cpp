@@ -29,12 +29,17 @@ constexpr const char* kEnvHost = "DEVCLIENT_HOST";
 constexpr const char* kEnvPort = "DEVCLIENT_PORT";
 } // namespace
 
-// UI 구성 요소, 명령 처리기, 네트워크 클라이언트를 묶어 운영하는 내부 구현체.
+// -----------------------------------------------------------------------------
+// Application::Impl 클래스
+// -----------------------------------------------------------------------------
+// UI 구성 요소, 명령 처리기, 네트워크 클라이언트를 묶어 운영하는 내부 구현체입니다.
+// Pimpl 관용구를 사용하여 헤더 의존성을 줄입니다.
 class Application::Impl {
 public:
     Impl(std::string host, unsigned short port, bool allow_env_override);
     ~Impl() = default;
 
+    // 메인 루프 실행
     int Run();
 
 private:
@@ -43,14 +48,30 @@ private:
     void LoadEnvironment();
     static unsigned short ParsePort(const char* value, unsigned short fallback);
 
+    // FTXUI 화면 객체 (전체 화면 모드)
     ftxui::ScreenInteractive screen_;
+    
+    // 애플리케이션 상태 (채팅 로그, 현재 방, 사용자 정보 등)
     AppState state_;
+    
+    // 네트워크 클라이언트 (TCP 소켓 통신)
     ::NetClient net_;
+    
+    // UI 갱신 요청 콜백 (스레드 안전하게 UI 이벤트를 발생시킴)
     std::function<void()> request_refresh_;
+    
+    // 로그 출력 콜백 (AppState에 로그 추가 후 UI 갱신)
     std::function<void(const std::string&)> log_sink_;
+    
+    // 사용자 명령어 처리기 (/join, /login 등)
     CommandProcessor commands_;
+    
+    // UI 레이아웃 빌더
     UiBuilder builder_;
+    
+    // 네트워크 메시지 라우터 (수신된 패킷을 적절한 핸들러로 연결)
     NetworkRouter router_;
+    
     std::string host_;
     unsigned short port_;
     bool allow_env_override_{true};
@@ -70,13 +91,20 @@ Application::Impl::Impl(std::string host, unsigned short port, bool allow_env_ov
       port_(port),
       allow_env_override_(allow_env_override) {}
 
+// -----------------------------------------------------------------------------
+// 메인 실행 루프
+// -----------------------------------------------------------------------------
 int Application::Impl::Run() {
-    LoadEnvironment();
+    LoadEnvironment(); // 환경 변수 로드
     state_.set_preview_room(state_.current_room());
-    router_.Initialize();
+    router_.Initialize(); // 네트워크 콜백 등록
 
+    // UI 레이아웃 빌드
     auto ui = builder_.Build();
+    
+    // 키보드 이벤트 핸들러 등록
     auto app = CatchEvent(ui.root, [this, input = ui.input](ftxui::Event event) {
+        // ESC 또는 Ctrl+C: 종료
         if (event == ftxui::Event::Escape || event == ftxui::Event::CtrlC) {
             if (state_.connected()) {
                 net_.send_leave(state_.current_room());
@@ -84,12 +112,13 @@ int Application::Impl::Run() {
             screen_.ExitLoopClosure()();
             return true;
         }
+        // F1: 도움말 토글
         if (event == ftxui::Event::F1) {
             state_.toggle_help();
             request_refresh_();
             return true;
         }
-        // F5: 현재 방의 스냅샷을 다시 요청한다.
+        // F5: 현재 방의 스냅샷을 다시 요청 (새로고침)
         if (event == ftxui::Event::F5) {
             if (state_.connected()) {
                 net_.send_refresh(state_.current_room());
@@ -98,6 +127,7 @@ int Application::Impl::Run() {
             }
             return true;
         }
+        // 좌우 화살표: 왼쪽 패널 너비 조절
         if (event == ftxui::Event::ArrowLeft) {
             state_.set_left_panel_width(state_.left_panel_width() - 1);
             request_refresh_();
@@ -108,11 +138,12 @@ int Application::Impl::Run() {
             request_refresh_();
             return true;
         }
-        // Enter 키 입력 시 명령어/채팅을 구분해 처리한다.
+        // Enter 키: 명령어 실행 또는 채팅 전송
         if (event == ftxui::Event::Return && input->Focused()) {
             const std::string line = state_.input_buffer();
             state_.input_buffer().clear();
             if (!line.empty()) {
+                // 명령어로 처리되지 않으면 일반 채팅으로 간주
                 if (!commands_.Process(line)) {
                     if (state_.username() == AppState::kDefaultUser) {
                         log_sink_("[warn] 게스트는 채팅을 보낼 수 없습니다. /login 으로 로그인하세요.");
@@ -130,6 +161,7 @@ int Application::Impl::Run() {
     AppendInitialLogs();
     Connect();
 
+    // 입력창에 포커스 설정 후 UI 루프 시작
     ui.input->TakeFocus();
     screen_.Loop(app);
 
@@ -150,6 +182,7 @@ void Application::Impl::Connect() {
     if (net_.connect(host_, port_)) {
         state_.set_connected(true);
         log_sink_(std::string("연결됨: ") + host_ + ":" + std::to_string(port_));
+        // 연결 즉시 기본 게스트 로그인 시도
         net_.send_login(state_.username(), "");
     } else {
         state_.set_connected(false);
@@ -215,4 +248,3 @@ int Application::Run() {
 }
 
 } // namespace client::app
-

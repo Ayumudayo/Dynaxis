@@ -11,12 +11,14 @@
 namespace client::app {
 
 namespace {
+// 문자열 왼쪽 공백 제거
 std::string LTrim(std::string s) {
     auto it = std::find_if_not(s.begin(), s.end(), [](unsigned char ch) { return std::isspace(ch) != 0; });
     s.erase(s.begin(), it);
     return s;
 }
 
+// 문자열 오른쪽 공백 제거
 std::string RTrim(std::string s) {
     while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
         s.pop_back();
@@ -24,11 +26,16 @@ std::string RTrim(std::string s) {
     return s;
 }
 
+// 문자열 양쪽 공백 제거
 std::string Trim(std::string s) {
     return RTrim(LTrim(std::move(s)));
 }
 
-// 사용자 입력을 트리밍하고 alias를 canonical 명령으로 치환한다.
+// -----------------------------------------------------------------------------
+// 명령어 정규화
+// -----------------------------------------------------------------------------
+// 사용자 입력을 트리밍하고 별칭(alias)을 정식 명령어로 치환합니다.
+// 예: "/w" -> "/whisper"
 std::string NormalizeCommand(std::string line) {
     static constexpr std::pair<std::string_view, std::string_view> kAliases[] = {
         {"/w", "/whisper"},
@@ -53,6 +60,11 @@ std::string NormalizeCommand(std::string line) {
 CommandProcessor::CommandProcessor(AppState& state, ::NetClient& net, LogSink log_sink)
     : state_(state), net_(net), log_sink_(std::move(log_sink)) {}
 
+// -----------------------------------------------------------------------------
+// 명령어 처리 진입점
+// -----------------------------------------------------------------------------
+// 입력된 라인이 명령어인지 확인하고 처리합니다.
+// 명령어가 아니면(일반 채팅) false를 반환합니다.
 bool CommandProcessor::Process(const std::string& line) {
     if (line.empty()) {
         return true;
@@ -63,6 +75,10 @@ bool CommandProcessor::Process(const std::string& line) {
     return HandleCommand(line);
 }
 
+// -----------------------------------------------------------------------------
+// 명령어 라우팅
+// -----------------------------------------------------------------------------
+// 정규화된 명령어를 파싱하여 핸들러 테이블에서 일치하는 함수를 찾아 실행합니다.
 bool CommandProcessor::HandleCommand(const std::string& line) {
     const std::string normalized = NormalizeCommand(line);
     const auto command_end = normalized.find(' ');
@@ -79,6 +95,9 @@ bool CommandProcessor::HandleCommand(const std::string& line) {
     return true;
 }
 
+// -----------------------------------------------------------------------------
+// /login 명령어 핸들러
+// -----------------------------------------------------------------------------
 bool CommandProcessor::HandleLogin(const std::string& args) {
     auto trimmed = Trim(args);
     if (trimmed.empty()) {
@@ -90,6 +109,9 @@ bool CommandProcessor::HandleLogin(const std::string& args) {
     return true;
 }
 
+// -----------------------------------------------------------------------------
+// /join 명령어 핸들러
+// -----------------------------------------------------------------------------
 bool CommandProcessor::HandleJoin(const std::string& args) {
     std::string room_arg;
     std::string password_arg;
@@ -113,6 +135,9 @@ bool CommandProcessor::HandleJoin(const std::string& args) {
     return true;
 }
 
+// -----------------------------------------------------------------------------
+// /whisper 명령어 핸들러
+// -----------------------------------------------------------------------------
 bool CommandProcessor::HandleWhisper(const std::string& args) {
     auto trimmed = Trim(args);
     auto pos = trimmed.find(' ');
@@ -142,6 +167,9 @@ bool CommandProcessor::HandleWhisper(const std::string& args) {
     return true;
 }
 
+// -----------------------------------------------------------------------------
+// /leave 명령어 핸들러
+// -----------------------------------------------------------------------------
 bool CommandProcessor::HandleLeave(const std::string& args) {
     auto trimmed = Trim(args);
     std::string room = trimmed.empty() ? state_.current_room() : std::move(trimmed);
@@ -149,6 +177,9 @@ bool CommandProcessor::HandleLeave(const std::string& args) {
     return true;
 }
 
+// -----------------------------------------------------------------------------
+// /refresh 명령어 핸들러
+// -----------------------------------------------------------------------------
 // /refresh는 인자가 없으며 연결 상태에서만 허용된다.
 bool CommandProcessor::HandleRefresh(const std::string& args) {
     if (!Trim(args).empty()) {
@@ -163,6 +194,9 @@ bool CommandProcessor::HandleRefresh(const std::string& args) {
     return true;
 }
 
+// -----------------------------------------------------------------------------
+// 명령어 핸들러 테이블
+// -----------------------------------------------------------------------------
 const std::array<CommandProcessor::CommandHandlerEntry, 5>& CommandProcessor::command_table() {
     static constexpr std::array<CommandHandlerEntry, 5> kCommandHandlers = {{
         {"/login", &CommandProcessor::HandleLogin},

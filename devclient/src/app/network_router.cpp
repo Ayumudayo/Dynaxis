@@ -25,6 +25,12 @@ NetworkRouter::NetworkRouter(AppState& state,
       request_refresh_(std::move(request_refresh)),
       log_sink_(std::move(log_sink)) {}
 
+// -----------------------------------------------------------------------------
+// 네트워크 콜백 초기화
+// -----------------------------------------------------------------------------
+// NetClient의 각종 이벤트 콜백을 등록합니다.
+// 모든 콜백은 UI 스레드(ScreenInteractive::Post)에서 실행되도록 하여
+// 멀티스레드 환경에서의 UI 갱신 안전성을 보장합니다.
 void NetworkRouter::Initialize() {
     // 서버 HELLO는 capability 정보를 담고 있으므로 저장 후 로그로 남긴다.
     net_.set_on_hello([this](std::uint16_t caps) {
@@ -81,6 +87,7 @@ void NetworkRouter::Initialize() {
                                  std::string text,
                                  std::uint16_t flags,
                                  std::uint32_t sender_sid) {
+        // 시스템 메시지(방 목록 갱신 등) 처리
         if (room == "(system)" && sender == "server" && text.rfind("rooms:", 0) == 0) {
             HandleSystemRoomsBroadcast(text.substr(6));
             return;
@@ -93,6 +100,7 @@ void NetworkRouter::Initialize() {
                       flags,
                       sender_sid]() mutable {
             bool is_me = false;
+            // sender_sid가 지원되면 ID로 비교, 아니면 이름으로 비교 (단, 이름은 중복 가능성 있음)
             if (state_.sender_sid_supported() && sender_sid && state_.session_id() &&
                 sender_sid == state_.session_id()) {
                 is_me = true;
@@ -157,21 +165,29 @@ void NetworkRouter::Initialize() {
                       new_users = std::move(new_users),
                       new_locked = std::move(new_locked)]() mutable {
             const bool room_changed = (snap_room != state_.current_room());
+            
+            // 방 목록 업데이트
             if (!new_rooms.empty()) {
                 state_.update_rooms(std::move(new_rooms), std::move(new_locked), snap_room);
             } else if (!new_locked.empty()) {
+                // 방 목록은 그대로인데 잠금 상태만 바뀐 경우
                 state_.rooms_locked() = std::move(new_locked);
                 if (state_.rooms_locked().size() != state_.rooms().size()) {
                     state_.rooms_locked().resize(state_.rooms().size(), false);
                 }
             }
+            
             state_.set_current_room(std::move(snap_room));
             state_.set_preview_room(state_.current_room());
             state_.update_users(std::move(new_users));
+            
+            // 방이 바뀌었으면 로그를 초기화하고 자동 스크롤 활성화
             if (room_changed) {
                 state_.clear_logs();
                 state_.set_log_auto_scroll(true);
             }
+            
+            // 입장 대기 중이던 방에 들어왔는지 확인
             if (!state_.pending_join_room().empty() &&
                 state_.pending_join_room() == state_.current_room()) {
                 log_sink_("방 \"" + state_.current_room() + "\"에 입장했습니다.");
@@ -182,6 +198,11 @@ void NetworkRouter::Initialize() {
     });
 }
 
+// -----------------------------------------------------------------------------
+// 시스템 방 목록 브로드캐스트 처리
+// -----------------------------------------------------------------------------
+// 서버가 주기적으로 보내는 방 목록 텍스트를 파싱하여 UI 상태를 갱신합니다.
+// 포맷 예: "Lobby(L) Room1 Room2(L)"
 void NetworkRouter::HandleSystemRoomsBroadcast(const std::string& payload) {
     std::istringstream iss(payload);
     std::string token;
@@ -222,4 +243,3 @@ void NetworkRouter::HandleSystemRoomNotice(const std::string&, const std::string
 }
 
 } // namespace client::app
-

@@ -28,7 +28,16 @@ UiBuilder::UiBuilder(AppState& state,
       net_(net),
       request_refresh_(std::move(request_refresh)) {}
 
+// -----------------------------------------------------------------------------
+// UI 레이아웃 구성
+// -----------------------------------------------------------------------------
+// 전체 UI 구조를 생성하고 반환합니다.
+// 구조:
+// [상단 상태바]
+// [좌측 패널(방/유저)] | [우측 패널(채팅 로그)]
+// [입력창]
 UiBuilder::UiComponents UiBuilder::Build() {
+    // 방 목록 메뉴 설정
     MenuOption rooms_opt;
     rooms_opt.on_change = [this] {
         // 방 선택이 바뀌면 preview를 갱신하고 서버에 /who를 보낸다.
@@ -43,6 +52,7 @@ UiBuilder::UiComponents UiBuilder::Build() {
         }
         request_refresh_();
     };
+    // 잠긴 방은 자물쇠 아이콘을 표시
     rooms_opt.entries_option.transform = [this](const EntryState& entry_state) {
         std::string label = entry_state.label;
         if (entry_state.index >= 0 &&
@@ -73,6 +83,7 @@ UiBuilder::UiComponents UiBuilder::Build() {
     log_option.on_change = [this] {
         const auto& logs = state_.logs();
         const int last = logs.empty() ? 0 : static_cast<int>(logs.size()) - 1;
+        // 사용자가 스크롤을 맨 아래로 내렸는지 확인하여 자동 스크롤 활성화
         state_.set_log_auto_scroll(state_.log_selected_ref() >= last);
     };
     log_menu_ = Menu(&state_.mutable_logs(), &state_.log_selected_ref(), log_option);
@@ -89,6 +100,7 @@ UiBuilder::UiComponents UiBuilder::Build() {
     auto top_container = Container::Horizontal({left_renderer, right_renderer});
     auto main_container = Container::Vertical({top_container, input_renderer});
 
+    // 전체 레이아웃 렌더링
     Component root = Renderer(main_container, [this, left_renderer, right_renderer, input_renderer]() {
         auto status = client::ui::RenderStatusBar(state_);
         auto content = hbox({
@@ -103,6 +115,7 @@ UiBuilder::UiComponents UiBuilder::Build() {
             separator(),
             input_renderer->Render(),
         });
+        // 도움말 오버레이 표시
         if (state_.show_help()) {
             return dbox({base, BuildHelpOverlay()});
         }
@@ -112,6 +125,9 @@ UiBuilder::UiComponents UiBuilder::Build() {
     return {root, input_box_};
 }
 
+// -----------------------------------------------------------------------------
+// 좌측 패널 (방 목록/사용자 목록)
+// -----------------------------------------------------------------------------
 Component UiBuilder::BuildLeftPane() {
     // 좌측 패널: 방 목록 + 사용자 목록
     auto left_container = Container::Vertical({rooms_menu_, users_menu_});
@@ -127,6 +143,9 @@ Component UiBuilder::BuildLeftPane() {
     });
 }
 
+// -----------------------------------------------------------------------------
+// 우측 패널 (채팅 로그)
+// -----------------------------------------------------------------------------
 Component UiBuilder::BuildRightPane() {
     return Renderer(log_menu_, [this] {
         auto terminal_size = Terminal::Size();
@@ -163,6 +182,9 @@ Component UiBuilder::BuildRightPane() {
     });
 }
 
+// -----------------------------------------------------------------------------
+// 입력창
+// -----------------------------------------------------------------------------
 Component UiBuilder::BuildInputBox() {
     InputOption option;
     option.placeholder = "메시지를 입력하세요...";
@@ -170,6 +192,9 @@ Component UiBuilder::BuildInputBox() {
     return Input(&state_.input_buffer(), option);
 }
 
+// -----------------------------------------------------------------------------
+// 도움말 오버레이
+// -----------------------------------------------------------------------------
 ftxui::Element UiBuilder::BuildHelpOverlay() {
     auto lines = vbox({
         text(" 도움말") | bold,
@@ -191,4 +216,3 @@ ftxui::Element UiBuilder::BuildHelpOverlay() {
 }
 
 } // namespace client::app
-
