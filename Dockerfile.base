@@ -1,11 +1,20 @@
-# Base Image for Dependencies
+# ==============================================================================
+# Knights Server - Base Image with Dependencies
+# ==============================================================================
+# This image contains all C++ dependencies built from source or apt packages.
+# Hybrid approach: System packages where stable, source builds for C++20 ABI.
+# ==============================================================================
+
 FROM ubuntu:24.04 AS base
 
-# Prevent interactive prompts
+# Prevent interactive prompts during build
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies
+# ==============================================================================
+# System Build Tools and Runtime Dependencies
+# ==============================================================================
 RUN apt-get update && apt-get install -y \
+    # Build essentials
     build-essential \
     git \
     curl \
@@ -19,6 +28,9 @@ RUN apt-get update && apt-get install -y \
     wget \
     bison \
     flex \
+    python3 \
+    python3-dev \
+    # C++ libraries (system packages)
     libboost-dev \
     libboost-system-dev \
     protobuf-compiler \
@@ -29,78 +41,100 @@ RUN apt-get update && apt-get install -y \
     libgtest-dev \
     nlohmann-json3-dev \
     libhiredis-dev \
-    python3 \
-    python3-dev \
     && rm -rf /var/lib/apt/lists/* \
+    # Remove conflicting system libpqxx (we build from source for C++20)
     && (apt-get purge -y libpqxx* || true) \
     && rm -f /usr/lib/x86_64-linux-gnu/libpqxx* \
     && rm -f /usr/lib/libpqxx*
 
+# Environment configuration
 ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH
 ENV VCPKG_DISABLE_METRICS=1
 ENV CMAKE_MAKE_PROGRAM=/usr/bin/ninja
 
-# Verify libpqxx detection
-RUN pkg-config --libs libpqxx || echo "pkg-config failed to find libpqxx"
-
-
-
-# Install CMake 3.27 (newer than apt default 3.22)
-RUN wget -O cmake.sh https://github.com/Kitware/CMake/releases/download/v3.27.7/cmake-3.27.7-linux-x86_64.sh && \
+# ==============================================================================
+# Build Tool: CMake 3.27
+# ==============================================================================
+# Ubuntu 24.04 ships CMake 3.22, we need 3.27 for better C++20 support
+RUN wget -q -O cmake.sh https://github.com/Kitware/CMake/releases/download/v3.27.7/cmake-3.27.7-linux-x86_64.sh && \
     chmod +x cmake.sh && \
     ./cmake.sh --skip-license --prefix=/usr/local && \
     rm cmake.sh
 
-# Build libpqxx from source (C++20 ABI compatibility)
-RUN git clone https://github.com/jtv/libpqxx.git && \
+# ==============================================================================
+# Source Build: libpqxx 7.9.0 (C++20 ABI Compatibility)
+# ==============================================================================
+# System libpqxx is C++17, causes ABI mismatch. Build from source with C++20.
+RUN git clone --depth 1 --branch 7.9.0 https://github.com/jtv/libpqxx.git && \
     cd libpqxx && \
-    git checkout 7.9.0 && \
     mkdir build && cd build && \
-    cmake -Dpqxx_CXX_STANDARD=20 -DBUILD_SHARED_LIBS=ON -DSKIP_BUILD_TEST=ON .. && \
+    cmake -Dpqxx_CXX_STANDARD=20 \
+    -DBUILD_SHARED_LIBS=ON \
+    -DSKIP_BUILD_TEST=ON .. && \
     make -j$(nproc) && \
     make install && \
     cd ../.. && \
-    rm -rf libpqxx
+    rm -rf libpqxx && \
+    ldconfig
 
-# Verify libpqxx detection after build
-RUN pkg-config --libs libpqxx && echo "libpqxx found by pkg-config"
+# Verify libpqxx installation
+RUN pkg-config --libs libpqxx && echo "✓ libpqxx 7.9.0 (C++20) installed"
 
-# Build redis-plus-plus from source (not available in ubuntu 24.04 repo)
-RUN git clone https://github.com/sewenew/redis-plus-plus.git && \
+# ==============================================================================
+# Source Build: redis-plus-plus (Not in Ubuntu repos)
+# ==============================================================================
+RUN git clone --depth 1 https://github.com/sewenew/redis-plus-plus.git && \
     cd redis-plus-plus && \
     mkdir build && cd build && \
-    cmake -DREDIS_PLUS_PLUS_BUILD_TEST=OFF -DCMAKE_BUILD_TYPE=Release .. && \
+    cmake -DREDIS_PLUS_PLUS_BUILD_TEST=OFF \
+    -DCMAKE_BUILD_TYPE=Release .. && \
     make -j$(nproc) && \
     make install && \
     cd ../.. && \
-    rm -rf redis-plus-plus
+    rm -rf redis-plus-plus && \
+    ldconfig
 
-# Install Ninja
-RUN apt-get update && apt-get install -y ninja-build && rm -rf /var/lib/apt/lists/*
+# ==============================================================================
+# Build Tool: Ninja
+# ==============================================================================
+RUN apt-get update && \
+    apt-get install -y ninja-build && \
+    rm -rf /var/lib/apt/lists/*
 
-# Setup vcpkg
+# ==============================================================================
+# vcpkg Setup (for ftxui and other dev dependencies)
+# ==============================================================================
+# Note: vcpkg is unreliable on Linux Docker (network issues), but kept for
+# potential Windows container builds or future improvements.
 ENV VCPKG_ROOT=/opt/vcpkg
 ENV VCPKG_FORCE_SYSTEM_BINARIES=1
-ENV VCPKG_DISABLE_METRICS=1
 ENV VCPKG_MAX_DOWNLOAD_ATTEMPTS=10
 ENV VCPKG_MAX_CONCURRENCY=8
+
 RUN git clone https://github.com/microsoft/vcpkg.git $VCPKG_ROOT && \
     cd $VCPKG_ROOT && \
     git checkout 2025.10.17 && \
     touch vcpkg.disable-metrics && \
     ./bootstrap-vcpkg.sh
 
-# Set working directory
+# ==============================================================================
+# Application Workspace
+# ==============================================================================
 WORKDIR /app
 
-# Copy dependency definition files
+# Copy dependency manifests
 COPY vcpkg.json .
 COPY CMakePresets.json .
 
-# Install dependencies via vcpkg explicitly
-# This ensures dependencies are built even if CMake configuration fails due to dummy files
-RUN $VCPKG_ROOT/vcpkg install --triplet x64-linux --disable-metrics
+# Install vcpkg dependencies (ftxui for devclient, etc.)
+# This may fail on some Linux systems due to network issues - that's expected.
+# Server components don't require vcpkg dependencies.
+RUN $VCPKG_ROOT/vcpkg install --triplet x64-linux --disable-metrics || \
+    echo "⚠ vcpkg install failed (expected on Linux Docker)" && \
+    rm -rf $VCPKG_ROOT/buildtrees $VCPKG_ROOT/downloads
 
-# Clean up vcpkg build trees to reduce image size (optional, but good for base image)
-# We keep installed packages but remove build artifacts
+# ==============================================================================
+# Final Cleanup
+# ==============================================================================
+# Remove vcpkg build artifacts to reduce image size
 RUN rm -rf $VCPKG_ROOT/buildtrees
