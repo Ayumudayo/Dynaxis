@@ -42,7 +42,13 @@ int main(int argc, char** argv) {
         // Collect migrations
         std::vector<Migration> migs;
         std::regex re_num(R"((\d+)_.*\.sql$)");
-        fs::path dir = fs::path("tools") / "migrations";
+        fs::path dir;
+        if (const char* env_dir = std::getenv("MIGRATIONS_DIR"); env_dir && *env_dir) {
+            dir = env_dir;
+        } else {
+            dir = fs::path("tools") / "migrations";
+        }
+        std::cout << "Using migrations directory: " << dir << std::endl;
         for (auto& ent : fs::directory_iterator(dir)) {
             if (!ent.is_regular_file()) continue;
             auto name = ent.path().filename().string();
@@ -87,7 +93,24 @@ int main(int argc, char** argv) {
             std::cout << "Applying " << m.path.filename().string() << (non_tx ? " (non-tx)" : "") << std::endl;
             if (non_tx) {
                 pqxx::nontransaction n(c);
-                n.exec(sql);
+                // Split by semicolon to avoid implicit transaction block for multiple statements
+                std::regex re_split(R"(;)");
+                std::sregex_token_iterator it(sql.begin(), sql.end(), re_split, -1);
+                std::sregex_token_iterator end;
+                for (; it != end; ++it) {
+                    std::string stmt = *it;
+                    // Trim whitespace
+                    stmt.erase(0, stmt.find_first_not_of(" \t\n\r"));
+                    stmt.erase(stmt.find_last_not_of(" \t\n\r") + 1);
+                    if (!stmt.empty()) {
+                        try {
+                            n.exec(stmt);
+                        } catch (const std::exception& e) {
+                            std::cerr << "Failed statement: " << stmt << "\nError: " << e.what() << std::endl;
+                            throw;
+                        }
+                    }
+                }
             } else {
                 pqxx::work w(c);
                 w.exec(sql);

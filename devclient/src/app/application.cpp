@@ -12,6 +12,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -81,6 +82,11 @@ Application::Impl::Impl(std::string host, unsigned short port, bool allow_env_ov
       request_refresh_([this] { screen_.PostEvent(ftxui::Event::Custom); }),
       log_sink_([this](const std::string& message) {
           state_.append_log(message);
+          // Debug logging
+          std::ofstream debug_log("client_debug.log", std::ios::app);
+          if (debug_log) {
+              debug_log << message << std::endl;
+          }
           request_refresh_();
       }),
       commands_(state_, net_, log_sink_),

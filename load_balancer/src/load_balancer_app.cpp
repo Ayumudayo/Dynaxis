@@ -579,6 +579,7 @@ std::optional<LoadBalancerApp::BackendEndpoint> LoadBalancerApp::find_backend_by
 
 // 클라이언트 ID가 있으면 consistent hash ring으로 sticky routing을 시도하고,
 // 없으면 round-robin + health 상태로 backend를 고른다.
+// "anonymous" 클라이언트는 라운드로빈으로 분산한다.
 std::optional<LoadBalancerApp::BackendEndpoint> LoadBalancerApp::select_backend(const std::string& client_id) {
     if (backends_.empty()) {
         return std::nullopt;
@@ -586,7 +587,8 @@ std::optional<LoadBalancerApp::BackendEndpoint> LoadBalancerApp::select_backend(
 
     auto now = std::chrono::steady_clock::now();
 
-    if (!client_id.empty()) {
+    // anonymous 사용자는 sticky session을 사용하지 않고 라운드로빈으로 분산
+    if (!client_id.empty() && client_id != "anonymous") {
         std::lock_guard<std::mutex> lock(hash_mutex_);
         if (!hash_ring_.empty()) {
             auto hash = static_cast<std::uint32_t>(std::hash<std::string>{}(client_id));
@@ -612,6 +614,7 @@ std::optional<LoadBalancerApp::BackendEndpoint> LoadBalancerApp::select_backend(
         }
     }
 
+    // Round-robin: anonymous 사용자 또는 sticky routing 실패 시
     for (std::size_t attempt = 0; attempt < backends_.size(); ++attempt) {
         auto idx = backend_index_.fetch_add(1, std::memory_order_relaxed);
         const auto& candidate = backends_[idx % backends_.size()];
@@ -681,7 +684,8 @@ grpc::Status LoadBalancerApp::handle_stream(
 
     auto now = std::chrono::steady_clock::now();
     // sticky 세션을 지원하기 위해 Redis session_directory에서 기존 backend를 찾는다.
-    if (session_directory_ && !client_id.empty()) {
+    // anonymous 사용자는 session_directory를 사용하지 않는다.
+    if (session_directory_ && !client_id.empty() && client_id != "anonymous") {
         // session_directory는 "client_id -> backend_id" 매핑을 Redis에 저장해
         // gateway 재연결 시에도 같은 backend를 선택하게 한다. backend가 죽었거나 health 체크에
         // 실패하면 release_backend를 호출해 매핑을 제거하고 새 backend를 배정한다.

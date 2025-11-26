@@ -9,6 +9,7 @@
 #include "server/core/protocol/protocol_flags.hpp"
 
 #include <sstream>
+#include <fstream>
 #include <string>
 #include <utility>
 
@@ -110,6 +111,13 @@ void NetworkRouter::Initialize() {
             }
             auto prefix = "[" + room + "] " + (is_me ? "me" : sender) + ": ";
             log_sink_(prefix + text);
+
+            // Debug logging to file
+            std::ofstream debug_log("client_debug.log", std::ios::app);
+            if (debug_log) {
+                debug_log << prefix << text << std::endl;
+            }
+
             request_refresh_();
         });
     });

@@ -289,14 +289,12 @@ void NetClient::handle_frame(const proto::FrameHeader& hh, std::span<const std::
 
     // 채팅 브로드캐스트 처리
     if (hh.msg_id == proto::MSG_CHAT_BROADCAST) {
-        std::string room; std::string sender; std::string text;
-        std::uint32_t sender_sid = 0;
-        auto cur = in;
-        proto::read_lp_utf8(cur, room);
-        proto::read_lp_utf8(cur, sender);
-        proto::read_lp_utf8(cur, text);
-        if (cur.size() >= 4) sender_sid = proto::read_be32(cur.data());
-        if (on_bcast_) on_bcast_(std::move(room), std::move(sender), std::move(text), hh.flags, sender_sid);
+        server::wire::v1::ChatBroadcast pb;
+        if (server::wire::codec::Decode(in.data(), in.size(), pb)) {
+            if (on_bcast_) {
+                on_bcast_(pb.room(), pb.sender(), pb.text(), hh.flags, pb.sender_sid());
+            }
+        }
         return;
     }
 

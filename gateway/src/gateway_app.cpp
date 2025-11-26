@@ -137,7 +137,11 @@ void GatewayApp::LbSession::stop() {
     }
 
     if (reader_thread_.joinable()) {
-        reader_thread_.join();
+        if (reader_thread_.get_id() == std::this_thread::get_id()) {
+            reader_thread_.detach();
+        } else {
+            reader_thread_.join();
+        }
     }
     stream_.reset();
     context_.reset();

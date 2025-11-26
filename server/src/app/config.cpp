@@ -18,6 +18,9 @@ bool ServerConfig::load(int argc, char** argv) {
 
     // 2. 환경 변수 로드 (Docker 또는 OS 환경 변수)
     // .env 파일 로딩 로직은 제거됨. Docker Compose 또는 실행 환경에서 주입된 환경 변수를 사용함.
+    if (const char* val = std::getenv("PORT"); val && *val) {
+        port = static_cast<unsigned short>(std::stoi(val));
+    }
 
     if (const char* val = std::getenv("LOG_BUFFER_CAPACITY"); val && *val) {
         auto cap = std::strtoull(val, nullptr, 10);

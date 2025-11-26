@@ -14,6 +14,15 @@ case "$CMD" in
   "replayer")
     exec ./wb_dlq_replayer "$@"
     ;;
+  "gateway")
+    exec ./gateway_app "$@"
+    ;;
+  "load_balancer")
+    exec ./load_balancer_app "$@"
+    ;;
+  "migrate")
+    exec ./migrations_runner "$@"
+    ;;
   *)
     echo "Unknown command: $CMD"
     echo "Usage: $0 {server|worker|replayer} [args...]"

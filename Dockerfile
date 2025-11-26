@@ -16,7 +16,7 @@ RUN cmake --preset linux
 
 # Build the project
 # We use the same preset as the base image
-RUN cmake --build --preset linux-release --target server_app wb_worker wb_dlq_replayer
+RUN cmake --build --preset linux-release --target server_app wb_worker wb_dlq_replayer gateway_app load_balancer_app migrations_runner
 
 # Runtime Stage
 FROM ubuntu:24.04
@@ -41,6 +41,12 @@ WORKDIR /app
 COPY --from=builder /app/build-linux/server/server_app .
 COPY --from=builder /app/build-linux/wb_worker .
 COPY --from=builder /app/build-linux/wb_dlq_replayer .
+COPY --from=builder /app/build-linux/gateway/gateway_app .
+COPY --from=builder /app/build-linux/load_balancer/load_balancer_app .
+COPY --from=builder /app/build-linux/migrations_runner .
+
+# Copy migration SQL files
+COPY tools/migrations /app/migrations
 
 # Create a startup script to choose which binary to run
 COPY scripts/docker_entrypoint.sh /app/entrypoint.sh

@@ -25,6 +25,10 @@ void register_routes(server::core::Dispatcher& dispatcher, server::app::chat::Ch
     dispatcher.register_handler(MSG_PING,
         [&chat](server::core::Session& s, std::span<const std::uint8_t> payload) { chat.on_ping(s, payload); });
 
+    // PONG 핸들러: 클라이언트의 응답을 수신하고 무시한다 (RTT 측정 등은 추후 구현)
+    dispatcher.register_handler(MSG_PONG,
+        [](server::core::Session&, std::span<const std::uint8_t>) {});
+
     dispatcher.register_handler(MSG_LOGIN_REQ,
         [&chat](server::core::Session& s, std::span<const std::uint8_t> payload) { chat.on_login(s, payload); });
 

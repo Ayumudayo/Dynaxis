@@ -46,8 +46,8 @@ services:
       USE_REDIS_PUBSUB: "1"
       REDIS_CHANNEL_PREFIX: "knights:"
       SERVER_INSTANCE_ID: server-1
-      ADVERTISE_HOST: server-1
-      ADVERTISE_PORT: ${SERVER_PORT_1}
+      SERVER_ADVERTISE_HOST: server-1
+      SERVER_ADVERTISE_PORT: ${SERVER_PORT_1}
       METRICS_PORT: 9090
     ports:
       - "${SERVER_PORT_1}:${SERVER_PORT_1}"
@@ -75,8 +75,8 @@ services:
       USE_REDIS_PUBSUB: "1"
       REDIS_CHANNEL_PREFIX: "knights:"
       SERVER_INSTANCE_ID: server-2
-      ADVERTISE_HOST: server-2
-      ADVERTISE_PORT: ${SERVER_PORT_2}
+      SERVER_ADVERTISE_HOST: server-2
+      SERVER_ADVERTISE_PORT: ${SERVER_PORT_2}
       METRICS_PORT: 9090
     ports:
       - "${SERVER_PORT_2}:${SERVER_PORT_2}"
@@ -106,6 +106,59 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     networks:
       - knights-net
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: never
+    command: [ "gateway" ]
+    ports:
+      - "6000:6000"
+    environment:
+      GATEWAY_LISTEN: "0.0.0.0:6000"
+      LB_GRPC_ENDPOINT: "load_balancer:7001"
+      GATEWAY_ID: "gw1"
+    depends_on:
+      - load_balancer
+    networks:
+      - knights-net
+
+  load_balancer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: never
+    command: [ "load_balancer" ]
+    ports:
+      - "7001:7001"
+    environment:
+      LB_GRPC_LISTEN: "0.0.0.0:7001"
+      REDIS_URI: "tcp://redis:6379"
+      LB_DYNAMIC_BACKENDS: "1"
+      LB_BACKEND_REGISTRY_PREFIX: "gateway/instances/"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - knights-net
+
+  migrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: never
+    command: [ "migrate" ]
+    environment:
+      DB_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      MIGRATIONS_DIR: /app/migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - knights-net
+    profiles:
+      - tools
 
   wb_worker:
     build: .
