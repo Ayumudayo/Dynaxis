@@ -12,7 +12,6 @@
 
 #include "server/storage/redis/client.hpp"
 #include "server/core/util/log.hpp"
-#include "server/core/config/dotenv.hpp"
 #include <pqxx/pqxx>
 #include <nlohmann/json.hpp>
 
@@ -42,9 +41,6 @@ struct WorkerConfig {
     static WorkerConfig Load() {
         WorkerConfig cfg;
         // .env 파일 로드 (기존 환경변수 덮어쓰기)
-        if (server::core::config::load_dotenv(".env", true)) {
-            info("Loaded .env for wb_worker (override existing env = true)");
-        }
 
         if (const char* v = std::getenv("DB_URI")) cfg.db_uri = v;
         if (const char* v = std::getenv("REDIS_URI")) cfg.redis_uri = v;

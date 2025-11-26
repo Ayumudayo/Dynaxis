@@ -12,7 +12,6 @@
 
 #include "server/storage/redis/client.hpp"
 #include "server/core/util/log.hpp"
-#include "server/core/config/dotenv.hpp"
 #include <pqxx/pqxx>
 #include <nlohmann/json.hpp>
 
@@ -37,9 +36,6 @@ struct ReplayerConfig {
 
     static ReplayerConfig Load() {
         ReplayerConfig cfg;
-        if (server::core::config::load_dotenv(".env", true)) {
-            info("Loaded .env for wb_dlq_replayer (override existing env = true)");
-        }
 
         if (const char* v = std::getenv("DB_URI")) cfg.db_uri = v;
         if (const char* v = std::getenv("REDIS_URI")) cfg.redis_uri = v;
@@ -56,8 +52,14 @@ struct ReplayerConfig {
             auto n = std::strtoul(v, nullptr, 10);
             if (n >= 50 && n <= 60000) cfg.retry_backoff_ms = static_cast<long long>(n);
         }
+        if (const char* v = std::getenv("WB_DLQ_BATCH")) {
+            auto n = std::strtoul(v, nullptr, 10);
+            if (n > 0 && n <= 1000) cfg.batch_size = static_cast<int>(n);
+        }
         return cfg;
     }
+
+    int batch_size = 50; // Default from docs
 };
 
 // -----------------------------------------------------------------------------
@@ -79,7 +81,7 @@ class WbDlqReplayer {
 public:
     explicit WbDlqReplayer(ReplayerConfig config) : config_(std::move(config)) {}
 
-    int Run() {
+    int Run(bool run_once) {
         if (config_.db_uri.empty()) {
             std::cerr << "DLQ: DB_URI not set" << std::endl;
             return 2;
@@ -111,7 +113,7 @@ public:
             // Loop() 내에서 처리하도록 함.
         }
 
-        Loop();
+        Loop(run_once);
         return 0;
     }
 
@@ -131,7 +133,7 @@ private:
         return false;
     }
 
-    void Loop() {
+    void Loop(bool run_once) {
         while (true) {
             // DB 연결 확인 (끊어졌으면 재연결 시도)
             if (!EnsureDbConnection()) {
@@ -140,15 +142,27 @@ private:
             }
 
             std::vector<server::storage::redis::IRedisClient::StreamEntry> entries;
-            // DLQ는 처리량이 적으므로 1초 대기, 100개씩 읽기
+            // DLQ는 처리량이 적으므로 1초 대기
+            // 문서에 명시된 WB_DLQ_BATCH 값(기본 50)을 사용
             if (!redis_->xreadgroup(config_.dlq_stream, config_.group, config_.consumer, 
-                                  1000, 100, entries)) {
+                                  1000, config_.batch_size, entries)) {
+                if (run_once) break; // --once 모드에서는 타임아웃/빈 응답 시 종료
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 continue;
             }
 
+            if (entries.empty()) {
+                if (run_once) break; // --once 모드에서는 더 이상 읽을 게 없으면 종료
+            }
+
             for (const auto& e : entries) {
                 ProcessEntry(e);
+            }
+            
+            if (run_once && entries.size() < static_cast<size_t>(config_.batch_size)) {
+                // --once 모드이고, 읽어온 개수가 배치 크기보다 작으면 
+                // 더 이상 처리할 항목이 없다고 판단하여 종료
+                break;
             }
         }
     }
@@ -221,14 +235,6 @@ private:
                        const std::string& orig_id, int retry_count, const char* error_msg) {
         
         // 재시도 한도 초과 -> Dead Letter Stream으로 이동
-        //
-        // 동작 방식:
-        // 1. 재시도 횟수가 한도(retry_max)에 도달하면 더 이상 재시도하지 않고
-        //    별도의 'Dead Stream'으로 이벤트를 이동시킵니다.
-        //    이는 운영자가 수동으로 개입하여 문제를 분석하고 처리해야 함을 의미합니다.
-        // 2. Dead Stream 이동에 성공하면 원본 DLQ 스트림에서는 ACK 처리하여 제거합니다.
-        // 3. [중요] Dead Stream 이동에 실패하면(Redis 오류 등) ACK를 하지 않습니다.
-        //    이렇게 해야 데이터 유실 없이 다음 번에 다시 시도할 수 있습니다.
         if (retry_count + 1 >= static_cast<int>(config_.retry_max)) {
             if (MoveToDeadStream(e, orig_id, error_msg)) {
                 // 이동 성공 시에만 ACK
@@ -239,28 +245,7 @@ private:
             }
         } else {
             // 지수 백오프 후 DLQ에 다시 추가 (재시도 횟수 증가)
-            //
-            // 동작 방식:
-            // 1. 재시도 횟수에 따라 대기 시간을 지수적으로 늘립니다 (Exponential Backoff).
-            //    이는 일시적인 DB 부하 등으로 인한 실패 시 시스템에 과부하를 주지 않기 위함입니다.
-            // 2. 대기 후, 이벤트를 다시 DLQ 스트림의 *끝*에 추가합니다.
-            //    이때 'retry_count' 필드를 1 증가시켜 다음 처리 시 재시도 횟수를 알 수 있게 합니다.
-            // 3. 원본 이벤트는 ACK 처리하여 제거합니다. (새로운 이벤트가 DLQ 끝에 추가되었으므로)
             RetryLater(e, orig_id, retry_count, error_msg);
-            
-            // RetryLater 내부에서 실패하더라도, 현재 메시지는 처리된 것으로 간주하고 ACK 할지,
-            // 아니면 ACK를 안 할지 결정해야 합니다.
-            // 여기서는 RetryLater가 실패하면(Redis 오류) ACK를 안 하는 것이 안전합니다.
-            // 하지만 RetryLater 함수가 void라 성공 여부를 모릅니다.
-            // RetryLater를 bool로 변경하거나, 예외를 던지게 해야 합니다.
-            // 현재 구현상 RetryLater는 예외를 삼키고 에러 로그를 찍습니다.
-            // 안전성을 위해 RetryLater가 실패하면 ACK를 하지 않도록 수정하는 것이 좋습니다.
-            // (아래 코드에서는 RetryLater가 실패하면 ACK를 수행하여 데이터가 유실될 수 있는 구조였음 -> 수정 필요)
-            
-            // 수정된 로직: RetryLater가 성공했을 때만 ACK
-            // 하지만 RetryLater 함수 시그니처를 바꾸기보다, 여기서 직접 처리하거나
-            // RetryLater가 예외를 던지게 하는 것이 깔끔합니다.
-            // 여기서는 RetryLater를 호출하고, 그 안에서 xadd가 성공하면 true를 반환하도록 변경하겠습니다.
         }
     }
 
@@ -315,11 +300,19 @@ private:
     std::unique_ptr<pqxx::connection> db_;
 };
 
-int main(int, char**) {
+int main(int argc, char** argv) {
     try {
+        bool run_once = false;
+        for (int i = 1; i < argc; ++i) {
+            std::string arg = argv[i];
+            if (arg == "--once") {
+                run_once = true;
+            }
+        }
+
         auto config = ReplayerConfig::Load();
         WbDlqReplayer replayer(std::move(config));
-        return replayer.Run();
+        return replayer.Run(run_once);
     } catch (const std::exception& e) {
         std::cerr << "DLQ replayer fatal error: " << e.what() << std::endl;
         return 1;

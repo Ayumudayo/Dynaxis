@@ -108,23 +108,6 @@
 - 멱등성: `event_id`(Streams ID) 고유 제약으로 중복 삽입 무해
 - 부분 커밋: 이벤트별 개별 트랜잭션으로 성공분만 커밋/ACK
 - 에러 처리:
-  - `WB_DLQ_ON_ERROR=1`이고 `WB_DLQ_STREAM`이 지정되면 DLQ로 포워드 후 ACK
-  - DLQ 전송도 실패하면 ACK 생략(재시도)
-  - `WB_ACK_ON_ERROR=1`이면 DLQ 비활성이어도 에러 항목을 ACK하여 워크플로 차단 방지
-- 펜딩 길이 관측: `metric=wb_pending value=<n>` 주기(1s) 로그
- - UUID 정규화: `user_id/session_id/room_id`가 UUID 형식이 아니면 NULL 저장(워커에서 정규화)
-
-## 모니터링 및 개선 항목
-- DLQ 항목은 
-etry_count, last_error_ts, 원인 코드를 payload에 포함해 재처리 대상을 빠르게 파악한다.
-- Streams 길이는 XINFO STREAM과 REDIS_STREAM_MAXLEN 설정으로 관리하고, XADD MAXLEN ~을 사용해 기하급수적으로 늘어나지 않도록 한다.
-- /metrics에 wb_batch_size, wb_commit_ms, wb_fail_total, wb_pending, wb_dlq_total을 내보내고 알람 기준을 정한다. (예: wb_pending > 500 5분 지속 시 경보)
-- 워커는 batch commit 후 metric=wb_flush(commit_ms, batch_size, ok/fail/dlq)을 INFO 로그에 남기고, DLQ 재처리 결과는 wb_dlq_replay 키워드로 집계한다.
-## DLQ 재처리 도구(wb_dlq_replayer)
-- 동작: DLQ에서 읽어 멱등 커밋, 실패 시 재시도/데드 이동
-- 설정: `WB_DLQ_STREAM`, `WB_DEAD_STREAM`, `WB_GROUP_DLQ`, `WB_CONSUMER`, `WB_RETRY_MAX`, `WB_RETRY_BACKOFF_MS`
-- 백오프: 재시도마다 2^n 배(상한 10초) 지연 후 재삽입
-- 로그: `metric=wb_dlq_replay*` 계열(성공/재시도/데드)
 
 ## 모니터링
 - 레이턴시 p50/p95, 배치 크기, 커밋율, 실패율, 재시도/펜딩 길이, DLQ 길이

@@ -13,13 +13,18 @@ write-behind 워커(`wb_worker`)가 실패한 이벤트를 DLQ 로 보내면, `w
 
 ## 2. 재처리 절차
 ```bash
-# 환경 변수 준비	export DB_URI=postgres://...
-export WB_STREAM=session_events
+# 환경 변수 준비
+export DB_URI=postgres://...
 export WB_DLQ_STREAM=session_events_dlq
 export WB_RETRY_MAX=5
 export WB_RETRY_BACKOFF_MS=500
+export WB_DLQ_BATCH=50
 
+# 1회 실행 (크론잡 등)
 ./wb_dlq_replayer --once
+
+# 데몬 모드 (무한 루프)
+./wb_dlq_replayer
 ```
 1. DLQ에서 가장 오래된 항목을 읽는다.
 2. `retry_count < WB_RETRY_MAX` 이면 작업 수행 → 성공 시 ACK + 로그 `metric=wb_dlq_replay ok=1 event_id=`

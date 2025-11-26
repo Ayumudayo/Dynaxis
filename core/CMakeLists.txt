@@ -12,7 +12,6 @@ add_library(server_core
     src/concurrent/thread_manager.cpp
     src/concurrent/task_scheduler.cpp
     src/memory/memory_pool.cpp
-    src/config/dotenv.cpp
     src/util/service_registry.cpp
     src/util/paths.cpp
     src/util/crash_handler.cpp

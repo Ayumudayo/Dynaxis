@@ -22,7 +22,6 @@
 #include <boost/asio/write.hpp>
 
 #include "load_balancer/session_directory.hpp"
-#include "server/core/config/dotenv.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/util/paths.hpp"
 #include "server/storage/redis/client.hpp"
@@ -100,7 +99,6 @@ LoadBalancerApp::LoadBalancerApp()
     , heartbeat_timer_(io_)
     , signals_(io_)
     , backend_refresh_timer_(io_) {
-    load_environment();
     state_backend_ = create_backend();
     configure();
 }
@@ -799,158 +797,98 @@ grpc::Status LoadBalancerApp::handle_stream(
             std::size_t bytes = backend_socket.read_some(boost::asio::buffer(buffer), read_ec);
             if (read_ec) {
                 if (running.load(std::memory_order_relaxed)) {
-                    gateway::lb::RouteMessage msg;
-                    msg.set_kind(gateway::lb::ROUTE_KIND_SERVER_CLOSE);
-                    msg.set_error(read_ec.message());
-                    mark_backend_failure(assigned_backend_id);
-                    send_to_gateway(std::move(msg));
+                    gateway::lb::RouteMessage close_msg;
+                    if (read_ec == boost::asio::error::eof) {
+                        close_msg.set_kind(gateway::lb::ROUTE_KIND_SERVER_CLOSE);
+                    } else {
+                        close_msg.set_kind(gateway::lb::ROUTE_KIND_SERVER_ERROR);
+                        close_msg.set_error(read_ec.message());
+                    }
+                    send_to_gateway(std::move(close_msg));
                 }
-                break;
-            }
-            // backend로부터 응답을 받은 시간은 idle watcher가 참고하므로 즉시 갱신한다.
-            last_backend_activity.store(std::chrono::steady_clock::now(), std::memory_order_relaxed);
-            gateway::lb::RouteMessage response;
-            response.set_kind(gateway::lb::ROUTE_KIND_SERVER_PAYLOAD);
-            response.set_payload(reinterpret_cast<const char*>(buffer.data()), static_cast<int>(bytes));
-            if (!send_to_gateway(std::move(response))) {
-                break;
-            }
-        }
-        running.store(false, std::memory_order_relaxed);
-        boost::system::error_code close_ec;
-        backend_socket.close(close_ec);
-    });
-
-    // idle_watcher는 backend가 장시간 payload를 보내지 않을 때 세션을 정리해 리소스를 회수한다.
-    std::thread idle_watcher([&, session_id, gateway_id]() {
-        while (running.load(std::memory_order_relaxed)) {
-            auto sleep = backend_idle_timeout_ / 2;
-            if (sleep <= std::chrono::seconds::zero()) {
-                sleep = std::chrono::seconds{1};
-            }
-            std::this_thread::sleep_for(sleep);
-            if (!running.load(std::memory_order_relaxed)) {
-                break;
-            }
-            auto idle = std::chrono::steady_clock::now() - last_backend_activity.load(std::memory_order_relaxed);
-            if (idle >= backend_idle_timeout_) {
-                auto total = ++backend_idle_close_total_;
-                server::core::log::warn("LoadBalancerApp closing idle backend session session_id=" + session_id +
-                                        " gateway=" + gateway_id + " backend=" + assigned_backend_id +
-                                        " idle_ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(idle).count()) +
-                                        " metric=lb_backend_idle_close_total value=" + std::to_string(total));
                 running.store(false, std::memory_order_relaxed);
-                boost::system::error_code close_ec;
-                backend_socket.close(close_ec);
                 break;
+            }
+
+            if (bytes > 0) {
+                gateway::lb::RouteMessage payload_msg;
+                payload_msg.set_kind(gateway::lb::ROUTE_KIND_SERVER_PAYLOAD);
+                payload_msg.set_payload(reinterpret_cast<const char*>(buffer.data()), static_cast<int>(bytes));
+                if (!send_to_gateway(std::move(payload_msg))) {
+                    break;
+                }
             }
         }
     });
 
-    auto process_message = [&](const gateway::lb::RouteMessage& message) {
-        switch (message.kind()) {
-        case gateway::lb::ROUTE_KIND_CLIENT_HELLO:
-        case gateway::lb::ROUTE_KIND_CLIENT_PAYLOAD:
-            if (!message.payload().empty()) {
-                forward_to_backend(message.payload());
+    gateway::lb::RouteMessage response;
+    while (running.load(std::memory_order_relaxed) && stream->Read(&response)) {
+        switch (response.kind()) {
+        case gateway::lb::ROUTE_KIND_CLIENT_PAYLOAD: {
+            auto payload = response.payload();
+            if (!forward_to_backend(payload)) {
+                running.store(false, std::memory_order_relaxed);
             }
             break;
+        }
         case gateway::lb::ROUTE_KIND_CLIENT_CLOSE:
             running.store(false, std::memory_order_relaxed);
-            release_session();
-            break;
-        case gateway::lb::ROUTE_KIND_HEARTBEAT:
-            // no-op for now
             break;
         default:
             break;
         }
-    };
-
-    process_message(request);
-
-    gateway::lb::RouteMessage next;
-    while (running.load(std::memory_order_relaxed) && stream->Read(&next)) {
-        process_message(next);
     }
 
     running.store(false, std::memory_order_relaxed);
-    boost::system::error_code shutdown_ec;
-    backend_socket.shutdown(boost::asio::ip::tcp::socket::shutdown_both, shutdown_ec);
-    backend_socket.close(shutdown_ec);
+    if (backend_socket.is_open()) {
+        boost::system::error_code ignored;
+        backend_socket.close(ignored);
+    }
     if (backend_reader.joinable()) {
         backend_reader.join();
     }
-    if (idle_watcher.joinable()) {
-        idle_watcher.join();
-    }
+
     release_session();
     return grpc::Status::OK;
 }
 
 void LoadBalancerApp::start_grpc_server() {
-    grpc_service_ = std::make_unique<GrpcServiceImpl>(*this);
+    std::string server_address = grpc_listen_address_;
     grpc::ServerBuilder builder;
-    builder.AddListeningPort(grpc_listen_address_, grpc::InsecureServerCredentials(), &grpc_selected_port_);
+    builder.AddListeningPort(server_address, grpc::InsecureServerCredentials(), &grpc_selected_port_);
+    
+    grpc_service_ = std::make_unique<GrpcServiceImpl>(*this);
     builder.RegisterService(grpc_service_.get());
+    
     grpc_server_ = builder.BuildAndStart();
-    if (!grpc_server_) {
-        throw std::runtime_error("LoadBalancerApp failed to start gRPC server on " + grpc_listen_address_);
-    }
-    server::core::log::info("LoadBalancerApp gRPC listening on " + grpc_listen_address_);
-    publish_heartbeat();
+    server::core::log::info("LoadBalancerApp gRPC server listening on " + server_address);
+    
     grpc_thread_ = std::thread([this]() {
-        grpc_server_->Wait();
+        if (grpc_server_) {
+            grpc_server_->Wait();
+        }
     });
 }
 
 void LoadBalancerApp::stop_grpc_server() {
-    if (!grpc_server_) {
-        return;
+    if (grpc_server_) {
+        grpc_server_->Shutdown();
+        grpc_server_.reset();
     }
-    grpc_server_->Shutdown();
     if (grpc_thread_.joinable()) {
         grpc_thread_.join();
     }
-    grpc_server_.reset();
-    grpc_service_.reset();
 }
 
 void LoadBalancerApp::handle_signals() {
-#if defined(SIGINT)
     signals_.add(SIGINT);
-#endif
-#if defined(SIGTERM)
     signals_.add(SIGTERM);
-#endif
-    signals_.async_wait([this](const boost::system::error_code& ec, int) {
-        if (ec == boost::asio::error::operation_aborted) {
-            return;
-        }
-        if (!ec) {
-            server::core::log::info("LoadBalancerApp received shutdown signal");
+    signals_.async_wait([this](const boost::system::error_code& error, int signal_number) {
+        if (!error) {
+            server::core::log::info("LoadBalancerApp received signal " + std::to_string(signal_number));
             stop();
         }
     });
-}
-
-void LoadBalancerApp::load_environment() {
-    namespace paths = server::core::util::paths;
-    try {
-        auto exe_dir = paths::executable_dir();
-        auto exe_env = exe_dir / ".env";
-        if (std::filesystem::exists(exe_env)) {
-            server::core::config::load_dotenv(exe_env.string(), true);
-            return;
-        }
-    } catch (const std::exception& ex) {
-        server::core::log::warn(std::string("LoadBalancerApp executable dir detection failed: ") + ex.what());
-    }
-
-    std::filesystem::path repo_env{".env"};
-    if (std::filesystem::exists(repo_env)) {
-        server::core::config::load_dotenv(repo_env.string(), true);
-    }
 }
 
 } // namespace load_balancer

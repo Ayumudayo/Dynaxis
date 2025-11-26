@@ -1,0 +1,42 @@
+# Version Control
+.git
+.gitignore
+.gitattributes
+
+# Build Artifacts
+build/
+build-*/
+out/
+bin/
+lib/
+*.exe
+*.dll
+*.so
+*.dylib
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.obj
+
+# Environment Files (Important: Prevent local config from overriding Docker config)
+.env
+.env.*
+!.env.example
+!.env.default
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Dependency Managers
+vcpkg_installed/
+vcpkg/
+*.vhdx
+
+# Etc
+Sapphire/
+external/

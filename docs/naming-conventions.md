@@ -3,7 +3,7 @@
 이 문서는 Knights 리포지터리 전체에 적용되는 네이밍 규칙과 예외를 정리한다. 목적은 ① 프로젝트명을 코드/바이너리 식별자로 사용하지 않고, ② 역할 기반 이름을 통해 모듈을 재사용 가능하게 유지하며, ③ 문서/코드/운영 자산 간 일관성을 보장하는 것이다.
 
 ## 1. 공통 원칙
-- **역할 기반 이름 사용**: `gateway`, `load_balancer`, `chat`, `auth`, `presence` 등 기능을 설명하는 이름만 허용한다. `Knights`, `knights`, `kproj` 등 프로젝트 전용 키워드는 금지한다.
+- **역할 기반 이름 사용**: `gateway`, `load_balancer`, `chat`, `auth`, `presence` 등 기능을 설명하는 이름만 허용한다. `Knights`, `knights`, `kproj` 등 프로젝트명을 코드 내 식별자나 네임스페이스로 사용하는 것을 금지한다.
 - **소문자 snake_case 파일명**: 헤더/소스/스크립트/문서는 모두 소문자 + `_` 조합을 사용한다. 예: `chat_service_core.cpp`, `gateway_app.hpp`.
 - **UTF-8 문서, ASCII 심볼**: 문서는 한국어+UTF-8, 코드 심볼은 ASCII 이름만 사용한다.
 - **네임스페이스 = 패키지 경로**: `server::core::net`, `server::gateway::auth`처럼 디렉터리 구조와 동일한 계층을 유지한다.

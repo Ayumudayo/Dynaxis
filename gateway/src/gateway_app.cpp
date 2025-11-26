@@ -14,7 +14,6 @@
 #include <grpcpp/grpcpp.h>
 
 #include "gateway/gateway_connection.hpp"
-#include "server/core/config/dotenv.hpp"
 #include "server/core/util/paths.hpp"
 #include "server/core/util/log.hpp"
 
@@ -188,7 +187,6 @@ GatewayApp::GatewayApp()
     : hive_(std::make_shared<server::core::net::Hive>(io_))
     , signals_(io_)
     , authenticator_(std::make_shared<auth::NoopAuthenticator>()) {
-    load_environment();
     configure_gateway();
     configure_load_balancer();
 }
@@ -352,24 +350,5 @@ void GatewayApp::handle_signals() {
     });
 }
 
-void GatewayApp::load_environment() {
-    namespace paths = server::core::util::paths;
-    // 실행 파일 옆 .env → 리포지터리 루트 .env 순으로 탐색하여 운영/개발 환경 모두 대응한다.
-    try {
-        auto exe_dir = paths::executable_dir();
-        auto exe_env = exe_dir / ".env";
-        if (std::filesystem::exists(exe_env)) {
-            server::core::config::load_dotenv(exe_env.string(), true);
-            return;
-        }
-    } catch (const std::exception& ex) {
-        server::core::log::warn(std::string("GatewayApp executable dir detection failed: ") + ex.what());
-    }
-
-    std::filesystem::path repo_env{".env"};
-    if (std::filesystem::exists(repo_env)) {
-        server::core::config::load_dotenv(repo_env.string(), true);
-    }
-}
 
 } // namespace gateway

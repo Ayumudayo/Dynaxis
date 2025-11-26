@@ -1,0 +1,106 @@
+# Base Image for Dependencies
+FROM ubuntu:24.04 AS base
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    curl \
+    zip \
+    unzip \
+    tar \
+    pkg-config \
+    linux-libc-dev \
+    ca-certificates \
+    gpg \
+    wget \
+    bison \
+    flex \
+    libboost-dev \
+    libboost-system-dev \
+    protobuf-compiler \
+    libprotobuf-dev \
+    libgrpc++-dev \
+    protobuf-compiler-grpc \
+    libpq-dev \
+    libgtest-dev \
+    nlohmann-json3-dev \
+    libhiredis-dev \
+    python3 \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && (apt-get purge -y libpqxx* || true) \
+    && rm -f /usr/lib/x86_64-linux-gnu/libpqxx* \
+    && rm -f /usr/lib/libpqxx*
+
+ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH
+ENV VCPKG_DISABLE_METRICS=1
+ENV CMAKE_MAKE_PROGRAM=/usr/bin/ninja
+
+# Verify libpqxx detection
+RUN pkg-config --libs libpqxx || echo "pkg-config failed to find libpqxx"
+
+
+
+# Install CMake 3.27 (newer than apt default 3.22)
+RUN wget -O cmake.sh https://github.com/Kitware/CMake/releases/download/v3.27.7/cmake-3.27.7-linux-x86_64.sh && \
+    chmod +x cmake.sh && \
+    ./cmake.sh --skip-license --prefix=/usr/local && \
+    rm cmake.sh
+
+# Build libpqxx from source (C++20 ABI compatibility)
+RUN git clone https://github.com/jtv/libpqxx.git && \
+    cd libpqxx && \
+    git checkout 7.9.0 && \
+    mkdir build && cd build && \
+    cmake -Dpqxx_CXX_STANDARD=20 -DBUILD_SHARED_LIBS=ON -DSKIP_BUILD_TEST=ON .. && \
+    make -j$(nproc) && \
+    make install && \
+    cd ../.. && \
+    rm -rf libpqxx
+
+# Verify libpqxx detection after build
+RUN pkg-config --libs libpqxx && echo "libpqxx found by pkg-config"
+
+# Build redis-plus-plus from source (not available in ubuntu 24.04 repo)
+RUN git clone https://github.com/sewenew/redis-plus-plus.git && \
+    cd redis-plus-plus && \
+    mkdir build && cd build && \
+    cmake -DREDIS_PLUS_PLUS_BUILD_TEST=OFF -DCMAKE_BUILD_TYPE=Release .. && \
+    make -j$(nproc) && \
+    make install && \
+    cd ../.. && \
+    rm -rf redis-plus-plus
+
+# Install Ninja
+RUN apt-get update && apt-get install -y ninja-build && rm -rf /var/lib/apt/lists/*
+
+# Setup vcpkg
+ENV VCPKG_ROOT=/opt/vcpkg
+ENV VCPKG_FORCE_SYSTEM_BINARIES=1
+ENV VCPKG_DISABLE_METRICS=1
+ENV VCPKG_MAX_DOWNLOAD_ATTEMPTS=10
+ENV VCPKG_MAX_CONCURRENCY=8
+RUN git clone https://github.com/microsoft/vcpkg.git $VCPKG_ROOT && \
+    cd $VCPKG_ROOT && \
+    git checkout 2025.10.17 && \
+    touch vcpkg.disable-metrics && \
+    ./bootstrap-vcpkg.sh
+
+# Set working directory
+WORKDIR /app
+
+# Copy dependency definition files
+COPY vcpkg.json .
+COPY CMakePresets.json .
+
+# Install dependencies via vcpkg explicitly
+# This ensures dependencies are built even if CMake configuration fails due to dummy files
+RUN $VCPKG_ROOT/vcpkg install --triplet x64-linux --disable-metrics
+
+# Clean up vcpkg build trees to reduce image size (optional, but good for base image)
+# We keep installed packages but remove build artifacts
+RUN rm -rf $VCPKG_ROOT/buildtrees

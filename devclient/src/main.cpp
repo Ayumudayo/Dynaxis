@@ -39,7 +39,7 @@ int main(int argc, char** argv) {
     // Debug 빌드: 기본 loopback 환경을 사용해 빠르게 실행한다.
     (void)argc;
     (void)argv;
-    client::app::Application app("127.0.0.1", 6000, true);
+    client::app::Application app("127.0.0.1", 10001, true);
 #endif
     return app.Run();
 }

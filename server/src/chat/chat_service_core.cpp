@@ -12,6 +12,7 @@
 #include "server/storage/redis/client.hpp"
 
 #include <algorithm>
+#include <random>
 #include <array>
 #include <cstdlib>
 #include <sstream>

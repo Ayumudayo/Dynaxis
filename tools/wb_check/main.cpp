@@ -3,7 +3,6 @@
 #include <string>
 #include <cstdlib>
 #include <pqxx/pqxx>
-#include "server/core/config/dotenv.hpp"
 
 // -----------------------------------------------------------------------------
 // wb_check
@@ -13,7 +12,6 @@
 int main(int argc, char** argv) {
     try {
         // .env 로드
-        (void)server::core::config::load_dotenv(".env", true);
 
         if (argc < 2) {
             std::cerr << "usage: wb_check <event_id>" << std::endl;

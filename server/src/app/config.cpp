@@ -1,75 +1,23 @@
 #include "server/app/config.hpp"
 #include "server/core/util/log.hpp"
-#include "server/core/config/dotenv.hpp"
-#include "server/core/util/paths.hpp"
-#include <filesystem>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <string>
+#include <chrono>
 
 namespace server::app {
 
 namespace corelog = server::core::log;
-namespace pathutil = server::core::util::paths;
 
 bool ServerConfig::load(int argc, char** argv) {
-    // 1. .env 파일 로드
-    bool env_loaded = false;
-    std::filesystem::path env_path;
-    std::filesystem::path exe_dir;
-
-    try {
-        exe_dir = pathutil::executable_dir();
-        auto local_env = exe_dir / ".env";
-        if (std::filesystem::exists(local_env)) {
-            env_loaded = server::core::config::load_dotenv(local_env.string(), true);
-            if (env_loaded) env_path = local_env;
-        } else {
-            auto local_default = exe_dir / ".env.default";
-            if (std::filesystem::exists(local_default)) {
-                try {
-                    std::filesystem::copy_file(local_default, local_env, std::filesystem::copy_options::overwrite_existing);
-                    corelog::info("Seeded .env next to executable from .env.default");
-                    env_loaded = server::core::config::load_dotenv(local_env.string(), true);
-                    if (env_loaded) env_path = local_env;
-                } catch (const std::exception& copy_ex) {
-                    corelog::warn(std::string("Failed to seed .env next to executable: ") + copy_ex.what());
-                }
-            }
-        }
-    } catch (const std::exception& ex) {
-        corelog::warn(std::string("Executable dir detection failed: ") + ex.what());
-    }
-
-    if (!env_loaded) {
-        std::filesystem::path repo_env{".env"};
-        if (!std::filesystem::exists(repo_env)) {
-            std::filesystem::path repo_default{".env.default"};
-            if (std::filesystem::exists(repo_default)) {
-                try {
-                    std::filesystem::copy_file(repo_default, repo_env, std::filesystem::copy_options::overwrite_existing);
-                    corelog::info("Seeded repository .env from .env.default");
-                } catch (const std::exception& copy_ex) {
-                    corelog::warn(std::string("Failed to seed repository .env: ") + copy_ex.what());
-                }
-            }
-        }
-        if (std::filesystem::exists(repo_env)) {
-            env_loaded = server::core::config::load_dotenv(repo_env.string(), true);
-            if (env_loaded) env_path = std::filesystem::absolute(repo_env);
-        }
-    }
-
-    if (env_loaded) {
-        corelog::info(std::string("Loaded environment file: ") + env_path.string());
-    } else {
-        corelog::info("No .env file located; using existing environment variables");
-    }
-
-    // 2. 기본 설정 로드
+    // 1. 기본 설정 로드 (커맨드 라인 인자)
     if (argc >= 2) {
         port = static_cast<unsigned short>(std::stoi(argv[1]));
     }
+
+    // 2. 환경 변수 로드 (Docker 또는 OS 환경 변수)
+    // .env 파일 로딩 로직은 제거됨. Docker Compose 또는 실행 환경에서 주입된 환경 변수를 사용함.
 
     if (const char* val = std::getenv("LOG_BUFFER_CAPACITY"); val && *val) {
         auto cap = std::strtoull(val, nullptr, 10);

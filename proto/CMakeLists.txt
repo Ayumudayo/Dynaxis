@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
-find_package(Protobuf CONFIG REQUIRED)
-find_package(gRPC CONFIG REQUIRED)
+find_package(Protobuf REQUIRED)
+find_package(gRPC REQUIRED)
 
 set(WIRE_PROTO ${CMAKE_CURRENT_SOURCE_DIR}/wire.proto)
 set(GATEWAY_LB_PROTO ${CMAKE_CURRENT_SOURCE_DIR}/gateway_lb.proto)

@@ -6,7 +6,6 @@
 #include <cstdlib>
 #include <optional>
 
-#include "server/core/config/dotenv.hpp"
 #include "server/storage/redis/client.hpp"
 
 // -----------------------------------------------------------------------------
@@ -16,7 +15,6 @@
 // 사용법: wb_emit [event_type]
 int main(int argc, char** argv) {
     try {
-        (void)server::core::config::load_dotenv(".env", true);
 
         const char* ruri = std::getenv("REDIS_URI");
         if (!ruri || !*ruri) {

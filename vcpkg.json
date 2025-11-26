@@ -3,14 +3,35 @@
   "version-string": "0.1.0",
   "description": "Chat server + FTXUI-based CLI client",
   "dependencies": [
-    "boost-asio",
+    {
+      "name": "boost-asio",
+      "platform": "windows"
+    },
     "ftxui",
-    "protobuf",
-    "grpc",
-    "libpqxx",
-    "redis-plus-plus",
-    "gtest",
-    "nlohmann-json"
+    {
+      "name": "protobuf",
+      "platform": "windows"
+    },
+    {
+      "name": "grpc",
+      "platform": "windows"
+    },
+    {
+      "name": "libpqxx",
+      "platform": "windows"
+    },
+    {
+      "name": "redis-plus-plus",
+      "platform": "windows"
+    },
+    {
+      "name": "gtest",
+      "platform": "windows"
+    },
+    {
+      "name": "nlohmann-json",
+      "platform": "windows"
+    }
   ],
   "builtin-baseline": "b1e15efef6758eaa0beb0a8732cfa66f6a68a81d"
 }

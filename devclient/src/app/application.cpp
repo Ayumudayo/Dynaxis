@@ -17,7 +17,6 @@
 #include <string>
 #include <utility>
 
-#include "server/core/config/dotenv.hpp"
 #include "server/core/util/paths.hpp"
 
 namespace client::app {
@@ -191,26 +190,6 @@ void Application::Impl::Connect() {
 }
 
 void Application::Impl::LoadEnvironment() {
-    // 실행 파일 위치와 repo 루트 순으로 .env를 찾고, DEVCLIENT_HOST/PORT를 덮어쓴다.
-    namespace paths = server::core::util::paths;
-    bool loaded = false;
-    try {
-        auto exe_dir = paths::executable_dir();
-        auto exe_env = exe_dir / ".env";
-        if (std::filesystem::exists(exe_env)) {
-            loaded = server::core::config::load_dotenv(exe_env.string(), true);
-        }
-    } catch (const std::exception& ex) {
-        log_sink_(std::string("[warn] .env 로드 실패: ") + ex.what());
-    }
-
-    if (!loaded) {
-        std::filesystem::path repo_env{".env"};
-        if (std::filesystem::exists(repo_env)) {
-            loaded = server::core::config::load_dotenv(repo_env.string(), true);
-        }
-    }
-
     if (allow_env_override_) {
         if (const char* host_env = std::getenv(kEnvHost); host_env && *host_env) {
             host_ = host_env;

@@ -1,0 +1,150 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - knights-net
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - knights-net
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  server-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: never
+    command: [ "server" ]
+    environment:
+      GATEWAY_ID: gw1
+      PORT: ${SERVER_PORT_1}
+      DB_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URI: tcp://redis:6379
+      WRITE_BEHIND_ENABLED: "1"
+      USE_REDIS_PUBSUB: "1"
+      REDIS_CHANNEL_PREFIX: "knights:"
+      SERVER_INSTANCE_ID: server-1
+      ADVERTISE_HOST: server-1
+      ADVERTISE_PORT: ${SERVER_PORT_1}
+      METRICS_PORT: 9090
+    ports:
+      - "${SERVER_PORT_1}:${SERVER_PORT_1}"
+      - "9091:9090" # Expose metrics for manual check
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - knights-net
+
+  server-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: never
+    command: [ "server" ]
+    environment:
+      GATEWAY_ID: gw2
+      PORT: ${SERVER_PORT_2}
+      DB_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URI: tcp://redis:6379
+      WRITE_BEHIND_ENABLED: "1"
+      USE_REDIS_PUBSUB: "1"
+      REDIS_CHANNEL_PREFIX: "knights:"
+      SERVER_INSTANCE_ID: server-2
+      ADVERTISE_HOST: server-2
+      ADVERTISE_PORT: ${SERVER_PORT_2}
+      METRICS_PORT: 9090
+    ports:
+      - "${SERVER_PORT_2}:${SERVER_PORT_2}"
+      - "9092:9090" # Expose metrics for manual check
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - knights-net
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - knights-net
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    networks:
+      - knights-net
+
+  wb_worker:
+    build: .
+    command: [ "worker" ]
+    environment:
+      DB_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URI: tcp://redis:6379
+      WB_CONSUMER: worker-1
+      WB_GROUP_DLQ: wb_dlq_group
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - knights-net
+
+  wb_dlq_replayer:
+    build: .
+    command: [ "replayer" ]
+    environment:
+      DB_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URI: tcp://redis:6379
+      WB_DLQ_BATCH: ${WB_DLQ_BATCH}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - knights-net
+    profiles:
+      - tools # Only start when explicitly requested or with --profile tools
+
+volumes:
+  postgres_data:
+  redis_data:
+
+
+networks:
+  knights-net:
+    driver: bridge

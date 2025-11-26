@@ -12,6 +12,14 @@ gateway_app  ── gRPC Stream ──>  load_balancer_app  ── TCP ──>  
         └──── Redis Presence / Sticky Session / PubSub / Streams ────┘
 ```
 
+> **Note**: 본 문서는 목표로 하는 MSA 아키텍처를 기술합니다. 현재 개발 단계에서는 `server_app` 단일 프로세스(Monolith)로 동작하며, 추후 `gateway`, `load_balancer` 등으로 분리될 예정입니다.
+
+## 1. 개요
+Knights 서버는 고성능 실시간 채팅을 위한 분산 아키텍처를 지향한다.
+- **Gateway**: 클라이언트 연결 관리, 프로토콜 변환, 인증 위임.
+- **Load Balancer**: 세션 분산, Sticky Routing, 백엔드 헬스 체크.
+- **Server (Chat/Logic)**: 실제 비즈니스 로직 처리, 상태 관리.
+
 ## 1. 모듈 설명
 ### server_app
 - Boost.Asio 기반 `core::net::Acceptor`/`Session`으로 직접 클라이언트를 관리한다.
