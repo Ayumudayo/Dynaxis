@@ -146,7 +146,6 @@ void ChatService::on_leave(server::core::Session& s, std::span<const std::uint8_
                                 auto uow = db_pool_->make_unit_of_work();
                                 uow->rooms().close(room_uuid);
                                 uow->commit();
-                                corelog::info("DEBUG: Closed empty room: " + room_to_leave + " (UUID: " + room_uuid + ")");
 
                                 // 로컬 캐시에서도 제거하여 다음번 방 생성 시 새로운 UUID를 발급받도록 함
                                 {
@@ -154,10 +153,8 @@ void ChatService::on_leave(server::core::Session& s, std::span<const std::uint8_
                                     state_.room_ids.erase(room_to_leave);
                                 }
                             } catch (const std::exception& e) {
-                                corelog::error("DEBUG: Failed to close room: " + std::string(e.what()));
+                                corelog::error("failed to close room: " + std::string(e.what()));
                             }
-                        } else {
-                            corelog::warn("DEBUG: Skipping room close. db_pool=" + std::to_string((bool)db_pool_) + ", room_uuid=" + room_uuid);
                         }
                     }
                 }

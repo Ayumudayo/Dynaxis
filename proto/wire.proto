@@ -35,13 +35,14 @@ message StateSnapshot {
   }
   repeated SnapshotMessage messages = 4; // recent messages in current_room (ascending)
   uint64 last_seen_id = 5;              // membership.last_seen_msg_id (0 if unknown)
-  string your_name = 6;                 // assigned username (for guest identification)
+  // 클라이언트에게 할당된 이름 (Guest 식별용)
+  string your_name = 6;
 }
-
 message RoomUsers {
   string room = 1;
   repeated string users = 2;
 }
+
 message WhisperNotice {
   string sender = 1;
   string recipient = 2;

@@ -899,7 +899,6 @@ void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const st
     session_sp->async_send(proto::MSG_WHISPER_BROADCAST, outgoing, 0);
 
     send_whisper_result(*session_sp, true, "");
-    corelog::info("[whisper] sender=" + sender + " target=" + target_user + " recipients=" + std::to_string(targets.size()) + " text=" + text);
 }
 
 // 방 비밀번호 해싱 (간단한 std::hash 사용, 실제 서비스에선 더 강력한 해시 권장)
