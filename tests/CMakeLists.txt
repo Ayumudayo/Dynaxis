@@ -62,3 +62,20 @@ gtest_discover_tests(storage_basic_tests)
 gtest_discover_tests(core_concurrency_tests)
 gtest_discover_tests(server_state_tests)
 gtest_discover_tests(chat_history_tests)
+
+add_executable(core_general_tests
+    core/test_core_memory.cpp
+    core/test_core_util.cpp
+    core/test_core_metrics.cpp
+    core/test_core_paths.cpp
+    core/test_core_net.cpp
+)
+target_include_directories(core_general_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/include
+    ${CMAKE_SOURCE_DIR}/server/include
+)
+target_link_libraries(core_general_tests PRIVATE
+    GTest::gtest_main
+    server_core
+)
+gtest_discover_tests(core_general_tests)
