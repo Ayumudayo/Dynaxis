@@ -1,5 +1,5 @@
 #include "server/chat/chat_service.hpp"
-#include "server/core/protocol/opcodes.hpp"
+#include "server/protocol/game_opcodes.hpp"
 #include "wire.pb.h"
 #include <cstdlib>
 #include "server/storage/redis/client.hpp"
@@ -8,6 +8,7 @@
 
 using namespace server::core;
 namespace proto = server::core::protocol;
+namespace game_proto = server::protocol;
 
 namespace server::app::chat {
 
@@ -65,7 +66,7 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
                 state_.cur_room.erase(itcr);
             }
         }
-        for (auto& t : targets) { t->async_send(proto::MSG_CHAT_BROADCAST, body, 0); }
+        for (auto& t : targets) { t->async_send(game_proto::MSG_CHAT_BROADCAST, body, 0); }
         // Redis 프레즌스 SET에서 사용자를 제거한다.
         if (redis_ && !room_left.empty()) {
             try {

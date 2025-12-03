@@ -2,7 +2,8 @@
 #include "client/net_client.hpp"
 
 #include "server/core/protocol/frame.hpp"
-#include "server/core/protocol/opcodes.hpp"
+#include "server/core/protocol/system_opcodes.hpp"
+#include "server/protocol/game_opcodes.hpp"
 #include "server/core/protocol/protocol_flags.hpp"
 #include "server/wire/codec.hpp"
 #include "wire.pb.h"
@@ -16,6 +17,7 @@ using namespace std::chrono;
 namespace asio = boost::asio;
 using tcp = asio::ip::tcp;
 namespace proto = server::core::protocol;
+namespace game_proto = server::protocol;
 
 // -----------------------------------------------------------------------------
 // NetClient 생성자
@@ -263,7 +265,7 @@ void NetClient::handle_frame(const proto::FrameHeader& hh, std::span<const std::
     }
 
     // 로그인 응답 처리
-    if (hh.msg_id == proto::MSG_LOGIN_RES) {
+    if (hh.msg_id == game_proto::MSG_LOGIN_RES) {
         server::wire::v1::LoginRes pb;
         if (server::wire::codec::Decode(in.data(), in.size(), pb)) {
             if (on_login_) on_login_(pb.effective_user(), pb.session_id());
@@ -290,7 +292,7 @@ void NetClient::handle_frame(const proto::FrameHeader& hh, std::span<const std::
     }
 
     // 채팅 브로드캐스트 처리
-    if (hh.msg_id == proto::MSG_CHAT_BROADCAST) {
+    if (hh.msg_id == game_proto::MSG_CHAT_BROADCAST) {
         server::wire::v1::ChatBroadcast pb;
         if (server::wire::codec::Decode(in.data(), in.size(), pb)) {
             if (on_bcast_) {
@@ -301,7 +303,7 @@ void NetClient::handle_frame(const proto::FrameHeader& hh, std::span<const std::
     }
 
     // 방 사용자 목록 처리
-    if (hh.msg_id == proto::MSG_ROOM_USERS) {
+    if (hh.msg_id == game_proto::MSG_ROOM_USERS) {
         std::string room;
         proto::read_lp_utf8(in, room);
         std::vector<std::string> list;
@@ -315,7 +317,7 @@ void NetClient::handle_frame(const proto::FrameHeader& hh, std::span<const std::
     }
 
     // 상태 스냅샷 처리 (로그인/조인 직후 상태 동기화)
-    if (hh.msg_id == proto::MSG_STATE_SNAPSHOT) {
+    if (hh.msg_id == game_proto::MSG_STATE_SNAPSHOT) {
         server::wire::v1::StateSnapshot pb;
         if (server::wire::codec::Decode(in.data(), in.size(), pb)) {
             std::vector<std::string> rooms;
@@ -344,7 +346,7 @@ void NetClient::handle_frame(const proto::FrameHeader& hh, std::span<const std::
     }
 
     // 귓속말 수신 처리
-    if (hh.msg_id == proto::MSG_WHISPER_BROADCAST) {
+    if (hh.msg_id == game_proto::MSG_WHISPER_BROADCAST) {
         std::string sender; std::string recipient; std::string text;
         bool outgoing = false;
         proto::read_lp_utf8(in, sender);
@@ -356,7 +358,7 @@ void NetClient::handle_frame(const proto::FrameHeader& hh, std::span<const std::
     }
 
     // 귓속말 결과 처리 (성공/실패)
-    if (hh.msg_id == proto::MSG_WHISPER_RES) {
+    if (hh.msg_id == game_proto::MSG_WHISPER_RES) {
         bool ok = false;
         std::string reason;
         if (!in.empty()) {
@@ -379,7 +381,7 @@ void NetClient::handle_frame(const proto::FrameHeader& hh, std::span<const std::
     }
 
     // 상태 갱신 알림 처리
-    if (hh.msg_id == proto::MSG_REFRESH_NOTIFY) {
+    if (hh.msg_id == game_proto::MSG_REFRESH_NOTIFY) {
         if (on_refresh_notify_) on_refresh_notify_();
         return;
     }
@@ -420,50 +422,50 @@ void NetClient::send_login(const std::string& user, const std::string& token) {
     std::vector<std::uint8_t> p;
     proto::write_lp_utf8(p, user);
     proto::write_lp_utf8(p, token);
-    enqueue_frame(proto::MSG_LOGIN_REQ, 0, std::move(p));
+    enqueue_frame(game_proto::MSG_LOGIN_REQ, 0, std::move(p));
 }
 
 void NetClient::send_join(const std::string& room, const std::string& password) {
     std::vector<std::uint8_t> p;
     proto::write_lp_utf8(p, room);
     if (!password.empty()) proto::write_lp_utf8(p, password);
-    enqueue_frame(proto::MSG_JOIN_ROOM, 0, std::move(p));
+    enqueue_frame(game_proto::MSG_JOIN_ROOM, 0, std::move(p));
 }
 
 void NetClient::send_leave(const std::string& room) {
     std::vector<std::uint8_t> p;
     proto::write_lp_utf8(p, room);
-    enqueue_frame(proto::MSG_LEAVE_ROOM, 0, std::move(p));
+    enqueue_frame(game_proto::MSG_LEAVE_ROOM, 0, std::move(p));
 }
 
 void NetClient::send_chat(const std::string& room, const std::string& text) {
     std::vector<std::uint8_t> p;
     proto::write_lp_utf8(p, room);
     proto::write_lp_utf8(p, text);
-    enqueue_frame(proto::MSG_CHAT_SEND, 0, std::move(p));
+    enqueue_frame(game_proto::MSG_CHAT_SEND, 0, std::move(p));
 }
 
 void NetClient::send_refresh(const std::string& current_room) {
     std::vector<std::uint8_t> p;
     proto::write_lp_utf8(p, current_room);
-    enqueue_frame(proto::MSG_REFRESH_REQ, 0, std::move(p));
+    enqueue_frame(game_proto::MSG_REFRESH_REQ, 0, std::move(p));
 }
 
 void NetClient::send_who(const std::string& room) {
     std::vector<std::uint8_t> p;
     proto::write_lp_utf8(p, room);
-    enqueue_frame(proto::MSG_ROOM_USERS_REQ, 0, std::move(p));
+    enqueue_frame(game_proto::MSG_ROOM_USERS_REQ, 0, std::move(p));
 }
 
 void NetClient::send_rooms(const std::string& current_room) {
     std::vector<std::uint8_t> p;
     proto::write_lp_utf8(p, current_room);
-    enqueue_frame(proto::MSG_ROOMS_REQ, 0, std::move(p));
+    enqueue_frame(game_proto::MSG_ROOMS_REQ, 0, std::move(p));
 }
 
 void NetClient::send_whisper(const std::string& user, const std::string& text) {
     std::vector<std::uint8_t> p;
     proto::write_lp_utf8(p, user);
     proto::write_lp_utf8(p, text);
-    enqueue_frame(proto::MSG_WHISPER_REQ, 0, std::move(p));
+    enqueue_frame(game_proto::MSG_WHISPER_REQ, 0, std::move(p));
 }

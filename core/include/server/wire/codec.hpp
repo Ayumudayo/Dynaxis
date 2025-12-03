@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-#include "server/core/protocol/opcodes.hpp"
+
 #include "wire.pb.h"
 
 namespace server { namespace wire { namespace codec {

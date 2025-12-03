@@ -14,7 +14,8 @@
 #include <boost/asio.hpp>
 
 #include "server/core/net/session.hpp"
-#include "server/core/protocol/opcodes.hpp"
+#include "server/core/protocol/system_opcodes.hpp"
+#include "server/protocol/game_opcodes.hpp"
 #include "wire.pb.h"
 
 namespace server::core { class JobQueue; }

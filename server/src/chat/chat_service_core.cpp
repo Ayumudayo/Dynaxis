@@ -1,5 +1,5 @@
 #include "server/chat/chat_service.hpp"
-#include "server/core/protocol/opcodes.hpp"
+#include "server/protocol/game_opcodes.hpp"
 #include "server/core/protocol/frame.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/util/log.hpp"
@@ -20,6 +20,7 @@
 #include <unordered_set>
 using namespace server::core;
 namespace proto = server::core::protocol;
+namespace game_proto = server::protocol;
 namespace corelog = server::core::log;
 namespace services = server::core::util::services;
 
@@ -382,7 +383,7 @@ void ChatService::send_rooms_list(Session& s) {
         std::string bytes; pb.SerializeToString(&bytes);
         body.assign(bytes.begin(), bytes.end());
     }
-    s.async_send(proto::MSG_CHAT_BROADCAST, body, 0);
+    s.async_send(game_proto::MSG_CHAT_BROADCAST, body, 0);
 }
 
 // 해당 방의 로컬 세션에게만 상태 갱신 알림을 전송합니다.
@@ -398,7 +399,7 @@ void ChatService::broadcast_refresh_local(const std::string& room) {
     }
     
     for (auto& s : targets) {
-        s->async_send(proto::MSG_REFRESH_NOTIFY, empty_body, 0);
+        s->async_send(game_proto::MSG_REFRESH_NOTIFY, empty_body, 0);
     }
 }
 
@@ -487,7 +488,7 @@ void ChatService::send_room_users(Session& s, const std::string& target) {
     std::string bytes;
     pb.SerializeToString(&bytes);
     std::vector<std::uint8_t> body(bytes.begin(), bytes.end());
-    s.async_send(proto::MSG_ROOM_USERS, body, 0);
+    s.async_send(game_proto::MSG_ROOM_USERS, body, 0);
 }
 
 // 방 입장 시 현재 상태(방 목록, 유저 목록, 최근 메시지)를 스냅샷으로 전송합니다.
@@ -738,7 +739,7 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
         std::string bytes; pb.SerializeToString(&bytes);
         body.assign(bytes.begin(), bytes.end());
     }
-    s.async_send(proto::MSG_STATE_SNAPSHOT, body, 0);
+    s.async_send(game_proto::MSG_STATE_SNAPSHOT, body, 0);
 }
 
 // 외부에서 수신한 브로드캐스트(예: Redis Pub/Sub)를 해당 방의 로컬 세션들에게 전달합니다.
@@ -753,7 +754,7 @@ void ChatService::broadcast_room(const std::string& room, const std::vector<std:
     }
     for (auto& t : targets) {
         int f = 0; // 재전파에서는 self 플래그를 사용하지 않는다.
-        t->async_send(proto::MSG_CHAT_BROADCAST, body, f);
+        t->async_send(game_proto::MSG_CHAT_BROADCAST, body, f);
     }
 }
 
@@ -770,7 +771,7 @@ void ChatService::send_system_notice(Session& s, const std::string& text) {
     std::string bytes;
     pb.SerializeToString(&bytes);
     std::vector<std::uint8_t> body(bytes.begin(), bytes.end());
-    s.async_send(proto::MSG_CHAT_BROADCAST, body, 0);
+    s.async_send(game_proto::MSG_CHAT_BROADCAST, body, 0);
 }
 
 // 귓속말 전송 결과를 클라이언트에게 알립니다.
@@ -783,7 +784,7 @@ void ChatService::send_whisper_result(Session& s, bool ok, const std::string& re
     std::string bytes;
     pb.SerializeToString(&bytes);
     std::vector<std::uint8_t> body(bytes.begin(), bytes.end());
-    s.async_send(proto::MSG_WHISPER_RES, body, 0);
+    s.async_send(game_proto::MSG_WHISPER_RES, body, 0);
 }
 
 // 귓속말(1:1 채팅)을 처리합니다.
@@ -882,14 +883,14 @@ void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const st
     notice.SerializeToString(&incoming_bytes);
     std::vector<std::uint8_t> incoming(incoming_bytes.begin(), incoming_bytes.end());
     for (auto& target : targets) {
-        target->async_send(proto::MSG_WHISPER_BROADCAST, incoming, 0);
+        target->async_send(game_proto::MSG_WHISPER_BROADCAST, incoming, 0);
     }
 
     notice.set_outgoing(true);
     std::string outgoing_bytes;
     notice.SerializeToString(&outgoing_bytes);
     std::vector<std::uint8_t> outgoing(outgoing_bytes.begin(), outgoing_bytes.end());
-    session_sp->async_send(proto::MSG_WHISPER_BROADCAST, outgoing, 0);
+    session_sp->async_send(game_proto::MSG_WHISPER_BROADCAST, outgoing, 0);
 
     send_whisper_result(*session_sp, true, "");
 }

@@ -1,6 +1,6 @@
 #include "server/chat/chat_service.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
-#include "server/core/protocol/opcodes.hpp"
+#include "server/protocol/game_opcodes.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/concurrent/job_queue.hpp"
 #include "wire.pb.h"
@@ -14,6 +14,7 @@
 
 using namespace server::core;
 namespace proto = server::core::protocol;
+namespace game_proto = server::protocol;
 namespace corelog = server::core::log;
 
 namespace server::app::chat {
@@ -165,7 +166,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         pb.set_message("ok");
         std::string bytes; pb.SerializeToString(&bytes);
         std::vector<std::uint8_t> res(bytes.begin(), bytes.end());
-        session_sp->async_send(proto::MSG_LOGIN_RES, res, 0);
+        session_sp->async_send(game_proto::MSG_LOGIN_RES, res, 0);
 
         // presence:user:{uid} 키의 TTL을 주기적으로 갱신해 온라인 리스트를 유지한다.
         if (redis_) {

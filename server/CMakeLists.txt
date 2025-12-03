@@ -17,6 +17,20 @@ target_link_libraries(server_app PRIVATE server_core wire_proto server_storage_p
 # protobuf 생성 헤더 경로 추가
 target_include_directories(server_app PRIVATE ${CMAKE_BINARY_DIR}/proto)
 
+# Game Opcodes 생성
+if (Python3_Interpreter_FOUND)
+    set(GAME_OPCODES_JSON ${CMAKE_SOURCE_DIR}/server/protocol/game_opcodes.json)
+    set(GAME_GENERATED_HEADER ${CMAKE_SOURCE_DIR}/server/include/server/protocol/game_opcodes.hpp)
+    add_custom_command(
+        OUTPUT ${GAME_GENERATED_HEADER}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/gen_opcodes.py ${GAME_OPCODES_JSON} ${GAME_GENERATED_HEADER}
+        DEPENDS ${GAME_OPCODES_JSON} ${CMAKE_SOURCE_DIR}/tools/gen_opcodes.py
+        COMMENT "Generating protocol game opcodes header"
+        VERBATIM)
+    add_custom_target(generate_game_opcodes DEPENDS ${GAME_GENERATED_HEADER})
+    add_dependencies(server_app generate_game_opcodes)
+endif()
+
 # vcpkg DLL 자동 복사(Windows)
 if(WIN32)
     add_custom_command(TARGET server_app POST_BUILD

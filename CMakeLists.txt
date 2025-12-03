@@ -16,7 +16,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
-find_package(PkgConfig REQUIRED)
+
 
 if (MSVC)
     add_compile_options(/utf-8 /MP)
@@ -57,13 +57,13 @@ message(STATUS "Boost lib dirs: ${Boost_LIBRARY_DIRS}")
 # Python3가 있으면 opcode 헤더를 빌드 시 자동 생성
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if (Python3_Interpreter_FOUND)
-    set(OPCODES_JSON ${CMAKE_SOURCE_DIR}/protocol/opcodes.json)
-    set(GENERATED_HEADER ${CMAKE_SOURCE_DIR}/core/include/server/core/protocol/opcodes.hpp)
+    set(OPCODES_JSON ${CMAKE_SOURCE_DIR}/core/protocol/system_opcodes.json)
+    set(GENERATED_HEADER ${CMAKE_SOURCE_DIR}/core/include/server/core/protocol/system_opcodes.hpp)
     add_custom_command(
         OUTPUT ${GENERATED_HEADER}
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/gen_opcodes.py ${OPCODES_JSON} ${GENERATED_HEADER}
         DEPENDS ${OPCODES_JSON} ${CMAKE_SOURCE_DIR}/tools/gen_opcodes.py
-        COMMENT "Generating protocol opcodes header"
+        COMMENT "Generating protocol system opcodes header"
         VERBATIM)
     add_custom_target(generate_opcodes DEPENDS ${GENERATED_HEADER})
     # wire codec header generation
@@ -95,6 +95,7 @@ if (BUILD_DEVCLIENT_APP)
   add_subdirectory(devclient)
 endif()
 if (BUILD_SERVER_TESTS)
+  enable_testing()
   add_subdirectory(tests)
 endif()
 

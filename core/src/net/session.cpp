@@ -4,6 +4,7 @@
 #include "server/core/config/options.hpp"
 #include "server/core/state/shared_state.hpp"
 #include "server/core/protocol/protocol_flags.hpp"
+#include "server/core/protocol/system_opcodes.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/memory/memory_pool.hpp"
 #include "server/core/runtime_metrics.hpp"

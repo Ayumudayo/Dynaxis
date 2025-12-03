@@ -13,6 +13,7 @@ add_executable(dev_chat_cli
 )
 target_include_directories(dev_chat_cli PRIVATE ${CMAKE_CURRENT_LIST_DIR}/src)
 target_include_directories(dev_chat_cli PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
+target_include_directories(dev_chat_cli PRIVATE ${CMAKE_SOURCE_DIR}/server/include)
 
 # 서버 공용 헤더 재사용
 target_link_libraries(dev_chat_cli PRIVATE wire_proto server_core)

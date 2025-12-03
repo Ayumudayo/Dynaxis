@@ -1,5 +1,5 @@
 #include "server/chat/chat_service.hpp"
-#include "server/core/protocol/opcodes.hpp"
+#include "server/protocol/game_opcodes.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/concurrent/job_queue.hpp"
@@ -13,6 +13,7 @@
 
 using namespace server::core;
 namespace proto = server::core::protocol;
+namespace game_proto = server::protocol;
 namespace corelog = server::core::log;
 
 namespace server::app::chat {
@@ -158,7 +159,7 @@ void ChatService::on_join(server::core::Session& s, std::span<const std::uint8_t
         }
 
         // 로컬 세션들에게 입장 알림 전송
-        for (auto& t : targets) t->async_send(proto::MSG_CHAT_BROADCAST, body, 0);
+        for (auto& t : targets) t->async_send(game_proto::MSG_CHAT_BROADCAST, body, 0);
 
         // DB upsert (멤버십 기록)
         if (db_pool_) {

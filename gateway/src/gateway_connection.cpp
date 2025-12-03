@@ -7,9 +7,10 @@
 #include "gateway/gateway_app.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/protocol/frame.hpp"
-#include "server/core/protocol/opcodes.hpp"
+#include "server/protocol/game_opcodes.hpp"
 
 namespace gateway {
+namespace game_proto = server::protocol;
 
 namespace {
 // 게이트웨이 최초 메시지는 "client_id:opaque_token"을 기대하며,
@@ -114,7 +115,7 @@ void GatewayConnection::on_read(const std::uint8_t* data, std::size_t length) {
         if (length >= server::core::protocol::k_header_bytes) {
             server::core::protocol::FrameHeader header{};
             server::core::protocol::decode_header(data, header);
-            if (header.msg_id == server::core::protocol::MSG_LOGIN_REQ) {
+            if (header.msg_id == game_proto::MSG_LOGIN_REQ) {
                 is_login_frame = true;
                 // Payload 파싱: [User(LP)][Token(LP)]
                 auto payload = std::span<const std::uint8_t>(data + server::core::protocol::k_header_bytes, 

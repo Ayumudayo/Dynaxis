@@ -1,6 +1,6 @@
 
 #include "server/chat/chat_service.hpp"
-#include "server/core/protocol/opcodes.hpp"
+#include "server/protocol/game_opcodes.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/protocol/protocol_flags.hpp"
 #include "server/core/util/log.hpp"
@@ -16,6 +16,7 @@
 
 using namespace server::core;
 namespace proto = server::core::protocol;
+namespace game_proto = server::protocol;
 namespace corelog = server::core::log;
 
 namespace server::app::chat {
@@ -217,11 +218,11 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
         // 로컬 세션들에게 메시지 전송
         if (targets.empty()) { 
             // 방에 혼자 있는 경우 자신에게만 에코
-            session_sp->async_send(proto::MSG_CHAT_BROADCAST, std::vector<std::uint8_t>(bytes.begin(), bytes.end()), proto::FLAG_SELF); 
+            session_sp->async_send(game_proto::MSG_CHAT_BROADCAST, std::vector<std::uint8_t>(bytes.begin(), bytes.end()), proto::FLAG_SELF); 
         } else { 
             for (auto& t : targets) { 
                 auto f = (t.get() == session_sp.get()) ? proto::FLAG_SELF : 0; 
-                t->async_send(proto::MSG_CHAT_BROADCAST, std::vector<std::uint8_t>(bytes.begin(), bytes.end()), f); 
+                t->async_send(game_proto::MSG_CHAT_BROADCAST, std::vector<std::uint8_t>(bytes.begin(), bytes.end()), f); 
             } 
         }
 

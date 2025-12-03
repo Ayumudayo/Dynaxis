@@ -1,5 +1,5 @@
 #include "server/chat/chat_service.hpp"
-#include "server/core/protocol/opcodes.hpp"
+#include "server/protocol/game_opcodes.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/protocol/protocol_flags.hpp"
 #include "server/core/concurrent/job_queue.hpp"
@@ -14,6 +14,7 @@
 
 using namespace server::core;
 namespace proto = server::core::protocol;
+namespace game_proto = server::protocol;
 namespace corelog = server::core::log;
 
 namespace server::app::chat {
@@ -99,7 +100,7 @@ void ChatService::on_leave(server::core::Session& s, std::span<const std::uint8_
             body.assign(bytes.begin(), bytes.end());
             for (auto& t : targets) {
                 auto f = (t.get() == session_sp.get()) ? proto::FLAG_SELF : 0;
-                t->async_send(proto::MSG_CHAT_BROADCAST, body, f);
+                t->async_send(game_proto::MSG_CHAT_BROADCAST, body, f);
             }
         }
 
@@ -188,7 +189,7 @@ void ChatService::on_leave(server::core::Session& s, std::span<const std::uint8_
         }
         std::string bytes2; pb2.SerializeToString(&bytes2);
         body2.assign(bytes2.begin(), bytes2.end());
-        for (auto& t : t2) t->async_send(proto::MSG_CHAT_BROADCAST, body2, 0);
+        for (auto& t : t2) t->async_send(game_proto::MSG_CHAT_BROADCAST, body2, 0);
 
         // 로비와 해당 방에 있는 다른 유저들에게 새로고침 알림 전송
         broadcast_refresh("lobby");

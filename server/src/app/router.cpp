@@ -1,7 +1,8 @@
 #include "server/app/router.hpp"
 
 #include "server/core/net/dispatcher.hpp"
-#include "server/core/protocol/opcodes.hpp"
+#include "server/core/protocol/system_opcodes.hpp"
+#include "server/protocol/game_opcodes.hpp"
 #include "server/chat/chat_service.hpp"
 
 namespace server::app {
@@ -13,14 +14,14 @@ namespace server::app {
 void register_routes(server::core::Dispatcher& dispatcher, server::app::chat::ChatService& chat) {
     using server::core::protocol::MSG_PING;
     using server::core::protocol::MSG_PONG;
-    using server::core::protocol::MSG_LOGIN_REQ;
-    using server::core::protocol::MSG_JOIN_ROOM;
-    using server::core::protocol::MSG_CHAT_SEND;
-    using server::core::protocol::MSG_LEAVE_ROOM;
-    using server::core::protocol::MSG_WHISPER_REQ;
-    using server::core::protocol::MSG_ROOMS_REQ;
-    using server::core::protocol::MSG_ROOM_USERS_REQ;
-    using server::core::protocol::MSG_REFRESH_REQ;
+    using server::protocol::MSG_LOGIN_REQ;
+    using server::protocol::MSG_JOIN_ROOM;
+    using server::protocol::MSG_CHAT_SEND;
+    using server::protocol::MSG_LEAVE_ROOM;
+    using server::protocol::MSG_WHISPER_REQ;
+    using server::protocol::MSG_ROOMS_REQ;
+    using server::protocol::MSG_ROOM_USERS_REQ;
+    using server::protocol::MSG_REFRESH_REQ;
 
     // keep-alive 핸들러: ping payload를 그대로 pong으로 반사한다.
     dispatcher.register_handler(MSG_PING,
