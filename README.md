@@ -5,8 +5,6 @@
 
 **Knights**는 C++20로 작성된 고성능 분산 채팅 시스템입니다. 마이크로서비스 아키텍처를 채택하여 확장성을 보장하며, Redis와 PostgreSQL을 활용한 견고한 데이터 처리 파이프라인을 갖추고 있습니다.
 
-![Overall Architecture](Overall Architecture.png)
-
 ## 🚀 프로젝트 개요 (Overview)
 
 이 프로젝트는 대규모 트래픽을 처리할 수 있는 채팅 서버 스택을 구현하는 것을 목표로 합니다. 최신 C++ 표준(C++20)과 고성능 비동기 네트워크 라이브러리(Boost.Asio)를 기반으로 하며, 다음과 같은 핵심 가치를 추구합니다.
@@ -38,6 +36,9 @@
 4.  **Core (`core/`)**:
     -   모든 프로젝트에서 공유하는 정적 라이브러리입니다.
     -   네트워크(Session, Listener), 동시성(JobQueue, ThreadManager), 메모리 관리(MemoryPool) 등의 공통 기능을 제공합니다.
+
+## 아키텍처 다이어그램
+<img width="1763" height="2608" alt="Overall Architecture" src="https://github.com/user-attachments/assets/288609b9-11cf-4ab4-88fc-8f72a4ccff3b" />
 
 ## ✨ 주요 기능 (Key Features)
 
