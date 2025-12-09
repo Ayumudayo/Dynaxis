@@ -8,14 +8,19 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <random>
+#include <algorithm>
+#include <deque>
 
-#include <boost/asio/ip/address.hpp>
+#include <boost/asio/connect.hpp>
+#include <boost/asio/write.hpp>
 #include <boost/asio/ip/tcp.hpp>
-#include <grpcpp/grpcpp.h>
 
 #include "gateway/gateway_connection.hpp"
 #include "server/core/util/paths.hpp"
 #include "server/core/util/log.hpp"
+#include "server/storage/redis/client.hpp"
+#include "server/state/instance_registry.hpp"
 
 namespace gateway {
 
@@ -23,14 +28,11 @@ namespace {
 
 constexpr const char* kEnvGatewayListen = "GATEWAY_LISTEN";
 constexpr const char* kEnvGatewayId = "GATEWAY_ID";
-constexpr const char* kEnvLbEndpoint = "LB_GRPC_ENDPOINT";
+constexpr const char* kEnvRedisUri = "REDIS_URI";
 constexpr const char* kDefaultGatewayListen = "0.0.0.0:6000";
 constexpr const char* kDefaultGatewayId = "gateway-default";
-constexpr const char* kDefaultLbEndpoint = "127.0.0.1:7001";
+constexpr const char* kDefaultRedisUri = "tcp://127.0.0.1:6379";
 
-// GATEWAY_LISTEN은 "host:port" 형식을 허용하고, 일부 필드가 비어 있어도 합리적인 기본값으로 보정한다.
-// GATEWAY_LISTEN은 "host:port" 또는 "host" 형태를 모두 허용한다. 운영 환경에서
-// 잘못된 포트가 들어올 수 있으므로, 파싱 실패 시 지정된 fallback 포트로 복구한다.
 std::pair<std::string, std::uint16_t> parse_listen(std::string_view value, std::uint16_t fallback_port) {
     if (value.empty()) {
         return {"0.0.0.0", fallback_port};
@@ -57,144 +59,155 @@ std::pair<std::string, std::uint16_t> parse_listen(std::string_view value, std::
 
 } // namespace
 
-// LbSession은 단일 gateway 클라이언트와 LB gRPC 스트림 사이의 stateful bridge를 캡슐화한다.
-// GatewayConnection(TCP)과 LoadBalancer(gRPC) 사이의 1:1 매핑을 담당합니다.
-GatewayApp::LbSession::LbSession(GatewayApp& app,
-                                 std::string session_id,
-                                 std::string client_id,
-                                 std::weak_ptr<GatewayConnection> connection)
+// --- BackendSession Implementation ---
+
+// Re-implementing GatewayApp::BackendSession methods directly
+
+GatewayApp::BackendSession::BackendSession(GatewayApp& app,
+                                           std::string session_id,
+                                           std::string client_id,
+                                           std::weak_ptr<GatewayConnection> connection)
     : app_(app)
     , session_id_(std::move(session_id))
     , client_id_(std::move(client_id))
-    , connection_(std::move(connection)) {}
-
-GatewayApp::LbSession::~LbSession() {
-    stop();
+    , connection_(std::move(connection))
+    , socket_(app.io_) {
 }
 
-bool GatewayApp::LbSession::start() {
-    if (!app_.lb_stub_) {
-        return false;
-    }
-    // 각 세션은 독립적인 ClientContext/stream을 갖고, 읽기 루프는 백엔드 응답을 gateway로 fan-out 한다.
-    context_ = std::make_unique<grpc::ClientContext>();
-    stream_ = app_.lb_stub_->Stream(context_.get());
-    if (!stream_) {
-        server::core::log::error("GatewayApp failed to open LB gRPC stream");
-        return false;
-    }
-    reader_thread_ = std::thread([weak_self = std::weak_ptr<LbSession>(shared_from_this())]() {
-        if (auto self = weak_self.lock()) {
-            self->read_loop();
-        }
-    });
-    return true;
+GatewayApp::BackendSession::~BackendSession() {
+    close();
 }
 
-bool GatewayApp::LbSession::send(gateway::lb::RouteMessageKind kind,
-                                 const std::vector<std::uint8_t>& payload) {
-    if (stopped_.load(std::memory_order_relaxed) || !stream_) {
-        return false;
-    }
-
-    gateway::lb::RouteMessage message;
-    message.set_session_id(session_id_);
-    message.set_gateway_id(app_.gateway_id_);
-    message.set_client_id(client_id_);
-    message.set_kind(kind);
-    if (!payload.empty()) {
-        message.set_payload(reinterpret_cast<const char*>(payload.data()), static_cast<int>(payload.size()));
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(write_mutex_);
-        if (!stream_->Write(message)) {
-            stopped_.store(true, std::memory_order_relaxed);
-            return false;
-        }
-        if (kind == gateway::lb::ROUTE_KIND_CLIENT_CLOSE) {
-            // 클라이언트 종료는 더 이상 쓸 데이터가 없음을 명시하기 위해 WritesDone()까지 호출한다.
-            stream_->WritesDone();
-        }
-    }
-    return true;
+void GatewayApp::BackendSession::connect(const std::string& host, std::uint16_t port) {
+    if (closed_.load(std::memory_order_relaxed)) return;
+    do_connect(host, port);
 }
 
-void GatewayApp::LbSession::stop() {
-    bool expected = false;
-    if (!stopped_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+void GatewayApp::BackendSession::do_connect(const std::string& host, std::uint16_t port) {
+    auto self = shared_from_this();
+    auto resolver = std::make_shared<boost::asio::ip::tcp::resolver>(app_.io_);
+    
+    resolver->async_resolve(host, std::to_string(port),
+        [self, this, resolver](const boost::system::error_code& ec, boost::asio::ip::tcp::resolver::results_type results) {
+            if (ec) {
+                server::core::log::error("BackendSession resolve failed: " + ec.message());
+                if (auto conn = connection_.lock()) {
+                    conn->handle_backend_close("resolve failed");
+                }
+                return;
+            }
+            
+            boost::asio::async_connect(socket_, results,
+                [self, this](const boost::system::error_code& ec, const boost::asio::ip::tcp::endpoint& /*endpoint*/) {
+                    if (ec) {
+                        server::core::log::error("BackendSession connect failed: " + ec.message());
+                        if (auto conn = connection_.lock()) {
+                            conn->handle_backend_close("connect failed");
+                        }
+                        return;
+                    }
+                    
+                    {
+                        std::lock_guard<std::mutex> lock(send_mutex_);
+                        connected_ = true;
+                        if (!write_queue_.empty()) {
+                            do_write();
+                        }
+                    }
+                    do_read();
+                });
+        });
+}
+
+void GatewayApp::BackendSession::send(const std::vector<std::uint8_t>& payload) {
+    std::lock_guard<std::mutex> lock(send_mutex_);
+    if (closed_) return;
+
+    write_queue_.push_back(payload);
+    if (connected_ && !write_in_progress_) {
+        do_write();
+    }
+}
+
+void GatewayApp::BackendSession::do_write() {
+    if (write_queue_.empty()) {
+        write_in_progress_ = false;
         return;
     }
 
-    {
-        std::lock_guard<std::mutex> lock(write_mutex_);
-        if (stream_) {
-            stream_->WritesDone();
-        }
-    }
+    write_in_progress_ = true;
+    auto& msg = write_queue_.front();
+    
+    auto self = shared_from_this();
+    boost::asio::async_write(socket_, boost::asio::buffer(msg),
+        [self, this](const boost::system::error_code& ec, std::size_t /*bytes_transferred*/) {
+            if (ec) {
+                close();
+                return;
+            }
 
-    if (context_) {
-        context_->TryCancel();
-    }
-
-    if (reader_thread_.joinable()) {
-        if (reader_thread_.get_id() == std::this_thread::get_id()) {
-            reader_thread_.detach();
-        } else {
-            reader_thread_.join();
-        }
-    }
-    stream_.reset();
-    context_.reset();
+            std::lock_guard<std::mutex> lock(send_mutex_);
+            write_queue_.pop_front();
+            if (!write_queue_.empty()) {
+                do_write();
+            } else {
+                write_in_progress_ = false;
+            }
+        });
 }
 
-const std::string& GatewayApp::LbSession::session_id() const {
+void GatewayApp::BackendSession::do_read() {
+    auto self = shared_from_this();
+    socket_.async_read_some(boost::asio::buffer(buffer_),
+        [self, this](const boost::system::error_code& ec, std::size_t bytes_transferred) {
+            on_read(ec, bytes_transferred);
+        });
+}
+
+void GatewayApp::BackendSession::on_read(const boost::system::error_code& ec, std::size_t bytes_transferred) {
+    if (ec) {
+        if (ec != boost::asio::error::operation_aborted) {
+            if (auto conn = connection_.lock()) {
+                conn->handle_backend_close(ec.message());
+            }
+            close();
+        }
+        return;
+    }
+
+    if (bytes_transferred > 0) {
+        if (auto conn = connection_.lock()) {
+            std::vector<std::uint8_t> data(buffer_.begin(), buffer_.begin() + bytes_transferred);
+            conn->handle_backend_payload(std::move(data));
+        }
+        do_read();
+    }
+}
+
+void GatewayApp::BackendSession::close() {
+    bool expected = false;
+    if (!closed_.compare_exchange_strong(expected, true)) return;
+
+    boost::system::error_code ignored;
+    if (socket_.is_open()) {
+        socket_.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ignored);
+        socket_.close(ignored);
+    }
+}
+
+const std::string& GatewayApp::BackendSession::session_id() const {
     return session_id_;
 }
 
-void GatewayApp::LbSession::read_loop() {
-    gateway::lb::RouteMessage response;
-    while (!stopped_.load(std::memory_order_relaxed) && stream_ && stream_->Read(&response)) {
-        switch (response.kind()) {
-        case gateway::lb::ROUTE_KIND_SERVER_PAYLOAD: {
-            // LB가 backend에서 읽은 바이트를 전달하면 GatewayConnection을 통해 TCP 클라이언트로 재전송한다.
-            // 이는 서버 -> LB -> Gateway -> Client 로 이어지는 응답 경로입니다.
-            auto payload = response.payload();
-            if (auto connection = connection_.lock()) {
-                std::vector<std::uint8_t> data(payload.begin(), payload.end());
-                connection->handle_backend_payload(std::move(data));
-            }
-            break;
-        }
-        case gateway::lb::ROUTE_KIND_SERVER_CLOSE:
-        case gateway::lb::ROUTE_KIND_SERVER_ERROR: {
-            // backend 측에서 세션을 닫거나 에러가 발생하면 GatewayConnection에도 동일 reason을 알린다.
-            const std::string reason = response.error();
-            if (auto connection = connection_.lock()) {
-                connection->handle_backend_close(reason);
-            }
-            stopped_.store(true, std::memory_order_relaxed);
-            return;
-        }
-        default:
-            // 추가 kind가 도입될 수 있으므로 현재는 무시하고 다음 메시지를 대기한다.
-            break;
-        }
-    }
+// --- GatewayApp Implementation ---
 
-    if (auto connection = connection_.lock()) {
-        connection->handle_backend_close("load balancer stream ended");
-    }
-    stopped_.store(true, std::memory_order_relaxed);
-}
-
-// GatewayApp은 단일 io_context에서 Listener+Signal 핸들링과 LB gRPC 클라이언트를 묶어 관리한다.
 GatewayApp::GatewayApp()
     : hive_(std::make_shared<server::core::net::Hive>(io_))
     , signals_(io_)
     , authenticator_(std::make_shared<auth::NoopAuthenticator>()) {
+    
     configure_gateway();
-    configure_load_balancer();
+    configure_infrastructure();
 
     if (const char* port_env = std::getenv("METRICS_PORT")) {
         metrics_port_ = static_cast<std::uint16_t>(std::stoi(port_env));
@@ -207,8 +220,6 @@ GatewayApp::GatewayApp()
             std::lock_guard<std::mutex> lock(session_mutex_);
             stream << "gateway_sessions_active " << sessions_.size() << "\n";
         }
-        stream << "# TYPE gateway_connections_total counter\n";
-        stream << "gateway_connections_total " << session_counter_.load() << "\n";
         return stream.str();
     });
     metrics_server_->start();
@@ -229,7 +240,6 @@ int GatewayApp::run() {
 }
 
 void GatewayApp::stop() {
-    // stop()은 listener와 모든 LbSession을 차례로 중단해 dangling gRPC stream을 방지한다.
     if (listener_) {
         listener_->stop();
     }
@@ -241,7 +251,7 @@ void GatewayApp::stop() {
         std::lock_guard<std::mutex> lock(session_mutex_);
         for (auto& [_, state] : sessions_) {
             if (state.session) {
-                state.session->stop();
+                state.session->close();
             }
         }
         sessions_.clear();
@@ -253,20 +263,33 @@ void GatewayApp::stop() {
     io_.stop();
 }
 
-GatewayApp::LbSessionPtr GatewayApp::create_lb_session(const std::string& client_id,
-                                                       std::weak_ptr<GatewayConnection> connection) {
-    if (!lb_stub_) {
-        server::core::log::error("GatewayApp load balancer stub unavailable");
+GatewayApp::BackendSessionPtr GatewayApp::create_backend_session(const std::string& client_id,
+                                                                 std::weak_ptr<GatewayConnection> connection) {
+    auto target = select_best_server(client_id);
+    if (!target) {
+        server::core::log::error("GatewayApp: No available backend server found");
         return nullptr;
     }
 
-    const auto seq = session_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
-    // gateway_id-증가값으로 세션 ID를 만들면 LB 쪽에서 gateway별 세션을 쉽게 그룹화할 수 있다.
-    std::string session_id = gateway_id_ + "-" + std::to_string(seq);
+    // Unique session ID could utilize a better generator, but this suffices for now
+    static std::atomic<std::uint64_t> counter{0};
+    std::string session_id = gateway_id_ + "-" + std::to_string(++counter);
 
-    auto session = std::make_shared<LbSession>(*this, session_id, client_id, std::move(connection));
-    if (!session->start()) {
-        return nullptr;
+    auto session = std::make_shared<BackendSession>(*this, session_id, client_id, std::move(connection));
+    
+    server::core::log::info("GatewayApp connecting session " + session_id + " to " + target->first + ":" + std::to_string(target->second));
+    session->connect(target->first, target->second);
+
+    // Binding session if authenticated
+    if (session_directory_ && !client_id.empty() && client_id != "anonymous") {
+        // Find backend ID by host/port
+        // Note: Ideally, instance_id should be returned by select_best_server, but for now we look it up or rely on host/port consistency.
+        // To be simpler, we will just use host:port as ID for binding in this lightweight implementation if needed, 
+        // OR we can fix select_best_server to return InstanceRecord.
+        // Let's refine select_best_server to do binding internally or here.
+        
+        // Actually, ensuring binding after successful connect is better.
+        // But we need the Instance ID.
     }
 
     {
@@ -277,8 +300,8 @@ GatewayApp::LbSessionPtr GatewayApp::create_lb_session(const std::string& client
     return session;
 }
 
-void GatewayApp::close_lb_session(const std::string& session_id) {
-    LbSessionPtr session;
+void GatewayApp::close_backend_session(const std::string& session_id) {
+    BackendSessionPtr session;
     {
         std::lock_guard<std::mutex> lock(session_mutex_);
         auto it = sessions_.find(session_id);
@@ -288,8 +311,55 @@ void GatewayApp::close_lb_session(const std::string& session_id) {
         }
     }
     if (session) {
-        session->stop();
+        session->close();
     }
+}
+
+std::optional<std::pair<std::string, std::uint16_t>> GatewayApp::select_best_server(const std::string& client_id) {
+    if (!backend_registry_) return std::nullopt;
+
+    auto instances = backend_registry_->list_instances();
+    if (instances.empty()) return std::nullopt;
+
+    // 1. Session Stickiness
+    if (session_directory_ && !client_id.empty() && client_id != "anonymous") {
+        if (auto backend_id = session_directory_->find_backend(client_id)) {
+            auto it = std::find_if(instances.begin(), instances.end(), [&](const auto& rec) {
+                return rec.instance_id == *backend_id;
+            });
+            if (it != instances.end()) {
+                 // Found active sticky backend
+                 return std::make_pair(it->host, it->port);
+            }
+            // Backend is gone, release binding
+            session_directory_->release_backend(client_id, *backend_id);
+        }
+    }
+
+    // 2. Select new backend (Least Connections)
+    std::vector<server::state::InstanceRecord> candidates;
+    std::copy_if(instances.begin(), instances.end(), std::back_inserter(candidates), [](const auto& rec) {
+        return !rec.host.empty() && rec.port > 0;
+    });
+
+    if (candidates.empty()) return std::nullopt;
+
+    // Sort by active_sessions ascending
+    std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+        return a.active_sessions < b.active_sessions;
+    });
+
+    // Pick the one with least connections. 
+    // If there are multiple with the same lowest count, we could pick randomly among them to avoid thundering herd,
+    // but strict least connections is fine for now.
+    const auto& selected = candidates.front();
+
+    // 3. Bind new backend
+    if (session_directory_ && !client_id.empty() && client_id != "anonymous") {
+        session_directory_->refresh_backend(client_id, selected.instance_id);
+    }
+    
+    return std::make_pair(selected.host, selected.port);
 }
 
 void GatewayApp::configure_gateway() {
@@ -310,19 +380,35 @@ void GatewayApp::configure_gateway() {
         + " listen=" + listen_host_ + ":" + std::to_string(listen_port_));
 }
 
-void GatewayApp::configure_load_balancer() {
-    const char* lb_env = std::getenv(kEnvLbEndpoint);
-    if (lb_env && *lb_env) {
-        lb_endpoint_ = lb_env;
-    } else {
-        lb_endpoint_ = kDefaultLbEndpoint;
+void GatewayApp::configure_infrastructure() {
+    const char* redis_env = std::getenv(kEnvRedisUri);
+    redis_uri_ = redis_env ? redis_env : kDefaultRedisUri;
+
+    try {
+        server::storage::redis::Options opts;
+        redis_client_ = server::storage::redis::make_redis_client(redis_uri_, opts);
+        
+        if (redis_client_) {
+             auto state_client = server::state::make_redis_state_client(redis_client_);
+             backend_registry_ = std::make_unique<server::state::RedisInstanceStateBackend>(
+                 state_client,
+                 "server:registry:", 
+                 std::chrono::seconds(30)
+             );
+             
+             session_directory_ = std::make_unique<SessionDirectory>(
+                 redis_client_,
+                 "gateway/session/",
+                 std::chrono::seconds(600) // 10 minutes session stickiness
+             );
+
+             server::core::log::info("GatewayApp connected to Redis at " + redis_uri_);
+        } else {
+            server::core::log::error("GatewayApp failed to create Redis client at " + redis_uri_);
+        }
+    } catch (const std::exception& e) {
+        server::core::log::error(std::string("GatewayApp infrastructure init failed: ") + e.what());
     }
-
-    // LB는 gRPC 스트림 API만 사용하므로 간단한 insecure 채널로 충분하다.
-    auto channel = grpc::CreateChannel(lb_endpoint_, grpc::InsecureChannelCredentials());
-    lb_stub_ = gateway::lb::LoadBalancerService::NewStub(channel);
-
-    server::core::log::info("GatewayApp LB endpoint: " + lb_endpoint_);
 }
 
 void GatewayApp::start_listener() {
@@ -340,7 +426,6 @@ void GatewayApp::start_listener() {
     }
 
     tcp::endpoint endpoint{address, listen_port_};
-    // Listener는 GatewayConnection을 생성해 TCP 세션을 gRPC 브리지로 넘겨주는 역할만 수행한다.
     listener_ = std::make_shared<server::core::net::Listener>(
         hive_,
         endpoint,
@@ -364,7 +449,6 @@ void GatewayApp::handle_signals() {
 #if defined(SIGTERM)
     signals_.add(SIGTERM);
 #endif
-    // ctrl+c / SIGTERM을 받아 graceful stop을 호출한다. multiple signal에도 재진입하지 않는다.
     signals_.async_wait([this](const boost::system::error_code& ec, int) {
         if (ec == boost::asio::error::operation_aborted) {
             return;
@@ -375,6 +459,5 @@ void GatewayApp::handle_signals() {
         }
     });
 }
-
 
 } // namespace gateway

@@ -69,6 +69,7 @@ add_executable(core_general_tests
     core/test_core_metrics.cpp
     core/test_core_paths.cpp
     core/test_core_net.cpp
+    core/test_security_compression.cpp
 )
 target_include_directories(core_general_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/core/include

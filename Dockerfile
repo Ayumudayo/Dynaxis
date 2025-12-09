@@ -25,7 +25,6 @@ RUN cmake --build --preset linux-release --target \
     wb_worker \
     wb_dlq_replayer \
     gateway_app \
-    load_balancer_app \
     migrations_runner
 
 # ==============================================================================
@@ -38,9 +37,9 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     libpq5 \
     libprotobuf-dev \
-    libgrpc++-dev \
     libboost-system-dev \
     libhiredis-dev \
+    dos2unix \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy custom-built libraries from builder
@@ -54,7 +53,6 @@ COPY --from=builder /app/build-linux/server/server_app .
 COPY --from=builder /app/build-linux/wb_worker .
 COPY --from=builder /app/build-linux/wb_dlq_replayer .
 COPY --from=builder /app/build-linux/gateway/gateway_app .
-COPY --from=builder /app/build-linux/load_balancer/load_balancer_app .
 COPY --from=builder /app/build-linux/migrations_runner .
 
 # Copy migration SQL files
@@ -63,6 +61,6 @@ COPY tools/migrations /app/migrations
 # Copy and configure entrypoint
 # Copy and configure entrypoint
 COPY scripts/docker_entrypoint.sh /app/entrypoint.sh
-RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+RUN dos2unix /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 ENTRYPOINT ["/app/entrypoint.sh"]

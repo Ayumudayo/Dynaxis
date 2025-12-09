@@ -48,6 +48,7 @@ services:
       SERVER_INSTANCE_ID: server-1
       SERVER_ADVERTISE_HOST: server-1
       SERVER_ADVERTISE_PORT: ${SERVER_PORT_1}
+      SERVER_REGISTRY_PREFIX: "server:registry:"
       METRICS_PORT: 9090
     ports:
       - "30001:${SERVER_PORT_1}"
@@ -77,6 +78,7 @@ services:
       SERVER_INSTANCE_ID: server-2
       SERVER_ADVERTISE_HOST: server-2
       SERVER_ADVERTISE_PORT: ${SERVER_PORT_2}
+      SERVER_REGISTRY_PREFIX: "server:registry:"
       METRICS_PORT: 9090
     ports:
       - "30002:${SERVER_PORT_2}"
@@ -121,29 +123,9 @@ services:
       - "36001:6001"
     environment:
       GATEWAY_LISTEN: "0.0.0.0:6000"
-      LB_GRPC_ENDPOINT: "load_balancer:7001"
       GATEWAY_ID: "gw1"
-      METRICS_PORT: "6001"
-    depends_on:
-      - load_balancer
-    networks:
-      - knights-net
-
-  load_balancer:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    pull_policy: never
-    command: [ "load_balancer" ]
-    ports:
-      - "37001:7001"
-      - "37002:7002"
-    environment:
-      LB_GRPC_LISTEN: "0.0.0.0:7001"
       REDIS_URI: "tcp://redis:6379"
-      LB_DYNAMIC_BACKENDS: "1"
-      LB_BACKEND_REGISTRY_PREFIX: "gateway/instances/"
-      METRICS_PORT: "7002"
+      METRICS_PORT: "6001"
     depends_on:
       redis:
         condition: service_healthy

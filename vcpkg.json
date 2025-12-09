@@ -13,10 +13,6 @@
       "platform": "windows"
     },
     {
-      "name": "grpc",
-      "platform": "windows"
-    },
-    {
       "name": "libpqxx",
       "platform": "windows"
     },
@@ -26,6 +22,14 @@
     },
     {
       "name": "gtest",
+      "platform": "windows"
+    },
+    {
+      "name": "openssl",
+      "platform": "windows"
+    },
+    {
+      "name": "lz4",
       "platform": "windows"
     },
     {

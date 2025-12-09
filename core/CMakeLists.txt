@@ -17,7 +17,14 @@ add_library(server_core
     src/util/paths.cpp
     src/util/crash_handler.cpp
     src/storage/db_worker_pool.cpp
+    src/security/cipher.cpp
+    src/compression/compressor.cpp
 )
+
+find_package(OpenSSL REQUIRED)
+find_package(lz4 CONFIG REQUIRED)
+
+target_link_libraries(server_core PUBLIC OpenSSL::SSL OpenSSL::Crypto lz4::lz4)
 
 target_include_directories(server_core PUBLIC include)
 # protobuf 생성 헤더 경로 추가

@@ -258,9 +258,10 @@ int run_server(int argc, char** argv) {
             // 레지스트리 하트비트 스케줄링
             if (registry_registered) {
                 auto interval = config.registry_heartbeat_interval;
-                scheduler.schedule_every([registry_backend, registry_record]() mutable {
+                scheduler.schedule_every([registry_backend, registry_record, state]() mutable {
                     registry_record.last_heartbeat_ms = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now().time_since_epoch()).count());
+                    registry_record.active_sessions = state->connection_count.load(std::memory_order_relaxed);
                     if (!registry_backend->upsert(registry_record)) {
                         corelog::warn("Server registry heartbeat upsert failed");
                     }

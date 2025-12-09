@@ -11,7 +11,7 @@ namespace server::storage::redis {
 class IRedisClient;
 } // namespace server::storage::redis
 
-namespace load_balancer {
+namespace gateway {
 
 // Sticky Session을 관리하는 클래스입니다.
 // Redis를 사용하여 클라이언트 ID와 백엔드 서버 ID 간의 매핑 정보를 저장하고 조회합니다.
@@ -42,4 +42,4 @@ private:
     std::unordered_map<std::string, CacheEntry> cache_;
 };
 
-} // namespace load_balancer
+} // namespace gateway

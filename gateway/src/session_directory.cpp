@@ -1,10 +1,10 @@
-#include "load_balancer/session_directory.hpp"
+#include "gateway/session_directory.hpp"
 
 #include <utility>
 
 #include "server/storage/redis/client.hpp"
 
-namespace load_balancer {
+namespace gateway {
 
 SessionDirectory::SessionDirectory(std::shared_ptr<server::storage::redis::IRedisClient> redis_client,
                                    std::string key_prefix,
@@ -121,4 +121,4 @@ std::string SessionDirectory::make_key(const std::string& client_id) const {
     return key_prefix_ + client_id;
 }
 
-} // namespace load_balancer
+} // namespace gateway

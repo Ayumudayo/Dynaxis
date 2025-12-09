@@ -21,11 +21,7 @@ case "$CMD" in
     ldd ./gateway_app
     exec ./gateway_app "$@"
     ;;
-  "load_balancer")
-    ls -l ./load_balancer_app
-    ldd ./load_balancer_app
-    exec ./load_balancer_app "$@"
-    ;;
+
   "migrate")
     exec ./migrations_runner "$@"
     ;;

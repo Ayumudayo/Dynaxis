@@ -21,12 +21,10 @@
 1.  **Gateway (`gateway/`)**:
     -   클라이언트의 TCP 연결을 수용하는 진입점입니다.
     -   인증(Authentication), 세션 관리, Heartbeat 처리를 담당합니다.
-    -   Load Balancer와 gRPC로 통신하여 트래픽을 백엔드 서버로 전달합니다.
+    -   **Service Discovery**: Redis를 통해 서버 인스턴스를 찾아, **Least Connections** 방식으로 트래픽을 분산합니다.
+    -   **Session Stickiness**: 재접속 시 이전 세션 정보를 바탕으로 동일한 서버로 라우팅을 시도합니다.
 
-2.  **Load Balancer (`load_balancer/`)**:
-    -   Gateway와 Server 사이의 중계 역할을 합니다.
-    -   **Consistent Hashing**을 사용하여 유저를 특정 서버에 분배합니다.
-    -   **Sticky Session**을 지원하여 재접속 시에도 동일한 서버로 연결되도록 보장합니다.
+
 
 3.  **Server (`server/`)**:
     -   실제 채팅 로직을 처리하는 핵심 서버입니다.
@@ -38,7 +36,85 @@
     -   네트워크(Session, Listener), 동시성(JobQueue, ThreadManager), 메모리 관리(MemoryPool) 등의 공통 기능을 제공합니다.
 
 ## 아키텍처 다이어그램
-<img width="1763" height="2608" alt="Overall Architecture" src="https://github.com/user-attachments/assets/288609b9-11cf-4ab4-88fc-8f72a4ccff3b" />
+```mermaid
+flowchart TB
+    %% ------------------------------
+    %% Styles & Definitions
+    %% ------------------------------
+    classDef client fill:#333,stroke:#fff,stroke-width:2px,color:#fff
+    classDef gateway fill:#1a237e,stroke:#7986cb,stroke-width:2px,color:#fff,rx:5
+    classDef server fill:#004d40,stroke:#4db6ac,stroke-width:2px,color:#fff,rx:5
+    classDef redis fill:#b71c1c,stroke:#e57373,stroke-width:2px,color:#fff,shape:cylinder
+    classDef db fill:#3e2723,stroke:#a1887f,stroke-width:2px,color:#fff,shape:cylinder
+    classDef component fill:#455a64,stroke:#90a4ae,stroke-width:2px,color:#fff,rx:5
+    classDef network fill:#f5f5f5,stroke:#e0e0e0,stroke-width:2px,stroke-dasharray: 5 5,color:#616161
+
+    %% ------------------------------
+    %% Node Structure
+    %% ------------------------------
+    
+    subgraph Clients ["USERS"]
+        ClientApp["Client Application"]:::client
+    end
+
+    subgraph AccessLayer ["ACCESS LAYER"]
+        direction TB
+        Gateway["Gateway Server\n(Session & Routing)"]:::gateway
+    end
+
+    subgraph ServiceLayer ["SERVICE LAYER"]
+        direction TB
+        subgraph Cluster ["Game Server Cluster"]
+            direction LR
+            S1["Server 1"]:::server
+            S2["Server 2"]:::server
+            Sn["Server N"]:::server
+        end
+    end
+
+    subgraph StateLayer ["STATE & DATA LAYER"]
+        direction TB
+        RedisPrimary[("Redis (Hot Data)\nSession/PubSub")]:::redis
+        
+        subgraph Async ["Async Persistence"]
+            direction TB
+            WbWorker["Write-Behind Worker"]:::component
+            Postgres[("PostgreSQL\n(Cold Data)")]:::db
+        end
+    end
+
+    %% ------------------------------
+    %% Data Flow
+    %% ------------------------------
+
+    %% 1. Connection
+    ClientApp ===|"1. TCP Connect"| Gateway
+
+    %% 2. Routing (Least Connections)
+    Gateway ===|"2. Route (Least Conn)"| S1
+    Gateway ===|"2. Route"| S2
+    Gateway ===|"2. Route"| Sn
+
+    %% 3. Synchronization (Pub/Sub & Heartbeat)
+    S1 <-->|"3. Sync/PubSub"| RedisPrimary
+    S2 <-->|"3. Sync/PubSub"| RedisPrimary
+    Sn <-->|"3. Sync/PubSub"| RedisPrimary
+
+    %% 4. Discovery
+    Gateway -.->|"Discovery"| RedisPrimary
+
+    %% 5. Persistence
+    RedisPrimary -.->|"Stream (Events)"| WbWorker
+    WbWorker -->|"Batch Insert"| Postgres
+
+    %% ------------------------------
+    %% Layout Hints
+    %% ------------------------------
+    style Clients fill:#fff,stroke:none
+    style AccessLayer fill:#e8eaf6,stroke:#c5cae9
+    style ServiceLayer fill:#e0f2f1,stroke:#b2dfdb
+    style StateLayer fill:#ffebee,stroke:#ffcdd2
+```
 
 ## ✨ 주요 기능 (Key Features)
 
@@ -57,7 +133,7 @@
 | **Core** | [`core/`](core/README.md) | 네트워크, 스레딩, 로깅 등 공용 라이브러리 |
 | **Server** | [`server/`](server/README.md) | 채팅 비즈니스 로직 및 데이터 처리 |
 | **Gateway** | [`gateway/`](gateway/README.md) | 클라이언트 연결 및 인증 담당 프론트엔드 |
-| **Load Balancer** | [`load_balancer/`](load_balancer/README.md) | 트래픽 분산 및 세션 라우팅 |
+
 | **DevClient** | [`devclient/`](devclient/README.md) | 개발자용 TUI 채팅 클라이언트 |
 | **Tools** | [`tools/`](tools/README.md) | Write-Behind 워커, 마이그레이션 도구 등 |
 
@@ -85,7 +161,7 @@ REDIS_URI=redis://localhost:6379
 # Network
 SERVER_PORT=5000
 GATEWAY_PORT=6000
-LB_GRPC_PORT=7001
+
 
 # Monitoring
 METRICS_PORT=9090
@@ -110,8 +186,7 @@ scripts/build.ps1 -Config Debug
 # 서버 실행
 .\build-msvc\server\Debug\server_app.exe 5000
 
-# 로드 밸런서 실행
-.\build-msvc\load_balancer\Debug\load_balancer_app.exe
+
 
 # 게이트웨이 실행
 .\build-msvc\gateway\Debug\gateway_app.exe
