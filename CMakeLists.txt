@@ -159,3 +159,7 @@ else()
     endif()
   endif()
 endif()
+
+if (WIN32)
+    add_subdirectory(client_gui)
+endif()

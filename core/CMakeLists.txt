@@ -22,7 +22,14 @@ add_library(server_core
 )
 
 find_package(OpenSSL REQUIRED)
-find_package(lz4 CONFIG REQUIRED)
+find_package(lz4 CONFIG QUIET)
+if (NOT TARGET lz4::lz4)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(LZ4 REQUIRED liblz4)
+    add_library(lz4::lz4 INTERFACE IMPORTED)
+    target_include_directories(lz4::lz4 INTERFACE ${LZ4_INCLUDE_DIRS})
+    target_link_libraries(lz4::lz4 INTERFACE ${LZ4_LIBRARIES})
+endif()
 
 target_link_libraries(server_core PUBLIC OpenSSL::SSL OpenSSL::Crypto lz4::lz4)
 

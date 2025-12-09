@@ -1,7 +1,7 @@
 #pragma once
 
 #include <vector>
-#include <span >
+#include <span>
 #include <string>
 #include <cstdint>
 #include <stdexcept>

@@ -39,6 +39,7 @@ RUN apt-get update && apt-get install -y \
     libprotobuf-dev \
     libboost-system-dev \
     libhiredis-dev \
+    liblz4-1 \
     dos2unix \
     && rm -rf /var/lib/apt/lists/*
 
