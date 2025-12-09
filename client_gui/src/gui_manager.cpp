@@ -8,6 +8,8 @@
 #include "backends/imgui_impl_opengl3.h"
 #include <GLFW/glfw3.h>
 #include <cstdio>
+#include <shlobj.h> // SHGetFolderPath
+
 
 // GLFW 오류 콜백
 static void glfw_error_callback(int error, const char* description) {
@@ -48,12 +50,20 @@ bool GuiManager::init(int width, int height, const std::string& title) {
     // 한글 폰트 로드
     ImFontConfig config;
     config.MergeMode = false;
-    const char* font_path = "C:\\Windows\\Fonts\\malgun.ttf";
-    FILE* f = fopen(font_path, "rb");
+    
+    // 시스템 폰트 경로 동적 탐색 (SHGetFolderPath)
+    char font_dir[MAX_PATH];
+    std::string font_path;
+    if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_FONTS, NULL, 0, font_dir))) {
+        font_path = std::string(font_dir) + "\\malgun.ttf";
+    }
+
+    FILE* f = fopen(font_path.c_str(), "rb");
     if (f) {
         fclose(f);
-        io.Fonts->AddFontFromFileTTF(font_path, 18.0f, NULL, io.Fonts->GetGlyphRangesKorean());
+        io.Fonts->AddFontFromFileTTF(font_path.c_str(), 18.0f, NULL, io.Fonts->GetGlyphRangesKorean());
     } else {
+        // 폰트가 없으면 기본 폰트 사용 (한글 깨질 수 있음)
         io.Fonts->AddFontDefault();
     }
 
