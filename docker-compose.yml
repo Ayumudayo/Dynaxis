@@ -50,6 +50,7 @@ services:
       SERVER_ADVERTISE_PORT: ${SERVER_PORT_1}
       SERVER_REGISTRY_PREFIX: "server:registry:"
       METRICS_PORT: 9090
+      RECENT_HISTORY_LIMIT: 20
     ports:
       - "30001:${SERVER_PORT_1}"
       - "39091:9090" # Expose metrics for manual check
@@ -80,6 +81,7 @@ services:
       SERVER_ADVERTISE_PORT: ${SERVER_PORT_2}
       SERVER_REGISTRY_PREFIX: "server:registry:"
       METRICS_PORT: 9090
+      RECENT_HISTORY_LIMIT: 20
     ports:
       - "30002:${SERVER_PORT_2}"
       - "39092:9090" # Expose metrics for manual check

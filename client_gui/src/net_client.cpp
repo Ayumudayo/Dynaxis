@@ -1,4 +1,3 @@
-// UTF-8, 한글 주석
 #include "client/net_client.hpp"
 
 #include "server/core/protocol/frame.hpp"
@@ -430,7 +429,7 @@ void NetClient::send_login(const std::string& user, const std::string& token) {
 void NetClient::send_join(const std::string& room, const std::string& password) {
     std::vector<std::uint8_t> p;
     proto::write_lp_utf8(p, room);
-    if (!password.empty()) proto::write_lp_utf8(p, password);
+    proto::write_lp_utf8(p, password);
     enqueue_frame(game_proto::MSG_JOIN_ROOM, 0, std::move(p));
 }
 

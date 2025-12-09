@@ -124,7 +124,7 @@ flowchart TB
 -   **Fault Tolerance**:
     -   Gateway/Server 장애 시 자동 재접속 및 세션 복구.
     -   DB 쓰기 실패 시 Redis DLQ로 이동 후 `wb_worker`가 재처리.
--   **DevClient**: FTXUI 기반의 TUI 클라이언트로 개발 및 테스트 용이성 확보.
+-   **Client GUI**: Dear ImGui 기반의 그래픽 클라이언트로 직관적인 사용성과 한국어 지원.
 
 ## 📂 서브 프로젝트 (Sub-projects)
 
@@ -134,7 +134,7 @@ flowchart TB
 | **Server** | [`server/`](server/README.md) | 채팅 비즈니스 로직 및 데이터 처리 |
 | **Gateway** | [`gateway/`](gateway/README.md) | 클라이언트 연결 및 인증 담당 프론트엔드 |
 
-| **DevClient** | [`devclient/`](devclient/README.md) | 개발자용 TUI 채팅 클라이언트 |
+| **Client GUI** | [`client_gui/`](client_gui/README.md) | Dear ImGui 기반 그래픽 채팅 클라이언트 |
 | **Tools** | [`tools/`](tools/README.md) | Write-Behind 워커, 마이그레이션 도구 등 |
 
 ## 🛠️ 시작하기 (Getting Started)
@@ -192,7 +192,7 @@ scripts/build.ps1 -Config Debug
 .\build-msvc\gateway\Debug\gateway_app.exe
 
 # 클라이언트 실행
-.\build-msvc\devclient\Debug\dev_chat_cli.exe
+.\build-windows\client_gui\Debug\client_gui.exe
 ```
 
 ## 🧪 테스트 (Testing)

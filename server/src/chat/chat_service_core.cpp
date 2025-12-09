@@ -1019,6 +1019,7 @@ bool ChatService::load_recent_messages_from_cache(
                       " kept=" + std::to_string(parsed.size()) +
                       " requested=" + std::to_string(ids.size()));
     }
+    std::reverse(parsed.begin(), parsed.end());
     out = std::move(parsed);
     return true;
 }

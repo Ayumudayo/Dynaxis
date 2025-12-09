@@ -7,7 +7,7 @@ option(SERVER_USE_HEADER_ONLY_BOOST_SYSTEM "Use header-only boost::system (no li
 option(BUILD_SERVER_STACK "Build server libraries and server_app" ON)
 option(BUILD_GATEWAY_APP "Build gateway_app" ON)
 
-option(BUILD_DEVCLIENT_APP "Build dev_chat_cli" ON)
+
 option(BUILD_SERVER_TESTS "Build server tests" ON)
 option(BUILD_WRITE_BEHIND_TOOLS "Build write-behind helper tools" ON)
 set(CMAKE_CXX_STANDARD 20)
@@ -87,9 +87,7 @@ if (BUILD_GATEWAY_APP)
   add_subdirectory(gateway)
 endif()
 
-if (BUILD_DEVCLIENT_APP)
-  add_subdirectory(devclient)
-endif()
+
 if (BUILD_SERVER_TESTS)
   enable_testing()
   add_subdirectory(tests)
@@ -158,4 +156,8 @@ else()
       message(WARNING "libpqxx not found — migrations_runner will fail to link")
     endif()
   endif()
+endif()
+
+if (WIN32)
+    add_subdirectory(client_gui)
 endif()

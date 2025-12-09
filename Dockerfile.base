@@ -41,6 +41,7 @@ RUN apt-get update && apt-get install -y \
     libgtest-dev \
     nlohmann-json3-dev \
     libhiredis-dev \
+    liblz4-dev \
     && rm -rf /var/lib/apt/lists/* \
     # Remove conflicting system libpqxx (we build from source for C++20)
     && (apt-get purge -y libpqxx* || true) \

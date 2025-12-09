@@ -194,6 +194,30 @@ void ChatService::on_join(server::core::Session& s, std::span<const std::uint8_t
                 // 1. 이전 방에서 제거 (방 이동 시)
                 if (!previous_room.empty() && previous_room != room_to_join) {
                     redis_->srem("room:users:" + previous_room, sender);
+                    
+                    // 이전 방이 비었는지 확인하고 활성 목록에서 제거 (Room List Sync)
+                    if (previous_room != "lobby") {
+                        std::vector<std::string> remaining;
+                        redis_->smembers("room:users:" + previous_room, remaining);
+                        if (remaining.empty()) {
+                            redis_->srem("rooms:active", previous_room);
+                            redis_->del("room:password:" + previous_room);
+                             if (db_pool_) {
+                                try {
+                                    auto uow = db_pool_->make_unit_of_work();
+                                    auto found = uow->rooms().find_by_name_exact_ci(previous_room);
+                                    if (found) {
+                                        uow->rooms().close(found->id);
+                                        uow->commit();
+                                    }
+                                    {
+                                        std::lock_guard<std::mutex> lk(state_.mu);
+                                        state_.room_ids.erase(previous_room);
+                                    }
+                                } catch (...) {}
+                            }
+                        }
+                    }
                 }
 
                 // 2. 새 방에 추가
@@ -240,6 +264,9 @@ void ChatService::on_join(server::core::Session& s, std::span<const std::uint8_t
         // 로비와 해당 방에 있는 다른 유저들에게 새로고침 알림 전송
         broadcast_refresh("lobby");
         broadcast_refresh(room_to_join);
+        if (!previous_room.empty() && previous_room != room_to_join) {
+            broadcast_refresh(previous_room);
+        }
     });
 }
 
