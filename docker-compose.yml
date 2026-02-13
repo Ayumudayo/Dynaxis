@@ -1,18 +1,30 @@
+# Legacy all-in-one dev compose (no HAProxy entrypoint).
+# - Infra-only: `docker/infra/docker-compose.yml`
+# - Full stack verification (Client -> HAProxy -> gateway -> server): `docker/stack/docker-compose.yml`
+
+x-knights-app: &knights-app
+  build:
+    context: .
+    dockerfile: Dockerfile
+  pull_policy: never
+  image: knights-app:local
+
 services:
+
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:-knights}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-knights_db}
     ports:
-      - "35432:5432"
+      - "${POSTGRES_HOST_PORT:-35432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - knights-net
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-knights} -d ${POSTGRES_DB:-knights_db}" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -20,7 +32,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "36379:6379"
+      - "${REDIS_HOST_PORT:-36379}:6379"
     volumes:
       - redis_data:/data
     networks:
@@ -32,64 +44,62 @@ services:
       retries: 5
 
   server-1:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    pull_policy: never
+    <<: *knights-app
     command: [ "server" ]
     environment:
       GATEWAY_ID: gw1
-      PORT: ${SERVER_PORT_1}
-      DB_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      PORT: ${SERVER_PORT_1:-5000}
+      DB_URI: postgresql://${POSTGRES_USER:-knights}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-knights_db}
       REDIS_URI: tcp://redis:6379
       WRITE_BEHIND_ENABLED: "1"
       USE_REDIS_PUBSUB: "1"
       REDIS_CHANNEL_PREFIX: "knights:"
       SERVER_INSTANCE_ID: server-1
       SERVER_ADVERTISE_HOST: server-1
-      SERVER_ADVERTISE_PORT: ${SERVER_PORT_1}
-      SERVER_REGISTRY_PREFIX: "server:registry:"
+      SERVER_ADVERTISE_PORT: ${SERVER_PORT_1:-5000}
+      SERVER_REGISTRY_PREFIX: "gateway/instances/"
       METRICS_PORT: 9090
       RECENT_HISTORY_LIMIT: 20
     ports:
-      - "30001:${SERVER_PORT_1}"
+      - "30001:${SERVER_PORT_1:-5000}"
       - "39091:9090" # Expose metrics for manual check
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     networks:
       - knights-net
 
   server-2:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    pull_policy: never
+    <<: *knights-app
     command: [ "server" ]
     environment:
       GATEWAY_ID: gw2
-      PORT: ${SERVER_PORT_2}
-      DB_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      PORT: ${SERVER_PORT_2:-5000}
+      DB_URI: postgresql://${POSTGRES_USER:-knights}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-knights_db}
       REDIS_URI: tcp://redis:6379
       WRITE_BEHIND_ENABLED: "1"
       USE_REDIS_PUBSUB: "1"
       REDIS_CHANNEL_PREFIX: "knights:"
       SERVER_INSTANCE_ID: server-2
       SERVER_ADVERTISE_HOST: server-2
-      SERVER_ADVERTISE_PORT: ${SERVER_PORT_2}
-      SERVER_REGISTRY_PREFIX: "server:registry:"
+      SERVER_ADVERTISE_PORT: ${SERVER_PORT_2:-5000}
+      SERVER_REGISTRY_PREFIX: "gateway/instances/"
       METRICS_PORT: 9090
       RECENT_HISTORY_LIMIT: 20
     ports:
-      - "30002:${SERVER_PORT_2}"
+      - "30002:${SERVER_PORT_2:-5000}"
       - "39092:9090" # Expose metrics for manual check
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     networks:
       - knights-net
 
@@ -115,10 +125,7 @@ services:
       - knights-net
 
   gateway:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    pull_policy: never
+    <<: *knights-app
     command: [ "gateway" ]
     ports:
       - "36000:6000"
@@ -127,6 +134,8 @@ services:
       GATEWAY_LISTEN: "0.0.0.0:6000"
       GATEWAY_ID: "gw1"
       REDIS_URI: "tcp://redis:6379"
+      SERVER_REGISTRY_PREFIX: "gateway/instances/"
+      SERVER_REGISTRY_TTL: "30"
       METRICS_PORT: "6001"
     depends_on:
       redis:
@@ -135,50 +144,51 @@ services:
       - knights-net
 
   migrator:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    pull_policy: never
+    <<: *knights-app
     command: [ "migrate" ]
     environment:
-      DB_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DB_URI: postgresql://${POSTGRES_USER:-knights}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-knights_db}
       MIGRATIONS_DIR: /app/migrations
     depends_on:
       postgres:
         condition: service_healthy
     networks:
       - knights-net
-    profiles:
-      - tools
-
   wb_worker:
-    build: .
+    <<: *knights-app
     command: [ "worker" ]
     environment:
-      DB_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DB_URI: postgresql://${POSTGRES_USER:-knights}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-knights_db}
       REDIS_URI: tcp://redis:6379
+      REDIS_STREAM_KEY: "session_events"
+      WB_GROUP: "wb_group"
       WB_CONSUMER: worker-1
-      WB_GROUP_DLQ: wb_dlq_group
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     networks:
       - knights-net
 
   wb_dlq_replayer:
-    build: .
+    <<: *knights-app
     command: [ "replayer" ]
     environment:
-      DB_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DB_URI: postgresql://${POSTGRES_USER:-knights}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-knights_db}
       REDIS_URI: tcp://redis:6379
-      WB_DLQ_BATCH: ${WB_DLQ_BATCH}
+      WB_DLQ_BATCH: ${WB_DLQ_BATCH:-10}
+      WB_GROUP_DLQ: "wb_dlq_group"
+      WB_CONSUMER: "replayer-1"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     networks:
       - knights-net
     profiles:
