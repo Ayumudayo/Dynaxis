@@ -39,6 +39,8 @@ Client --TCP--> HAProxy --TCP--> Gateway --TCP--> server_app
 ## 3. HAProxy 세부
 HAProxy는 TCP 레벨에서만 Gateway로 분산한다. (애플리케이션 opcode는 Gateway/Server가 처리)
 
+로컬에서 Redis/Postgres(선택) + N 서버 + N 게이트웨이 + HAProxy를 한번에 띄우려면 `scripts/run_full_stack.ps1` / `scripts/run_full_stack.sh`를 사용한다.
+
 ### 3.1 로컬 개발용 예시 설정
 아래 예시는 로컬에서 Gateway를 2개 포트로 띄우고(6101/6102) HAProxy가 6000으로 수신해 분산하는 형태다.
 (`gateway_app` 기본 METRICS_PORT=6001과 충돌을 피하기 위해, 리스너 포트는 61xx 대역을 권장한다.)

@@ -214,6 +214,13 @@ scripts/build.ps1 -Config Debug
 scripts/run_haproxy_gateways.ps1 -Config Debug -GatewayCount 2
 ```
 
+Redis/Postgres(선택)까지 포함해 로컬에서 전체 스택을 한 번에 띄우려면 다음 스크립트를 사용합니다.
+
+```powershell
+# Docker infra + migrations + (optional) wb_worker + N servers + N gateways + HAProxy
+scripts/run_full_stack.ps1 -WithDockerInfra -WithPostgres -RunMigrations -WithWorker
+```
+
 ## 🧪 테스트 (Testing)
 
 **단위 테스트 (Unit Tests)**
