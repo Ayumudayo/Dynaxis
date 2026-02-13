@@ -75,7 +75,8 @@ try { if ($IsWindows) { $onWindows = $true } } catch { }
 if (-not $onWindows) { $onWindows = ($PSVersionTable.PSEdition -eq 'Desktop' -or $env:OS -like '*Windows*') }
 
 if (-not $BuildDir -or $BuildDir -eq '') {
-  if ($onWindows) { $BuildDir = 'build-msvc' } else { $BuildDir = 'build-linux' }
+  # CMakePresets.json의 기본 binaryDir과 일치시키는 것을 전제로 한다.
+  if ($onWindows) { $BuildDir = 'build-windows' } else { $BuildDir = 'build-linux' }
 }
 Info "BuildDir=$BuildDir"
 
@@ -117,9 +118,33 @@ Info "CMake 구성 중... (Preset: $Preset)"
 if ($LASTEXITCODE -ne 0) { Fail "CMake 구성 실패" }
 
 Info "빌드 중... (Preset: $BuildPreset)"
-$buildArgs = @('--build', '--preset', $BuildPreset)
+
+$buildArgs = @()
 if ($Target -and $Target -ne '') {
-    $buildArgs += @('--target', $Target)
+  # Visual Studio generator는 타깃별 .vcxproj가 서브 디렉터리에 생성될 수 있어
+  # `cmake --build --preset ... --target <name>`가 실패할 수 있다.
+  # (예: build-windows/gateway/gateway_app.vcxproj)
+  # 이 경우 해당 .vcxproj가 있는 디렉터리를 빌드 디렉터리로 사용한다.
+  if ($onWindows) {
+    $resolvedBuildDir = $BuildDir
+    try { $resolvedBuildDir = (Resolve-Path $BuildDir).Path } catch {}
+    $proj = $null
+    try {
+      $proj = Get-ChildItem -Path $resolvedBuildDir -Recurse -File -Filter "$Target.vcxproj" -ErrorAction SilentlyContinue |
+              Sort-Object FullName |
+              Select-Object -First 1
+    } catch {}
+
+    if ($proj) {
+      $buildArgs = @('--build', $proj.DirectoryName, '--config', $Config, '--target', $Target)
+    } else {
+      $buildArgs = @('--build', '--preset', $BuildPreset, '--target', $Target)
+    }
+  } else {
+    $buildArgs = @('--build', '--preset', $BuildPreset, '--target', $Target)
+  }
+} else {
+  $buildArgs = @('--build', '--preset', $BuildPreset)
 }
 
 if ($MaxJobs -gt 0) {

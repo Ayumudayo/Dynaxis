@@ -36,9 +36,14 @@ fail(){ printf '[fail] %s\n' "$1" >&2; exit 1 ; }
 
 if [[ ! -d "$VCPKG_ROOT/.git" ]]; then
   info "Cloning vcpkg into $VCPKG_ROOT"
-  git clone --depth 1 "$VCPKG_REPO" "$VCPKG_ROOT"
+  # vcpkg manifest versioning(builtin-baseline)은 과거 커밋/트리를 필요로 하므로 shallow clone을 피한다.
+  git clone "$VCPKG_REPO" "$VCPKG_ROOT"
 else
   info "Using existing vcpkg checkout: $VCPKG_ROOT"
+  if [[ -f "$VCPKG_ROOT/.git/shallow" ]]; then
+    info "vcpkg shallow clone detected; fetching full history"
+    (cd "$VCPKG_ROOT" && git fetch --unshallow)
+  fi
 fi
 
 VCPKG_EXE="$VCPKG_ROOT/vcpkg"
