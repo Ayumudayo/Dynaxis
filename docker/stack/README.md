@@ -8,6 +8,12 @@
 
 ## 실행
 
+먼저 `knights-base` 이미지를 빌드한다. (`Dockerfile`이 `FROM knights-base:latest`를 사용)
+
+```bash
+docker build -f Dockerfile.base -t knights-base .
+```
+
 ```bash
 docker compose -f docker/stack/docker-compose.yml up -d --build
 ```

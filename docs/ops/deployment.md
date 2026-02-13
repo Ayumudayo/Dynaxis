@@ -23,6 +23,7 @@ scripts/deploy_docker.ps1 -Action up -Stack -Detached -Build
 
 ```bash
 # WSL/Linux
+docker build -f Dockerfile.base -t knights-base .
 docker compose -f docker/stack/docker-compose.yml up -d --build
 ```
 
