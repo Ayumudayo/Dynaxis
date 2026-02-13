@@ -13,25 +13,48 @@
 `.env` 예시는 `docs/configuration.md` 를 참고한다. 환경별로 `.env.server`, `.env.gateway` 를 분리해 ConfigMap/Secret 에 주입하는 것을 권장한다. (HAProxy는 별도 설정 파일로 관리)
 
 ## 2. Dev 환경 (Docker Compose)
-### 2.1 실행 방법
-```bash
-# Windows PowerShell
-scripts/run_all.ps1 -Config Debug -WithClient
+### 2.1 권장: 호스트 프로세스 기반(개발/디버깅)
+개발 루프(빌드/디버깅)는 호스트에서 `server_app`/`gateway_app`를 직접 실행하는 편이 빠르다.
 
-# WSL/Linux
-bash scripts/run_all.sh -c Debug -b build-linux -p 5000
+```powershell
+# Windows: Redis/Postgres는 Docker(옵션), 앱 + HAProxy는 호스트 프로세스
+scripts/run_full_stack.ps1 -WithDockerInfra -WithPostgres -RunMigrations -ServerCount 2 -GatewayCount 2
 ```
-위 스크립트는 `server_app`, `wb_worker`(그리고 옵션으로 `dev_chat_cli`)를 빌드/기동한다. `gateway_app` 및 HAProxy는 별도 프로세스로 실행한다. Redis는 기본적으로 외부 인스턴스를 바라보므로, 로컬 Redis 를 쓰고 싶다면 `.env` 에 `REDIS_URI=redis://redis:6379` 를 지정하고 compose 파일에 redis 서비스를 추가한다.
+
+```bash
+# WSL/Linux
+WITH_DOCKER_INFRA=1 WITH_POSTGRES=1 RUN_MIGRATIONS=1 SERVER_COUNT=2 GATEWAY_COUNT=2 ./scripts/run_full_stack.sh
+```
+
+### 2.2 Docker Infra만(선택)
+Redis/Postgres만 Compose로 띄우고, 애플리케이션은 호스트에서 실행할 수도 있다.
+
+```powershell
+scripts/deploy_docker.ps1 -Action up -Infra -Detached
+```
+
+### 2.3 검증용: 전체 스택 Docker (HAProxy 포함)
+아키텍처 전체를 컨테이너로 재현하는 스택은 회귀/검증용으로 둔다.
+
+```powershell
+scripts/deploy_docker.ps1 -Action up -Stack -Detached -Build
+```
+
+또는:
+
+```bash
+docker compose -f docker/stack/docker-compose.yml up -d --build
+```
 
 ### 2.2 Compose 파일 핵심
 - `depends_on.condition=service_healthy` 로 Postgres 준비 여부를 보장
 - `volumes: pgdata` 로 데이터 유지
-- 서버 컨테이너에 `METRICS_PORT=9090` 노출 후 `docker-compose logs -f server` 로 확인
+- 서버/게이트웨이에서 `/metrics`를 노출하고 Prometheus/Grafana를 붙일 수 있다.
 
 ### 2.3 Dev 검증 체크리스트
-1. `curl http://localhost:9090/metrics` 200 OK
-2. devclient 로 `/login dev` → `/chat hello` 성공
-3. `scripts/smoke_wb.ps1` 실행 시 write-behind ok
+1. HAProxy 엔드포인트로 접속: `127.0.0.1:6000`
+2. server/gateway metrics 확인(옵션): `/metrics` 200 OK
+3. `WRITE_BEHIND_ENABLED=1` 설정 시 `wb_worker`가 backlog를 처리하는지 확인
 
 ## 3. Prod 환경 (AWS + Kubernetes)
 ### 3.1 인프라 (Terraform)
