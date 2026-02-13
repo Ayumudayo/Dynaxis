@@ -10,8 +10,8 @@ tools/wb_check/
 
 ## 사용법
 ```powershell
-cmake --build build-msvc --target wb_check
-.\build-msvc\tools\Debug\wb_check.exe <event_id>
+scripts/build.ps1 -Config Debug -Target wb_check
+.\build-windows\tools\Debug\wb_check.exe <event_id>
 ```
 - 존재하면 `found`를 출력하고 종료 코드 0을 반환한다.
 - 존재하지 않으면 `not found`와 함께 종료 코드 5를 반환한다.
@@ -22,7 +22,8 @@ cmake --build build-msvc --target wb_check
 | --- | --- | --- |
 | `DB_URI` | PostgreSQL 연결 문자열 | (필수) |
 
-`.env` 파일이 있으면 우선 로드한 뒤, OS 환경 변수가 있으면 동일한 키로 덮어쓴다.
+`.env`는 개발 편의용 예시 파일이며, 애플리케이션이 자동으로 로드하지 않는다.
+로컬에서는 쉘/스크립트에서 `.env`를 로드한 뒤 실행하거나, OS 환경 변수로 직접 주입해야 한다.
 
 ## 활용 시나리오
 - `wb_emit`로 발행한 테스트 이벤트가 DB까지 적재됐는지 즉시 확인.

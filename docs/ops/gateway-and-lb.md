@@ -40,7 +40,8 @@ Client --TCP--> HAProxy --TCP--> Gateway --TCP--> server_app
 HAProxy는 TCP 레벨에서만 Gateway로 분산한다. (애플리케이션 opcode는 Gateway/Server가 처리)
 
 ### 3.1 로컬 개발용 예시 설정
-아래 예시는 로컬에서 Gateway를 2개 포트로 띄우고(6001/6002) HAProxy가 6000으로 수신해 분산하는 형태다.
+아래 예시는 로컬에서 Gateway를 2개 포트로 띄우고(6101/6102) HAProxy가 6000으로 수신해 분산하는 형태다.
+(`gateway_app` 기본 METRICS_PORT=6001과 충돌을 피하기 위해, 리스너 포트는 61xx 대역을 권장한다.)
 
 ```haproxy
 global
@@ -58,8 +59,8 @@ frontend fe_gateway
 
 backend be_gateway
   balance roundrobin
-  server gw1 127.0.0.1:6001 check
-  server gw2 127.0.0.1:6002 check
+  server gw1 127.0.0.1:6101 check
+  server gw2 127.0.0.1:6102 check
 ```
 
 ### 3.2 운영 팁

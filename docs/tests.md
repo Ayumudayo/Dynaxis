@@ -3,21 +3,21 @@
 ## 1. 스토리지 단위 테스트
 - 대상: `storage_basic_tests` (Postgres + Repository 기본 검증)
 - 준비
-  - `.env` 혹은 환경 변수에 `DB_URI` 지정
+  - 환경 변수에 `DB_URI` 지정
   - `docs/db/migrations/*.sql`로 스키마 적용
 - 실행 (PowerShell)
   ```
-  scripts/build.ps1 -Config Debug -BuildDir build-msvc -Target storage_basic_tests
-  build-msvc/tests/Debug/storage_basic_tests.exe
+  scripts/build.ps1 -Config Debug -BuildDir build-windows -Target storage_basic_tests
+  build-windows/tests/Debug/storage_basic_tests.exe
   ```
 - DB 연결이 없으면 테스트는 자동 skip 된다.
 
 ## 2. Redis/Write-behind 스모크 테스트
 `wb_worker`, `wb_emit`, `wb_check`를 묶어 Streams→DB 라운드트립을 검증한다.
 ```
-scripts/smoke_wb.ps1 -Config Debug -BuildDir build-msvc
+scripts/smoke_wb.ps1 -Config Debug -BuildDir build-windows
 ```
-- Redis/DB URI를 `.env`에 지정하고 `WRITE_BEHIND_ENABLED=1` 상태에서 실행.
+- Redis/DB URI를 환경 변수로 지정하고 `WRITE_BEHIND_ENABLED=1` 상태에서 실행.
 - 완료 후 `wb_check`가 `session_events` 테이블을 조회해 XADD→DB 반영 여부를 출력한다.
 
 ## 3. E2E (Gateway + Server + Client)

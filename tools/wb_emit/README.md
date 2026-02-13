@@ -10,9 +10,9 @@ tools/wb_emit/
 
 ## 사용 방법
 ```powershell
-cmake --build build-msvc --target wb_emit
-.\build-msvc\tools\Debug\wb_emit.exe            # 기본 이벤트(session_login) 발행
-.\build-msvc\tools\Debug\wb_emit.exe room_join  # type 필드를 덮어써 커스텀 이벤트 발행
+scripts/build.ps1 -Config Debug -Target wb_emit
+.\build-windows\tools\Debug\wb_emit.exe            # 기본 이벤트(session_login) 발행
+.\build-windows\tools\Debug\wb_emit.exe room_join  # type 필드를 덮어써 커스텀 이벤트 발행
 ```
 
 ## 환경 변수
@@ -21,7 +21,8 @@ cmake --build build-msvc --target wb_emit
 | `REDIS_URI` | Redis 연결 문자열 | (필수) |
 | `REDIS_STREAM_KEY` | 이벤트를 쓸 스트림 이름 | `session_events` |
 
-`.env` 파일이 있으면 실행 시 자동으로 로드하며, 이후 OS 환경 변수로 덮어쓸 수 있다.
+`.env`는 개발 편의용 예시 파일이며, 애플리케이션이 자동으로 로드하지 않는다.
+로컬에서는 쉘/스크립트에서 `.env`를 로드한 뒤 실행하거나, OS 환경 변수로 직접 주입해야 한다.
 
 ## 필드 레이아웃
 - `type`: 명령줄 인자(또는 `session_login`)

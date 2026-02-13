@@ -9,7 +9,7 @@ tools/wb_worker/
 ```
 
 ## 동작 개요
-1. 실행 시 `.env` 또는 환경 변수에서 Redis·PostgreSQL 설정을 로드한다.
+1. 실행 시 환경 변수에서 Redis·PostgreSQL 설정을 로드한다.
 2. `WB_GROUP` / `WB_CONSUMER` 이름으로 Redis Stream 소비자 그룹을 생성한다.
 3. `WB_BATCH_MAX_EVENTS`, `WB_BATCH_MAX_BYTES`, `WB_BATCH_DELAY_MS` 조건을 만족할 때마다 이벤트를 묶어 PostgreSQL에 INSERT/UPSERT 한다.
 4. 처리 실패 시 DLQ 스트림(`WB_DLQ_STREAM`)으로 이동하고, 재처리 정책(`WB_RETRY_MAX`, `WB_RETRY_BACKOFF_MS`)을 따른다.
@@ -27,12 +27,13 @@ tools/wb_worker/
 | `WB_RETRY_MAX`, `WB_RETRY_BACKOFF_MS` | 재시도 횟수·백오프(ms) | `5`, `250` |
 | `DB_URI` | PostgreSQL 연결 문자열 | (필수) |
 
-환경 변수는 루트 `.env` 또는 실행 파일 경로에 위치한 `.env`에서 자동으로 로드된다.
+`.env`는 개발 편의용 예시 파일이며, 애플리케이션이 자동으로 로드하지 않는다.
+로컬에서는 쉘/스크립트에서 `.env`를 로드한 뒤 실행하거나, OS 환경 변수로 직접 주입해야 한다.
 
 ## 빌드 및 실행
 ```powershell
-cmake --build build-msvc --target wb_worker
-.\build-msvc\tools\Debug\wb_worker.exe
+scripts/build.ps1 -Config Debug -Target wb_worker
+.\build-windows\tools\Debug\wb_worker.exe
 ```
 
 또는 `scripts/build.ps1 -Target wb_worker`를 사용해 다른 모듈과 함께 빌드할 수 있다.

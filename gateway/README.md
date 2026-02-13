@@ -44,16 +44,19 @@ class TokenAuthenticator : public gateway::auth::IAuthenticator {
 | `GATEWAY_LISTEN` | TCP 수신 주소:포트 | `0.0.0.0:6000` |
 | `GATEWAY_ID` | 인스턴스 식별자 (Presence, 로그) | `gateway-default` |
 | `REDIS_URI` | Redis URI (Instance Registry/SessionDirectory) | `tcp://127.0.0.1:6379` |
+| `SERVER_REGISTRY_PREFIX` | Instance Registry key prefix (server_app과 동일) | `gateway/instances/` |
+| `SERVER_REGISTRY_TTL` | Instance Registry TTL seconds | `30` |
 | `METRICS_PORT` | `/metrics` HTTP 포트 | `6001` |
+| `ALLOW_ANONYMOUS` | 익명 로그인 허용(1/0) | `1` |
+| `AUTH_PROVIDER` / `AUTH_ENDPOINT` | 외부 인증 연동(옵션) | 빈 값 |
 
 자세한 옵션은 `docs/configuration.md` 와 `docs/ops/gateway-and-lb.md` 를 참고하세요.
 
 ## 빌드 & 실행
 ```powershell
-cmake --build build-msvc --target gateway_app
-.\build-msvc\gateway\Debug\gateway_app.exe
+scripts/build.ps1 -Config Debug -Target gateway_app
+.\build-windows\gateway\Debug\gateway_app.exe
 ```
 
 멀티 인스턴스로 운영할 경우 외부 TCP 로드밸런서(예: HAProxy)에서 여러 `gateway_app`으로 분산시킵니다.
 예시는 `docs/ops/gateway-and-lb.md` 를 참고하세요.
-

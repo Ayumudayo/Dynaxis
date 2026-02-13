@@ -157,20 +157,27 @@ flowchart TB
 
 ### 환경 설정 (Configuration)
 
-프로젝트 루트의 `.env` 파일을 설정해야 합니다. (`.env.example` 참고)
+애플리케이션은 **OS 환경 변수**를 읽어 설정됩니다.
+로컬 개발에서는 `.env.example`를 복사해 `.env`를 만들고, 스크립트들이 이를 로드하도록 사용할 수 있습니다.
+(코드 자체에는 `.env` 자동 로더가 없습니다.)
 
 ```ini
-# Database
-DB_URI=postgresql://user:pass@localhost:5432/knights
-REDIS_URI=redis://localhost:6379
+# Core
+DB_URI=postgresql://knights:password@127.0.0.1:5432/knights_db
+REDIS_URI=tcp://127.0.0.1:6379
 
-# Network
-SERVER_PORT=5000
-GATEWAY_PORT=6000
+# server_app
+PORT=5000
+SERVER_ADVERTISE_HOST=127.0.0.1
+SERVER_REGISTRY_PREFIX=gateway/instances/
 
+# gateway_app
+GATEWAY_LISTEN=0.0.0.0:6000
+GATEWAY_ID=gateway-default
 
-# Monitoring
-METRICS_PORT=9090
+# Metrics
+# METRICS_PORT is per-process. Set different values per terminal/script.
+# METRICS_PORT=9100
 ```
 
 ### 빌드 및 실행 (Build & Run)
@@ -190,15 +197,21 @@ scripts/build.ps1 -Config Debug
 
 ```powershell
 # 서버 실행
-.\build-msvc\server\Debug\server_app.exe 5000
+.\build-windows\server\Debug\server_app.exe 5000
 
 
 
 # 게이트웨이 실행
-.\build-msvc\gateway\Debug\gateway_app.exe
+.\build-windows\gateway\Debug\gateway_app.exe
 
 # 클라이언트 실행
 .\build-windows\client_gui\Debug\client_gui.exe
+```
+
+로컬에서 HAProxy 뒤에 다수의 Gateway 인스턴스를 띄우려면 다음 스크립트를 사용합니다.
+
+```powershell
+scripts/run_haproxy_gateways.ps1 -Config Debug -GatewayCount 2
 ```
 
 ## 🧪 테스트 (Testing)
@@ -206,8 +219,8 @@ scripts/build.ps1 -Config Debug
 **단위 테스트 (Unit Tests)**
 
 ```powershell
-cmake --build build-msvc --target chat_history_tests
-ctest --test-dir build-msvc/tests
+cmake --build build-windows --target chat_history_tests
+ctest --test-dir build-windows/tests
 ```
 
 **통합 스모크 테스트 (Smoke Test)**

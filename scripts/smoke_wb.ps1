@@ -1,7 +1,7 @@
 # Write-behind 통합 스모크 테스트 (PowerShell)
 param(
   [string]$Config = 'Debug',
-  [string]$BuildDir = 'build-msvc'
+  [string]$BuildDir = 'build-windows'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -55,4 +55,3 @@ finally {
 }
 
 exit 0
-
