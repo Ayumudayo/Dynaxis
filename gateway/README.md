@@ -52,11 +52,16 @@ class TokenAuthenticator : public gateway::auth::IAuthenticator {
 
 자세한 옵션은 `docs/configuration.md` 와 `docs/ops/gateway-and-lb.md` 를 참고하세요.
 
-## 빌드 & 실행
+## 빌드
 ```powershell
 scripts/build.ps1 -Config Debug -Target gateway_app
-.\build-windows\gateway\Debug\gateway_app.exe
 ```
 
-멀티 인스턴스로 운영할 경우 외부 TCP 로드밸런서(예: HAProxy)에서 여러 `gateway_app`으로 분산시킵니다.
-예시는 `docs/ops/gateway-and-lb.md` 를 참고하세요.
+## 실행 (권장: Linux/Docker)
+로컬/운영 환경에서는 `gateway_app`을 **HAProxy 뒤**에 두고 Linux 런타임에서 실행하는 형태를 표준으로 둔다.
+
+```powershell
+scripts/deploy_docker.ps1 -Action up -Stack -Detached -Build
+```
+
+예시는 `docker/stack/docker-compose.yml`, `docker/stack/haproxy/haproxy.cfg` 와 `docs/ops/gateway-and-lb.md` 를 참고하세요.

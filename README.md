@@ -182,7 +182,7 @@ GATEWAY_ID=gateway-default
 
 ### 빌드 및 실행 (Build & Run)
 
-PowerShell 스크립트를 통해 간편하게 전체 스택을 빌드하고 실행할 수 있습니다.
+개발은 Windows에서 하되, 서버 스택(HAProxy/gateway/server/worker)은 **Linux 런타임(Docker Desktop의 Linux containers)** 으로 실행하는 흐름을 표준으로 둡니다.
 
 **1. 빌드**
 
@@ -191,34 +191,27 @@ PowerShell 스크립트를 통해 간편하게 전체 스택을 빌드하고 실
 scripts/build.ps1 -Config Debug
 ```
 
-**2. 실행**
-
-각 컴포넌트를 개별 터미널에서 실행하거나, `run_all.ps1`을 사용하세요.
+**2. 서버 스택 실행 (권장: Docker/Stack)**
 
 ```powershell
-# 서버 실행
-.\build-windows\server\Debug\server_app.exe 5000
+# HAProxy 포함 전체 스택 (검증용 표본)
+scripts/deploy_docker.ps1 -Action up -Stack -Detached -Build
+```
 
+접속:
+- 게임 트래픽: `127.0.0.1:6000` (HAProxy)
+- HAProxy stats: `http://127.0.0.1:8404/`
 
+중지:
 
-# 게이트웨이 실행
-.\build-windows\gateway\Debug\gateway_app.exe
+```powershell
+scripts/deploy_docker.ps1 -Action down -Stack
+```
 
-# 클라이언트 실행
+**3. 클라이언트 실행**
+
+```powershell
 .\build-windows\client_gui\Debug\client_gui.exe
-```
-
-로컬에서 HAProxy 뒤에 다수의 Gateway 인스턴스를 띄우려면 다음 스크립트를 사용합니다.
-
-```powershell
-scripts/run_haproxy_gateways.ps1 -Config Debug -GatewayCount 2
-```
-
-Redis/Postgres(선택)까지 포함해 로컬에서 전체 스택을 한 번에 띄우려면 다음 스크립트를 사용합니다.
-
-```powershell
-# Docker infra + migrations + (optional) wb_worker + N servers + N gateways + HAProxy
-scripts/run_full_stack.ps1 -WithDockerInfra -WithPostgres -RunMigrations -WithWorker
 ```
 
 ## 🧪 테스트 (Testing)
@@ -232,10 +225,13 @@ ctest --test-dir build-windows/tests
 
 **통합 스모크 테스트 (Smoke Test)**
 
-서버, 게이트웨이, 로드밸런서, 클라이언트를 모두 띄우고 메시지 송수신을 검증합니다.
+Docker 스택(`docker/stack`)을 띄운 뒤 클라이언트로 메시지 송수신을 검증합니다.
 
 ```powershell
-scripts/run_all.ps1 -Config Debug -WithClient -Smoke
+scripts/deploy_docker.ps1 -Action up -Stack -Detached -Build
+
+# (선택) 로그 보기
+scripts/deploy_docker.ps1 -Action logs -Stack
 ```
 
 ## 📚 문서 (Documentation)

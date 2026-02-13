@@ -46,9 +46,15 @@ cmake --build --preset windows-vs2022-debug --target server_app
 cmake --build --preset windows-vs2022-relwithdebinfo --target server_app
 ```
 
-### 실행
-실행 파일은 `build-windows/server/Debug/server_app.exe` 경로에 생성됩니다.
-실행 시 포트 번호를 인자로 전달할 수 있습니다.
+### 실행 (권장: Linux/Docker)
+서버 스택 런타임은 Linux(예: Docker)로 통일하는 것을 권장한다.
+
+```powershell
+scripts/deploy_docker.ps1 -Action up -Stack -Detached -Build
+```
+
+### (옵션) Windows 단일 프로세스 실행
+Windows에서 빌드된 실행 파일은 `build-windows/server/Debug/server_app.exe` 경로에 생성된다.
 
 ```powershell
 .\build-windows\server\Debug\server_app.exe 5000
