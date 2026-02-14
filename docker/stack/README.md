@@ -18,11 +18,19 @@ docker build -f Dockerfile.base -t knights-base .
 docker compose -f docker/stack/docker-compose.yml up -d --build
 ```
 
+관측까지 포함하려면(옵션):
+
+```bash
+docker compose -f docker/stack/docker-compose.yml --profile observability up -d --build
+```
+
 접속:
 - 게임 트래픽: `127.0.0.1:6000` (HAProxy)
 - HAProxy stats: `http://127.0.0.1:8404/`
 - gateway metrics: `http://127.0.0.1:36001/metrics`, `http://127.0.0.1:36002/metrics`
 - server metrics: `http://127.0.0.1:39091/metrics`, `http://127.0.0.1:39092/metrics`
+- (옵션) Prometheus: `http://127.0.0.1:39090/`
+- (옵션) Grafana: `http://127.0.0.1:33000/` (admin password: `GRAFANA_ADMIN_PASSWORD`, 기본 `admin`)
 
 ## 종료
 

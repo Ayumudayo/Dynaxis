@@ -17,9 +17,6 @@ scrape_configs:
   - job_name: 'gateway'
     metrics_path: /metrics
     static_configs:
-      - targets: ['gateway:6001']
-
-  - job_name: 'load_balancer'
-    metrics_path: /metrics
-    static_configs:
-      - targets: ['load_balancer:7002']
+      - targets:
+          - 'gateway-1:6001'
+          - 'gateway-2:6001'
