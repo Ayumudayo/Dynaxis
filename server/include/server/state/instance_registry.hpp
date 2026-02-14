@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -103,6 +104,14 @@ private:
     std::shared_ptr<IRedisClient> client_;
     std::string key_prefix_;
     std::chrono::seconds ttl_;
+
+    // Cache refresh throttle: list_instances() may be called from hot paths (gateway accept).
+    // Avoid doing SCAN+GET on every call.
+    std::chrono::milliseconds reload_min_interval_{500};
+    mutable std::chrono::steady_clock::time_point last_reload_attempt_{};
+    mutable std::chrono::steady_clock::time_point last_reload_ok_{};
+    mutable std::atomic<bool> reload_in_progress_{false};
+
     mutable std::mutex mutex_;
     mutable std::unordered_map<std::string, InstanceRecord> cache_;
 };

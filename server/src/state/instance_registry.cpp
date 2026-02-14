@@ -5,7 +5,6 @@
 #include <sstream>
 #include <utility>
 
-#include "server/core/util/log.hpp"
 #include "server/storage/redis/client.hpp"
 
 namespace server::state {
@@ -269,7 +268,27 @@ bool RedisInstanceStateBackend::reload_cache_from_backend() const {
 
 std::vector<InstanceRecord> RedisInstanceStateBackend::list_instances() const {
     if (client_) {
-        reload_cache_from_backend();
+        const auto now = std::chrono::steady_clock::now();
+        bool should_reload = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (now - last_reload_attempt_ >= reload_min_interval_) {
+                last_reload_attempt_ = now;
+                should_reload = true;
+            }
+        }
+
+        if (should_reload) {
+            bool expected = false;
+            if (reload_in_progress_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+                const bool ok = reload_cache_from_backend();
+                reload_in_progress_.store(false, std::memory_order_release);
+                if (ok) {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    last_reload_ok_ = now;
+                }
+            }
+        }
     }
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<InstanceRecord> result;
