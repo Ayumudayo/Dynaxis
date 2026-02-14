@@ -1,7 +1,7 @@
 <#
   빌드/구성 스크립트 (PowerShell)
-  - Windows/MSVC default. All dependencies come from vcpkg manifest (cpkg.json).
-  - WSL/Linux follows the same flow; Boost and the rest install via vcpkg as well.
+  - Windows/MSVC default. Dependencies come from vcpkg manifest features (see vcpkg.json).
+  - Linux runtime is Docker (system packages + source builds in Dockerfile.base). This script does not auto-run vcpkg on Linux.
 #>
 [CmdletBinding()]
 param(
@@ -104,10 +104,16 @@ $vcpkgJsonExists = Test-Path 'vcpkg.json'
 if (-not $VcpkgTriplet -or $VcpkgTriplet -eq '') {
   if ($onWindows) { $VcpkgTriplet = 'x64-windows' } else { $VcpkgTriplet = 'x64-linux' }
 }
-if ($UseVcpkg -or $vcpkgJsonExists) {
+$shouldUseVcpkg = $UseVcpkg -or ($onWindows -and $vcpkgJsonExists)
+if ($UseVcpkg -and -not $onWindows) {
+  Warn "UseVcpkg requested on non-Windows; Linux presets are configured for system dependencies (no vcpkg toolchain)."
+}
+
+if ($shouldUseVcpkg) {
   $setupScript = Join-Path $PSScriptRoot 'setup_vcpkg.ps1'
   if (-not (Test-Path $setupScript)) { Fail "setup_vcpkg.ps1 스크립트를 찾을 수 없습니다: $setupScript" }
-  $vcpkgRoot = & $setupScript -Triplet $VcpkgTriplet
+  # CMake preset(toolchain) will run manifest install; here we only ensure vcpkg is cloned/bootstrapped.
+  $vcpkgRoot = & $setupScript -Triplet $VcpkgTriplet -SkipInstall
   if (-not $vcpkgRoot) { Fail "vcpkg root 경로를 확인할 수 없습니다." }
   Info "vcpkg root: $vcpkgRoot"
   # Presets handle toolchain file, but we might need to ensure vcpkg is bootstrapped

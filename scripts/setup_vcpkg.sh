@@ -7,11 +7,13 @@ VCPKG_ROOT="$REPO_ROOT/external/vcpkg"
 VCPKG_REPO="${VCPKG_REPO:-https://github.com/microsoft/vcpkg.git}"
 TRIPLET=""
 SKIP_INSTALL=0
+FEATURES=()
 
 usage(){
   cat <<'EOF'
 Usage: scripts/setup_vcpkg.sh [options]
   -t, --triplet <name>     Triplet to install (default: x64-linux or detected)
+      --feature <name>      Top-level manifest feature to install (repeatable)
       --skip-install       Skip running 'vcpkg install'
       --repo <url>         Override vcpkg git repository
 EOF
@@ -20,6 +22,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -t|--triplet) TRIPLET="$2"; shift 2 ;;
+    --feature) FEATURES+=("$2"); shift 2 ;;
     --skip-install) SKIP_INSTALL=1; shift ;;
     --repo) VCPKG_REPO="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -29,6 +32,10 @@ done
 
 if [[ -z "$TRIPLET" ]]; then
   TRIPLET="x64-linux"
+fi
+
+if [[ ${#FEATURES[@]} -eq 0 && "$TRIPLET" == *"-windows" ]]; then
+  FEATURES+=("windows-dev")
 fi
 
 info(){ printf '[info] %s\n' "$1" >&2; }
@@ -56,7 +63,12 @@ fi
 
 if [[ "$SKIP_INSTALL" -eq 0 ]]; then
   info "Installing manifest dependencies for $TRIPLET"
-  "$VCPKG_EXE" install --triplet "$TRIPLET"
+  args=(install --triplet "$TRIPLET")
+  for f in "${FEATURES[@]:-}"; do
+    [[ -n "$f" ]] || continue
+    args+=(--x-feature "$f")
+  done
+  (cd "$REPO_ROOT" && "$VCPKG_EXE" "${args[@]}")
 fi
 
 printf '%s\n' "$VCPKG_ROOT"

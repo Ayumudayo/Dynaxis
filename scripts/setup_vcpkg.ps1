@@ -8,7 +8,8 @@
 param(
   [string]$Triplet = "",
   [switch]$SkipInstall,
-  [string]$Repo = "https://github.com/microsoft/vcpkg.git"
+  [string]$Repo = "https://github.com/microsoft/vcpkg.git",
+  [string[]]$Features = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -52,6 +53,11 @@ function Ensure-VcpkgBaselineCommit([string]$VcpkgRoot, [string]$Baseline) {
 if (-not $Triplet -or $Triplet -eq '') {
   if ($IsWindows) { $Triplet = 'x64-windows' }
   else { $Triplet = 'x64-linux' }
+}
+
+if ($Features.Count -eq 0 -and $IsWindows) {
+  # Default: install Windows dev dependencies declared in vcpkg.json.
+  $Features = @('windows-dev')
 }
 
 if (-not (Test-Path $vcpkgRoot)) {
@@ -100,9 +106,20 @@ if (-not (Test-Path $exePath)) {
 }
 
 if (-not $SkipInstall) {
-  Info "manifest 의존성 설치(vcpkg install --triplet $Triplet)"
-  & $exePath install --triplet $Triplet | Out-Host | Out-Host
-  if ($LASTEXITCODE -ne 0) { Fail "vcpkg install 실패" }
+  $args = @('install', '--triplet', $Triplet)
+  foreach ($f in $Features) {
+    if ($f -and $f.Trim() -ne '') {
+      $args += @('--x-feature', $f)
+    }
+  }
+  Info ("manifest 의존성 설치(vcpkg {0})" -f ($args -join ' '))
+  Push-Location $repoRoot
+  try {
+    & $exePath @args | Out-Host
+  } finally {
+    Pop-Location
+  }
+  if ($LASTEXITCODE -ne 0) { Fail 'vcpkg install 실패' }
 }
 
 Write-Output (Resolve-Path $vcpkgRoot).Path
