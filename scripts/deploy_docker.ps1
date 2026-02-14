@@ -4,11 +4,7 @@ param (
     [switch]$Detached = $false,
     [switch]$Build = $false,
     [switch]$NoCache = $false,
-    [string]$ComposeFile = "",
-    [switch]$Stack = $false,
-    [switch]$Infra = $false,
     [switch]$Observability = $false,
-    [switch]$Legacy = $false,
     [string]$ProjectName = "",
     [switch]$NoBase = $false
 )
@@ -35,46 +31,12 @@ function Test-Docker {
 }
 
 function Resolve-ComposeTarget {
-    $modeCount = 0
-    if ($Stack) { $modeCount++ }
-    if ($Infra) { $modeCount++ }
-    if ($Observability) { $modeCount++ }
-    if ($Legacy) { $modeCount++ }
-
-    $explicitCompose = $false
-    if ($ComposeFile -and $ComposeFile.Trim() -ne "") {
-        $explicitCompose = $true
-        $modeCount++
-    }
-
-    if ($modeCount -gt 1) {
-        Write-Error "Compose target is ambiguous. Use only one of: -ComposeFile, -Stack, -Infra, -Observability, -Legacy"
-    }
-
-    if (-not $explicitCompose) {
-        if ($Stack) {
-            $ComposeFile = "docker/stack/docker-compose.yml"
-        } elseif ($Infra) {
-            $ComposeFile = "docker/infra/docker-compose.yml"
-        } elseif ($Observability) {
-            $ComposeFile = "docker/observability/docker-compose.yml"
-        } elseif ($Legacy) {
-            $ComposeFile = "docker-compose.yml"
-        } else {
-            # Default: canonical stack compose.
-            $ComposeFile = "docker/stack/docker-compose.yml"
-        }
-    }
-
-    $resolved = Resolve-Path $ComposeFile -ErrorAction Stop
+    $resolved = Resolve-Path "docker/stack/docker-compose.yml" -ErrorAction Stop
     $composePath = $resolved.Path
     $composeDir = Split-Path -Parent $composePath
 
     if (-not $ProjectName -or $ProjectName.Trim() -eq "") {
-        if ($Stack -or $composePath -match "docker\\stack") { $ProjectName = "knights-stack" }
-        elseif ($Infra -or $composePath -match "docker\\infra") { $ProjectName = "knights-infra" }
-        elseif ($Observability -or $composePath -match "docker\\observability") { $ProjectName = "knights-observability" }
-        else { $ProjectName = "knights" }
+        $ProjectName = "knights-stack"
     }
 
     return @{
@@ -92,11 +54,7 @@ function Maybe-PrintComposeEnvHint([string]$ComposeDir) {
 }
 
 function Needs-BaseImage([string]$ComposePath) {
-    if ($NoBase) { return $false }
-    $p = $ComposePath.ToLowerInvariant()
-    if ($p.Contains("docker\\infra")) { return $false }
-    if ($p.Contains("docker\\observability")) { return $false }
-    return $true
+    return (-not $NoBase)
 }
 
 function Ensure-BaseImage {
@@ -128,6 +86,10 @@ $ComposeBaseArgs = @(
     "--project-directory", $ComposeDir,
     "-f", $ComposePath
 )
+
+if ($Observability) {
+    $ComposeBaseArgs += @("--profile", "observability")
+}
 
 if ($Action -eq "build") {
     if (Needs-BaseImage $ComposePath) {

@@ -5,7 +5,7 @@
 # server stack (Docker), so HAProxy should run as a container.
 #
 # Use instead:
-#   scripts/deploy_docker.ps1 -Action up -Stack -Detached -Build
+#   scripts/deploy_docker.ps1 -Action up -Detached -Build
 
 param(
   # Keep legacy parameters so old invocations don't break.
@@ -27,7 +27,7 @@ try { chcp 65001 | Out-Null } catch {}
 
 Write-Host "[warn] scripts/run_haproxy_gateways.ps1 is deprecated." -ForegroundColor Yellow
 Write-Host "[warn] HAProxy is expected to run on Linux (Docker), not Windows host." -ForegroundColor Yellow
-Write-Host "[warn] Use: scripts/deploy_docker.ps1 -Action up -Stack -Detached -Build" -ForegroundColor Yellow
+Write-Host "[warn] Use: scripts/deploy_docker.ps1 -Action up -Detached -Build" -ForegroundColor Yellow
 
 $deploy = Join-Path $PSScriptRoot 'deploy_docker.ps1'
 if (-not (Test-Path $deploy)) {
@@ -35,5 +35,5 @@ if (-not (Test-Path $deploy)) {
 }
 
 $build = -not $NoBuild
-& $deploy -Action up -Stack -Detached -Build:$build
+& $deploy -Action up -Detached -Build:$build
 exit $LASTEXITCODE

@@ -2,7 +2,7 @@
 #
 # This repo's standard runtime is Linux (Docker). For a full-stack local run
 # (HAProxy + gateways + servers + infra), use:
-#   scripts/deploy_docker.ps1 -Action up -Stack -Detached -Build
+#   scripts/deploy_docker.ps1 -Action up -Detached -Build
 
 param(
   # Keep legacy parameters so old invocations don't break.
@@ -42,7 +42,7 @@ try { chcp 65001 | Out-Null } catch {}
 
 Write-Host "[warn] scripts/run_full_stack.ps1 is deprecated." -ForegroundColor Yellow
 Write-Host "[warn] Server stack runtime is Linux containers (Docker)." -ForegroundColor Yellow
-Write-Host "[warn] Use: scripts/deploy_docker.ps1 -Action up -Stack -Detached -Build" -ForegroundColor Yellow
+Write-Host "[warn] Use: scripts/deploy_docker.ps1 -Action up -Detached -Build" -ForegroundColor Yellow
 
 $deploy = Join-Path $PSScriptRoot 'deploy_docker.ps1'
 if (-not (Test-Path $deploy)) {
@@ -50,5 +50,5 @@ if (-not (Test-Path $deploy)) {
 }
 
 $build = -not $NoBuild
-& $deploy -Action up -Stack -Detached -Build:$build
+& $deploy -Action up -Detached -Build:$build
 exit $LASTEXITCODE
