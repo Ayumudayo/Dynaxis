@@ -7,7 +7,6 @@
 #include <vector>
 #include <optional>
 #include <sstream>
-#include <algorithm>
 #include <atomic>
 #include <cstdint>
 
@@ -39,6 +38,12 @@ struct WorkerConfig {
     
     bool dlq_on_error = true;
     bool ack_on_error = true;
+
+    // Pending reclaim (PEL) settings
+    bool reclaim_enabled = true;
+    long long reclaim_interval_ms = 1000;
+    long long reclaim_min_idle_ms = 5000;
+    std::size_t reclaim_count = 200;
 
     std::uint16_t metrics_port = 0;
 
@@ -74,6 +79,20 @@ struct WorkerConfig {
         if (const char* v = std::getenv("WB_DLQ_ON_ERROR")) cfg.dlq_on_error = (std::string(v) != "0");
         if (const char* v = std::getenv("WB_ACK_ON_ERROR")) cfg.ack_on_error = (std::string(v) != "0");
 
+        if (const char* v = std::getenv("WB_RECLAIM_ENABLED")) cfg.reclaim_enabled = (std::string(v) != "0");
+        if (const char* v = std::getenv("WB_RECLAIM_INTERVAL_MS")) {
+            auto n = std::strtoul(v, nullptr, 10);
+            if (n >= 100 && n <= 60 * 1000) cfg.reclaim_interval_ms = static_cast<long long>(n);
+        }
+        if (const char* v = std::getenv("WB_RECLAIM_MIN_IDLE_MS")) {
+            auto n = std::strtoul(v, nullptr, 10);
+            if (n <= 10 * 60 * 1000) cfg.reclaim_min_idle_ms = static_cast<long long>(n);
+        }
+        if (const char* v = std::getenv("WB_RECLAIM_COUNT")) {
+            auto n = std::strtoul(v, nullptr, 10);
+            if (n > 0 && n <= 10000) cfg.reclaim_count = static_cast<std::size_t>(n);
+        }
+
         return cfg;
     }
 };
@@ -96,6 +115,14 @@ bool IsUuid(const std::string& s) {
         }
     }
     return true;
+}
+
+std::size_t EstimateEntryBytes(const server::storage::redis::IRedisClient::StreamEntry& e) {
+    std::size_t est = e.id.size();
+    for (const auto& f : e.fields) {
+        est += f.first.size() + f.second.size() + 4;
+    }
+    return est;
 }
 
 } // namespace
@@ -171,9 +198,14 @@ private:
         if (db_ && db_->is_open()) return true;
 
         try {
+            db_prepared_ = false;
             db_ = std::make_unique<pqxx::connection>(config_.db_uri);
             if (db_->is_open()) {
                 info("DB connected successfully.");
+                if (!EnsureDbPrepared()) {
+                    server::core::log::warn("DB connected but prepare failed; will retry");
+                    return false;
+                }
                 return true;
             }
         } catch (const std::exception& e) {
@@ -182,9 +214,58 @@ private:
         return false;
     }
 
+    bool EnsureDbPrepared() {
+        if (!db_ || !db_->is_open()) {
+            return false;
+        }
+        if (db_prepared_) {
+            return true;
+        }
+
+        static constexpr const char* kInsertName = "wb_insert_session_event";
+        static constexpr const char* kInsertSql =
+            "insert into session_events(event_id, type, ts, user_id, session_id, room_id, payload) "
+            "values ($1, $2, to_timestamp(($3)::bigint/1000.0), "
+            "nullif($4,'')::uuid, nullif($5,'')::uuid, nullif($6,'')::uuid, $7::jsonb) "
+            "on conflict (event_id) do nothing";
+
+        try {
+            db_->prepare(kInsertName, kInsertSql);
+        } catch (const pqxx::usage_error&) {
+            // 이미 prepare된 이름일 수 있으므로(재사용 등) 이를 성공으로 처리합니다.
+        } catch (const pqxx::argument_error&) {
+            // 이미 prepare된 이름일 수 있으므로(재사용 등) 이를 성공으로 처리합니다.
+        } catch (const pqxx::broken_connection&) {
+            db_prepared_ = false;
+            return false;
+        } catch (const std::exception& e) {
+            server::core::log::warn(std::string("DB prepare failed: ") + e.what());
+            db_prepared_ = false;
+            return false;
+        }
+
+        db_prepared_ = true;
+        return true;
+    }
+
+    bool Ack(const std::string& id) {
+        if (!redis_) {
+            return false;
+        }
+        const bool ok = redis_->xack(config_.stream_key, config_.group, id);
+        if (ok) {
+            wb_ack_total_.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            wb_ack_fail_total_.fetch_add(1, std::memory_order_relaxed);
+        }
+        return ok;
+    }
+
     void Loop() {
         auto last_flush = std::chrono::steady_clock::now();
         auto last_pending_log = std::chrono::steady_clock::now();
+        auto last_reclaim = std::chrono::steady_clock::now() - std::chrono::milliseconds(config_.reclaim_interval_ms);
+        bool initial_reclaim_done = false;
         
         std::vector<server::storage::redis::IRedisClient::StreamEntry> buf;
         buf.reserve(config_.batch_max_events);
@@ -195,6 +276,18 @@ private:
             if (!EnsureDbConnection()) {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
                 continue;
+            }
+
+            // 0. Pending reclaim (PEL)
+            {
+                const auto now = std::chrono::steady_clock::now();
+                if (config_.reclaim_enabled &&
+                    std::chrono::duration_cast<std::chrono::milliseconds>(now - last_reclaim).count() >= config_.reclaim_interval_ms) {
+                    const long long min_idle = initial_reclaim_done ? config_.reclaim_min_idle_ms : 0;
+                    initial_reclaim_done = true;
+                    ReclaimPending(min_idle, buf, buf_bytes, last_flush);
+                    last_reclaim = now;
+                }
             }
 
             // 1. Redis에서 메시지 읽기 (Blocking)
@@ -210,11 +303,7 @@ private:
             // 2. 버퍼링
             if (!entries.empty()) {
                 for (auto& e : entries) {
-                    std::size_t est = e.id.size();
-                    for (const auto& f : e.fields) {
-                        est += f.first.size() + f.second.size() + 4;
-                    }
-                    buf_bytes += est;
+                    buf_bytes += EstimateEntryBytes(e);
                     buf.emplace_back(std::move(e));
 
                     // 배치 크기나 용량 초과 시 즉시 플러시
@@ -247,18 +336,64 @@ private:
         }
     }
 
+    void ReclaimPending(long long min_idle_ms,
+                        std::vector<server::storage::redis::IRedisClient::StreamEntry>& buf,
+                        std::size_t& buf_bytes,
+                        std::chrono::steady_clock::time_point& last_flush) {
+        if (!redis_) {
+            return;
+        }
+
+        server::storage::redis::IRedisClient::StreamAutoClaimResult claimed;
+        wb_reclaim_runs_total_.fetch_add(1, std::memory_order_relaxed);
+        if (!redis_->xautoclaim(config_.stream_key,
+                                config_.group,
+                                config_.consumer,
+                                min_idle_ms,
+                                reclaim_next_id_,
+                                config_.reclaim_count,
+                                claimed)) {
+            wb_reclaim_error_total_.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        if (!claimed.next_start_id.empty()) {
+            reclaim_next_id_ = claimed.next_start_id;
+        }
+
+        if (!claimed.deleted_ids.empty()) {
+            wb_reclaim_deleted_total_.fetch_add(static_cast<std::uint64_t>(claimed.deleted_ids.size()), std::memory_order_relaxed);
+            // Stream에서 이미 삭제된 메시지는 더 이상 처리할 수 없으므로 PEL에서 제거한다.
+            for (const auto& id : claimed.deleted_ids) {
+                (void)Ack(id);
+            }
+        }
+
+        if (claimed.entries.empty()) {
+            return;
+        }
+
+        wb_reclaim_total_.fetch_add(static_cast<std::uint64_t>(claimed.entries.size()), std::memory_order_relaxed);
+
+        for (auto& e : claimed.entries) {
+            buf_bytes += EstimateEntryBytes(e);
+            buf.emplace_back(std::move(e));
+            if (buf.size() >= config_.batch_max_events || buf_bytes >= config_.batch_max_bytes) {
+                Flush(buf);
+                buf_bytes = 0;
+                last_flush = std::chrono::steady_clock::now();
+            }
+        }
+    }
+
     // 버퍼에 쌓인 이벤트를 DB에 저장하고 Redis에 ACK 처리
     //
     // 동작 방식:
-    // 1. 버퍼에 있는 모든 이벤트를 순회하며 DB 트랜잭션을 개별적으로 수행합니다.
-    //    - 배치 단위 트랜잭션이 아닌 개별 트랜잭션을 사용하는 이유는,
-    //      하나의 이벤트 실패가 전체 배치의 롤백을 유발하지 않게 하기 위함입니다.
-    // 2. DB 저장이 성공하면 Redis Stream에 ACK를 보내 해당 메시지가 처리되었음을 알립니다.
-    // 3. 실패 시:
-    //    - DLQ(Dead Letter Queue) 사용이 활성화되어 있으면, 실패한 이벤트를 DLQ 스트림으로 이동시킵니다.
-    //    - DLQ 이동에 성공하면 원본 스트림에서는 ACK 처리하여 중복 처리를 방지합니다.
-    //    - DLQ 이동조차 실패하거나 DLQ를 사용하지 않는 경우, 설정에 따라 ACK를 수행하여
-    //      무한 재시도 루프에 빠지는 것을 방지할 수 있습니다.
+    // 1) 배치 단위로 하나의 트랜잭션을 열고, 이벤트 단위 실패는 savepoint(subtransaction)로 격리한다.
+    //    - 개별 트랜잭션(1 event = 1 transaction)보다 훨씬 빠르면서도,
+    //      특정 이벤트의 포맷 오류가 전체 배치를 망치지 않도록 한다.
+    // 2) 트랜잭션 commit 성공 후에만 ACK 한다. (At-least-once)
+    // 3) 영구적 오류는 DLQ로 이동한 뒤 ACK(옵션)하여 무한 재시도를 방지한다.
     void Flush(std::vector<server::storage::redis::IRedisClient::StreamEntry>& buf) {
         if (buf.empty()) return;
 
@@ -267,45 +402,58 @@ private:
         std::size_t fail = 0;
         std::size_t dlqed = 0;
 
-        for (const auto& e : buf) {
-            try {
-                ProcessEntry(e);
-                // 성공 시 ACK: Redis에게 이 메시지는 안전하게 처리되었음을 알림
-                (void)redis_->xack(config_.stream_key, config_.group, e.id);
-                ++ok;
-            } catch (const std::exception& ex) {
-                // DB 연결 끊김 예외인 경우, 즉시 재시도하지 않고 루프의 다음 턴에서 재연결을 시도하도록
-                // 예외를 던지거나, 여기서 재연결을 시도할 수 있습니다.
-                // 현재 구조상 pqxx::broken_connection 예외가 발생하면 db_ 객체가 유효하지 않게 되므로
-                // EnsureDbConnection()이 호출되는 다음 루프까지 기다리는 것이 안전합니다.
-                // 다만, 이 경우 ACK를 하지 않으므로 다음 번에 다시 읽혀서 처리됩니다 (At-least-once).
-                
-                // 만약 데이터 포맷 에러 등 '영구적 오류'라면 DLQ로 보내야 합니다.
-                // pqxx::broken_connection은 일시적 오류로 간주해야 합니다.
-                if (dynamic_cast<const pqxx::broken_connection*>(&ex)) {
-                    std::cerr << "DB connection broken during flush. Will retry later." << std::endl;
-                    db_.reset(); // 연결 객체 해제하여 재연결 유도
-                    continue; // ACK 하지 않고 넘어감 -> 재처리 대상
-                }
+        std::vector<std::string> ack_ids;
+        ack_ids.reserve(buf.size());
 
-                ++fail;
-                bool acked = false;
-                
-                // 에러 발생 시 DLQ로 이동 시도
-                // 이는 일시적인 DB 오류가 아닌 데이터 포맷 문제 등의 영구적 오류일 때 중요합니다.
-                if (config_.dlq_on_error && !config_.dlq_stream.empty()) {
-                    if (SendToDlq(e, ex.what())) {
-                        // DLQ 이동 성공 시 원본 스트림에서는 ACK 처리
-                        (void)redis_->xack(config_.stream_key, config_.group, e.id);
-                        acked = true;
-                        ++dlqed;
+        bool committed = false;
+        try {
+            if (!db_ || !db_->is_open() || !EnsureDbPrepared()) {
+                throw std::runtime_error("DB not ready");
+            }
+
+            pqxx::work tx(*db_);
+
+            for (const auto& e : buf) {
+                try {
+                    pqxx::subtransaction sub(tx, "wb_entry");
+                    ProcessEntry(sub, e);
+                    sub.commit();
+                    ack_ids.emplace_back(e.id);
+                } catch (const pqxx::broken_connection&) {
+                    throw;
+                } catch (const std::exception& ex) {
+                    ++fail;
+                    bool acked = false;
+
+                    // 영구적 오류는 DLQ로 이동한다.
+                    if (config_.dlq_on_error && !config_.dlq_stream.empty()) {
+                        if (SendToDlq(e, ex.what())) {
+                            (void)Ack(e.id);
+                            acked = true;
+                            ++dlqed;
+                        }
+                    }
+
+                    if (!acked && config_.ack_on_error) {
+                        (void)Ack(e.id);
                     }
                 }
+            }
 
-                // DLQ 이동 실패했거나 DLQ 미사용 시에도 설정에 따라 ACK 처리 (무한 루프 방지)
-                if (!acked && config_.ack_on_error) {
-                    (void)redis_->xack(config_.stream_key, config_.group, e.id);
-                }
+            tx.commit();
+            committed = true;
+        } catch (const pqxx::broken_connection&) {
+            std::cerr << "DB connection broken during flush. Will retry later." << std::endl;
+            db_.reset();
+            db_prepared_ = false;
+        } catch (const std::exception& ex) {
+            server::core::log::error(std::string("WB flush DB error: ") + ex.what());
+        }
+
+        if (committed) {
+            ok = ack_ids.size();
+            for (const auto& id : ack_ids) {
+                (void)Ack(id);
             }
         }
 
@@ -340,11 +488,7 @@ private:
         buf.clear();
     }
 
-    void ProcessEntry(const server::storage::redis::IRedisClient::StreamEntry& e) {
-        if (!db_ || !db_->is_open()) {
-            throw std::runtime_error("DB connection not open");
-        }
-        pqxx::work w(*db_);
+    void ProcessEntry(pqxx::transaction_base& tx, const server::storage::redis::IRedisClient::StreamEntry& e) {
         
         std::string type = "unknown";
         std::string ts_ms = "0";
@@ -379,14 +523,9 @@ private:
         try { ts_v = std::stoll(ts_ms); } catch (...) { ts_v = 0; }
 
         // DB Insert
-        w.exec_params(
-            "insert into session_events(event_id, type, ts, user_id, session_id, room_id, payload) "
-            "values ($1, $2, to_timestamp(($3)::bigint/1000.0), "
-            "nullif($4,'')::uuid, nullif($5,'')::uuid, nullif($6,'')::uuid, $7::jsonb) "
-            "on conflict (event_id) do nothing",
-            e.id, type, ts_v, uid_v, sid_v, rid_v, j.dump()
-        );
-        w.commit();
+        const std::string payload = j.dump();
+        tx.exec(pqxx::prepped{"wb_insert_session_event"},
+                pqxx::params{e.id, type, ts_v, uid_v, sid_v, rid_v, payload});
     }
 
     bool SendToDlq(const server::storage::redis::IRedisClient::StreamEntry& e, const char* error_msg) {
@@ -409,9 +548,20 @@ private:
     WorkerConfig config_;
     std::shared_ptr<server::storage::redis::IRedisClient> redis_;
     std::unique_ptr<pqxx::connection> db_;
+    bool db_prepared_{false};
 
     std::unique_ptr<server::core::metrics::MetricsHttpServer> metrics_server_;
     std::atomic<long long> wb_pending_{0};
+
+    std::string reclaim_next_id_{"0-0"};
+    std::atomic<std::uint64_t> wb_reclaim_runs_total_{0};
+    std::atomic<std::uint64_t> wb_reclaim_total_{0};
+    std::atomic<std::uint64_t> wb_reclaim_error_total_{0};
+    std::atomic<std::uint64_t> wb_reclaim_deleted_total_{0};
+
+    std::atomic<std::uint64_t> wb_ack_total_{0};
+    std::atomic<std::uint64_t> wb_ack_fail_total_{0};
+
     std::atomic<std::uint64_t> wb_flush_total_{0};
     std::atomic<std::uint64_t> wb_flush_ok_total_{0};
     std::atomic<std::uint64_t> wb_flush_fail_total_{0};
@@ -425,9 +575,39 @@ private:
     std::string RenderMetrics() const {
         std::ostringstream stream;
 
+        stream << "# TYPE wb_batch_max_events gauge\n";
+        stream << "wb_batch_max_events " << config_.batch_max_events << "\n";
+        stream << "# TYPE wb_batch_max_bytes gauge\n";
+        stream << "wb_batch_max_bytes " << config_.batch_max_bytes << "\n";
+        stream << "# TYPE wb_batch_delay_ms gauge\n";
+        stream << "wb_batch_delay_ms " << config_.batch_delay_ms << "\n";
+
+        stream << "# TYPE wb_reclaim_enabled gauge\n";
+        stream << "wb_reclaim_enabled " << (config_.reclaim_enabled ? 1 : 0) << "\n";
+        stream << "# TYPE wb_reclaim_interval_ms gauge\n";
+        stream << "wb_reclaim_interval_ms " << config_.reclaim_interval_ms << "\n";
+        stream << "# TYPE wb_reclaim_min_idle_ms gauge\n";
+        stream << "wb_reclaim_min_idle_ms " << config_.reclaim_min_idle_ms << "\n";
+        stream << "# TYPE wb_reclaim_count gauge\n";
+        stream << "wb_reclaim_count " << config_.reclaim_count << "\n";
+ 
         stream << "# TYPE wb_pending gauge\n";
         stream << "wb_pending " << wb_pending_.load(std::memory_order_relaxed) << "\n";
 
+        stream << "# TYPE wb_reclaim_runs_total counter\n";
+        stream << "wb_reclaim_runs_total " << wb_reclaim_runs_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE wb_reclaim_total counter\n";
+        stream << "wb_reclaim_total " << wb_reclaim_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE wb_reclaim_error_total counter\n";
+        stream << "wb_reclaim_error_total " << wb_reclaim_error_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE wb_reclaim_deleted_total counter\n";
+        stream << "wb_reclaim_deleted_total " << wb_reclaim_deleted_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE wb_ack_total counter\n";
+        stream << "wb_ack_total " << wb_ack_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE wb_ack_fail_total counter\n";
+        stream << "wb_ack_fail_total " << wb_ack_fail_total_.load(std::memory_order_relaxed) << "\n";
+ 
         stream << "# TYPE wb_flush_total counter\n";
         stream << "wb_flush_total " << wb_flush_total_.load(std::memory_order_relaxed) << "\n";
         stream << "# TYPE wb_flush_ok_total counter\n";
