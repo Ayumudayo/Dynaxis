@@ -26,7 +26,11 @@ Aux binaries + code generation.
 
 ## Worker Metrics
 `wb_worker` can expose `/metrics` when `METRICS_PORT` is set:
+- batch config: `wb_batch_max_events`, `wb_batch_max_bytes`, `wb_batch_delay_ms` (gauges)
+- reclaim config: `wb_reclaim_enabled`, `wb_reclaim_interval_ms`, `wb_reclaim_min_idle_ms`, `wb_reclaim_count` (gauges)
 - `wb_pending` (gauge)
+- reclaim: `wb_reclaim_runs_total`, `wb_reclaim_total`, `wb_reclaim_error_total`, `wb_reclaim_deleted_total` (counters)
+- ack: `wb_ack_total`, `wb_ack_fail_total` (counters)
 - `wb_flush_total`, `wb_flush_ok_total`, `wb_flush_fail_total`, `wb_flush_dlq_total` (counters)
 - `wb_flush_batch_size_last` (gauge)
 - `wb_flush_commit_ms_last`, `wb_flush_commit_ms_max` (gauges)
