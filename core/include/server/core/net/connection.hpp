@@ -75,7 +75,7 @@ public:
      * 
      * @param data 전송할 바이트 배열
      */
-    void async_send(const std::vector<std::uint8_t>& data);
+    void async_send(std::vector<std::uint8_t> data);
 
 protected:
     // ======================================================================

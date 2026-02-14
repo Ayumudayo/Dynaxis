@@ -44,14 +44,14 @@ bool Connection::is_stopped() const {
     return stopped_.load(std::memory_order_relaxed);
 }
 
-void Connection::async_send(const std::vector<std::uint8_t>& data) {
+void Connection::async_send(std::vector<std::uint8_t> data) {
     if (is_stopped()) {
         return;
     }
 
     // asio::post를 사용하여 I/O 스레드(strand)로 작업을 넘깁니다.
     // 이는 멀티스레드 환경에서 write_queue_에 대한 동시 접근을 막아줍니다.
-    boost::asio::post(io(), [self = shared_from_this(), payload = data]() mutable {
+    boost::asio::post(io(), [self = shared_from_this(), payload = std::move(data)]() mutable {
         const bool idle = self->write_queue_.empty();
         self->write_queue_.push_back(std::move(payload));
         if (idle) {
