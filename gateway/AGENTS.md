@@ -11,13 +11,22 @@ Edge TCP gateway: accepts clients, authenticates, selects a backend `server_app`
 
 ## Flow
 - Accept: `server::core::net::Listener` creates `GatewayConnection` per client.
-- Auth: `GatewayConnection::on_connect()` runs the authenticator and derives `client_id_` (subject or remote IP).
-- Backend select: `GatewayApp::create_backend_session()` -> `GatewayApp::select_best_server()`:
+- Handshake/Auth:
+  - `GatewayConnection::on_connect()` starts a handshake deadline (3s) and waits for the first full frame.
+  - `GatewayConnection::on_read()` buffers bytes into `prebuffer_` (TCP fragmentation-safe) until `try_finish_handshake()` can decode a full `PacketHeader` + payload.
+  - The first frame must be `MSG_LOGIN_REQ`.
+    - Extracts `(user, token)` from the payload (length-prefixed UTF-8 fields).
+    - Calls `IAuthenticator::authenticate({client_id=user, token, remote_address})`.
+    - Derives `client_id_` used for routing/stickiness.
+  - Safety limits: handshake buffer cap=64KiB; login payload cap=32KiB.
+- Backend select: `GatewayApp::create_backend_session()` -> `GatewayApp::select_best_server()` returns `SelectedBackend { InstanceRecord, sticky_hit }`.
   - Sticky: `SessionDirectory::find_backend(client_id)` -> prefer the previous `InstanceRecord` when still active.
   - Least connections: sort candidates by `active_sessions` and pick the lowest.
-  - Binding: `SessionDirectory::refresh_backend(client_id, instance_id)` for next reconnect.
+  - Binding is committed post-connect to avoid zombie mappings.
+- Post-connect binding: `BackendSession` calls `GatewayApp::on_backend_connected()` on successful TCP connect.
+  - `GatewayApp::on_backend_connected()` -> `SessionDirectory::ensure_backend(client_id, instance_id)` (SETNX + refresh TTL).
 - Bridge:
-  - client -> backend: `GatewayConnection::on_read()` -> `BackendSession::send()`.
+  - client -> backend: after handshake, `GatewayConnection` forwards the raw login frame bytes exactly as received, then continues forwarding subsequent reads via `BackendSession::send()`.
   - backend -> client: `BackendSession::on_read()` -> `GatewayConnection::handle_backend_payload()`.
 - Close: either side closing triggers `GatewayConnection::on_disconnect()` / `handle_backend_close()` and `GatewayApp::close_backend_session()`.
 
