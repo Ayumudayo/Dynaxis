@@ -18,7 +18,7 @@ Windows에서 개발하더라도 서버 스택 런타임은 **Linux 컨테이너
 
 ```powershell
 # Windows PowerShell
-scripts/deploy_docker.ps1 -Action up -Stack -Detached -Build
+scripts/deploy_docker.ps1 -Action up -Detached -Build
 ```
 
 ```bash
@@ -27,19 +27,18 @@ docker build -f Dockerfile.base -t knights-base .
 docker compose -f docker/stack/docker-compose.yml up -d --build
 ```
 
-### 2.2 Docker Infra만(선택)
-Redis/Postgres만 Compose로 띄우고, 애플리케이션은 WSL/Linux(또는 원격 Linux)에서 실행할 수도 있다.
-
-```powershell
-scripts/deploy_docker.ps1 -Action up -Infra -Detached
-```
-
-### 2.4 Compose 파일 핵심
+### 2.2 Compose 파일 핵심
 - `depends_on.condition=service_healthy` 로 Postgres 준비 여부를 보장
 - `volumes: pgdata` 로 데이터 유지
 - 서버/게이트웨이에서 `/metrics`를 노출하고 Prometheus/Grafana를 붙일 수 있다.
 
-### 2.5 Dev 검증 체크리스트
+관측 스택까지 함께 띄우려면(옵션):
+
+```powershell
+scripts/deploy_docker.ps1 -Action up -Detached -Build -Observability
+```
+
+### 2.3 Dev 검증 체크리스트
 1. HAProxy 엔드포인트로 접속: `127.0.0.1:6000`
 2. server/gateway metrics 확인(옵션): `/metrics` 200 OK
 3. `WRITE_BEHIND_ENABLED=1` 설정 시 `wb_worker`가 backlog를 처리하는지 확인

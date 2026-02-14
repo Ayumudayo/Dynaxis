@@ -61,7 +61,7 @@ scripts/build.ps1 -Config Debug -Target gateway_app
 로컬/운영 환경에서는 `gateway_app`을 **HAProxy 뒤**에 두고 Linux 런타임에서 실행하는 형태를 표준으로 둔다.
 
 ```powershell
-scripts/deploy_docker.ps1 -Action up -Stack -Detached -Build
+scripts/deploy_docker.ps1 -Action up -Detached -Build
 ```
 
 예시는 `docker/stack/docker-compose.yml`, `docker/stack/haproxy/haproxy.cfg` 와 `docs/ops/gateway-and-lb.md` 를 참고하세요.

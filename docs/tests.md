@@ -23,7 +23,7 @@ scripts/smoke_wb.ps1 -Config Debug -BuildDir build-windows
 ## 3. E2E (Gateway + Server + Client)
 - 준비: Redis(필수) / Postgres(옵션)을 준비하고, 필요한 환경 변수를 설정한다. (`.env.example` 참고)
 - 실행 (Docker stack, HAProxy 포함)
-  - Windows: `scripts/deploy_docker.ps1 -Action up -Stack -Detached -Build`
+  - Windows: `scripts/deploy_docker.ps1 -Action up -Detached -Build`
   - WSL/Linux: `docker build -f Dockerfile.base -t knights-base . && docker compose -f docker/stack/docker-compose.yml up -d --build`
 - 검증 순서
   1. 클라이언트에서 로그인/룸 입장/채팅/퇴장 수행 (HAProxy: `127.0.0.1:6000`)

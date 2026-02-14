@@ -195,7 +195,7 @@ scripts/build.ps1 -Config Debug
 
 ```powershell
 # HAProxy 포함 전체 스택 (검증용 표본)
-scripts/deploy_docker.ps1 -Action up -Stack -Detached -Build
+scripts/deploy_docker.ps1 -Action up -Detached -Build
 ```
 
 접속:
@@ -205,7 +205,7 @@ scripts/deploy_docker.ps1 -Action up -Stack -Detached -Build
 중지:
 
 ```powershell
-scripts/deploy_docker.ps1 -Action down -Stack
+scripts/deploy_docker.ps1 -Action down
 ```
 
 **3. 클라이언트 실행**
@@ -228,10 +228,10 @@ ctest --test-dir build-windows/tests
 Docker 스택(`docker/stack`)을 띄운 뒤 클라이언트로 메시지 송수신을 검증합니다.
 
 ```powershell
-scripts/deploy_docker.ps1 -Action up -Stack -Detached -Build
+scripts/deploy_docker.ps1 -Action up -Detached -Build
 
 # (선택) 로그 보기
-scripts/deploy_docker.ps1 -Action logs -Stack
+scripts/deploy_docker.ps1 -Action logs
 ```
 
 ## 📚 문서 (Documentation)

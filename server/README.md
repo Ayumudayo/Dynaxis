@@ -50,7 +50,7 @@ cmake --build --preset windows-vs2022-relwithdebinfo --target server_app
 서버 스택 런타임은 Linux(예: Docker)로 통일하는 것을 권장한다.
 
 ```powershell
-scripts/deploy_docker.ps1 -Action up -Stack -Detached -Build
+scripts/deploy_docker.ps1 -Action up -Detached -Build
 ```
 
 ### (옵션) Windows 단일 프로세스 실행
