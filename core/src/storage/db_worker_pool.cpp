@@ -17,11 +17,15 @@ std::size_t normalize_worker_count(std::size_t count) {
 }
 } // namespace
 
-DbWorkerPool::DbWorkerPool(std::shared_ptr<IConnectionPool> pool)
-    : pool_(std::move(pool)) {
+DbWorkerPool::DbWorkerPool(std::shared_ptr<IConnectionPool> pool, std::size_t queue_capacity)
+    : pool_(std::move(pool))
+    , queue_(queue_capacity)
+    , queue_capacity_(queue_capacity) {
     if (!pool_) {
         throw std::invalid_argument("DbWorkerPool requires a valid connection pool");
     }
+
+    runtime_metrics::register_db_job_queue_capacity(queue_capacity_);
 }
 
 DbWorkerPool::~DbWorkerPool() {
@@ -71,7 +75,12 @@ void DbWorkerPool::submit(Task task, bool auto_commit) {
     if (!running_) {
         throw std::runtime_error("DbWorkerPool is not running");
     }
+    const auto wait_begin = std::chrono::steady_clock::now();
     queue_.push(Job{std::move(task), auto_commit});
+    const auto waited = std::chrono::steady_clock::now() - wait_begin;
+    if (queue_capacity_ > 0) {
+        runtime_metrics::record_db_job_queue_push_wait(waited);
+    }
     runtime_metrics::record_db_job_queue_depth(queue_.size());
 }
 

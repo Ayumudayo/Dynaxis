@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <condition_variable>
 #include <mutex>
 #include <optional>
@@ -21,19 +22,22 @@ class LockedQueue {
 public:
     using value_type = T;
 
-    LockedQueue() = default;
+    explicit LockedQueue(std::size_t capacity = 0)
+        : capacity_(capacity) {}
 
     LockedQueue(const LockedQueue&) = delete;
     LockedQueue& operator=(const LockedQueue&) = delete;
 
     void push(T item) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [&]() { return capacity_ == 0 || queue_.size() < capacity_; });
         queue_.push(std::move(item));
         cv_.notify_one();
     }
 
     void push_swap(T& item) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [&]() { return capacity_ == 0 || queue_.size() < capacity_; });
         queue_.emplace();
         std::swap(queue_.back(), item);
         cv_.notify_one();
@@ -51,6 +55,9 @@ public:
         }
         std::optional<T> result(std::move(queue_.front()));
         queue_.pop();
+        if (capacity_ > 0) {
+            cv_.notify_one();
+        }
         return result;
     }
 
@@ -61,7 +68,24 @@ public:
         }
         out = std::move(queue_.front());
         queue_.pop();
+        if (capacity_ > 0) {
+            cv_.notify_one();
+        }
         return true;
+    }
+
+    bool try_push(T item) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (capacity_ > 0 && queue_.size() >= capacity_) {
+            return false;
+        }
+        queue_.push(std::move(item));
+        cv_.notify_one();
+        return true;
+    }
+
+    std::size_t capacity() const {
+        return capacity_;
     }
 
     bool empty() const {
@@ -78,6 +102,7 @@ protected:
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::queue<T> queue_;
+    std::size_t capacity_{0}; // 0이면 무제한
 };
 
 template <typename T>
@@ -85,7 +110,8 @@ class LockedWaitQueue : public LockedQueue<T> {
 public:
     using typename LockedQueue<T>::value_type;
 
-    LockedWaitQueue() = default;
+    explicit LockedWaitQueue(std::size_t capacity = 0)
+        : LockedQueue<T>(capacity) {}
 
     LockedWaitQueue(const LockedWaitQueue&) = delete;
     LockedWaitQueue& operator=(const LockedWaitQueue&) = delete;
@@ -98,7 +124,23 @@ public:
         }
         std::optional<T> value(std::move(this->queue_.front()));
         this->queue_.pop();
+        lock.unlock();
+        if (this->capacity_ > 0) {
+            this->cv_.notify_one();
+        }
         return value;
+    }
+
+    void push(T item) {
+        std::unique_lock<std::mutex> lock(this->mutex_);
+        this->cv_.wait(lock, [&]() {
+            return shutdown_ || this->capacity_ == 0 || this->queue_.size() < this->capacity_;
+        });
+        if (shutdown_) {
+            return;
+        }
+        this->queue_.push(std::move(item));
+        this->cv_.notify_one();
     }
 
     void stop() {

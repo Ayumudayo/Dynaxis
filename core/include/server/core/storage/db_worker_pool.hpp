@@ -21,7 +21,7 @@ public:
         bool auto_commit{true};
     };
 
-    explicit DbWorkerPool(std::shared_ptr<IConnectionPool> pool);
+    explicit DbWorkerPool(std::shared_ptr<IConnectionPool> pool, std::size_t queue_capacity = 4096);
     ~DbWorkerPool();
 
     DbWorkerPool(const DbWorkerPool&) = delete;
@@ -39,10 +39,10 @@ private:
 
     std::shared_ptr<IConnectionPool> pool_;
     concurrent::LockedWaitQueue<Job> queue_;
+    std::size_t queue_capacity_{0};
     std::vector<std::thread> workers_;
     std::atomic<bool> running_{false};
     std::atomic<bool> stopping_{false};
 };
 
 } // namespace server::core::storage
-
