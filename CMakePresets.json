@@ -25,6 +25,27 @@
       }
     },
     {
+      "name": "windows-ninja-base",
+      "hidden": true,
+      "displayName": "Windows Ninja Base",
+      "description": "Base configuration for Windows using Ninja (for clangd/compile_commands.json)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-windows-ninja",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "toolchainFile": "${sourceDir}/cmake/knights_vcpkg_toolchain.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_MAKE_PROGRAM": "C:/Program Files/Microsoft Visual Studio/18/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_MANIFEST_FEATURES": "windows-dev"
+      }
+    },
+    {
       "name": "linux-base",
       "hidden": true,
       "displayName": "Linux Base",
@@ -46,6 +67,24 @@
       "inherits": "windows-base",
       "displayName": "Windows (VS2022)",
       "description": "Windows configuration using Visual Studio 2022"
+    },
+    {
+      "name": "windows-ninja",
+      "inherits": "windows-ninja-base",
+      "displayName": "Windows (Ninja)",
+      "description": "Windows configuration using Ninja (Debug, exports compile_commands.json)"
+    },
+    {
+      "name": "windows-ninja-release",
+      "inherits": "windows-ninja-base",
+      "displayName": "Windows Release (Ninja)",
+      "description": "Windows configuration using Ninja (Release, exports compile_commands.json)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_MANIFEST_FEATURES": "windows-dev"
+      }
     },
     {
       "name": "linux",
@@ -76,6 +115,18 @@
       "configurePreset": "windows",
       "configuration": "RelWithDebInfo",
       "displayName": "Windows Release"
+    },
+    {
+      "name": "windows-ninja-debug",
+      "configurePreset": "windows-ninja",
+      "configuration": "Debug",
+      "displayName": "Windows Ninja Debug"
+    },
+    {
+      "name": "windows-ninja-release",
+      "configurePreset": "windows-ninja-release",
+      "configuration": "Release",
+      "displayName": "Windows Ninja Release"
     },
     {
       "name": "linux-debug",
