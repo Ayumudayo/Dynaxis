@@ -557,6 +557,10 @@ log.txt
 # Env
 .env
 
+# OpenCode (local config)
+.opencode/
+opencode.json
+
 # AGENTS
 # AGENTS.md files are tracked as the repo knowledge base.
 Sapphire/
