@@ -49,8 +49,7 @@ RUN apt-get update && apt-get install -y \
     && rm -f /usr/lib/libpqxx*
 
 # Environment configuration
-ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH
-ENV VCPKG_DISABLE_METRICS=1
+ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
 ENV CMAKE_MAKE_PROGRAM=/usr/bin/ninja
 
 # ==============================================================================
@@ -103,39 +102,6 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # ==============================================================================
-# vcpkg Setup (for ftxui and other dev dependencies)
-# ==============================================================================
-# Note: vcpkg is unreliable on Linux Docker (network issues), but kept for
-# potential Windows container builds or future improvements.
-ENV VCPKG_ROOT=/opt/vcpkg
-ENV VCPKG_FORCE_SYSTEM_BINARIES=1
-ENV VCPKG_MAX_DOWNLOAD_ATTEMPTS=10
-ENV VCPKG_MAX_CONCURRENCY=8
-
-RUN git clone https://github.com/microsoft/vcpkg.git $VCPKG_ROOT && \
-    cd $VCPKG_ROOT && \
-    git checkout 2025.10.17 && \
-    touch vcpkg.disable-metrics && \
-    ./bootstrap-vcpkg.sh
-
-# ==============================================================================
 # Application Workspace
 # ==============================================================================
 WORKDIR /app
-
-# Copy dependency manifests
-COPY vcpkg.json .
-COPY CMakePresets.json .
-
-# Install vcpkg dependencies (ftxui for devclient, etc.)
-# This may fail on some Linux systems due to network issues - that's expected.
-# Server components don't require vcpkg dependencies.
-RUN $VCPKG_ROOT/vcpkg install --triplet x64-linux --disable-metrics || \
-    echo "⚠ vcpkg install failed (expected on Linux Docker)" && \
-    rm -rf $VCPKG_ROOT/buildtrees $VCPKG_ROOT/downloads
-
-# ==============================================================================
-# Final Cleanup
-# ==============================================================================
-# Remove vcpkg build artifacts to reduce image size
-RUN rm -rf $VCPKG_ROOT/buildtrees
