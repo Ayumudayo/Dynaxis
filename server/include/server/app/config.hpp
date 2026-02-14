@@ -15,6 +15,10 @@ struct ServerConfig {
     unsigned short port = 5000;
     std::size_t log_buffer_capacity = 0;
 
+    // Backpressure 설정
+    std::size_t job_queue_max = 8192;
+    std::size_t db_job_queue_max = 4096;
+
     // 인스턴스 레지스트리 설정
     std::string advertise_host = "127.0.0.1";
     unsigned short advertise_port = 5000;

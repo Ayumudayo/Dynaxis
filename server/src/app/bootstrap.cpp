@@ -97,7 +97,7 @@ int run_server(int argc, char** argv) {
 
         // 3. 코어 컴포넌트 초기화
         asio::io_context io;
-        core::JobQueue job_queue;
+        core::JobQueue job_queue(config.job_queue_max);
         auto* job_queue_ptr = &job_queue;
         core::ThreadManager workers(job_queue);
         core::BufferManager buffer_manager(2048, 1024);
@@ -169,7 +169,7 @@ int run_server(int argc, char** argv) {
                 log_workers = std::thread::hardware_concurrency();
                 if (log_workers == 0) log_workers = 1;
             }
-            db_workers = std::make_shared<core::storage::DbWorkerPool>(db_pool);
+            db_workers = std::make_shared<core::storage::DbWorkerPool>(db_pool, config.db_job_queue_max);
             db_workers->start(config.db_worker_threads);
             services::set(db_workers);
             corelog::info(std::string("DB worker pool started: ") + std::to_string(log_workers) + " threads.");

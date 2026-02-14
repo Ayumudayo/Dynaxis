@@ -31,6 +31,15 @@ bool ServerConfig::load(int argc, char** argv) {
         if (cap > 0) log_buffer_capacity = static_cast<std::size_t>(cap);
     }
 
+    if (const char* val = std::getenv("CHAT_JOB_QUEUE_MAX"); val && *val) {
+        auto cap = std::strtoull(val, nullptr, 10);
+        if (cap > 0) job_queue_max = static_cast<std::size_t>(cap);
+    }
+    if (const char* val = std::getenv("CHAT_DB_JOB_QUEUE_MAX"); val && *val) {
+        auto cap = std::strtoull(val, nullptr, 10);
+        if (cap > 0) db_job_queue_max = static_cast<std::size_t>(cap);
+    }
+
     // 3. 인스턴스 레지스트리 설정
     if (const char* val = std::getenv("SERVER_ADVERTISE_HOST"); val && *val) {
         advertise_host = val;

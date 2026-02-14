@@ -157,8 +157,18 @@ void MetricsServer::do_accept() {
                         stream << "chat_dispatch_latency_ms_count " << snap.dispatch_latency_count << "\n";
                         append_gauge("chat_job_queue_depth", static_cast<long double>(snap.job_queue_depth));
                         append_gauge("chat_job_queue_depth_peak", static_cast<long double>(snap.job_queue_depth_peak));
+                        append_gauge("chat_job_queue_capacity", static_cast<long double>(snap.job_queue_capacity));
+                        append_counter("chat_job_queue_reject_total", snap.job_queue_reject_total);
+                        append_counter("chat_job_queue_push_wait_ns_total", snap.job_queue_push_wait_sum_ns);
+                        append_counter("chat_job_queue_push_wait_total", snap.job_queue_push_wait_count);
+                        append_gauge("chat_job_queue_push_wait_max_ms", static_cast<long double>(snap.job_queue_push_wait_max_ns) / 1'000'000.0L);
                         append_gauge("chat_db_job_queue_depth", static_cast<long double>(snap.db_job_queue_depth));
                         append_gauge("chat_db_job_queue_depth_peak", static_cast<long double>(snap.db_job_queue_depth_peak));
+                        append_gauge("chat_db_job_queue_capacity", static_cast<long double>(snap.db_job_queue_capacity));
+                        append_counter("chat_db_job_queue_reject_total", snap.db_job_queue_reject_total);
+                        append_counter("chat_db_job_queue_push_wait_ns_total", snap.db_job_queue_push_wait_sum_ns);
+                        append_counter("chat_db_job_queue_push_wait_total", snap.db_job_queue_push_wait_count);
+                        append_gauge("chat_db_job_queue_push_wait_max_ms", static_cast<long double>(snap.db_job_queue_push_wait_max_ns) / 1'000'000.0L);
                         append_counter("chat_db_job_processed_total", snap.db_job_processed_total);
                         append_counter("chat_db_job_failed_total", snap.db_job_failed_total);
                         append_gauge("chat_memory_pool_capacity", static_cast<long double>(snap.memory_pool_capacity));
