@@ -371,6 +371,95 @@ public:
         }
     }
 
+    bool xautoclaim(const std::string& key,
+                    const std::string& group,
+                    const std::string& consumer,
+                    long long min_idle_ms,
+                    const std::string& start,
+                    std::size_t count,
+                    StreamAutoClaimResult& out) override {
+        try {
+            out.next_start_id.clear();
+            out.entries.clear();
+            out.deleted_ids.clear();
+
+            if (count == 0) {
+                count = 1;
+            }
+            const auto min_idle_str = std::to_string(min_idle_ms < 0 ? 0 : min_idle_ms);
+            const auto count_str = std::to_string(static_cast<unsigned long long>(count));
+
+            auto reply = redis_->command("XAUTOCLAIM", key, group, consumer, min_idle_str, start, "COUNT", count_str);
+            if (!reply) {
+                return false;
+            }
+
+            if (!sw::redis::reply::is_array(*reply) || reply->elements < 2) {
+                throw sw::redis::ParseError("ARRAY(>=2)", *reply);
+            }
+
+            out.next_start_id = sw::redis::reply::parse<std::string>(*reply->element[0]);
+
+            auto* entries_reply = reply->element[1];
+            if (entries_reply && sw::redis::reply::is_array(*entries_reply) && entries_reply->element) {
+                out.entries.reserve(entries_reply->elements);
+                for (std::size_t i = 0; i < entries_reply->elements; ++i) {
+                    auto* entry_reply = entries_reply->element[i];
+                    if (!entry_reply || !sw::redis::reply::is_array(*entry_reply) || entry_reply->elements < 2) {
+                        continue;
+                    }
+
+                    StreamEntry e;
+                    e.id = sw::redis::reply::parse<std::string>(*entry_reply->element[0]);
+
+                    auto* fields_reply = entry_reply->element[1];
+                    if (fields_reply && sw::redis::reply::is_array(*fields_reply) && fields_reply->element) {
+                        if (fields_reply->elements % 2 != 0) {
+                            throw sw::redis::ProtoError("XAUTOCLAIM entry fields not key-value pair array");
+                        }
+                        e.fields.reserve(fields_reply->elements / 2);
+                        for (std::size_t f = 0; f < fields_reply->elements; f += 2) {
+                            auto* k = fields_reply->element[f];
+                            auto* v = fields_reply->element[f + 1];
+                            if (!k || !v) {
+                                throw sw::redis::ProtoError("XAUTOCLAIM entry has null field reply");
+                            }
+                            e.fields.emplace_back(
+                                sw::redis::reply::parse<std::string>(*k),
+                                sw::redis::reply::parse<std::string>(*v)
+                            );
+                        }
+                    }
+
+                    out.entries.emplace_back(std::move(e));
+                }
+            }
+
+            // Redis 7+ may return deleted IDs as a 3rd element.
+            if (reply->elements >= 3) {
+                auto* deleted_reply = reply->element[2];
+                if (deleted_reply && sw::redis::reply::is_array(*deleted_reply) && deleted_reply->element) {
+                    out.deleted_ids.reserve(deleted_reply->elements);
+                    for (std::size_t i = 0; i < deleted_reply->elements; ++i) {
+                        auto* id_reply = deleted_reply->element[i];
+                        if (!id_reply) {
+                            continue;
+                        }
+                        out.deleted_ids.emplace_back(sw::redis::reply::parse<std::string>(*id_reply));
+                    }
+                }
+            }
+
+            return true;
+        } catch (const std::exception& e) {
+            server::core::log::warn(std::string("Redis XAUTOCLAIM failed: ") + e.what());
+            return false;
+        } catch (...) {
+            server::core::log::warn("Redis XAUTOCLAIM failed: unknown");
+            return false;
+        }
+    }
+
 private:
     std::unique_ptr<sw::redis::Redis> redis_;
     std::unique_ptr<sw::redis::Subscriber> subscriber_;
@@ -411,6 +500,23 @@ public:
     bool lrange(const std::string& key, long long start, long long stop, std::vector<std::string>& out) override { (void)key; (void)start; (void)stop; out.clear(); return true; }
     bool scan_del(const std::string& pattern) override { (void)pattern; return true; }
     bool xpending(const std::string& key, const std::string& group, long long& total) override { (void)key; (void)group; total = 0; return true; }
+    bool xautoclaim(const std::string& key,
+                    const std::string& group,
+                    const std::string& consumer,
+                    long long min_idle_ms,
+                    const std::string& start,
+                    std::size_t count,
+                    StreamAutoClaimResult& out) override {
+        (void)key;
+        (void)group;
+        (void)consumer;
+        (void)min_idle_ms;
+        (void)count;
+        out.next_start_id = start;
+        out.entries.clear();
+        out.deleted_ids.clear();
+        return true;
+    }
 private:
     std::string uri_;
     Options opts_;

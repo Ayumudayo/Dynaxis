@@ -153,6 +153,18 @@ public:
     bool xreadgroup(const std::string&, const std::string&, const std::string&, long long, std::size_t, std::vector<StreamEntry>&) override { return true; }
     bool xack(const std::string&, const std::string&, const std::string&) override { return true; }
     bool xpending(const std::string&, const std::string&, long long&) override { return true; }
+    bool xautoclaim(const std::string&,
+                    const std::string&,
+                    const std::string&,
+                    long long,
+                    const std::string& start,
+                    std::size_t,
+                    StreamAutoClaimResult& out) override {
+        out.next_start_id = start;
+        out.entries.clear();
+        out.deleted_ids.clear();
+        return true;
+    }
 };
 
 // --- Test Fixture ---

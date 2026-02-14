@@ -92,6 +92,13 @@ public:
                       bool approximate = true) = 0;
                       
     struct StreamEntry { std::string id; std::vector<std::pair<std::string,std::string>> fields; };
+
+    struct StreamAutoClaimResult {
+        std::string next_start_id;
+        std::vector<StreamEntry> entries;
+        // Redis 7+ may return a 3rd array of deleted IDs; keep as best-effort.
+        std::vector<std::string> deleted_ids;
+    };
     
     // 소비자 그룹을 통해 메시지 읽기
     virtual bool xreadgroup(const std::string& key, const std::string& group, const std::string& consumer,
@@ -102,6 +109,15 @@ public:
     
     // Pending length 조회(컨슈머 그룹의 대기 메시지 총량)
     virtual bool xpending(const std::string& key, const std::string& group, long long& total) = 0;
+
+    // Pending reclaim (Redis 6.2+): idle time이 충분히 지난 pending 메시지를 reclaim합니다.
+    virtual bool xautoclaim(const std::string& key,
+                            const std::string& group,
+                            const std::string& consumer,
+                            long long min_idle_ms,
+                            const std::string& start,
+                            std::size_t count,
+                            StreamAutoClaimResult& out) = 0;
 };
 
 // Redis 클라이언트/풀 팩토리(스켈레톤)
