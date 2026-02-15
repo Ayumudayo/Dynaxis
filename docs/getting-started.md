@@ -16,8 +16,8 @@
 프로젝트 루트에 `.env` 파일을 만들고 다음 예시를 기반으로 값을 설정합니다.
 
 ```
-DB_URI=postgres://user:pass@127.0.0.1:5432/appdb
-REDIS_URI=redis://127.0.0.1:6379
+DB_URI=postgresql://user:pass@127.0.0.1:5432/appdb
+REDIS_URI=tcp://127.0.0.1:6379
 
 # Optional: Pub/Sub 분산 브로드캐스트
 USE_REDIS_PUBSUB=1
@@ -48,15 +48,15 @@ WB_RETRY_BACKOFF_MS=250
 METRICS_PORT=9090
 ```
 
-PostgreSQL에 `docs/db/migrations/0004_session_events.sql.md`의 테이블을 적용해 둡니다(session_events 등).
+PostgreSQL에 `tools/migrations/*.sql`의 테이블을 적용해 둡니다(session_events 등).
 
 ## 2.5) DB 마이그레이션(빠른 적용)
 개발/스모크용 최소 스키마를 빠르게 적용하려면 제공된 러너를 사용할 수 있습니다.
 
 Windows 예시(빌드 산출물 사용):
 ```
-build-msvc/Debug/migrations_runner.exe --db-uri "postgresql://user:pass@127.0.0.1:5432/appdb?sslmode=disable" --dry-run  # 보류 목록 확인
-build-msvc/Debug/migrations_runner.exe --db-uri "postgresql://user:pass@127.0.0.1:5432/appdb?sslmode=disable"
+build-windows/Debug/migrations_runner.exe --db-uri "postgresql://user:pass@127.0.0.1:5432/appdb?sslmode=disable" --dry-run  # 보류 목록 확인
+build-windows/Debug/migrations_runner.exe --db-uri "postgresql://user:pass@127.0.0.1:5432/appdb?sslmode=disable"
 ```
 
 주의: `tools/migrations/0002_indexes.sql`은 `CREATE INDEX CONCURRENTLY`를 포함하므로 트랜잭션 블록 밖에서 실행됩니다(러너가 자동 처리).
@@ -78,34 +78,34 @@ scripts/build.ps1  -Config Debug -Target wb_worker
 ```
 
 산출물 예시(Visual Studio 제너레이터):
-- 서버: `build-msvc/server/Debug/server_app.exe`
-- 워커: `build-msvc/Debug/wb_worker.exe`
+- 서버: `build-windows/server/Debug/server_app.exe`
+- 워커: `build-windows/Debug/wb_worker.exe`
 
 ## 4) 실행
 터미널 1 — 서버:
 ```
-build-msvc/server/Debug/server_app.exe 5000
+build-windows/server/Debug/server_app.exe 5000
 ```
 
 터미널 2 — 워커:
 ```
-build-msvc/Debug/wb_worker.exe
+build-windows/Debug/wb_worker.exe
 ```
 
-옵션: DLQ 재처리도 구동하려면 `build-msvc/Debug/wb_dlq_replayer.exe` 실행.
+옵션: DLQ 재처리도 구동하려면 `build-windows/Debug/wb_dlq_replayer.exe` 실행.
 
 ## 5) 통합 스모크 테스트
 PowerShell 스크립트 하나로 Streams→DB 반영 경로를 확인합니다.
 
 ```
-scripts/smoke_wb.ps1 -Config Debug -BuildDir build-msvc
+scripts/smoke_wb.ps1 -Config Debug -BuildDir build-windows
 ```
 
 내부 동작:
 - wb_worker를 백그라운드 기동 → wb_emit로 샘플 이벤트 XADD → wb_check로 Postgres 반영 확인 → wb_worker 종료
 
 메모:
-- `wb_check`는 이제 루트 `.env`를 자동 로드해 `DB_URI`를 읽습니다.
+- `.env`는 개발 편의용 예시 파일이며 애플리케이션이 자동으로 로드하지 않는다. 로컬에서는 쉘/스크립트에서 `.env`를 로드하거나 OS 환경 변수로 주입한다.
 - Redis Cloud 등 외부 Redis를 사용할 때는 `REDIS_URI`에 `tcp://host:port` 형태도 지원됩니다(redis-plus-plus URL 생성자).
 
 ## 6) 관측(Observability)
