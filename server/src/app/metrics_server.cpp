@@ -104,6 +104,14 @@ void MetricsServer::do_accept() {
                             }
                         }
                         body = body_stream.str();
+                    } else if (target == "/healthz" || target == "/health") {
+                        content_type = "text/plain; charset=utf-8";
+                        body = "ok\n";
+                    } else if (target == "/readyz" || target == "/ready") {
+                        const bool ok = (services::get<server::app::chat::ChatService>() != nullptr);
+                        status = ok ? "200 OK" : "503 Service Unavailable";
+                        content_type = "text/plain; charset=utf-8";
+                        body = ok ? "ready\n" : "not ready\n";
                     } else if (target == "/metrics" || target == "/") {
                         auto snap = server::core::runtime_metrics::snapshot();
                         std::ostringstream stream;
