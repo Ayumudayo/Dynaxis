@@ -77,9 +77,40 @@ Windows에서 빌드된 실행 파일은 `build-windows/server/Debug/server_app.
 | `SERVER_REGISTRY_PREFIX` | Instance Registry key prefix | `gateway/instances/` |
 | `SERVER_REGISTRY_TTL` | Instance Registry TTL seconds | `30` |
 | `METRICS_PORT` | 메트릭 수집을 위한 HTTP 포트 | `9090` |
+| `CHAT_HOOK_PLUGINS_DIR` | (실험, 권장) 플러그인 디렉터리(모든 `.so/.dll`을 파일명 순으로 로드) | `/app/plugins` |
+| `CHAT_HOOK_PLUGIN_PATHS` | (실험) 플러그인 경로 목록(순서 고정, 구분자 `;` 또는 `,`) | `/app/plugins/10_chat_hook_sample.so;/app/plugins/20_chat_hook_tag.so` |
+| `CHAT_HOOK_PLUGIN_PATH` | (실험, 레거시) 단일 플러그인(.so/.dll) 경로 | `/app/plugins/10_chat_hook_sample.so` |
+| `CHAT_HOOK_CACHE_DIR` | 플러그인 캐시 디렉터리(원본을 cache-copy 후 로드) | `/tmp/chat_hook_cache` |
+| `CHAT_HOOK_LOCK_PATH` | (옵션) lock/sentinel 파일 경로(존재 시 reload 스킵, 단일 플러그인 모드에만 적용) | `<plugin_stem>_LOCK` |
+| `CHAT_HOOK_RELOAD_INTERVAL_MS` | reload 폴링 주기(ms) | `500` |
 | `LOG_BUFFER_CAPACITY` | 메모리 내 로그 버퍼 크기 | `256` |
 | `CHAT_JOB_QUEUE_MAX` | 서버 로직 작업 큐 최대 길이(트래픽 스파이크 시 백프레셔/메모리 보호) | `8192` |
 | `CHAT_DB_JOB_QUEUE_MAX` | DB 작업 큐 최대 길이(DB 지연 시 백프레셔/메모리 보호) | `4096` |
+
+## Chat Hook Plugin (Experimental)
+
+`server_app`은 `MSG_CHAT_SEND` 경로에 hot-reload 가능한 플러그인 훅을 붙일 수 있습니다.
+
+- ABI: `server/include/server/chat/chat_hook_plugin_abi.hpp` (C ABI v1, entrypoint `chat_hook_api_v1()`)
+- 멀티 플러그인: 파일명 순서(예: `10_*.so`, `20_*.so`)로 순차 적용; `kReplaceText`는 다음 플러그인에 반영됨
+- Docker 샘플 플러그인:
+  - `/app/plugins/10_chat_hook_sample.so`
+  - `/app/plugins/20_chat_hook_tag.so`
+  - `/app/plugins/staging/10_chat_hook_sample_v2.so` (swap 용)
+- Docker 스택 기본 설정: `docker/stack/docker-compose.yml`에서 `CHAT_HOOK_PLUGINS_DIR=/app/plugins`
+
+Hot reload(예시):
+
+```bash
+# lock/sentinel (optional)
+docker exec knights-stack-server-1-1 touch /app/plugins/10_chat_hook_sample_LOCK
+
+# swap binary
+docker exec knights-stack-server-1-1 cp /app/plugins/staging/10_chat_hook_sample_v2.so /app/plugins/10_chat_hook_sample.so
+
+# unlock
+docker exec knights-stack-server-1-1 rm -f /app/plugins/10_chat_hook_sample_LOCK
+```
 
 ## 디렉터리 구조
 
