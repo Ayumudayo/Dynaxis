@@ -21,6 +21,51 @@ add_library(server_core
     src/compression/compressor.cpp
 )
 
+# -----------------------------------------------------------------------------
+# Build metadata (git hash/describe + build time)
+#
+# - Exposed to C++ via `server/core/build_info.hpp`.
+# - Kept as compile definitions to avoid generated files.
+# - Fallbacks to "unknown" when git is unavailable (eg. source archive builds).
+# -----------------------------------------------------------------------------
+find_package(Git QUIET)
+
+set(KNIGHTS_GIT_HASH "unknown")
+set(KNIGHTS_GIT_DESCRIBE "unknown")
+if (GIT_FOUND)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        RESULT_VARIABLE _knights_git_hash_res
+        OUTPUT_VARIABLE _knights_git_hash_out
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if (_knights_git_hash_res EQUAL 0 AND NOT _knights_git_hash_out STREQUAL "")
+        set(KNIGHTS_GIT_HASH "${_knights_git_hash_out}")
+    endif()
+
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" describe --always --dirty
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        RESULT_VARIABLE _knights_git_desc_res
+        OUTPUT_VARIABLE _knights_git_desc_out
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if (_knights_git_desc_res EQUAL 0 AND NOT _knights_git_desc_out STREQUAL "")
+        set(KNIGHTS_GIT_DESCRIBE "${_knights_git_desc_out}")
+    endif()
+endif()
+
+string(TIMESTAMP KNIGHTS_BUILD_TIME_UTC "%Y-%m-%dT%H:%M:%SZ" UTC)
+
+target_compile_definitions(server_core PUBLIC
+    KNIGHTS_GIT_HASH="${KNIGHTS_GIT_HASH}"
+    KNIGHTS_GIT_DESCRIBE="${KNIGHTS_GIT_DESCRIBE}"
+    KNIGHTS_BUILD_TIME_UTC="${KNIGHTS_BUILD_TIME_UTC}"
+)
+
 find_package(OpenSSL REQUIRED)
 find_package(lz4 CONFIG QUIET)
 if (NOT TARGET lz4::lz4)
