@@ -22,6 +22,9 @@ RUN cmake --preset linux-release
 # Build server components only (devclient excluded - requires ftxui from vcpkg)
 RUN cmake --build --preset linux-release --target \
     server_app \
+    chat_hook_sample \
+    chat_hook_sample_v2 \
+    chat_hook_tag \
     wb_worker \
     wb_dlq_replayer \
     gateway_app \
@@ -55,6 +58,13 @@ COPY --from=builder /app/build-linux/wb_worker .
 COPY --from=builder /app/build-linux/wb_dlq_replayer .
 COPY --from=builder /app/build-linux/gateway/gateway_app .
 COPY --from=builder /app/build-linux/migrations_runner .
+
+# Copy sample chat hook plugins
+COPY --from=builder /app/build-linux/server/plugins/10_chat_hook_sample.so /app/plugins/10_chat_hook_sample.so
+COPY --from=builder /app/build-linux/server/plugins/20_chat_hook_tag.so /app/plugins/20_chat_hook_tag.so
+
+# Keep an alternative build in staging for hot reload demos
+COPY --from=builder /app/build-linux/server/plugins/10_chat_hook_sample_v2.so /app/plugins/staging/10_chat_hook_sample_v2.so
 
 # Copy migration SQL files
 COPY tools/migrations /app/migrations

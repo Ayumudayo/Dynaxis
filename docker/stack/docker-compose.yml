@@ -74,6 +74,9 @@ services:
       GATEWAY_ID: "server-1"
       METRICS_PORT: "9090"
       RECENT_HISTORY_LIMIT: "20"
+      CHAT_HOOK_PLUGINS_DIR: "/app/plugins"
+      CHAT_HOOK_CACHE_DIR: "/tmp/chat_hook_cache"
+      CHAT_HOOK_RELOAD_INTERVAL_MS: "500"
     depends_on:
       redis:
         condition: service_healthy
@@ -107,6 +110,9 @@ services:
       GATEWAY_ID: "server-2"
       METRICS_PORT: "9090"
       RECENT_HISTORY_LIMIT: "20"
+      CHAT_HOOK_PLUGINS_DIR: "/app/plugins"
+      CHAT_HOOK_CACHE_DIR: "/tmp/chat_hook_cache"
+      CHAT_HOOK_RELOAD_INTERVAL_MS: "500"
     depends_on:
       redis:
         condition: service_healthy
