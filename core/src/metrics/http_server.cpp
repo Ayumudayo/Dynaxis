@@ -16,12 +16,16 @@ MetricsHttpServer::MetricsHttpServer(unsigned short port,
                                      MetricsCallback metrics_callback,
                                      StatusCallback health_callback,
                                      StatusCallback ready_callback,
-                                     LogsCallback logs_callback)
+                                     LogsCallback logs_callback,
+                                     StatusBodyCallback health_body_callback,
+                                     StatusBodyCallback ready_body_callback)
     : port_(port)
     , callback_(std::move(metrics_callback))
     , health_callback_(std::move(health_callback))
     , ready_callback_(std::move(ready_callback))
-    , logs_callback_(std::move(logs_callback)) {
+    , logs_callback_(std::move(logs_callback))
+    , health_body_callback_(std::move(health_body_callback))
+    , ready_body_callback_(std::move(ready_body_callback)) {
     io_context_ = std::make_shared<asio::io_context>();
     acceptor_ = std::make_shared<tcp::acceptor>(*io_context_, tcp::endpoint(tcp::v4(), port_));
 }
@@ -105,12 +109,20 @@ void MetricsHttpServer::do_accept() {
                         const bool ok = health_callback_ ? health_callback_() : true;
                         status = ok ? "200 OK" : "503 Service Unavailable";
                         content_type = "text/plain; charset=utf-8";
-                        body = ok ? "ok\n" : "unhealthy\n";
+                        if (health_body_callback_) {
+                            body = health_body_callback_(ok);
+                        } else {
+                            body = ok ? "ok\n" : "unhealthy\n";
+                        }
                     } else if (target == "/readyz" || target == "/ready") {
                         const bool ok = ready_callback_ ? ready_callback_() : true;
                         status = ok ? "200 OK" : "503 Service Unavailable";
                         content_type = "text/plain; charset=utf-8";
-                        body = ok ? "ready\n" : "not ready\n";
+                        if (ready_body_callback_) {
+                            body = ready_body_callback_(ok);
+                        } else {
+                            body = ok ? "ready\n" : "not ready\n";
+                        }
                     } else {
                         status = "404 Not Found";
                         content_type = "text/plain; charset=utf-8";
