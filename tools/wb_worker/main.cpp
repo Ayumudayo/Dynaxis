@@ -13,6 +13,7 @@
 #include "server/storage/redis/client.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/metrics/http_server.hpp"
+#include "server/core/metrics/build_info.hpp"
 #include <pqxx/pqxx>
 #include <nlohmann/json.hpp>
 
@@ -524,8 +525,8 @@ private:
 
         // DB Insert
         const std::string payload = j.dump();
-        tx.exec(pqxx::prepped{"wb_insert_session_event"},
-                pqxx::params{e.id, type, ts_v, uid_v, sid_v, rid_v, payload});
+        tx.exec_prepared("wb_insert_session_event",
+                         e.id, type, ts_v, uid_v, sid_v, rid_v, payload);
     }
 
     bool SendToDlq(const server::storage::redis::IRedisClient::StreamEntry& e, const char* error_msg) {
@@ -574,6 +575,9 @@ private:
 
     std::string RenderMetrics() const {
         std::ostringstream stream;
+
+        // Build metadata (git hash/describe + build time)
+        server::core::metrics::append_build_info(stream);
 
         stream << "# TYPE wb_batch_max_events gauge\n";
         stream << "wb_batch_max_events " << config_.batch_max_events << "\n";
