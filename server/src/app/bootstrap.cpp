@@ -25,6 +25,7 @@
 #include "server/core/util/log.hpp"
 #include "server/core/util/service_registry.hpp"
 #include "server/core/util/crash_handler.hpp"
+#include "server/core/app/app_host.hpp"
 #include "server/core/config/options.hpp"
 #include "server/core/state/shared_state.hpp"
 #include "server/core/concurrent/job_queue.hpp"
@@ -72,6 +73,7 @@ int run_server(int argc, char** argv) {
     std::shared_ptr<server::state::RedisInstanceStateBackend> registry_backend;
     server::state::InstanceRecord registry_record{};
     bool registry_registered = false;
+    server::core::app::AppHost app_host{"server_app"};
 
     try {
 #if defined(_WIN32)
@@ -121,6 +123,7 @@ int run_server(int argc, char** argv) {
         services::set(options);
         services::set(state);
         services::set(make_ref(scheduler));
+        services::set(make_ref(app_host));
 
         // 스케줄러 타이머 설정
         scheduler_timer = std::make_shared<asio::steady_timer>(io);
@@ -302,6 +305,8 @@ int run_server(int argc, char** argv) {
         }
         corelog::info(std::to_string(num_io_threads) + " I/O threads started.");
 
+        app_host.set_ready(true);
+
         // 10. Redis Pub/Sub 구독 (분산 채팅용)
         if (redis && config.use_redis_pubsub) {
             // 통합 패턴 구독 (RedisClientImpl이 단일 구독만 지원하므로)
@@ -351,8 +356,7 @@ int run_server(int argc, char** argv) {
         }
 
         // 12. 종료 시그널 대기
-        asio::signal_set signals(io, SIGINT, SIGTERM);
-        signals.async_wait([&](const boost::system::error_code&, int) {
+        app_host.install_asio_termination_signals(io, [&]() {
             corelog::info("Shutdown signal received...");
             if (registry_registered && registry_backend) {
                 try { registry_backend->remove(registry_record.instance_id); } catch (...) {}
@@ -371,6 +375,8 @@ int run_server(int argc, char** argv) {
         for (auto& t : io_threads) {
             t.join();
         }
+
+        app_host.set_ready(false);
 
         // 정리 작업
         if (registry_registered && registry_backend) {

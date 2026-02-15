@@ -1,6 +1,7 @@
 #include "server/app/metrics_server.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/metrics/build_info.hpp"
+#include "server/core/app/app_host.hpp"
 #include "server/core/runtime_metrics.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
 #include "server/protocol/game_opcodes.hpp"
@@ -105,10 +106,20 @@ void MetricsServer::do_accept() {
                         }
                         body = body_stream.str();
                     } else if (target == "/healthz" || target == "/health") {
+                        bool ok = true;
+                        if (auto host = services::get<server::core::app::AppHost>()) {
+                            ok = host->healthy() && !host->stop_requested();
+                        }
+                        status = ok ? "200 OK" : "503 Service Unavailable";
                         content_type = "text/plain; charset=utf-8";
-                        body = "ok\n";
+                        body = ok ? "ok\n" : "unhealthy\n";
                     } else if (target == "/readyz" || target == "/ready") {
-                        const bool ok = (services::get<server::app::chat::ChatService>() != nullptr);
+                        bool ok = false;
+                        if (auto host = services::get<server::core::app::AppHost>()) {
+                            ok = host->ready() && host->healthy() && !host->stop_requested();
+                        } else {
+                            ok = (services::get<server::app::chat::ChatService>() != nullptr);
+                        }
                         status = ok ? "200 OK" : "503 Service Unavailable";
                         content_type = "text/plain; charset=utf-8";
                         body = ok ? "ready\n" : "not ready\n";
