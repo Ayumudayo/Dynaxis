@@ -67,7 +67,7 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
     }
 
     auto session_sp = s.shared_from_this();
-    job_queue_.Push([this, session_sp, room, text]() {
+    job_queue_.Push([this, session_sp, room = std::move(room), text = std::move(text)]() mutable {
         corelog::info(std::string("CHAT_SEND: room=") + (room.empty()?"(empty)":room) + ", text=" + text);
         
         // /refresh는 상태 스냅샷을 강제로 다시 받게 하는 관리 명령이다.
@@ -143,9 +143,20 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
             }
         }
 
+        // Chat hook plugins (optional): custom commands / moderation / transforms.
+        // Runs after built-in slash commands, right before broadcasting.
+        std::string sender;
+        {
+            std::lock_guard<std::mutex> lk(state_.mu);
+            auto it2 = state_.user.find(session_sp.get());
+            sender = (it2 != state_.user.end()) ? it2->second : std::string("guest");
+        }
+        if (maybe_handle_chat_hook_plugin(*session_sp, current_room, sender, text)) {
+            return;
+        }
+
         // 일반 채널 브로드캐스트 경로.
         std::vector<std::shared_ptr<Session>> targets;
-        std::string sender;
         {
             std::lock_guard<std::mutex> lk(state_.mu);
             auto it2 = state_.user.find(session_sp.get()); 

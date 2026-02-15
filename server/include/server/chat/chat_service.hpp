@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <cstdint>
 
 #include <boost/asio.hpp>
 
@@ -54,6 +55,8 @@ public:
                 server::core::JobQueue& job_queue,
                 std::shared_ptr<server::core::storage::IConnectionPool> db_pool = {},
                 std::shared_ptr<server::storage::redis::IRedisClient> redis = {});
+
+    ~ChatService();
 
     // ======================================================================
     // 패킷 핸들러 (Packet Handlers)
@@ -149,6 +152,24 @@ public:
      */
     void broadcast_refresh_local(const std::string& room);
 
+    struct ChatHookPluginMetric {
+        std::string file;
+        bool loaded{false};
+        std::string name;
+        std::string version;
+        std::uint64_t reload_attempt_total{0};
+        std::uint64_t reload_success_total{0};
+        std::uint64_t reload_failure_total{0};
+    };
+
+    struct ChatHookPluginsMetrics {
+        bool enabled{false};
+        std::string mode; // none|dir|paths|single
+        std::vector<ChatHookPluginMetric> plugins;
+    };
+
+    ChatHookPluginsMetrics chat_hook_plugins_metrics() const;
+
 private:
     using Session = server::core::Session;
     using WeakSession = std::weak_ptr<Session>;
@@ -157,6 +178,8 @@ private:
 
     using Exec = boost::asio::io_context::executor_type;
     using Strand = boost::asio::strand<Exec>; // 핸들러 동기화를 위한 Strand
+
+    struct HookPluginState;
 
     // Write-behind (지연 쓰기) 설정
     struct WriteBehindConfig {
@@ -201,6 +224,8 @@ private:
     std::shared_ptr<server::core::storage::IConnectionPool> db_pool_{};
     std::shared_ptr<server::storage::redis::IRedisClient> redis_{};
     std::string gateway_id_{"gw-default"};
+
+    std::unique_ptr<HookPluginState> hook_plugin_{};
     
     // 방별 Strand 관리 (방 단위로 메시지 순서를 보장하기 위함)
     std::unordered_map<std::string, std::shared_ptr<Strand>> room_strands_;
@@ -251,6 +276,13 @@ private:
     bool load_recent_messages_from_cache(const std::string& room_id,
                                          std::vector<server::wire::v1::StateSnapshot::SnapshotMessage>& out);
     void handle_refresh(std::shared_ptr<Session> session);
+
+    // Returns true if plugin handled/blocked the message (i.e., default logic should stop).
+    // May mutate text (replace) and/or send system notices.
+    bool maybe_handle_chat_hook_plugin(Session& s,
+                                       const std::string& room,
+                                       const std::string& sender,
+                                       std::string& text);
 
     friend struct ChatServiceHistoryTester;
 

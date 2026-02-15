@@ -4,7 +4,9 @@
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/util/service_registry.hpp"
+#include "server/core/concurrent/task_scheduler.hpp"
 #include "server/core/concurrent/job_queue.hpp"
+#include "chat_hook_plugin_chain.hpp"
 #include "wire.pb.h"
 // 저장소 연동 헤더
 #include "server/core/storage/connection_pool.hpp"
@@ -14,6 +16,7 @@
 #include <algorithm>
 #include <random>
 #include <array>
+#include <cctype>
 #include <cstdlib>
 #include <sstream>
 #include <utility>
@@ -25,6 +28,12 @@ namespace corelog = server::core::log;
 namespace services = server::core::util::services;
 
 namespace server::app::chat {
+
+struct ChatService::HookPluginState {
+    explicit HookPluginState(ChatHookPluginChain::Config cfg)
+        : chain(std::move(cfg)) {}
+    ChatHookPluginChain chain;
+};
 
 // ChatService 생성자: 주요 의존성을 주입받고 환경 변수로부터 설정을 로드합니다.
 ChatService::ChatService(boost::asio::io_context& io,
@@ -134,6 +143,125 @@ ChatService::ChatService(boost::asio::io_context& io,
     } else {
         corelog::warn("Write-behind disabled (set WRITE_BEHIND_ENABLED=1 to enable)");
     }
+
+    // Optional chat-hook plugins (hot-reloadable shared libraries)
+    {
+        ChatHookPluginChain::Config cfg;
+
+        const auto split_paths = [](const char* raw) -> std::vector<std::filesystem::path> {
+            std::vector<std::filesystem::path> out;
+            if (!raw || !*raw) {
+                return out;
+            }
+
+            auto trim = [](std::string& s) {
+                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
+                    s.erase(s.begin());
+                }
+                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
+                    s.pop_back();
+                }
+            };
+
+            std::string cur;
+            for (const char* p = raw; *p; ++p) {
+                const char c = *p;
+                if (c == ';' || c == ',') {
+                    trim(cur);
+                    if (!cur.empty()) {
+                        out.emplace_back(cur);
+                    }
+                    cur.clear();
+                    continue;
+                }
+                cur.push_back(c);
+            }
+            trim(cur);
+            if (!cur.empty()) {
+                out.emplace_back(cur);
+            }
+            return out;
+        };
+
+        bool enabled = false;
+        if (const char* list = std::getenv("CHAT_HOOK_PLUGIN_PATHS"); list && *list) {
+            cfg.plugin_paths = split_paths(list);
+            enabled = !cfg.plugin_paths.empty();
+        }
+
+        if (!enabled) {
+            if (const char* dir = std::getenv("CHAT_HOOK_PLUGINS_DIR"); dir && *dir) {
+                cfg.plugins_dir = std::filesystem::path(dir);
+                enabled = true;
+            }
+        }
+
+        if (!enabled) {
+            if (const char* val = std::getenv("CHAT_HOOK_PLUGIN_PATH"); val && *val) {
+                cfg.plugin_paths.emplace_back(val);
+                enabled = true;
+            }
+        }
+
+        if (enabled) {
+            if (const char* cache = std::getenv("CHAT_HOOK_CACHE_DIR"); cache && *cache) {
+                cfg.cache_dir = cache;
+            }
+            if (const char* lock = std::getenv("CHAT_HOOK_LOCK_PATH"); lock && *lock) {
+                cfg.single_lock_path = lock;
+            }
+
+            hook_plugin_ = std::make_unique<HookPluginState>(std::move(cfg));
+            hook_plugin_->chain.poll_reload();
+
+            unsigned long interval_ms = 500;
+            if (const char* interval = std::getenv("CHAT_HOOK_RELOAD_INTERVAL_MS"); interval && *interval) {
+                interval_ms = std::strtoul(interval, nullptr, 10);
+            }
+            if (interval_ms > 0) {
+                if (auto scheduler = services::get<server::core::concurrent::TaskScheduler>()) {
+                    scheduler->schedule_every([this]() {
+                        if (!hook_plugin_) {
+                            return;
+                        }
+                        (void)job_queue_.TryPush([this]() {
+                            if (hook_plugin_) {
+                                hook_plugin_->chain.poll_reload();
+                            }
+                        });
+                    }, std::chrono::milliseconds{static_cast<long long>(interval_ms)});
+                }
+            }
+        }
+    }
+}
+
+ChatService::~ChatService() = default;
+
+ChatService::ChatHookPluginsMetrics ChatService::chat_hook_plugins_metrics() const {
+    ChatHookPluginsMetrics out{};
+    if (!hook_plugin_) {
+        out.enabled = false;
+        out.mode = "none";
+        return out;
+    }
+
+    const auto snap = hook_plugin_->chain.metrics_snapshot();
+    out.enabled = snap.configured;
+    out.mode = snap.mode;
+    out.plugins.reserve(snap.plugins.size());
+    for (const auto& p : snap.plugins) {
+        ChatHookPluginMetric m{};
+        m.file = p.plugin_path.filename().string();
+        m.loaded = p.loaded;
+        m.name = p.name;
+        m.version = p.version;
+        m.reload_attempt_total = p.reload_attempt_total;
+        m.reload_success_total = p.reload_success_total;
+        m.reload_failure_total = p.reload_failure_total;
+        out.plugins.push_back(std::move(m));
+    }
+    return out;
 }
 
 // 방별 Strand(직렬화된 실행 컨텍스트)를 반환합니다.
@@ -781,6 +909,23 @@ void ChatService::send_system_notice(Session& s, const std::string& text) {
     pb.SerializeToString(&bytes);
     std::vector<std::uint8_t> body(bytes.begin(), bytes.end());
     s.async_send(game_proto::MSG_CHAT_BROADCAST, body, 0);
+}
+
+bool ChatService::maybe_handle_chat_hook_plugin(Session& s,
+                                                const std::string& room,
+                                                const std::string& sender,
+                                                std::string& text) {
+    if (!hook_plugin_) {
+        return false;
+    }
+
+    auto out = hook_plugin_->chain.on_chat_send(s.session_id(), room, sender, text);
+    for (const auto& notice : out.notices) {
+        if (!notice.empty()) {
+            send_system_notice(s, notice);
+        }
+    }
+    return out.stop_default;
 }
 
 // 귓속말 전송 결과를 클라이언트에게 알립니다.
