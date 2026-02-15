@@ -131,10 +131,8 @@ public:
      std::unique_ptr<SessionDirectory> session_directory_;
      std::string redis_uri_;
 
-     std::atomic<bool> listener_ready_{false};
-     std::atomic<bool> redis_ready_{false};
      std::atomic<bool> infra_probe_stop_{false};
      std::thread infra_probe_thread_;
- };
+  };
 
  } // namespace gateway

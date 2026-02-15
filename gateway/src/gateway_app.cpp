@@ -235,6 +235,9 @@ GatewayApp::GatewayApp()
 
     configure_infrastructure();
 
+    // Redis is required for backend discovery and sticky routing.
+    app_host_.declare_dependency("redis", server::core::app::AppHost::DependencyRequirement::kRequired);
+
     if (const char* port_env = std::getenv("METRICS_PORT")) {
         try {
             metrics_port_ = static_cast<std::uint16_t>(std::stoul(port_env));
@@ -266,7 +269,7 @@ GatewayApp::~GatewayApp() {
 
 int GatewayApp::run() {
     start_listener();
-    listener_ready_.store(true, std::memory_order_relaxed);
+    app_host_.set_ready(true);
     start_infrastructure_probe();
     app_host_.install_asio_termination_signals(io_, [this]() { stop(); });
 
@@ -281,7 +284,6 @@ int GatewayApp::run() {
 
 void GatewayApp::stop() {
     app_host_.request_stop();
-    listener_ready_.store(false, std::memory_order_relaxed);
     app_host_.set_ready(false);
     stop_infrastructure_probe();
     app_host_.stop_admin_http();
@@ -328,8 +330,7 @@ void GatewayApp::start_infrastructure_probe() {
                 ok = false;
             }
 
-            redis_ready_.store(ok, std::memory_order_relaxed);
-            app_host_.set_ready(listener_ready_.load(std::memory_order_relaxed) && ok);
+            app_host_.set_dependency_ok("redis", ok);
 
             if (ok != last_ok) {
                 if (ok) {
@@ -347,7 +348,7 @@ void GatewayApp::start_infrastructure_probe() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
         }
-        app_host_.set_ready(false);
+        app_host_.set_dependency_ok("redis", false);
     });
 }
 
