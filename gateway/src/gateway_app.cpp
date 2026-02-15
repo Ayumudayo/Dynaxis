@@ -225,7 +225,6 @@ const std::string& GatewayApp::BackendSession::session_id() const {
 
 GatewayApp::GatewayApp()
     : hive_(std::make_shared<server::core::net::Hive>(io_))
-    , signals_(io_)
     , authenticator_(std::make_shared<auth::NoopAuthenticator>()) {
     
     configure_gateway();
@@ -236,26 +235,29 @@ GatewayApp::GatewayApp()
     configure_infrastructure();
 
     if (const char* port_env = std::getenv("METRICS_PORT")) {
-        metrics_port_ = static_cast<std::uint16_t>(std::stoi(port_env));
+        try {
+            metrics_port_ = static_cast<std::uint16_t>(std::stoul(port_env));
+        } catch (...) {
+            server::core::log::warn("GatewayApp invalid METRICS_PORT; using default");
+        }
     }
 
-      metrics_server_ = std::make_unique<server::core::metrics::MetricsHttpServer>(metrics_port_, [this]() {
-          std::ostringstream stream;
+    app_host_.start_admin_http(metrics_port_, [this]() {
+        std::ostringstream stream;
 
-          // Build metadata (git hash/describe + build time)
-          server::core::metrics::append_build_info(stream);
+        // Build metadata (git hash/describe + build time)
+        server::core::metrics::append_build_info(stream);
 
-          stream << "# TYPE gateway_sessions_active gauge\n";
-          {
-              std::lock_guard<std::mutex> lock(session_mutex_);
-              stream << "gateway_sessions_active " << sessions_.size() << "\n";
-          }
-         stream << "# TYPE gateway_connections_total counter\n";
-         stream << "gateway_connections_total " << connections_total_.load(std::memory_order_relaxed) << "\n";
-         return stream.str();
-     });
-     metrics_server_->start();
- }
+        stream << "# TYPE gateway_sessions_active gauge\n";
+        {
+            std::lock_guard<std::mutex> lock(session_mutex_);
+            stream << "gateway_sessions_active " << sessions_.size() << "\n";
+        }
+        stream << "# TYPE gateway_connections_total counter\n";
+        stream << "gateway_connections_total " << connections_total_.load(std::memory_order_relaxed) << "\n";
+        return stream.str();
+    });
+}
 
 GatewayApp::~GatewayApp() {
     stop();
@@ -263,20 +265,23 @@ GatewayApp::~GatewayApp() {
 
 int GatewayApp::run() {
     start_listener();
-    handle_signals();
+    app_host_.set_ready(true);
+    app_host_.install_asio_termination_signals(io_, [this]() { stop(); });
 
     server::core::log::info("GatewayApp starting main loop");
     hive_->run();
+    app_host_.set_ready(false);
     server::core::log::info("GatewayApp stopped");
     return 0;
 }
 
 void GatewayApp::stop() {
+    app_host_.request_stop();
+    app_host_.set_ready(false);
+    app_host_.stop_admin_http();
+
     if (listener_) {
         listener_->stop();
-    }
-    if (metrics_server_) {
-        metrics_server_->stop();
     }
 
     {
@@ -510,24 +515,6 @@ void GatewayApp::start_listener() {
     listener_->start();
     auto bound = listener_->local_endpoint();
     server::core::log::info("GatewayApp listening on " + bound.address().to_string() + ":" + std::to_string(bound.port()));
-}
-
-void GatewayApp::handle_signals() {
-#if defined(SIGINT)
-    signals_.add(SIGINT);
-#endif
-#if defined(SIGTERM)
-    signals_.add(SIGTERM);
-#endif
-    signals_.async_wait([this](const boost::system::error_code& ec, int) {
-        if (ec == boost::asio::error::operation_aborted) {
-            return;
-        }
-        if (!ec) {
-            server::core::log::info("GatewayApp received shutdown signal");
-            stop();
-        }
-    });
 }
 
 } // namespace gateway

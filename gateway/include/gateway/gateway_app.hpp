@@ -12,12 +12,11 @@
 #include <deque>
 
 #include <boost/asio/io_context.hpp>
-#include <boost/asio/signal_set.hpp>
 
 #include "gateway/auth/authenticator.hpp"
+#include "server/core/app/app_host.hpp"
 #include "server/core/net/hive.hpp"
 #include "server/core/net/listener.hpp"
-#include "server/core/metrics/http_server.hpp"
 #include "server/state/instance_registry.hpp"
 #include "server/storage/redis/client.hpp"
 #include "gateway/session_directory.hpp"
@@ -98,7 +97,7 @@ public:
     boost::asio::io_context io_;
     std::shared_ptr<server::core::net::Hive> hive_;
     std::shared_ptr<server::core::net::Listener> listener_;
-    boost::asio::signal_set signals_;
+    server::core::app::AppHost app_host_{"gateway_app"};
     std::shared_ptr<auth::IAuthenticator> authenticator_;
     std::string gateway_id_;
     std::string listen_host_;
@@ -111,7 +110,6 @@ private:
     void configure_gateway();
     void configure_infrastructure();
     void start_listener();
-    void handle_signals();
 
     struct SessionState {
         BackendSessionPtr session;
@@ -122,8 +120,6 @@ private:
     std::atomic<std::uint64_t> connections_total_{0};
 
     std::string boot_id_;
-    
-    std::unique_ptr<server::core::metrics::MetricsHttpServer> metrics_server_;
     std::uint16_t metrics_port_{6001};
 
     // State & Storage
