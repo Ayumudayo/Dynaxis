@@ -8,7 +8,7 @@
 | OS | Windows 11 + PowerShell 7 / WSL2 Ubuntu | Amazon Linux 2 / Ubuntu 22.04 |
 | 필수 도구 | CMake 3.20+, vcpkg, Docker Desktop | kubectl, helm, terraform, aws cli |
 | 외부 서비스 | Redis 6+, PostgreSQL 13+ | Amazon ElastiCache, Amazon RDS |
-| 필수 Secrets | `DB_URI`, `REDIS_URI`, `JWT_SECRET` | AWS Secrets Manager 또는 KMS |
+| 필수 Secrets | `DB_URI`, `REDIS_URI` | AWS Secrets Manager 또는 KMS |
 
 `.env` 예시는 `docs/configuration.md` 를 참고한다. 환경별로 `.env.server`, `.env.gateway` 를 분리해 ConfigMap/Secret 에 주입하는 것을 권장한다. (HAProxy는 별도 설정 파일로 관리)
 
@@ -17,13 +17,14 @@
 Windows에서 개발하더라도 서버 스택 런타임은 **Linux 컨테이너**로 통일한다.
 
 ```powershell
-# Windows PowerShell
-scripts/deploy_docker.ps1 -Action up -Detached -Build
+# Windows / WSL / Linux (pwsh)
+pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build
 ```
 
+`pwsh`를 사용할 수 없는 환경에서는 아래처럼 직접 compose로도 기동할 수 있다.
+
 ```bash
-# WSL/Linux
-docker build -f Dockerfile.base -t knights-base .
+docker build -f Dockerfile.base -t knights-base:latest .
 docker compose -f docker/stack/docker-compose.yml up -d --build
 ```
 
@@ -35,10 +36,10 @@ docker compose -f docker/stack/docker-compose.yml up -d --build
 관측 스택까지 함께 띄우려면(옵션):
 
 ```powershell
-scripts/deploy_docker.ps1 -Action up -Detached -Build -Observability
+pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build -Observability
 
 # 또는 wrapper 사용
-scripts/run_full_stack_observability.ps1
+pwsh scripts/run_full_stack_observability.ps1
 ```
 
 ### 2.3 Dev 검증 체크리스트

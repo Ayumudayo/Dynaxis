@@ -43,6 +43,7 @@ pwsh scripts/check_observability.ps1
 ## 3. Metrics Catalog (Current)
 
 ### server_app
+- Build: `knights_build_info{git_hash=...,git_describe=...,build_time_utc=...} 1`
 - Sessions: `chat_session_active` (gauge), `chat_session_started_total`, `chat_session_stopped_total`
 - Frames: `chat_frame_total`, `chat_frame_error_total`, `chat_frame_payload_*`
 - Dispatch: `chat_dispatch_total`, `chat_dispatch_unknown_total`, `chat_dispatch_exception_total`
@@ -51,13 +52,20 @@ pwsh scripts/check_observability.ps1
   - Histogram: `chat_dispatch_latency_ms_bucket`, `chat_dispatch_latency_ms_sum`, `chat_dispatch_latency_ms_count`
 - Queues/DB: `chat_job_queue_depth`, `chat_db_job_queue_depth`, `chat_db_job_processed_total`, `chat_db_job_failed_total`
 - Fanout/Subscribe: `chat_subscribe_total`, `chat_self_echo_drop_total`, `chat_subscribe_last_lag_ms`
-- Per-opcode: `chat_dispatch_opcode_total{opcode="0x0000"}`
+- Per-opcode(hex): `chat_dispatch_opcode_total{opcode="0x0000"}`
+- Per-opcode(named): `chat_dispatch_opcode_named_total{opcode="0x0000",name="MSG_*"}`
+- Chat hook plugins(실험):
+  - `chat_hook_plugins_enabled{mode="..."}` (gauge)
+  - `chat_hook_plugin_info{file="...",name="...",version="..."} 1` (gauge)
+  - `chat_hook_plugin_reload_attempt_total{file="..."}` / `chat_hook_plugin_reload_success_total{file="..."}` / `chat_hook_plugin_reload_failure_total{file="..."}` (counters)
 
 ### gateway_app
+- Build: `knights_build_info{...} 1`
 - `gateway_sessions_active` (gauge)
 - `gateway_connections_total` (counter)
 
 ### wb_worker
+- Build: `knights_build_info{...} 1`
 - Backlog: `wb_pending` (gauge)
 - Flush: `wb_flush_total`, `wb_flush_ok_total`, `wb_flush_fail_total`, `wb_flush_dlq_total` (counters)
 - Batch/Latency: `wb_flush_batch_size_last` (gauge), `wb_flush_commit_ms_last` (gauge)
@@ -67,6 +75,9 @@ pwsh scripts/check_observability.ps1
 ```promql
 # 모든 타겟이 up 인지 빠르게 확인
 sum(up)
+
+# 배포된 빌드 버전 라벨 확인
+knights_build_info
 
 # server_app dispatch p95 (traffic가 있어야 NaN이 아님)
 histogram_quantile(0.95, sum by (le) (rate(chat_dispatch_latency_ms_bucket[5m])))

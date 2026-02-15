@@ -1,9 +1,9 @@
 # 운영 체크리스트 (Runbook – Expanded)
 
 ## 1. 배포 전/후 공통 점검
-1. `.env` / Secrets 확인 (`DB_URI`, `REDIS_URI`, `METRICS_PORT`, `JWT_SECRET`)
-2. `migrations_runner status` → pending 없음 확인
-3. `/metrics` 200 OK (`curl http://svc:9090/metrics`)
+1. `.env` / Secrets 확인 (`DB_URI`, `REDIS_URI`, `METRICS_PORT`)
+2. `/metrics` 200 OK + `knights_build_info` 라벨로 배포 버전 확인 (`curl http://svc:9090/metrics`)
+3. `migrations_runner status` → pending 없음 확인
 4. Grafana "Active Sessions" 정상, write-behind backlog/에러 지표 이상 없음
 5. Alertmanager silence 설정 여부 확인 (배포 중엔 silence ON, 완료 후 OFF)
 
