@@ -17,6 +17,11 @@ Client (host) -> `haproxy` (TCP) -> `gateway-*` -> `server-*`.
 - `wb_worker`: write-behind worker (`METRICS_PORT=9090` mapped to host `39093`).
 - `haproxy`: game traffic on host `6000`, stats+Prometheus metrics on host `8404`.
 
+## Chat Hook Plugins (Experimental)
+- `server-*` defaults to `CHAT_HOOK_PLUGINS_DIR=/app/plugins` (see `docker/stack/docker-compose.yml`).
+- Sample plugins are packaged into the image under `/app/plugins/`.
+- Hot reload is done by swapping the `.so` in-place (optional lock/sentinel file to defer reload).
+
 ## Observability Profile
 Enables: `prometheus`, `grafana`, `redis_exporter`, `postgres_exporter`.
 

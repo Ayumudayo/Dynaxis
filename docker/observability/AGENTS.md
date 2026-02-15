@@ -28,3 +28,7 @@ pwsh scripts/check_observability.ps1
 1) Export it from the service on `/metrics`.
 2) Add/adjust scrape targets in `docker/observability/prometheus/prometheus.yml` if needed.
 3) Update/add a dashboard JSON under `docker/observability/grafana/dashboards/`.
+
+## Notes
+- Most binaries export `knights_build_info` (git hash/describe + build time) at the top of `/metrics`.
+- `server_app` can export chat hook plugin metrics when plugins are enabled.
