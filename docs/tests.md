@@ -35,7 +35,10 @@ scripts/smoke_wb.ps1 -Config Debug -BuildDir build-windows
 - 주요 시나리오: Presence TTL 만료, Sticky Session 재바인딩, Streams pending 복구.
 
 ## 5. Observability 체크
-- `.env`의 `METRICS_PORT`를 지정한 뒤 `curl http://127.0.0.1:<port>/metrics`로 확인.
+- `.env`의 `METRICS_PORT`를 지정한 뒤 아래로 확인:
+  - `curl http://127.0.0.1:<port>/metrics`
+  - `curl http://127.0.0.1:<port>/healthz`
+  - `curl http://127.0.0.1:<port>/readyz`
 - 핵심 지표(현재 구현 기준):
   - server_app: `knights_build_info`, `chat_session_active`, `chat_dispatch_latency_ms_*`, `chat_dispatch_opcode_named_total`, `chat_job_queue_depth`, `chat_subscribe_total`, `chat_subscribe_last_lag_ms`, `chat_hook_plugins_enabled`
   - wb_worker: `wb_pending`, `wb_flush_total`, `wb_flush_batch_size_last`, `wb_flush_commit_ms_last`

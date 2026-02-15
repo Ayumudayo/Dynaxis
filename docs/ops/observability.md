@@ -14,6 +14,7 @@ pwsh scripts/run_full_stack_observability.ps1
 - gateway metrics: `http://127.0.0.1:36001/metrics`, `http://127.0.0.1:36002/metrics`
 - server metrics: `http://127.0.0.1:39091/metrics`, `http://127.0.0.1:39092/metrics`
 - wb_worker metrics: `http://127.0.0.1:39093/metrics`
+- (health/ready) 각 admin 포트는 `/healthz`, `/readyz`도 제공한다. (server_app는 `/logs`도 제공)
 - (옵션) Prometheus: `http://127.0.0.1:39090/`
 - (옵션) Grafana: `http://127.0.0.1:33000/` (admin password: `GRAFANA_ADMIN_PASSWORD`, 기본 `admin`)
 
