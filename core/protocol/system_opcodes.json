@@ -1,22 +1,38 @@
 {
     "namespace": "server::core::protocol",
+    "groups": [
+        {
+            "name": "system",
+            "id_min": "0x0001",
+            "id_max": "0x000F",
+            "desc": "core/system frames"
+        }
+    ],
     "opcodes": [
         {
+            "group": "system",
+            "dir": "s2c",
             "name": "MSG_HELLO",
             "id": "0x0001",
             "desc": "버전/서버 정보"
         },
         {
+            "group": "system",
+            "dir": "c2s",
             "name": "MSG_PING",
             "id": "0x0002",
             "desc": "heartbeat ping"
         },
         {
+            "group": "system",
+            "dir": "c2s",
             "name": "MSG_PONG",
             "id": "0x0003",
             "desc": "heartbeat pong"
         },
         {
+            "group": "system",
+            "dir": "s2c",
             "name": "MSG_ERR",
             "id": "0x0004",
             "desc": "에러 응답"
