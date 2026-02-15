@@ -1,0 +1,160 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Cancel previous runs on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-build-test:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Enable MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build (Debug)
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug
+
+      - name: Run Unit Tests (ctest)
+        shell: pwsh
+        run: |
+          ctest --preset windows-test
+
+  linux-docker-stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Validate Opcode Specs
+        run: |
+          python3 tools/gen_opcode_docs.py --check
+
+      - name: Docker Info
+        run: |
+          docker version
+          docker compose version
+
+      - name: Build Base Image (knights-base)
+        run: |
+          docker build -f Dockerfile.base -t knights-base:latest .
+
+      - name: ASan/UBSan Build (server_app)
+        run: |
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/app" \
+            -w /app \
+            knights-base:latest \
+            bash -lc "apt-get update && apt-get install -y ninja-build && cmake --preset linux-asan && cmake --build --preset linux-asan --target server_app --parallel"
+
+      - name: Start Stack (Build + Detached)
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/deploy_docker.ps1 -Action up -Detached -Build
+
+      - name: Wait For HAProxy
+        run: |
+          python3 - <<'PY'
+          import socket, time
+          host, port = '127.0.0.1', 6000
+          deadline = time.time() + 60
+          last_err = None
+          while time.time() < deadline:
+              try:
+                  with socket.create_connection((host, port), timeout=1.0):
+                      print('HAProxy is ready')
+                      raise SystemExit(0)
+              except Exception as e:
+                  last_err = e
+                  time.sleep(1)
+          raise SystemExit(f'HAProxy not ready: {last_err}')
+          PY
+
+      - name: Smoke Test (PONG)
+        run: |
+          python3 tests/python/verify_pong.py
+
+      - name: Smoke Test (Load Balancing)
+        run: |
+          python3 tests/python/test_load_balancing.py
+
+      - name: Verify Plugin Metrics
+        run: |
+          python3 - <<'PY'
+          import urllib.request
+
+          def fetch(url):
+              with urllib.request.urlopen(url, timeout=5) as r:
+                  return r.read().decode('utf-8', errors='replace')
+
+          urls = [
+              'http://127.0.0.1:39091/metrics',
+              'http://127.0.0.1:39092/metrics',
+          ]
+          for url in urls:
+              txt = fetch(url)
+              if 'chat_hook_plugins_enabled' not in txt:
+                  raise SystemExit(f'missing chat_hook_plugins_enabled in {url}')
+              if 'chat_hook_plugin_info' not in txt:
+                  raise SystemExit(f'missing chat_hook_plugin_info in {url}')
+          print('plugin metrics present')
+          PY
+
+      - name: Hot Reload Plugin (v2) And Verify Metrics
+        run: |
+          export MSYS2_ARG_CONV_EXCL='*'
+          docker exec knights-stack-server-1-1 sh -lc "set -e; touch /app/plugins/10_chat_hook_sample_LOCK; cp /app/plugins/staging/10_chat_hook_sample_v2.so /app/plugins/10_chat_hook_sample.so; rm -f /app/plugins/10_chat_hook_sample_LOCK"
+          docker exec knights-stack-server-2-1 sh -lc "set -e; touch /app/plugins/10_chat_hook_sample_LOCK; cp /app/plugins/staging/10_chat_hook_sample_v2.so /app/plugins/10_chat_hook_sample.so; rm -f /app/plugins/10_chat_hook_sample_LOCK"
+
+          python3 - <<'PY'
+          import time, urllib.request
+
+          def fetch(url):
+              with urllib.request.urlopen(url, timeout=5) as r:
+                  return r.read().decode('utf-8', errors='replace')
+
+          urls = ['http://127.0.0.1:39091/metrics', 'http://127.0.0.1:39092/metrics']
+          deadline = time.time() + 30
+          while time.time() < deadline:
+              ok = True
+              for url in urls:
+                  txt = fetch(url)
+                  if 'file="10_chat_hook_sample.so"' not in txt:
+                      ok = False
+                      break
+                  if 'version="v2"' not in txt:
+                      ok = False
+                      break
+              if ok:
+                  print('hot reload reflected in metrics')
+                  raise SystemExit(0)
+              time.sleep(0.5)
+          raise SystemExit('hot reload did not reflect in metrics within timeout')
+          PY
+
+      - name: Dump Stack Logs (On Failure)
+        if: failure()
+        run: |
+          docker compose --project-name knights-stack --project-directory docker/stack -f docker/stack/docker-compose.yml ps
+          docker compose --project-name knights-stack --project-directory docker/stack -f docker/stack/docker-compose.yml logs --no-color --tail 200
+
+      - name: Stop Stack
+        if: always()
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/deploy_docker.ps1 -Action down
