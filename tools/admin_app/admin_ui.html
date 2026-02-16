@@ -198,6 +198,19 @@
       font-size: 11px;
     }
     tr:hover td { background: #f6fbfc; }
+    tr.selected td { background: #eaf4f7; }
+    .table-link {
+      border: none;
+      background: transparent;
+      color: #1f5569;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      cursor: pointer;
+      padding: 0;
+      font: inherit;
+      text-align: left;
+    }
+    .table-link:hover { color: #143f4f; }
     .mono {
       font-family: "Cascadia Mono", "Consolas", monospace;
       font-size: 11px;
@@ -257,6 +270,30 @@
       text-decoration: none;
       font-size: 12px;
       font-weight: 600;
+    }
+    .detail-grid {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      margin-top: 8px;
+    }
+    .detail-item {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fbfefe;
+      padding: 8px 9px;
+    }
+    .detail-item .k {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    .detail-item .v {
+      margin-top: 3px;
+      font-size: 12px;
+      color: #273a43;
+      word-break: break-word;
     }
     .footer {
       color: #56666d;
@@ -338,6 +375,7 @@
               <tbody id="instances-body"></tbody>
             </table>
           </div>
+          <div id="instance-detail" style="margin-top:10px;" class="muted">Select an instance to see detail.</div>
           <div id="instances-error"></div>
         </div>
       </article>
@@ -382,6 +420,7 @@
       workerChip: document.getElementById('worker-chip'),
       workerError: document.getElementById('worker-error'),
       instancesBody: document.getElementById('instances-body'),
+      instanceDetail: document.getElementById('instance-detail'),
       instancesChip: document.getElementById('instances-chip'),
       instancesError: document.getElementById('instances-error'),
       sessionForm: document.getElementById('session-form'),
@@ -392,7 +431,14 @@
       footerMeta: document.getElementById('footer-meta')
     };
 
-    const state = { timer: null, refreshMs: 5000, inFlight: false, authMode: 'unknown' };
+    const state = {
+      timer: null,
+      refreshMs: 5000,
+      inFlight: false,
+      authMode: 'unknown',
+      selectedInstanceId: null,
+      instancesById: {},
+    };
 
     function setChip(node, text, kind) {
       node.textContent = text;
@@ -420,6 +466,18 @@
 
     function fmtNum(v) {
       return Number(v || 0).toLocaleString();
+    }
+
+    function safeText(v) {
+      if (v === undefined || v === null) {
+        return '';
+      }
+      return String(v)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
     }
 
     async function apiGet(path) {
@@ -536,26 +594,91 @@
     }
 
     function renderInstances(items) {
+      state.instancesById = {};
       if (!Array.isArray(items)) {
         dom.instancesBody.innerHTML = '<tr><td colspan="7" class="muted">No instance data</td></tr>';
+        dom.instanceDetail.textContent = 'Select an instance to see detail.';
         return;
       }
       if (items.length === 0) {
         dom.instancesBody.innerHTML = '<tr><td colspan="7" class="muted">No instances currently registered</td></tr>';
+        state.selectedInstanceId = null;
+        dom.instanceDetail.textContent = 'No registered instance available.';
         return;
       }
+
+      for (const item of items) {
+        if (item && item.instance_id) {
+          state.instancesById[item.instance_id] = item;
+        }
+      }
+
+      if (state.selectedInstanceId && !state.instancesById[state.selectedInstanceId]) {
+        state.selectedInstanceId = null;
+        dom.instanceDetail.textContent = 'Selected instance is no longer available.';
+      }
+
       dom.instancesBody.innerHTML = items.map((it) => {
         const ready = !!it.ready;
-        return '<tr>' +
-          '<td class="mono">' + (it.instance_id || '-') + '</td>' +
-          '<td>' + (it.role || '-') + '</td>' +
-          '<td class="mono">' + (it.host || '-') + ':' + (it.port || 0) + '</td>' +
+        const id = it.instance_id || '';
+        const selected = state.selectedInstanceId && state.selectedInstanceId === id;
+        const instanceCell = id
+          ? '<button type="button" class="table-link" data-instance-id="' + safeText(id) + '">' + safeText(id) + '</button>'
+          : '-';
+        return '<tr class="' + (selected ? 'selected' : '') + '">' +
+          '<td class="mono">' + instanceCell + '</td>' +
+          '<td>' + safeText(it.role || '-') + '</td>' +
+          '<td class="mono">' + safeText(it.host || '-') + ':' + safeText(it.port || 0) + '</td>' +
           '<td><span class="pill ' + (ready ? 'ok' : 'err') + '">' + (ready ? 'ready' : 'not-ready') + '</span></td>' +
           '<td>' + fmtNum(it.active_sessions) + '</td>' +
           '<td class="mono">' + fmtNum(it.last_heartbeat_ms) + '</td>' +
-          '<td class="mono">' + ((it.source && it.source.registry_key) || '-') + '</td>' +
+          '<td class="mono">' + safeText((it.source && it.source.registry_key) || '-') + '</td>' +
           '</tr>';
       }).join('');
+    }
+
+    function renderInstanceDetail(data) {
+      const ready = !!data.ready;
+      const metricsUrl = data.metrics_url || '';
+      const metricsLink = metricsUrl
+        ? '<a class="link" href="' + safeText(metricsUrl) + '" target="_blank" rel="noreferrer">Open metrics</a>'
+        : '<span class="muted">n/a</span>';
+
+      dom.instanceDetail.innerHTML =
+        '<div class="panel-head" style="margin:-1px -1px 0;border:1px solid var(--line);border-radius:10px 10px 0 0;background:#f8fcfd;"><h2>Instance Detail</h2><span class="pill ' + (ready ? 'ok' : 'err') + '">' + (ready ? 'ready' : 'not-ready') + '</span></div>' +
+        '<div class="detail-grid">' +
+          '<div class="detail-item"><div class="k">Instance</div><div class="v mono">' + safeText(data.instance_id || '-') + '</div></div>' +
+          '<div class="detail-item"><div class="k">Address</div><div class="v mono">' + safeText(data.host || '-') + ':' + safeText(data.port || 0) + '</div></div>' +
+          '<div class="detail-item"><div class="k">Role</div><div class="v">' + safeText(data.role || '-') + '</div></div>' +
+          '<div class="detail-item"><div class="k">Active Sessions</div><div class="v">' + fmtNum(data.active_sessions) + '</div></div>' +
+          '<div class="detail-item"><div class="k">Ready Reason</div><div class="v">' + safeText(data.ready_reason || '-') + '</div></div>' +
+          '<div class="detail-item"><div class="k">Last Heartbeat</div><div class="v mono">' + fmtNum(data.last_heartbeat_ms) + '</div></div>' +
+          '<div class="detail-item"><div class="k">Registry Key</div><div class="v mono">' + safeText((data.source && data.source.registry_key) || '-') + '</div></div>' +
+          '<div class="detail-item"><div class="k">Metrics URL</div><div class="v">' + metricsLink + '</div></div>' +
+        '</div>';
+    }
+
+    async function loadInstanceDetail(instanceId) {
+      if (!instanceId) {
+        return false;
+      }
+
+      const res = await apiGet('/api/v1/instances/' + encodeURIComponent(instanceId));
+      if (!res.ok) {
+        applyAuthError('Instance detail', res);
+        dom.instanceDetail.innerHTML = asError('Instance detail: ' + res.code + ' - ' + res.message);
+        return false;
+      }
+
+      const data = res.data || {};
+      state.selectedInstanceId = data.instance_id || instanceId;
+      renderInstanceDetail(data);
+
+      const items = Object.values(state.instancesById || {});
+      if (items.length > 0) {
+        renderInstances(items);
+      }
+      return true;
     }
 
     function renderWorker(data) {
@@ -608,6 +731,11 @@
         return false;
       }
       renderInstances((res.data && res.data.items) || []);
+
+      if (state.selectedInstanceId) {
+        await loadInstanceDetail(state.selectedInstanceId);
+      }
+
       setChip(dom.instancesChip, 'ok', 'ok');
       dom.instancesError.innerHTML = '';
       return true;
@@ -699,6 +827,18 @@
         return;
       }
       lookupSession(clientId);
+    });
+
+    dom.instancesBody.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-instance-id]');
+      if (!btn) {
+        return;
+      }
+      const instanceId = btn.getAttribute('data-instance-id');
+      if (!instanceId) {
+        return;
+      }
+      loadInstanceDetail(instanceId);
     });
 
     refreshAll();
