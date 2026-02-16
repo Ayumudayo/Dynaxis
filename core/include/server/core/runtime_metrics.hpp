@@ -33,6 +33,7 @@ struct Snapshot {
     std::uint64_t session_stopped_total{0};
     std::uint64_t session_active{0};
     std::uint64_t session_timeout_total{0};
+    std::uint64_t session_write_timeout_total{0};
     std::uint64_t heartbeat_timeout_total{0};
     std::uint64_t send_queue_drop_total{0};
     std::uint64_t packet_total{0};
@@ -78,6 +79,7 @@ void record_packet_error();
 void record_dispatch_attempt(bool handler_found, std::chrono::nanoseconds elapsed);
 void record_dispatch_exception();
 void record_session_timeout();
+void record_session_write_timeout();
 void record_heartbeat_timeout();
 void record_send_queue_drop();
 void record_packet_payload(std::size_t bytes);

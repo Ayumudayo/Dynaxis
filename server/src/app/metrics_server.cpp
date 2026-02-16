@@ -77,6 +77,7 @@ std::string render_metrics() {
     append_counter("chat_session_started_total", snap.session_started_total);
     append_counter("chat_session_stopped_total", snap.session_stopped_total);
     append_counter("chat_session_timeout_total", snap.session_timeout_total);
+    append_counter("chat_session_write_timeout_total", snap.session_write_timeout_total);
     append_counter("chat_heartbeat_timeout_total", snap.heartbeat_timeout_total);
     append_counter("chat_send_queue_drop_total", snap.send_queue_drop_total);
     append_gauge("chat_session_active", static_cast<long double>(snap.session_active));

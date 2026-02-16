@@ -16,6 +16,7 @@ struct RuntimeCounters {
     std::atomic<std::uint64_t> session_stopped_total{0};
     std::atomic<std::uint64_t> session_active{0};
     std::atomic<std::uint64_t> session_timeout_total{0};
+    std::atomic<std::uint64_t> session_write_timeout_total{0};
     std::atomic<std::uint64_t> heartbeat_timeout_total{0};
     std::atomic<std::uint64_t> send_queue_drop_total{0};
     std::atomic<std::uint64_t> packet_total{0};
@@ -77,6 +78,10 @@ void record_session_stop() {
 
 void record_session_timeout() {
     counters().session_timeout_total.fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_session_write_timeout() {
+    counters().session_write_timeout_total.fetch_add(1, std::memory_order_relaxed);
 }
 
 void record_heartbeat_timeout() {
@@ -255,6 +260,7 @@ Snapshot snapshot() {
     snap.session_stopped_total = c.session_stopped_total.load(std::memory_order_relaxed);
     snap.session_active = c.session_active.load(std::memory_order_relaxed);
     snap.session_timeout_total = c.session_timeout_total.load(std::memory_order_relaxed);
+    snap.session_write_timeout_total = c.session_write_timeout_total.load(std::memory_order_relaxed);
     snap.heartbeat_timeout_total = c.heartbeat_timeout_total.load(std::memory_order_relaxed);
     snap.send_queue_drop_total = c.send_queue_drop_total.load(std::memory_order_relaxed);
     snap.packet_total = c.packet_total.load(std::memory_order_relaxed);

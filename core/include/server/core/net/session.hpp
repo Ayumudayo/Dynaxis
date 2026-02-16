@@ -2,6 +2,7 @@
 
 #include <boost/asio.hpp>
 #include <boost/asio/steady_timer.hpp>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -58,6 +59,7 @@ private:
                                                               std::uint32_t utc_ts_ms32);
     void send_hello();
     void arm_read_timeout();
+    void arm_write_timeout();
     void arm_heartbeat();
 
 public:
@@ -74,8 +76,9 @@ public:
     std::size_t queued_bytes_{0};
     std::shared_ptr<const SessionOptions> options_;
     std::shared_ptr<SharedState> state_;
-    bool stopped_{false};
+    std::atomic<bool> stopped_{false};
     boost::asio::steady_timer read_timer_{socket_.get_executor()};
+    boost::asio::steady_timer write_timer_{socket_.get_executor()};
     boost::asio::steady_timer heartbeat_timer_{socket_.get_executor()};
     std::uint32_t tx_seq_{1};
     std::function<void(std::shared_ptr<Session>)> on_close_{};

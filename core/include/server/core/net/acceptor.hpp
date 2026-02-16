@@ -3,7 +3,6 @@
 #include <memory>
 #include <functional>
 #include <boost/asio.hpp>
-#include <memory>
 
 namespace server::core {
 
@@ -30,11 +29,13 @@ public:
     void stop();
 
 private:
+    void schedule_accept_retry();
     void do_accept();
 
     asio::io_context& io_;
     asio::ip::tcp::acceptor acceptor_;
-    bool running_ {false};
+    asio::steady_timer accept_retry_timer_;
+    std::atomic<bool> running_{false};
     Dispatcher& dispatcher_;
     BufferManager& buffer_manager_;
     std::shared_ptr<const SessionOptions> options_;
@@ -43,4 +44,3 @@ private:
 };
 
 } // namespace server::core
-

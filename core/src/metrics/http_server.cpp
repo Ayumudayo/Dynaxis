@@ -14,6 +14,26 @@ namespace asio = boost::asio;
 using tcp = asio::ip::tcp;
 namespace corelog = server::core::log;
 
+constexpr std::size_t kMaxHttpHeaderBytes = 16 * 1024;
+constexpr std::size_t kMaxHttpRequestLineBytes = 2048;
+constexpr std::size_t kMaxHttpHeaderCount = 64;
+constexpr std::size_t kMaxHttpTargetBytes = 2048;
+
+void close_socket_gracefully(const std::shared_ptr<tcp::socket>& sock) {
+    if (!sock) {
+        return;
+    }
+
+    try {
+        sock->shutdown(tcp::socket::shutdown_both);
+    } catch (...) {
+    }
+    try {
+        sock->close();
+    } catch (...) {
+    }
+}
+
 std::string trim_ascii(std::string_view value) {
     std::size_t begin = 0;
     while (begin < value.size() && std::isspace(static_cast<unsigned char>(value[begin])) != 0) {
@@ -89,14 +109,23 @@ void MetricsHttpServer::do_accept() {
         if (!ec) {
             asio::post(io_context_->get_executor(), [this, sock]() {
                 try {
-                    asio::streambuf request_buf;
+                    asio::streambuf request_buf(kMaxHttpHeaderBytes);
                     boost::system::error_code read_ec;
                     asio::read_until(*sock, request_buf, "\r\n\r\n", read_ec);
                     if (read_ec && read_ec != asio::error::eof) {
-                        try {
-                            sock->close();
-                        } catch (...) {
-                        }
+                        close_socket_gracefully(sock);
+                        return;
+                    }
+
+                    if (request_buf.size() > kMaxHttpHeaderBytes) {
+                        const std::string body = "Request Header Fields Too Large\r\n";
+                        const std::string hdr = "HTTP/1.1 431 Request Header Fields Too Large\r\n"
+                            "Content-Type: text/plain; charset=utf-8\r\n"
+                            "Content-Length: " + std::to_string(body.size()) + "\r\n"
+                            "Connection: close\r\n\r\n";
+                        const std::vector<asio::const_buffer> bufs{asio::buffer(hdr), asio::buffer(body)};
+                        asio::write(*sock, bufs);
+                        close_socket_gracefully(sock);
                         return;
                     }
 
@@ -104,21 +133,69 @@ void MetricsHttpServer::do_accept() {
                     std::string request_line;
                     std::getline(request_stream, request_line);
                     if (!request_line.empty() && request_line.back() == '\r') request_line.pop_back();
+                    if (request_line.empty() || request_line.size() > kMaxHttpRequestLineBytes) {
+                        const std::string body = "Bad Request\r\n";
+                        const std::string hdr = "HTTP/1.1 400 Bad Request\r\n"
+                            "Content-Type: text/plain; charset=utf-8\r\n"
+                            "Content-Length: " + std::to_string(body.size()) + "\r\n"
+                            "Connection: close\r\n\r\n";
+                        const std::vector<asio::const_buffer> bufs{asio::buffer(hdr), asio::buffer(body)};
+                        asio::write(*sock, bufs);
+                        close_socket_gracefully(sock);
+                        return;
+                    }
 
                     MetricsHttpServer::HttpRequest request;
                     {
                         std::istringstream line_stream(request_line);
-                        line_stream >> request.method >> request.target;
+                        std::string version;
+                        line_stream >> request.method >> request.target >> version;
+                        if (request.method.empty() || request.target.empty() || version.empty()) {
+                            const std::string body = "Bad Request\r\n";
+                            const std::string hdr = "HTTP/1.1 400 Bad Request\r\n"
+                                "Content-Type: text/plain; charset=utf-8\r\n"
+                                "Content-Length: " + std::to_string(body.size()) + "\r\n"
+                                "Connection: close\r\n\r\n";
+                            const std::vector<asio::const_buffer> bufs{asio::buffer(hdr), asio::buffer(body)};
+                            asio::write(*sock, bufs);
+                            close_socket_gracefully(sock);
+                            return;
+                        }
                     }
                     if (request.target.empty()) request.target = "/metrics";
+                    if (request.target.size() > kMaxHttpTargetBytes) {
+                        const std::string body = "URI Too Long\r\n";
+                        const std::string hdr = "HTTP/1.1 414 URI Too Long\r\n"
+                            "Content-Type: text/plain; charset=utf-8\r\n"
+                            "Content-Length: " + std::to_string(body.size()) + "\r\n"
+                            "Connection: close\r\n\r\n";
+                        const std::vector<asio::const_buffer> bufs{asio::buffer(hdr), asio::buffer(body)};
+                        asio::write(*sock, bufs);
+                        close_socket_gracefully(sock);
+                        return;
+                    }
 
                     std::string header_line;
+                    std::size_t header_count = 0;
                     while (std::getline(request_stream, header_line)) {
                         if (!header_line.empty() && header_line.back() == '\r') {
                             header_line.pop_back();
                         }
                         if (header_line.empty()) {
                             break;
+                        }
+
+                        ++header_count;
+                        if (header_count > kMaxHttpHeaderCount) {
+                            const std::string body = "Request Header Fields Too Large\r\n";
+                            const std::string hdr = "HTTP/1.1 431 Request Header Fields Too Large\r\n"
+                                "Content-Type: text/plain; charset=utf-8\r\n"
+                                "Content-Length: " + std::to_string(body.size()) + "\r\n"
+                                "Connection: close\r\n\r\n";
+                            const std::vector<asio::const_buffer> bufs{asio::buffer(hdr), asio::buffer(body)};
+                            asio::write(*sock, bufs);
+                            close_socket_gracefully(sock);
+                            return;
                         }
 
                         const auto colon = header_line.find(':');
@@ -144,12 +221,28 @@ void MetricsHttpServer::do_accept() {
                     }
 
                     const std::string& target = request.target;
+                    const bool is_get = request.method == "GET";
+                    const bool is_head = request.method == "HEAD";
+                    const bool built_in_target =
+                        target == "/" ||
+                        target == "/metrics" ||
+                        target == "/logs" ||
+                        target == "/healthz" ||
+                        target == "/health" ||
+                        target == "/readyz" ||
+                        target == "/ready";
 
                     std::string body;
                     std::string status = "200 OK";
                     std::string content_type = "text/plain; version=0.0.4";
+                    std::string extra_headers;
 
-                    if (target == "/logs") {
+                    if (built_in_target && !is_get && !is_head) {
+                        status = "405 Method Not Allowed";
+                        content_type = "text/plain; charset=utf-8";
+                        body = "Method Not Allowed\r\n";
+                        extra_headers = "Allow: GET, HEAD\r\n";
+                    } else if (target == "/logs") {
                         if (logs_callback_) {
                             content_type = "text/plain; charset=utf-8";
                             body = logs_callback_();
@@ -202,41 +295,20 @@ void MetricsHttpServer::do_accept() {
                     }
 
                     std::string hdr = "HTTP/1.1 " + status + "\r\nContent-Type: " + content_type +
-                        "\r\nContent-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n";
+                        "\r\nContent-Length: " + std::to_string(body.size()) + "\r\n" + extra_headers + "Connection: close\r\n\r\n";
                     std::vector<asio::const_buffer> bufs;
                     bufs.emplace_back(asio::buffer(hdr));
-                    if (!body.empty()) {
+                    if (!body.empty() && !is_head) {
                         bufs.emplace_back(asio::buffer(body));
                     }
                     asio::write(*sock, bufs);
-                    try {
-                        sock->shutdown(tcp::socket::shutdown_both);
-                    } catch (...) {
-                    }
-                    try {
-                        sock->close();
-                    } catch (...) {
-                    }
+                    close_socket_gracefully(sock);
                 } catch (const std::exception& e) {
                     corelog::error(std::string("MetricsHttpServer request handling exception: ") + e.what());
-                    try {
-                        sock->shutdown(tcp::socket::shutdown_both);
-                    } catch (...) {
-                    }
-                    try {
-                        sock->close();
-                    } catch (...) {
-                    }
+                    close_socket_gracefully(sock);
                 } catch (...) {
                     corelog::error("MetricsHttpServer request handling unknown exception");
-                    try {
-                        sock->shutdown(tcp::socket::shutdown_both);
-                    } catch (...) {
-                    }
-                    try {
-                        sock->close();
-                    } catch (...) {
-                    }
+                    close_socket_gracefully(sock);
                 }
             });
         }
