@@ -7,6 +7,7 @@
 - `/metrics`
 - `/healthz`, `/readyz`
 - `/admin` (browser UI, source: `tools/admin_app/admin_ui.html`)
+- `/api/v1/auth/context` (JSON)
 - `/api/v1/overview` (JSON)
 - `/api/v1/instances` (JSON)
 - `/api/v1/instances/{instance_id}` (JSON)

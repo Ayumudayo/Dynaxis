@@ -101,6 +101,24 @@ Phase 1 구현 스펙(현재):
 
 ## 6. Endpoint 계약
 
+### 6.0 GET /api/v1/auth/context
+
+목적:
+
+- 현재 요청의 인증 컨텍스트(actor/role/mode) 확인
+
+응답 필드:
+
+- `actor`
+- `role`
+- `mode`
+- `headers.user`, `headers.role`
+
+메모:
+
+- UI는 해당 endpoint를 사용해 현재 로그인 컨텍스트를 표시한다.
+- `mode=off`면 내부망 접근 정책 하에서 익명 `viewer` 컨텍스트로 응답한다.
+
 ### 6.1 GET /api/v1/overview
 
 목적:
@@ -206,6 +224,7 @@ Phase 1 구현 스펙(현재):
 
 | Endpoint | viewer | operator | admin |
 | --- | --- | --- | --- |
+| GET /api/v1/auth/context | allow | allow | allow |
 | GET /api/v1/overview | allow | allow | allow |
 | GET /api/v1/instances | allow | allow | allow |
 | GET /api/v1/instances/{instance_id} | allow | allow | allow |

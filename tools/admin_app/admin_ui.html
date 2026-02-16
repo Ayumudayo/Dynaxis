@@ -51,6 +51,14 @@
       color: #dce9ee;
       font-size: 13px;
     }
+    .hero-note {
+      margin: 8px 0 0;
+      font-size: 12px;
+      color: #dce9ee;
+    }
+    .hero-note.ok { color: #d8ffeb; }
+    .hero-note.warn { color: #ffe9ca; }
+    .hero-note.err { color: #ffe1e1; }
     .hero-row {
       margin-top: 12px;
       display: flex;
@@ -269,7 +277,7 @@
       <p>Read-only control plane for cluster status, routing visibility, and write-behind signals.</p>
       <div class="hero-row">
         <div class="row-left">
-          <button id="refresh-now" class="btn">Refresh now</button>
+          <button id="refresh-now" type="button" class="btn">Refresh now</button>
           <label class="chip" title="auto refresh toggle"><input id="auto-refresh" type="checkbox" checked /> Auto refresh</label>
           <label class="chip">Interval
             <select id="refresh-interval" style="margin-left:4px;border:none;background:transparent;color:inherit;">
@@ -281,10 +289,12 @@
           </label>
         </div>
         <div class="row-right">
+          <span id="auth-chip" class="chip warn">Auth unknown</span>
           <span id="overall-chip" class="chip warn">Loading</span>
           <span id="last-updated" class="chip">never</span>
         </div>
       </div>
+      <p id="auth-hint" class="hero-note warn">Checking access context...</p>
     </section>
 
     <section class="grid">
@@ -361,6 +371,8 @@
       autoRefresh: document.getElementById('auto-refresh'),
       refreshInterval: document.getElementById('refresh-interval'),
       overallChip: document.getElementById('overall-chip'),
+      authChip: document.getElementById('auth-chip'),
+      authHint: document.getElementById('auth-hint'),
       lastUpdated: document.getElementById('last-updated'),
       modePill: document.getElementById('mode-pill'),
       overviewCards: document.getElementById('overview-cards'),
@@ -380,7 +392,7 @@
       footerMeta: document.getElementById('footer-meta')
     };
 
-    const state = { timer: null, refreshMs: 5000, inFlight: false };
+    const state = { timer: null, refreshMs: 5000, inFlight: false, authMode: 'unknown' };
 
     function setChip(node, text, kind) {
       node.textContent = text;
@@ -390,6 +402,14 @@
 
     function asError(text) {
       return '<div class="error-box">' + text + '</div>';
+    }
+
+    function detailsText(details) {
+      if (!details || typeof details !== 'object') {
+        return '';
+      }
+      const pairs = Object.entries(details).map(([k, v]) => k + '=' + String(v));
+      return pairs.join(', ');
     }
 
     function fmtTime(ms) {
@@ -424,6 +444,7 @@
           status: res.status,
           code: err.code || 'HTTP_ERROR',
           message: err.message || ('HTTP ' + res.status),
+          details: err.details || null,
         };
       } catch (e) {
         return {
@@ -431,8 +452,57 @@
           status: 0,
           code: 'NETWORK_ERROR',
           message: e && e.message ? e.message : 'network error',
+          details: null,
         };
       }
+    }
+
+    function applyAuthError(source, res) {
+      if (!res || (res.status !== 401 && res.status !== 403)) {
+        return false;
+      }
+      const detail = detailsText(res.details);
+      const reason = res.status === 403
+        ? 'Access denied for the current role.'
+        : 'Authentication is required.';
+      const suffix = detail ? (' Details: ' + detail + '.') : '';
+      setChip(dom.authChip, res.status === 403 ? 'Forbidden' : 'Unauthorized', 'err');
+      dom.authHint.textContent = source + ': ' + reason + suffix + ' Configure trusted proxy headers or bearer token.';
+      dom.authHint.className = 'hero-note err';
+      return true;
+    }
+
+    async function refreshAuthContext() {
+      const res = await apiGet('/api/v1/auth/context');
+      if (!res.ok) {
+        if (!applyAuthError('Auth context', res)) {
+          setChip(dom.authChip, 'Auth unknown', 'warn');
+          dom.authHint.textContent = 'Unable to resolve access context: ' + res.code + ' - ' + res.message;
+          dom.authHint.className = 'hero-note warn';
+        }
+        return false;
+      }
+
+      const data = res.data || {};
+      const actor = data.actor || 'anonymous';
+      const role = data.role || 'viewer';
+      const mode = data.mode || 'unknown';
+      state.authMode = mode;
+
+      const userHeader = data.headers && data.headers.user ? data.headers.user : 'x-admin-user';
+      const roleHeader = data.headers && data.headers.role ? data.headers.role : 'x-admin-role';
+
+      const chipKind = mode === 'off' ? 'warn' : 'ok';
+      setChip(dom.authChip, role + ' @ ' + actor, chipKind);
+
+      if (mode === 'off') {
+        dom.authHint.textContent = 'Auth mode: off (internal network only).';
+        dom.authHint.className = 'hero-note warn';
+      } else {
+        dom.authHint.textContent = 'Auth mode: ' + mode + ' (headers: ' + userHeader + ', ' + roleHeader + ').';
+        dom.authHint.className = 'hero-note ok';
+      }
+      return true;
     }
 
     function renderOverview(data) {
@@ -520,6 +590,7 @@
       const res = await apiGet('/api/v1/overview');
       if (!res.ok) {
         dom.overviewError.innerHTML = asError('Overview: ' + res.code + ' - ' + res.message);
+        applyAuthError('Overview', res);
         setChip(dom.overallChip, 'Degraded', 'warn');
         return false;
       }
@@ -530,6 +601,7 @@
     async function refreshInstances() {
       const res = await apiGet('/api/v1/instances');
       if (!res.ok) {
+        applyAuthError('Instances', res);
         setChip(dom.instancesChip, 'degraded', 'warn');
         dom.instancesError.innerHTML = asError('Instances: ' + res.code + ' - ' + res.message);
         renderInstances([]);
@@ -544,6 +616,7 @@
     async function refreshWorker() {
       const res = await apiGet('/api/v1/worker/write-behind');
       if (!res.ok) {
+        applyAuthError('Worker', res);
         setChip(dom.workerChip, 'degraded', 'warn');
         dom.workerError.innerHTML = asError('Worker: ' + res.code + ' - ' + res.message);
         dom.workerCards.innerHTML = '';
@@ -556,6 +629,7 @@
     async function refreshLinks() {
       const res = await apiGet('/api/v1/metrics/links');
       if (!res.ok) {
+        applyAuthError('Links', res);
         dom.linksError.innerHTML = asError('Links: ' + res.code + ' - ' + res.message);
         dom.metricsLinks.innerHTML = '';
         return false;
@@ -568,6 +642,7 @@
       dom.sessionResult.innerHTML = '<div class="muted">Loading...</div>';
       const res = await apiGet('/api/v1/sessions/' + encodeURIComponent(clientId));
       if (!res.ok) {
+        applyAuthError('Session lookup', res);
         dom.sessionResult.innerHTML = asError('Session lookup: ' + res.code + ' - ' + res.message);
         return;
       }
@@ -589,13 +664,14 @@
     async function refreshAll() {
       if (state.inFlight) return;
       state.inFlight = true;
+      const authOk = await refreshAuthContext();
       const results = await Promise.all([refreshOverview(), refreshInstances(), refreshWorker()]);
       await refreshLinks();
-      const ok = results[0] && results[1] && results[2];
+      const ok = authOk && results[0] && results[1] && results[2];
       setChip(dom.overallChip, ok ? 'Healthy' : 'Degraded', ok ? 'ok' : 'warn');
       const now = new Date();
       dom.lastUpdated.textContent = now.toLocaleTimeString();
-      dom.footerMeta.textContent = 'Last refresh: ' + now.toISOString();
+      dom.footerMeta.textContent = 'Last refresh: ' + now.toISOString() + ' | auth=' + state.authMode;
       state.inFlight = false;
     }
 

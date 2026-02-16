@@ -98,6 +98,15 @@ def main() -> int:
         if "meta" not in overview or "request_id" not in overview["meta"]:
             raise RuntimeError("overview meta.request_id missing")
 
+        auth_context = load_json("/api/v1/auth/context")
+        auth_data = auth_context.get("data", {})
+        if auth_data.get("mode") != "off":
+            raise RuntimeError("auth context mode mismatch")
+        if auth_data.get("actor") != "anonymous":
+            raise RuntimeError("auth context actor mismatch")
+        if auth_data.get("role") != "viewer":
+            raise RuntimeError("auth context role mismatch")
+
         instances = wait_for_instances()
         instances_data = instances.get("data", {})
         items = instances_data.get("items", [])

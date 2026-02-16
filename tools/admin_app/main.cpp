@@ -249,6 +249,20 @@ AdminAuthMode parse_auth_mode(std::string_view raw) {
     return AdminAuthMode::kOff;
 }
 
+std::string_view auth_mode_to_string(AdminAuthMode mode) {
+    switch (mode) {
+    case AdminAuthMode::kOff:
+        return "off";
+    case AdminAuthMode::kHeader:
+        return "header";
+    case AdminAuthMode::kBearer:
+        return "bearer";
+    case AdminAuthMode::kHeaderOrBearer:
+        return "header_or_bearer";
+    }
+    return "off";
+}
+
 std::optional<std::string> parse_bearer_token(std::string_view authorization_value) {
     constexpr std::string_view kBearerPrefix = "Bearer ";
     if (authorization_value.size() < kBearerPrefix.size()) {
@@ -376,6 +390,9 @@ std::string json_details(std::string_view key, std::string_view value) {
 }
 
 std::string resource_from_path(std::string_view path) {
+    if (path == "/api/v1/auth/context") {
+        return "auth_context";
+    }
     if (path == "/api/v1/overview") {
         return "overview";
     }
@@ -980,6 +997,10 @@ private:
         stream << "# TYPE admin_overview_requests_total counter\n";
         stream << "admin_overview_requests_total " << overview_requests_total_.load(std::memory_order_relaxed) << "\n";
 
+        stream << "# TYPE admin_auth_context_requests_total counter\n";
+        stream << "admin_auth_context_requests_total "
+               << auth_context_requests_total_.load(std::memory_order_relaxed) << "\n";
+
         stream << "# TYPE admin_instances_requests_total counter\n";
         stream << "admin_instances_requests_total " << instances_requests_total_.load(std::memory_order_relaxed) << "\n";
 
@@ -1094,6 +1115,11 @@ private:
                     "\",\"value\":\"" + json_escape(query.error_value) + "\"}"));
         }
 
+        if (path == "/api/v1/auth/context") {
+            auth_context_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(handle_auth_context(request_id, auth, query.options));
+        }
+
         if (path == "/api/v1/overview") {
             overview_requests_total_.fetch_add(1, std::memory_order_relaxed);
             return finalize(handle_overview(request_id, query.options));
@@ -1129,6 +1155,22 @@ private:
 
         http_errors_total_.fetch_add(1, std::memory_order_relaxed);
         return finalize(json_error(request_id, "404 Not Found", "NOT_FOUND", "endpoint not found"));
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_auth_context(std::uint64_t request_id, const AuthContext& auth, const QueryOptions& options) {
+        (void)options;
+        std::ostringstream data;
+        data << "{";
+        data << "\"actor\":\"" << json_escape(auth.actor) << "\",";
+        data << "\"role\":\"" << json_escape(auth.role) << "\",";
+        data << "\"mode\":\"" << json_escape(auth_mode_to_string(auth_mode_)) << "\",";
+        data << "\"headers\":{";
+        data << "\"user\":\"" << json_escape(auth_user_header_name_) << "\",";
+        data << "\"role\":\"" << json_escape(auth_role_header_name_) << "\"";
+        data << "}";
+        data << "}";
+        return json_ok(request_id, data.str());
     }
 
     server::core::metrics::MetricsHttpServer::RouteResponse
@@ -1602,6 +1644,7 @@ private:
     std::atomic<std::uint64_t> http_requests_total_{0};
     std::atomic<std::uint64_t> http_errors_total_{0};
     std::atomic<std::uint64_t> overview_requests_total_{0};
+    std::atomic<std::uint64_t> auth_context_requests_total_{0};
     std::atomic<std::uint64_t> instances_requests_total_{0};
     std::atomic<std::uint64_t> session_lookup_requests_total_{0};
     std::atomic<std::uint64_t> worker_requests_total_{0};

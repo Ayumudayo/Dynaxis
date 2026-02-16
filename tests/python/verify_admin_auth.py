@@ -111,6 +111,18 @@ def main() -> int:
             raise RuntimeError("header auth request returned unexpected payload")
 
         status, _, payload, _ = request_with_payload(
+            f"{base_url}/api/v1/auth/context",
+            headers={"X-Admin-User": "ops", "X-Admin-Role": "viewer"},
+        )
+        if status != 200:
+            raise RuntimeError(f"header auth context expected 200, got {status}")
+        auth_data = (payload or {}).get("data", {})
+        if auth_data.get("actor") != "ops" or auth_data.get("role") != "viewer":
+            raise RuntimeError("header auth context mismatch")
+        if auth_data.get("mode") != "header_or_bearer":
+            raise RuntimeError("header auth context mode mismatch")
+
+        status, _, payload, _ = request_with_payload(
             f"{base_url}/api/v1/overview",
             headers={"Authorization": f"Bearer {TOKEN}"},
         )
@@ -118,6 +130,18 @@ def main() -> int:
             raise RuntimeError(f"bearer auth request expected 200, got {status}")
         if (payload or {}).get("data", {}).get("service") != "admin_app":
             raise RuntimeError("bearer auth request returned unexpected payload")
+
+        status, _, payload, _ = request_with_payload(
+            f"{base_url}/api/v1/auth/context",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        if status != 200:
+            raise RuntimeError(f"bearer auth context expected 200, got {status}")
+        auth_data = (payload or {}).get("data", {})
+        if auth_data.get("actor") != "ci-bearer" or auth_data.get("role") != "viewer":
+            raise RuntimeError("bearer auth context mismatch")
+        if auth_data.get("mode") != "header_or_bearer":
+            raise RuntimeError("bearer auth context mode mismatch")
 
         expect_error(
             base_url,
