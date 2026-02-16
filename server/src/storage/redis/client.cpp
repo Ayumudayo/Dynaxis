@@ -264,6 +264,36 @@ public:
         }
     }
 
+    bool mget(const std::vector<std::string>& keys,
+              std::vector<std::optional<std::string>>& out) override {
+        try {
+            out.clear();
+            if (keys.empty()) {
+                return true;
+            }
+            std::vector<sw::redis::OptionalString> raw;
+            raw.reserve(keys.size());
+            redis_->mget(keys.begin(), keys.end(), std::back_inserter(raw));
+            out.reserve(raw.size());
+            for (const auto& value : raw) {
+                if (value) {
+                    out.emplace_back(*value);
+                } else {
+                    out.emplace_back(std::nullopt);
+                }
+            }
+            return out.size() == keys.size();
+        } catch (const std::exception& e) {
+            server::core::log::warn(std::string("Redis MGET failed: ") + e.what());
+            out.clear();
+            return false;
+        } catch (...) {
+            server::core::log::warn("Redis MGET failed: unknown");
+            out.clear();
+            return false;
+        }
+    }
+
     bool set_if_not_exists(const std::string& key, const std::string& value, unsigned int ttl_sec) override {
         try {
             std::string ttl = std::to_string(ttl_sec);
@@ -493,6 +523,10 @@ public:
     bool xack(const std::string& /*key*/, const std::string& /*group*/, const std::string& /*id*/) override { return true; }
     bool del(const std::string& key) override { (void)key; return true; }
     std::optional<std::string> get(const std::string& key) override { (void)key; return std::optional<std::string>{}; }
+    bool mget(const std::vector<std::string>& keys, std::vector<std::optional<std::string>>& out) override {
+        out.assign(keys.size(), std::nullopt);
+        return true;
+    }
     bool set_if_not_exists(const std::string& key, const std::string& value, unsigned int ttl_sec) override { (void)key; (void)value; (void)ttl_sec; return true; }
     bool set_if_equals(const std::string& key, const std::string& expected, const std::string& value, unsigned int ttl_sec) override { (void)key; (void)expected; (void)value; (void)ttl_sec; return true; }
     bool del_if_equals(const std::string& key, const std::string& expected) override { (void)key; (void)expected; return true; }

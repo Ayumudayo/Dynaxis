@@ -1132,8 +1132,10 @@ bool ChatService::load_recent_messages_from_cache(
     if (ids.empty()) {
         return false;
     }
-    std::vector<server::wire::v1::StateSnapshot::SnapshotMessage> parsed;
-    parsed.reserve(ids.size());
+
+    std::vector<std::uint64_t> valid_ids;
+    valid_ids.reserve(ids.size());
+
     bool partial_hit = false;
     for (const auto& id_str : ids) {
         char* endptr = nullptr;
@@ -1143,18 +1145,58 @@ bool ChatService::load_recent_messages_from_cache(
             corelog::warn("recent history cache miss: invalid id entry=" + id_str);
             continue;
         }
-        auto payload = redis_->get(make_recent_message_key(value));
-        if (!payload) {
-            partial_hit = true;
-            continue;
+        valid_ids.emplace_back(value);
+    }
+
+    if (valid_ids.empty()) {
+        return false;
+    }
+
+    std::vector<server::wire::v1::StateSnapshot::SnapshotMessage> parsed;
+    parsed.reserve(valid_ids.size());
+
+    bool batch_loaded = false;
+    {
+        std::vector<std::string> keys;
+        keys.reserve(valid_ids.size());
+        for (const auto id : valid_ids) {
+            keys.emplace_back(make_recent_message_key(id));
         }
-        server::wire::v1::StateSnapshot::SnapshotMessage message;
-        if (!message.ParseFromString(*payload)) {
-            partial_hit = true;
-            corelog::warn("recent history cache miss: corrupted payload");
-            continue;
+
+        std::vector<std::optional<std::string>> payloads;
+        if (redis_->mget(keys, payloads) && payloads.size() == keys.size()) {
+            batch_loaded = true;
+            for (std::size_t i = 0; i < payloads.size(); ++i) {
+                if (!payloads[i].has_value()) {
+                    partial_hit = true;
+                    continue;
+                }
+                server::wire::v1::StateSnapshot::SnapshotMessage message;
+                if (!message.ParseFromString(*payloads[i])) {
+                    partial_hit = true;
+                    corelog::warn("recent history cache miss: corrupted payload");
+                    continue;
+                }
+                parsed.emplace_back(std::move(message));
+            }
         }
-        parsed.emplace_back(std::move(message));
+    }
+
+    if (!batch_loaded) {
+        for (const auto id : valid_ids) {
+            auto payload = redis_->get(make_recent_message_key(id));
+            if (!payload) {
+                partial_hit = true;
+                continue;
+            }
+            server::wire::v1::StateSnapshot::SnapshotMessage message;
+            if (!message.ParseFromString(*payload)) {
+                partial_hit = true;
+                corelog::warn("recent history cache miss: corrupted payload");
+                continue;
+            }
+            parsed.emplace_back(std::move(message));
+        }
     }
     if (parsed.empty()) {
         return false;

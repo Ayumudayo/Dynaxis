@@ -129,6 +129,10 @@ public:
     bool del(const std::string& key) override { return true; }
     
     std::optional<std::string> get(const std::string&) override { return std::nullopt; }
+    bool mget(const std::vector<std::string>& keys, std::vector<std::optional<std::string>>& out) override {
+        out.assign(keys.size(), std::nullopt);
+        return true;
+    }
     
     bool set_if_not_exists(const std::string&, const std::string&, unsigned int) override { return true; }
     bool set_if_equals(const std::string&, const std::string&, const std::string&, unsigned int) override { return true; }

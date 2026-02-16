@@ -56,6 +56,19 @@ public:
         if (it == kv_.end()) return std::nullopt;
         return it->second;
     }
+    bool mget(const std::vector<std::string>& keys, std::vector<std::optional<std::string>>& out) override {
+        out.clear();
+        out.reserve(keys.size());
+        for (const auto& key : keys) {
+            auto it = kv_.find(key);
+            if (it == kv_.end()) {
+                out.emplace_back(std::nullopt);
+            } else {
+                out.emplace_back(it->second);
+            }
+        }
+        return true;
+    }
     bool set_if_not_exists(const std::string&, const std::string&, unsigned int) override { return true; }
     bool set_if_equals(const std::string&, const std::string&, const std::string&, unsigned int) override { return true; }
     bool del_if_equals(const std::string&, const std::string&) override { return true; }

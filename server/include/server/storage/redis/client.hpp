@@ -46,6 +46,11 @@ public:
     
     // String: 값 조회
     virtual std::optional<std::string> get(const std::string& key) = 0;
+
+    // String: 다중 값 조회 (MGET)
+    // out.size() 는 keys.size() 와 동일해야 하며, miss 는 std::nullopt 로 반환합니다.
+    virtual bool mget(const std::vector<std::string>& keys,
+                      std::vector<std::optional<std::string>>& out) = 0;
     
     // String: 키가 없을 때만 설정 (분산 락 구현 등에 사용)
     virtual bool set_if_not_exists(const std::string& key, const std::string& value, unsigned int ttl_sec) = 0;
