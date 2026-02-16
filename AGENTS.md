@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
 Generated: 2026-02-17
-Commit: e38c7e4
+Commit: 4a25352
 Branch: Huge-Refactor
 
 ## Overview
@@ -23,7 +23,6 @@ Knights는 C++20 기반 분산 채팅 스택입니다: HAProxy(TCP) -> `gateway_
 ├─ docs/                 # 설계/운영 문서
 ├─ external/              # 3rd-party (imgui 등)
 ├─ Sapphire/              # 참고용 서브프로젝트(별도 레포; Knights 스택/빌드와 무관)
-├─ prometheus/            # legacy Prometheus 샘플(표준은 docker/observability)
 ├─ proto/                # Protobuf 정의
 ├─ protocol/             # wire map(JSON) 등 프로토콜 소스
 ├─ tests/                # GTest + python 검증
@@ -109,7 +108,7 @@ python tools/gen_opcode_docs.py --check
 - 코드/타깃/산출물/네임스페이스에 `Knights/knights/kproj` 문자열 사용 금지(`docs/repo-structure.md`).
 - CMake에서 소스 수집을 `GLOB`로 처리 금지(리뷰 불가/증분 빌드 혼선).
 - `core/`가 `server/`/`gateway/` 구현에 의존하도록 만들지 말 것(단방향 의존).
-- `scripts/run_full_stack.*`, `scripts/run_haproxy_gateways.*`는 deprecated wrapper(직접 확장/추가 금지; `scripts/deploy_docker.ps1`/`scripts/run_full_stack_observability.ps1` 사용).
+- Docker runtime 실행은 `scripts/deploy_docker.ps1`(또는 `scripts/run_full_stack_observability.ps1`) 경로만 사용하고, 임의 wrapper를 추가하지 않는다.
 - 비밀정보/개인정보를 로그에 남기지 말 것(운영/샘플 토큰 포함). `.env`는 커밋 금지.
 
 ## Notes
@@ -118,6 +117,5 @@ python tools/gen_opcode_docs.py --check
 - Gateway 하드닝 기본값: `GATEWAY_BACKEND_CONNECT_TIMEOUT_MS=5000`, `GATEWAY_BACKEND_SEND_QUEUE_MAX_BYTES=262144`; 관련 장애 카운터는 `gateway_backend_*` 메트릭으로 노출.
 - wb_worker는 Redis/DB 의존성 정상화 전 `ready=false`를 유지하고, DB 재연결 시 지수 백오프(+jitter)를 사용한다.
 - `WB_ACK_ON_ERROR=1` + `WB_DLQ_ON_ERROR=0` 조합은 실패 이벤트 유실을 유발할 수 있으므로 운영에서 주의(관측: `wb_error_drop_total`).
-- `prometheus/prometheus.yml`는 단일 job 샘플 구성(legacy)이며, 표준은 `docker/observability/prometheus/prometheus.yml`.
 - `Sapphire/`는 참고용으로 동봉된 별도 프로젝트이며, Knights의 런타임/빌드 대상으로 취급하지 않는다.
 - clangd/LSP 정밀 진단이 필요하면 `pwsh scripts/configure_windows_ninja.ps1`로 `build-windows-ninja/compile_commands.json`를 생성한 뒤, repo root에 `compile_commands.json`를 두면 된다(파일은 `.gitignore` 처리됨).

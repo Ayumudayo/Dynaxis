@@ -48,19 +48,18 @@ pwsh scripts/run_full_stack_observability.ps1
 3. `WRITE_BEHIND_ENABLED=1` 설정 시 `wb_worker`가 backlog를 처리하는지 확인
 
 ## 3. Prod 환경 (AWS + Kubernetes)
+> 참고: 이 저장소에는 Helm chart(`charts/*`)가 포함되어 있지 않다. Prod chart/IaC는 별도 운영 저장소에서 관리한다.
+
 ### 3.1 인프라 (Terraform)
 1. `terraform init && terraform apply` 로 VPC/Subnet/SecurityGroup/ElastiCache/RDS/SecretsManager 생성
 2. 출력물: `redis_endpoint`, `postgres_endpoint`, `server_advertise_host`
 3. SecretsManager 에 DB/Redis URI 저장 → Helm values 에 reference
 
-### 3.2 애플리케이션 배포 (Helm)
-```bash
-helm upgrade --install server-app charts/server-app -f values/prod.yaml \
-  --set env.DB_URI=secret://knights/db_uri \
-  --set env.REDIS_URI=secret://knights/redis_uri
-helm upgrade --install gateway charts/gateway -f values/prod.yaml
-```
-각 차트에는 Deployment(+HPA), Service, ConfigMap(환경 변수), Secret(DB/Redis), ServiceMonitor(/metrics), PodDisruptionBudget가 포함돼야 한다.
+### 3.2 애플리케이션 배포 (Helm, 외부 chart 저장소)
+1. 운영 chart 저장소에서 `server-app`, `gateway` chart 버전을 선택한다.
+2. values에 DB/Redis Secret reference, ServiceMonitor(`/metrics`), HPA/PDB 정책을 반영한다.
+3. `helm upgrade --install ...`로 배포하고 rollout 상태를 확인한다.
+4. `gateway`에는 `GATEWAY_BACKEND_CONNECT_TIMEOUT_MS`, `GATEWAY_BACKEND_SEND_QUEUE_MAX_BYTES`를 환경별로 명시한다.
 
 Edge Load Balancer는 클러스터 외부(예: HAProxy, AWS NLB)에서 `gateway` Service로 TCP 트래픽을 분산한다.
 
