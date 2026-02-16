@@ -430,7 +430,7 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
     if (session_directory_ && !client_id.empty() && client_id != "anonymous") {
         if (auto backend_id = session_directory_->find_backend(client_id)) {
             auto it = std::find_if(instances.begin(), instances.end(), [&](const auto& rec) {
-                return rec.instance_id == *backend_id;
+                return rec.instance_id == *backend_id && rec.ready;
             });
             if (it != instances.end()) {
                 return SelectedBackend{*it, true};
@@ -444,7 +444,7 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
     std::vector<server::state::InstanceRecord> candidates;
     candidates.reserve(instances.size());
     std::copy_if(instances.begin(), instances.end(), std::back_inserter(candidates), [](const auto& rec) {
-        return !rec.instance_id.empty() && !rec.host.empty() && rec.port > 0;
+        return rec.ready && !rec.instance_id.empty() && !rec.host.empty() && rec.port > 0;
     });
     if (candidates.empty()) {
         return std::nullopt;

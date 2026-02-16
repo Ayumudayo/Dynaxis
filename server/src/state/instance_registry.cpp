@@ -64,6 +64,7 @@ std::string serialize_json(const InstanceRecord& record) {
     oss << "\"role\":\"" << record.role << "\",";
     oss << "\"capacity\":" << record.capacity << ',';
     oss << "\"active_sessions\":" << record.active_sessions << ',';
+    oss << "\"ready\":" << (record.ready ? "true" : "false") << ',';
     oss << "\"last_heartbeat_ms\":" << record.last_heartbeat_ms;
     oss << '}';
     return oss.str();
@@ -121,6 +122,12 @@ std::optional<InstanceRecord> deserialize_json(std::string_view payload) {
                 record.capacity = static_cast<std::uint32_t>(std::stoul(value));
             } else if (key == "active_sessions") {
                 record.active_sessions = static_cast<std::uint32_t>(std::stoul(value));
+            } else if (key == "ready") {
+                if (value == "true" || value == "1") {
+                    record.ready = true;
+                } else if (value == "false" || value == "0") {
+                    record.ready = false;
+                }
             } else if (key == "last_heartbeat_ms") {
                 record.last_heartbeat_ms = static_cast<std::uint64_t>(std::stoull(value));
             }

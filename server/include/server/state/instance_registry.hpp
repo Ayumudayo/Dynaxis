@@ -33,6 +33,7 @@ struct InstanceRecord {
     std::string role;             // 역할 (예: "chat-server", "login-server")
     std::uint32_t capacity{0};    // 최대 수용 가능한 세션 수
     std::uint32_t active_sessions{0}; // 현재 활성 세션 수
+    bool ready{true};             // 라우팅 가능 상태 (readiness)
     std::uint64_t last_heartbeat_ms{0}; // 마지막 생존 신호 시간 (Epoch ms)
 };
 
