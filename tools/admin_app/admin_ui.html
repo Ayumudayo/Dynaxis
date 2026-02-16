@@ -571,6 +571,9 @@
         ['Instances Total', fmtNum(counts.instances_total)],
         ['Instances Ready', fmtNum(counts.instances_ready)],
         ['Instances Not Ready', fmtNum(counts.instances_not_ready)],
+        ['HTTP Errors', fmtNum(counts.http_errors_total)],
+        ['401 Unauthorized', fmtNum(counts.http_unauthorized_total)],
+        ['403 Forbidden', fmtNum(counts.http_forbidden_total)],
         ['Redis Available', services.redis && services.redis.available ? 'yes' : 'no'],
       ];
       dom.overviewCards.innerHTML = cards

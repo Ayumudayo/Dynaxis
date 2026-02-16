@@ -128,7 +128,7 @@ Phase 1 구현 스펙(현재):
 응답 필드:
 
 - `services`: `gateway`, `server`, `wb_worker`, `haproxy` 요약
-- `counts`: ready/up/down 집계
+- `counts`: ready/up/down 집계 + `http_errors_total`, `http_unauthorized_total`, `http_forbidden_total`
 - `generated_at_ms`
 
 데이터 소스:

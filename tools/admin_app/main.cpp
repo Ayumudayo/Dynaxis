@@ -994,6 +994,14 @@ private:
         stream << "# TYPE admin_http_errors_total counter\n";
         stream << "admin_http_errors_total " << http_errors_total_.load(std::memory_order_relaxed) << "\n";
 
+        stream << "# TYPE admin_http_unauthorized_total counter\n";
+        stream << "admin_http_unauthorized_total "
+               << http_unauthorized_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_http_forbidden_total counter\n";
+        stream << "admin_http_forbidden_total "
+               << http_forbidden_total_.load(std::memory_order_relaxed) << "\n";
+
         stream << "# TYPE admin_overview_requests_total counter\n";
         stream << "admin_overview_requests_total " << overview_requests_total_.load(std::memory_order_relaxed) << "\n";
 
@@ -1067,6 +1075,13 @@ private:
             event.status_code = status_code;
             event.latency_ms = static_cast<std::uint64_t>(elapsed.count());
             event.source_ip = request.source_ip.empty() ? std::string("unknown") : request.source_ip;
+
+            if (status_code == 401) {
+                http_unauthorized_total_.fetch_add(1, std::memory_order_relaxed);
+            } else if (status_code == 403) {
+                http_forbidden_total_.fetch_add(1, std::memory_order_relaxed);
+            }
+
             emit_audit_log(event);
 
             return response;
@@ -1227,7 +1242,11 @@ private:
         data << "\"counts\":{";
         data << "\"instances_total\":" << total << ",";
         data << "\"instances_ready\":" << ready << ",";
-        data << "\"instances_not_ready\":" << (total >= ready ? (total - ready) : 0);
+        data << "\"instances_not_ready\":" << (total >= ready ? (total - ready) : 0) << ",";
+        data << "\"http_errors_total\":" << http_errors_total_.load(std::memory_order_relaxed) << ",";
+        data << "\"http_unauthorized_total\":" << http_unauthorized_total_.load(std::memory_order_relaxed)
+             << ",";
+        data << "\"http_forbidden_total\":" << http_forbidden_total_.load(std::memory_order_relaxed);
         data << "},";
         data << "\"updated_at\":{";
         data << "\"instances_ms\":" << instances_updated_ms << ",";
@@ -1643,6 +1662,8 @@ private:
 
     std::atomic<std::uint64_t> http_requests_total_{0};
     std::atomic<std::uint64_t> http_errors_total_{0};
+    std::atomic<std::uint64_t> http_unauthorized_total_{0};
+    std::atomic<std::uint64_t> http_forbidden_total_{0};
     std::atomic<std::uint64_t> overview_requests_total_{0};
     std::atomic<std::uint64_t> auth_context_requests_total_{0};
     std::atomic<std::uint64_t> instances_requests_total_{0};

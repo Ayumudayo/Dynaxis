@@ -95,6 +95,21 @@ def main() -> int:
         for key in ("gateway", "server", "wb_worker", "haproxy"):
             if key not in services:
                 raise RuntimeError(f"overview.services missing '{key}'")
+
+        counts = data.get("counts", {})
+        for key in (
+            "instances_total",
+            "instances_ready",
+            "instances_not_ready",
+            "http_errors_total",
+            "http_unauthorized_total",
+            "http_forbidden_total",
+        ):
+            if key not in counts:
+                raise RuntimeError(f"overview.counts missing '{key}'")
+            if not isinstance(counts[key], int):
+                raise RuntimeError(f"overview.counts.{key} expected int")
+
         if "meta" not in overview or "request_id" not in overview["meta"]:
             raise RuntimeError("overview meta.request_id missing")
 
