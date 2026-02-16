@@ -15,6 +15,7 @@ Client (host) -> `haproxy` (TCP) -> `gateway-*` -> `server-*`.
 - `server-1`, `server-2`: chat servers (`METRICS_PORT=9090` mapped to host `39091/39092`).
 - `gateway-1`, `gateway-2`: gateways (`METRICS_PORT=6001` mapped to host `36001/36002`).
 - `wb_worker`: write-behind worker (`METRICS_PORT=9090` mapped to host `39093`).
+- `admin-app`: read-only admin control-plane (`METRICS_PORT=39200` mapped to host `39200`, UI at `/admin`).
 - `haproxy`: game traffic on host `6000`, stats+Prometheus metrics on host `8404`.
 
 ## Chat Hook Plugins (Experimental)

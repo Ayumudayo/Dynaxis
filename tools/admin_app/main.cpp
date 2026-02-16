@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -41,6 +42,46 @@ using tcp = asio::ip::tcp;
 constexpr std::uint16_t kDefaultAdminPort = 39200;
 constexpr std::uint16_t kDefaultWorkerMetricsPort = 39093;
 constexpr std::uint32_t kDefaultPollIntervalMs = 1000;
+
+constexpr std::string_view kAdminUiFileName = "admin_ui.html";
+
+constexpr std::string_view kAdminUiFallbackHtml = R"ADMIN(<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Knights Admin Console</title>
+  <style>
+    body { font-family: "Avenir Next", "Trebuchet MS", sans-serif; padding: 24px; background: #f3f6f7; color: #23323a; }
+    .panel { max-width: 700px; margin: 0 auto; padding: 18px; border-radius: 12px; background: #fff; border: 1px solid #dbe3e8; }
+    h1 { margin: 0 0 8px; font-size: 22px; }
+    p { margin: 8px 0; }
+    code { background: #edf3f6; padding: 2px 6px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <section class="panel">
+    <h1>Knights Admin Console</h1>
+    <p>UI asset could not be loaded. Check <code>admin_ui.html</code> next to <code>admin_app</code> binary.</p>
+    <p>API is still available at <code>/api/v1/overview</code>.</p>
+  </section>
+</body>
+</html>
+)ADMIN";
+
+std::string load_admin_ui_html() {
+    std::ifstream in(std::string(kAdminUiFileName), std::ios::binary);
+    if (!in) {
+        return std::string(kAdminUiFallbackHtml);
+    }
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    const auto html = buffer.str();
+    if (html.empty()) {
+        return std::string(kAdminUiFallbackHtml);
+    }
+    return html;
+}
 
 struct HttpUrl {
     std::string host;
@@ -263,6 +304,7 @@ public:
         server::core::app::install_termination_signal_handlers();
 
         load_config();
+        admin_ui_html_ = load_admin_ui_html();
         init_dependencies();
         init_backends();
 
@@ -519,6 +561,20 @@ private:
     std::optional<server::core::metrics::MetricsHttpServer::RouteResponse>
     handle_route(std::string_view method, std::string_view target) {
         const std::string path = strip_query(target);
+
+        if (path == "/admin" || path == "/admin/") {
+            if (method != "GET") {
+                return server::core::metrics::MetricsHttpServer::RouteResponse{
+                    "405 Method Not Allowed",
+                    "text/plain; charset=utf-8",
+                    "Method Not Allowed\n"};
+            }
+            return server::core::metrics::MetricsHttpServer::RouteResponse{
+                "200 OK",
+                "text/html; charset=utf-8",
+                admin_ui_html_};
+        }
+
         if (!path.starts_with("/api/")) {
             return std::nullopt;
         }
@@ -898,6 +954,7 @@ private:
 
     std::string grafana_base_url_;
     std::string prometheus_base_url_;
+    std::string admin_ui_html_;
 
     std::shared_ptr<server::storage::redis::IRedisClient> redis_;
     std::shared_ptr<server::state::RedisInstanceStateBackend> registry_backend_;

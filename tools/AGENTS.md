@@ -7,7 +7,7 @@ Aux binaries + code generation.
 - `tools/wb_emit/main.cpp` + `tools/wb_emit/README.md`: emit test events into Redis Streams (`XADD`).
 - `tools/wb_check/main.cpp` + `tools/wb_check/README.md`: verify Postgres `session_events` contains an `event_id`.
 - `tools/wb_dlq_replayer/main.cpp` + `tools/wb_dlq_replayer/README.md`: replay DLQ stream -> Postgres (and/or dead stream).
-- `tools/admin_app/main.cpp`: read-only admin control-plane (`/metrics`, `/healthz`, `/readyz`, `/api/v1/overview`, `/api/v1/instances`, `/api/v1/sessions/{client_id}`, `/api/v1/worker/write-behind`).
+- `tools/admin_app/main.cpp` + `tools/admin_app/admin_ui.html`: read-only admin control-plane (`/metrics`, `/healthz`, `/readyz`, `/admin`, `/api/v1/overview`, `/api/v1/instances`, `/api/v1/sessions/{client_id}`, `/api/v1/worker/write-behind`, `/api/v1/metrics/links`).
 - `tools/migrations/runner.cpp` + `tools/migrations/*.sql`: schema migrations.
 - `tools/gen_opcodes.py`: generates opcode headers from JSON specs (grouping + `opcode_name()` helpers).
 - `tools/gen_opcode_docs.py`: validates opcode specs and generates `docs/protocol/opcodes.md` (system/game share the same 16-bit space).

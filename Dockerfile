@@ -25,6 +25,7 @@ RUN cmake --build --preset linux-release --target \
     chat_hook_sample \
     chat_hook_sample_v2 \
     chat_hook_tag \
+    admin_app \
     wb_worker \
     wb_dlq_replayer \
     gateway_app \
@@ -54,10 +55,12 @@ WORKDIR /app
 
 # Copy binaries
 COPY --from=builder /app/build-linux/server/server_app .
+COPY --from=builder /app/build-linux/admin_app .
 COPY --from=builder /app/build-linux/wb_worker .
 COPY --from=builder /app/build-linux/wb_dlq_replayer .
 COPY --from=builder /app/build-linux/gateway/gateway_app .
 COPY --from=builder /app/build-linux/migrations_runner .
+COPY tools/admin_app/admin_ui.html /app/admin_ui.html
 
 # Copy sample chat hook plugins
 COPY --from=builder /app/build-linux/server/plugins/10_chat_hook_sample.so /app/plugins/10_chat_hook_sample.so

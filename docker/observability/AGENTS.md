@@ -4,7 +4,7 @@ Prometheus + Grafana configuration (used by the `observability` compose profile)
 
 ## Prometheus
 - Config: `docker/observability/prometheus/prometheus.yml`
-- Jobs: `chat_server`, `gateway`, `write_behind`, `haproxy`, `redis`, `postgres`
+- Jobs: `chat_server`, `gateway`, `write_behind`, `admin_app`, `haproxy`, `redis`, `postgres`
 
 ## Grafana
 - Datasource provisioning: `docker/observability/grafana/provisioning/datasources/prometheus.yml`

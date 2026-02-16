@@ -14,6 +14,8 @@ pwsh scripts/run_full_stack_observability.ps1
 - gateway metrics: `http://127.0.0.1:36001/metrics`, `http://127.0.0.1:36002/metrics`
 - server metrics: `http://127.0.0.1:39091/metrics`, `http://127.0.0.1:39092/metrics`
 - wb_worker metrics: `http://127.0.0.1:39093/metrics`
+- admin console(UI): `http://127.0.0.1:39200/admin`
+- admin API/metrics: `http://127.0.0.1:39200/api/v1/overview`, `http://127.0.0.1:39200/metrics`
 - (health/ready) 각 admin 포트는 `/healthz`, `/readyz`도 제공한다. (server_app는 `/logs`도 제공)
 - (옵션) Prometheus: `http://127.0.0.1:39090/`
 - (옵션) Grafana: `http://127.0.0.1:33000/` (admin password: `GRAFANA_ADMIN_PASSWORD`, 기본 `admin`)
@@ -24,7 +26,7 @@ pwsh scripts/run_full_stack_observability.ps1
 
 1) 스택 기동 확인
 - Prometheus Targets: `http://127.0.0.1:39090/targets`
-- 기대 job: `chat_server`, `gateway`, `write_behind`, `haproxy`, `redis`, `postgres`
+- 기대 job: `chat_server`, `gateway`, `write_behind`, `admin_app`, `haproxy`, `redis`, `postgres`
 
 ```powershell
 # (옵션) 빠른 sanity check
@@ -70,6 +72,13 @@ pwsh scripts/check_observability.ps1
 - Backlog: `wb_pending` (gauge)
 - Flush: `wb_flush_total`, `wb_flush_ok_total`, `wb_flush_fail_total`, `wb_flush_dlq_total` (counters)
 - Batch/Latency: `wb_flush_batch_size_last` (gauge), `wb_flush_commit_ms_last` (gauge)
+
+### admin_app
+- Build: `knights_build_info{...} 1`
+- API traffic: `admin_http_requests_total`, `admin_http_errors_total` (counters)
+- API per-surface: `admin_overview_requests_total`, `admin_instances_requests_total`, `admin_session_lookup_requests_total`, `admin_worker_requests_total` (counters)
+- Polling/cache: `admin_poll_errors_total` (counter), `admin_instances_cached` (gauge)
+- Dependency/state: `admin_redis_available`, `admin_worker_metrics_available`, `admin_read_only_mode` (gauges)
 
 ## 4. PromQL Snippets
 

@@ -165,6 +165,11 @@ if (BUILD_ADMIN_APP)
     target_link_libraries(admin_app PRIVATE server_state)
   endif()
 
+  add_custom_command(TARGET admin_app POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/tools/admin_app/admin_ui.html"
+            "$<TARGET_FILE_DIR:admin_app>/admin_ui.html")
+
   if (WIN32 AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.21")
     # Ensure local execution works without manually extending PATH.
     add_custom_command(TARGET admin_app POST_BUILD

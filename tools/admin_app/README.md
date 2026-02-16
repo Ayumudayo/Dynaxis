@@ -6,6 +6,7 @@
 
 - `/metrics`
 - `/healthz`, `/readyz`
+- `/admin` (browser UI, source: `tools/admin_app/admin_ui.html`)
 - `/api/v1/overview` (JSON)
 - `/api/v1/instances` (JSON)
 - `/api/v1/instances/{instance_id}` (JSON)
@@ -38,6 +39,22 @@ pwsh scripts/build.ps1 -Config Debug -Target admin_app
 set METRICS_PORT=39200
 .\build-windows\Debug\admin_app.exe
 ```
+
+브라우저 접속:
+
+- `http://127.0.0.1:39200/admin`
+
+## Docker Stack
+
+`docker/stack`에 `admin-app` 서비스가 포함된다.
+
+```powershell
+pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build -Observability
+```
+
+브라우저 접속:
+
+- `http://127.0.0.1:39200/admin`
 
 ## 참고 문서
 

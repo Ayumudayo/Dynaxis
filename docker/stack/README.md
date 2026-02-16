@@ -27,8 +27,12 @@ pwsh scripts/run_full_stack_observability.ps1
 - gateway metrics: `http://127.0.0.1:36001/metrics`, `http://127.0.0.1:36002/metrics`
 - server metrics: `http://127.0.0.1:39091/metrics`, `http://127.0.0.1:39092/metrics`
 - wb_worker metrics: `http://127.0.0.1:39093/metrics`
+- admin console(UI): `http://127.0.0.1:39200/admin`
+- admin API/metrics: `http://127.0.0.1:39200/api/v1/overview`, `http://127.0.0.1:39200/metrics`
 - (옵션) Prometheus: `http://127.0.0.1:39090/`
 - (옵션) Grafana: `http://127.0.0.1:33000/` (admin password: `GRAFANA_ADMIN_PASSWORD`, 기본 `admin`)
+
+포트는 `docker/stack/docker-compose.yml`의 `*_HOST_PORT` 환경 변수로 재지정할 수 있다. (`ADMIN_APP_HOST_PORT` 포함)
 
 ## 종료
 
