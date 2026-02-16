@@ -8,6 +8,12 @@
 #include <iostream>
 #include <sstream>
 
+/**
+ * @brief MetricsHttpServer의 HTTP 파싱/응답 구현입니다.
+ *
+ * 메트릭/상태 노출 트래픽을 앱 데이터 경로와 분리해,
+ * 운영 진단 요청이 핵심 세션 처리 성능을 방해하지 않도록 설계되었습니다.
+ */
 namespace server::core::metrics {
 
 namespace asio = boost::asio;

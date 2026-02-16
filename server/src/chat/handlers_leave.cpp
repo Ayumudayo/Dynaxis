@@ -17,6 +17,12 @@ namespace proto = server::core::protocol;
 namespace game_proto = server::protocol;
 namespace corelog = server::core::log;
 
+/**
+ * @brief 방 퇴장(leave) 핸들러 구현입니다.
+ *
+ * 룸 멤버십 정리와 presence/DB 상태 갱신을 함께 수행해,
+ * 연결 종료 직후에도 룸 목록과 사용자 표시가 빠르게 수렴하도록 합니다.
+ */
 namespace server::app::chat {
 
 // -----------------------------------------------------------------------------

@@ -10,6 +10,12 @@
 #include "server/core/storage/repositories.hpp"
 #include <pqxx/pqxx>
 
+/**
+ * @brief Postgres 연결 풀/UnitOfWork/리포지터리 구현입니다.
+ *
+ * 도메인 저장소를 SQL 질의로 명시적으로 구현해,
+ * 쿼리 동작과 트랜잭션 경계를 운영 관점에서 예측 가능하게 유지합니다.
+ */
 namespace server::storage::postgres {
 
 using server::core::storage::IConnectionPool;

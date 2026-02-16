@@ -22,6 +22,8 @@ class LockedQueue {
 public:
     using value_type = T;
 
+    // capacity == 0 이면 무제한 큐로 동작합니다.
+    // capacity > 0 이면 생산자 측 backpressure를 걸어 메모리 폭주를 완화합니다.
     explicit LockedQueue(std::size_t capacity = 0)
         : capacity_(capacity) {}
 
@@ -116,6 +118,8 @@ public:
     LockedWaitQueue(const LockedWaitQueue&) = delete;
     LockedWaitQueue& operator=(const LockedWaitQueue&) = delete;
 
+    // 소비자 스레드에서 호출하는 블로킹 pop입니다.
+    // stop() 이후에는 nullopt를 반환해 워커 루프가 자연스럽게 빠져나오도록 설계했습니다.
     std::optional<T> pop_blocking() {
         std::unique_lock<std::mutex> lock(this->mutex_);
         this->cv_.wait(lock, [&]() { return !this->queue_.empty() || shutdown_; });
@@ -131,6 +135,8 @@ public:
         return value;
     }
 
+    // 생산자 push: bounded 큐에서는 공간이 생길 때까지 대기합니다.
+    // stop() 이후에는 더 이상 큐에 넣지 않고 즉시 반환합니다.
     void push(T item) {
         std::unique_lock<std::mutex> lock(this->mutex_);
         this->cv_.wait(lock, [&]() {
@@ -143,12 +149,14 @@ public:
         this->cv_.notify_one();
     }
 
+    // 대기 중인 생산자/소비자를 모두 깨워 종료 경로를 빠르게 만든다.
     void stop() {
         std::lock_guard<std::mutex> lock(this->mutex_);
         shutdown_ = true;
         this->cv_.notify_all();
     }
 
+    // 테스트/재사용 시 stop 상태를 되돌려 다시 push/pop을 허용한다.
     void reset() {
         std::lock_guard<std::mutex> lock(this->mutex_);
         shutdown_ = false;

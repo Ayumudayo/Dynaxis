@@ -7,6 +7,12 @@
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/runtime_metrics.hpp"
 
+/**
+ * @brief Dispatcher 핸들러 등록/실행 구현입니다.
+ *
+ * 핸들러 예외를 세션 단위로 흡수해 서버 프로세스 전체 중단을 막고,
+ * 디스패치 실패 원인을 메트릭/로그로 남겨 운영 추적성을 확보합니다.
+ */
 namespace server::core {
 
 void Dispatcher::register_handler(std::uint16_t msg_id, handler_t handler) {

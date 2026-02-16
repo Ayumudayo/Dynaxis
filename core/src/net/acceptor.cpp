@@ -11,6 +11,12 @@
 
 using boost::system::error_code;
 
+/**
+ * @brief Acceptor의 소켓 바인딩/수락/재시도 구현입니다.
+ *
+ * 초기 바인드 실패를 조기에 드러내고, 런타임 accept 실패에는 짧은 backoff를 적용해
+ * 장애 시 hot loop를 피하면서 복구 가능성을 유지합니다.
+ */
 namespace server::core {
 
 Acceptor::Acceptor(asio::io_context& io,

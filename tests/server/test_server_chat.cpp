@@ -20,6 +20,9 @@ using namespace server::core;
 using namespace server::core::storage;
 using namespace server::storage::redis;
 
+/**
+ * @brief ChatService 주요 경로(로그인/입장/채팅/리프레시) 통합 동작을 검증합니다.
+ */
 // --- Helper Functions (Copied from frame.hpp to bypass include issues) ---
 inline void write_be16(std::uint16_t v, std::uint8_t* out) {
     out[0] = static_cast<std::uint8_t>((v >> 8) & 0xFF);

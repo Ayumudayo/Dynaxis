@@ -53,6 +53,12 @@ namespace crash = server::core::util::crash;
 
 namespace server::app {
 
+/**
+ * @brief server_app 부트스트랩(설정/DI/리스너/스케줄러) 구현입니다.
+ *
+ * 프로세스 시작 시 의존성 상태를 단계적으로 올리고,
+ * 종료 시에는 등록된 shutdown 단계를 역순으로 실행해 자원 해제 순서를 안정화합니다.
+ */
 // 전역 메트릭 변수 (metrics_server.cpp에서 참조)
 std::atomic<std::uint64_t> g_subscribe_total{0};
 std::atomic<std::uint64_t> g_self_echo_drop_total{0};
@@ -65,6 +71,12 @@ std::atomic<long long>     g_subscribe_last_lag_ms{0};
 // 4. DB/Redis 연결 설정
 // 5. 서버 인스턴스 등록 (Service Discovery)
 // 6. TCP 리스너 시작
+/**
+ * @brief 서버 프로세스를 기동합니다.
+ * @param argc 커맨드라인 인자 개수
+ * @param argv 커맨드라인 인자 배열
+ * @return 종료 코드(0 정상)
+ */
 int run_server(int argc, char** argv) {
     // 1. 핵심 컴포넌트 선언
     core::concurrent::TaskScheduler scheduler;

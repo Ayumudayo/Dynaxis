@@ -6,6 +6,12 @@
 #include <string>
 #include <chrono>
 
+/**
+ * @brief server_app 환경 변수 기반 설정 로더 구현입니다.
+ *
+ * 실행 인자/환경 변수 우선순위를 명확히 유지해,
+ * 로컬 실행과 컨테이너 배포에서 동일한 설정 규칙을 보장합니다.
+ */
 namespace server::app {
 
 namespace corelog = server::core::log;

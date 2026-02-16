@@ -6,6 +6,12 @@
 #include "server/core/runtime_metrics.hpp"
 #include "server/core/util/log.hpp"
 
+/**
+ * @brief DbWorkerPool의 워커 루프/커밋/롤백 처리 구현입니다.
+ *
+ * DB 예외를 작업 단위로 격리해 전체 워커 중단을 방지하고,
+ * 큐 깊이/실패율 메트릭을 함께 기록해 병목 원인을 추적할 수 있게 합니다.
+ */
 namespace server::core::storage {
 
 namespace {

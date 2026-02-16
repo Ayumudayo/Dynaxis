@@ -10,6 +10,12 @@
 #include <cstdio>
 #include <shlobj.h> // SHGetFolderPath
 
+/**
+ * @brief ImGui/GLFW 기반 UI 렌더링 및 입력 처리 구현입니다.
+ *
+ * 도킹 레이아웃, 로그인 모달, 채팅 패널 렌더링을 한곳에서 관리해
+ * `ClientApp`의 상태를 시각적으로 표현하는 뷰 계층 책임을 분리합니다.
+ */
 
 // GLFW 오류 콜백
 static void glfw_error_callback(int error, const char* description) {

@@ -13,6 +13,12 @@
 #include <chrono>
 using boost::system::error_code;
 
+/**
+ * @brief Session의 패킷 IO/타임아웃/heartbeat 구현입니다.
+ *
+ * 단일 세션에서 발생한 오류를 해당 연결 안에 격리하고,
+ * strand 기반 직렬화로 read/write 경합을 피하면서 안정적인 상태 전이를 보장합니다.
+ */
 namespace server::core {
 
 // Session은 단일 TCP 연결을 비동기적으로 관리하는 핵심 객체입니다.

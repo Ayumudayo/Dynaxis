@@ -6,6 +6,12 @@
 #include <cstdio>
 #include <cstring>
 
+/**
+ * @brief 예제 chat-hook 플러그인(sample) 구현입니다.
+ *
+ * `kPass/kHandled/kReplaceText/kBlock` 동작 예시를 제공해,
+ * 운영 플러그인 작성 시 ABI 사용법을 빠르게 검증할 수 있게 합니다.
+ */
 namespace {
 
 constexpr const char* kName = "chat_hook_sample";

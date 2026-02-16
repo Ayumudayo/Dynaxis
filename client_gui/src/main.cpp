@@ -5,6 +5,12 @@
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
 
+/**
+ * @brief ImGui 개발용 클라이언트 진입점입니다.
+ *
+ * UI 수명주기(`GuiManager`)와 로직 수명주기(`ClientApp`)를 분리해,
+ * 네트워크/상태 로직과 렌더링 계층을 독립적으로 유지합니다.
+ */
 int main(int, char**)
 {
     // 1. 비즈니스 로직 & 데이터 상태 관리자 생성

@@ -7,6 +7,12 @@
 #include <system_error>
 #include <unordered_set>
 
+/**
+ * @brief 다중 chat-hook 플러그인 체인 재구성/적용 구현입니다.
+ *
+ * 디렉터리 스캔 오류 시 기존 체인을 유지해 가용성을 우선하고,
+ * hot-reload는 안전한 cache-copy 경로를 통해 진행합니다.
+ */
 namespace server::app::chat {
 
 namespace corelog = server::core::log;
@@ -32,7 +38,9 @@ std::string ChatHookPluginChain::module_extension() {
 }
 
 std::string ChatHookPluginChain::normalize_key(const std::filesystem::path& p) {
-    // Avoid weakly_canonical() here; plugins may not exist yet, and we want a cheap key.
+    // 키 정규화는 "빠르고 실패가 적은" 연산을 우선한다.
+    // weakly_canonical()은 파일 존재 여부/시스템 호출에 영향을 받아
+    // 배포 교체 타이밍에 불필요한 실패를 만들 수 있어 사용하지 않는다.
     auto s = p.lexically_normal().generic_string();
 #if defined(_WIN32)
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
@@ -96,8 +104,9 @@ void ChatHookPluginChain::poll_reload() {
 
     std::vector<std::filesystem::path> paths;
     if (!get_desired_paths(paths)) {
-        // If we failed to scan the directory, keep the current ordered list as-is,
-        // but still allow already-registered plugins to hot-reload.
+        // 디렉터리 스캔 실패 시 체인을 즉시 비우지 않는다.
+        // 일시적인 FS 오류(권한/잠금/배포 교체 순간)에서도
+        // 기존 로드 플러그인으로 서비스 기능을 최대한 유지하기 위함이다.
         auto ordered = ordered_.load(std::memory_order_acquire);
         if (ordered) {
             for (auto& mgr : *ordered) {
@@ -118,6 +127,7 @@ void ChatHookPluginChain::poll_reload() {
         return;
     }
 
+    // 단일 플러그인 모드 + lock 경로 지정 시에는 해당 lock 규칙을 강제한다.
     const bool single_explicit = (!cfg_.plugins_dir.has_value() && paths.size() == 1 && cfg_.single_lock_path.has_value());
 
     std::shared_ptr<PluginList> ordered = std::make_shared<PluginList>();
@@ -148,6 +158,8 @@ void ChatHookPluginChain::poll_reload() {
             ordered->push_back(it->second);
         }
 
+        // 현재 구성에 없는 엔트리는 맵에서 제거한다.
+        // shared_ptr가 남아 있으면 즉시 파괴되지 않아 진행 중 호출의 안전성을 보존한다.
         for (auto it = by_key_.begin(); it != by_key_.end(); ) {
             if (keep.count(it->first) == 0) {
                 it = by_key_.erase(it);
@@ -177,6 +189,10 @@ ChatHookPluginChain::Outcome ChatHookPluginChain::on_chat_send(std::uint32_t ses
         return out;
     }
 
+    // 각 플러그인 정책:
+    // - kPass: 다음 플러그인으로 진행
+    // - kReplaceText: text를 대체하고 다음 플러그인으로 진행
+    // - kHandled/kBlock: 기본 채팅 경로를 중단하고 즉시 반환
     for (const auto& mgr : *ordered) {
         if (!mgr) {
             continue;

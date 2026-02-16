@@ -124,6 +124,22 @@ flowchart TB
     style StateLayer fill:#ffebee,stroke:#ffcdd2
 ```
 
+## 왜 이 구조인가? (비전공자 온보딩용)
+
+### 1) 왜 HAProxy(L4) + Gateway를 같이 쓰는가
+- HAProxy는 TCP 분산에는 매우 강하지만, 애플리케이션 프레임(opcode) 해석이나 인증/세션 스티키 정책은 담당하지 않는다.
+- `gateway_app`은 첫 로그인 프레임을 해석해 인증하고, Redis 기반 sticky routing까지 수행한다.
+- 즉, **HAProxy는 네트워크 분산**, **Gateway는 애플리케이션 연결 제어**를 맡아 역할 충돌 없이 수평 확장을 가능하게 한다.
+
+### 2) 왜 Redis Pub/Sub이 필요한가
+- 사용자들은 여러 `server_app` 인스턴스에 분산되어 붙기 때문에, 한 서버에서 보낸 룸 메시지를 다른 서버 사용자에게도 전달해야 한다.
+- 이때 Redis Pub/Sub을 서버 간 백플레인으로 사용하면 노드 수가 늘어나도 브로드캐스트 경로를 단순하게 유지할 수 있다.
+
+### 3) 왜 Write-Behind(Streams -> Worker -> Postgres)인가
+- 채팅 요청 경로에서 DB 쓰기를 직접 수행하면 지연과 실패 전파가 커져 실시간 응답성이 급격히 떨어진다.
+- 서버는 Redis Streams에 이벤트를 먼저 기록하고, `wb_worker`가 배치로 Postgres에 반영해 hot path 부하를 분리한다.
+- 이 구조는 성능(낮은 지연)과 신뢰성(재처리/DLQ)을 동시에 맞추기 위한 절충안이다.
+
 ## ✨ 주요 기능 (Key Features)
 
 -   **Modern C++20**: Concept, Coroutine(일부), Module(준비 중) 등 최신 문법 활용.
@@ -249,6 +265,7 @@ scripts/deploy_docker.ps1 -Action logs
 더 깊이 있는 기술적인 내용은 `docs/` 디렉토리에서 확인할 수 있습니다.
 
 -   [**Repository Structure**](docs/repo-structure.md): 프로젝트 구조 설명
+-   [**Naming & Commenting Conventions**](docs/naming-conventions.md): 네이밍/네임스페이스 + 한국어 Doxygen 주석 규칙
 -   [**Server Architecture**](docs/server-architecture.md): 서버 상세 아키텍처
 -   [**Redis Strategy**](docs/db/redis-strategy.md): Redis 활용 전략 (Streams, Pub/Sub)
 -   [**Write-Behind Pattern**](docs/db/write-behind.md): 쓰기 지연 처리 패턴 상세

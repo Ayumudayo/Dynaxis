@@ -10,6 +10,9 @@
 #include <memory>
 #include <vector>
 
+/**
+ * @brief core 네트워크 계층(Dispatcher/Hive) 기본 수명주기 동작을 검증합니다.
+ */
 using namespace server::core;
 using namespace server::core::net;
 

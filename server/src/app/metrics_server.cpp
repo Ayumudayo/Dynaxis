@@ -15,6 +15,12 @@
 #include <string>
 #include <string_view>
 
+/**
+ * @brief server_app `/metrics`, `/healthz`, `/readyz` 렌더링 구현입니다.
+ *
+ * 런타임 카운터를 Prometheus 텍스트로 변환하고,
+ * readiness/health 상태를 AppHost와 동기화해 오케스트레이터 판정을 일관화합니다.
+ */
 namespace server::app {
 
 namespace corelog = server::core::log;

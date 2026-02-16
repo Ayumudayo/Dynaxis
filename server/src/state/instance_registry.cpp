@@ -7,6 +7,12 @@
 
 #include "server/storage/redis/client.hpp"
 
+/**
+ * @brief 인스턴스 레지스트리(in-memory + Redis) 구현입니다.
+ *
+ * heartbeat + TTL 기반으로 활성 인스턴스를 추적해,
+ * 게이트웨이가 죽은 서버를 빠르게 제외하고 살아 있는 후보만 선택할 수 있게 합니다.
+ */
 namespace server::state {
 
 namespace {

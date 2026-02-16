@@ -7,6 +7,9 @@
 
 using namespace server::state;
 
+/**
+ * @brief 인스턴스 레지스트리(in-memory/Redis/Consul adapter) 동작을 검증합니다.
+ */
 namespace {
 
 InstanceRecord sample_record() {

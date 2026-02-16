@@ -1,5 +1,7 @@
 #include "server/core/app/app_host.hpp"
 
+#include "server/core/app/termination_signals.hpp"
+
 #include "server/core/util/log.hpp"
 
 #include <mutex>
@@ -7,6 +9,12 @@
 #include <vector>
 #include <sstream>
 
+/**
+ * @brief AppHost의 생명주기/readiness/admin HTTP 구현입니다.
+ *
+ * 공통 프로세스 제어 규칙을 구현 레벨에서 일관되게 유지해,
+ * server/gateway/tools 간 운영 동작 편차를 줄입니다.
+ */
 namespace server::core::app {
 
 namespace corelog = server::core::log;
@@ -21,6 +29,8 @@ struct AppHost::DependencyRegistry {
     std::mutex mutex;
     std::vector<Entry> entries;
 
+    // readiness는 "필수 의존성(required) 전체가 OK인가"로 계산합니다.
+    // optional 의존성은 관측 대상에는 남기되 준비 판정을 막지는 않습니다.
     bool compute_ok() const {
         for (const auto& e : entries) {
             if (e.requirement == DependencyRequirement::kRequired && !e.ok) {
@@ -51,6 +61,8 @@ bool AppHost::request_stop() noexcept {
 }
 
 bool AppHost::stop_requested() const noexcept {
+    // 로컬 플래그와 프로세스 전역 termination 플래그를 함께 본다.
+    // 이렇게 하면 비-asio 루프/다른 모듈에서도 동일한 종료 신호를 공유할 수 있다.
     return stop_requested_.load(std::memory_order_relaxed) || termination_signal_received();
 }
 
@@ -81,6 +93,8 @@ void AppHost::declare_dependency(std::string name, DependencyRequirement require
 
     std::lock_guard<std::mutex> lock(deps_->mutex);
 
+    // 동일 이름이 이미 있으면 requirement만 갱신한다.
+    // 운영 중 설정 전환(required<->optional)을 반영할 수 있어 유연하다.
     for (auto& e : deps_->entries) {
         if (e.name == name) {
             e.requirement = requirement;
@@ -116,6 +130,8 @@ void AppHost::set_dependency_ok(std::string_view name, bool ok) {
         }
     }
 
+    // 선언 누락은 구성 오류 신호이므로 경고를 남긴다.
+    // 동시에 런타임 복구를 위해 즉시 required 의존성으로 생성해 상태를 반영한다.
     corelog::warn(name_ + " set_dependency_ok used before declare_dependency: " + std::string(name));
     DependencyRegistry::Entry entry;
     entry.name = std::string(name);
@@ -147,6 +163,8 @@ std::string AppHost::readiness_body(bool ok) const {
     std::ostringstream oss;
     oss << "not ready";
 
+    // ready 실패 이유를 한 줄로 축약해 반환한다.
+    // K8s probe, 운영 대시보드, 사람이 직접 curl 하는 상황 모두에서 즉시 원인을 파악하도록 설계했다.
     std::vector<std::string> reasons;
     if (stop_requested()) {
         reasons.emplace_back("stopping");
@@ -201,6 +219,7 @@ std::string AppHost::dependency_metrics_text() const {
         }
     }
 
+    // 전체 집계 지표를 함께 노출해 알람 규칙을 단순화한다.
     out << "# TYPE knights_dependencies_ok gauge\n";
     out << "knights_dependencies_ok " << (dependencies_ok() ? 1 : 0) << "\n";
     return out.str();
@@ -215,15 +234,19 @@ void AppHost::start_admin_http(unsigned short port,
         return;
     }
 
+    // health/readiness 콜백은 의도적으로 "가볍고 빠르게" 유지한다.
+    // metrics HTTP 스레드에서 무거운 작업(DB 조회 등)을 하면 관측 자체가 병목이 되기 때문이다.
     admin_http_ = std::make_unique<server::core::metrics::MetricsHttpServer>(
         port,
         std::move(metrics_callback),
         [this]() {
-            // Keep health simple and cheap.
+            // healthz: 프로세스 생존성과 종료 상태만 확인한다.
+            // "의존성 준비 여부"까지 넣으면 장애 분류가 혼동될 수 있어 분리한다.
             return healthy() && !stop_requested();
         },
         [this]() {
-            // Readiness implies health.
+            // readyz: 트래픽 수신 가능 상태를 나타낸다.
+            // 기본 ready 플래그 + 필수 의존성 + health/stop 조건을 함께 본다.
             return ready() && healthy() && !stop_requested();
         },
         server::core::metrics::MetricsHttpServer::LogsCallback{},
@@ -271,6 +294,8 @@ void AppHost::run_shutdown_steps() noexcept {
         steps.swap(shutdown_->steps);
     }
 
+    // 등록 역순(LIFO) 실행: 나중에 붙은 상위 레이어를 먼저 내리고,
+    // 마지막에 하위 공용 자원을 정리하는 패턴을 자연스럽게 만든다.
     for (auto it = steps.rbegin(); it != steps.rend(); ++it) {
         const auto& name = it->first;
         try {
@@ -284,13 +309,14 @@ void AppHost::run_shutdown_steps() noexcept {
 }
 
 void AppHost::install_asio_termination_signals(boost::asio::io_context& io,
-                                              std::function<void()> on_shutdown) {
+                                               std::function<void()> on_shutdown) {
     if (signals_) {
         return;
     }
 
-    // Always install the process-wide (polling) handler too. It's cheap and helps
-    // non-asio loops share the same shutdown behavior.
+    // 프로세스 전역 폴링 플래그 핸들러도 함께 설치한다.
+    // Asio 이벤트 루프 밖에서 도는 루프(예: 별도 워커 스레드)가 있어도
+    // 동일한 종료 신호를 관찰해 일관된 종료 경로를 탈 수 있게 한다.
     install_termination_signal_handlers();
 
     signals_ = std::make_unique<boost::asio::signal_set>(io);
@@ -309,6 +335,7 @@ void AppHost::install_asio_termination_signals(boost::asio::io_context& io,
             return;
         }
         if (!request_stop()) {
+            // 중복 시그널(SIGINT 연타 등)은 첫 번째만 처리한다.
             return;
         }
 

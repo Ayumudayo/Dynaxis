@@ -9,6 +9,9 @@
 using namespace std::chrono_literals;
 using server::core::concurrent::TaskScheduler;
 
+/**
+ * @brief TaskScheduler 즉시/지연/주기 실행 및 shutdown 동작을 검증합니다.
+ */
 // 즉시 실행 작업(post)이 순서대로 실행되는지 확인합니다.
 TEST(TaskSchedulerTests, PostExecutesInOrder) {
     TaskScheduler scheduler;

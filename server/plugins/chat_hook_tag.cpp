@@ -4,6 +4,12 @@
 #include <cstdio>
 #include <cstring>
 
+/**
+ * @brief 메시지 앞에 tag를 붙이는 예제 플러그인 구현입니다.
+ *
+ * 간단한 명령(`/tag`) 기반 텍스트 변환 시나리오를 통해,
+ * replacement buffer 사용 규칙과 길이 제한 처리를 보여줍니다.
+ */
 namespace {
 
 constexpr const char* kName = "chat_hook_tag";

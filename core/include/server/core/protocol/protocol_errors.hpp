@@ -2,6 +2,12 @@
 
 #include <cstdint>
 
+/**
+ * @brief `MSG_ERR` payload의 code 필드에서 사용하는 표준 오류 코드 집합입니다.
+ *
+ * 서버/클라이언트가 동일한 수치 코드를 공유해야
+ * 운영 로그, 모니터링, 사용자 메시지 매핑을 일관되게 유지할 수 있습니다.
+ */
 namespace server::core::protocol::errc {
 
 // MSG_ERR payload 의 code 필드에 사용되는 오류 코드 정의

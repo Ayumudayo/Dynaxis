@@ -17,6 +17,12 @@ namespace proto = server::core::protocol;
 namespace game_proto = server::protocol;
 namespace corelog = server::core::log;
 
+/**
+ * @brief 로그인 핸들러 구현입니다.
+ *
+ * 사용자 식별/중복 검증/기본 로비 입장/감사 이벤트를 한 경로로 묶어,
+ * 인증 직후 세션 상태와 영속 상태가 동일하게 맞춰지도록 보장합니다.
+ */
 namespace server::app::chat {
 
 // -----------------------------------------------------------------------------

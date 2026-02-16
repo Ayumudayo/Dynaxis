@@ -14,6 +14,9 @@
 #include <string>
 #include <thread>
 
+/**
+ * @brief 메트릭 API/no-op 동작과 Metrics HTTP 라우트 동작을 검증합니다.
+ */
 using namespace server::core::metrics;
 
 namespace {

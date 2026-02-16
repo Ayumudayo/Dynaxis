@@ -11,6 +11,9 @@
 #include <optional>
 #include <unordered_map>
 
+/**
+ * @brief ChatService 최근 메시지 캐시 적재/조회 동작을 검증하는 테스트 파일입니다.
+ */
 namespace server::app::chat {
 struct ChatServiceHistoryTester {
     static void OverrideHistoryConfig(ChatService& svc, std::size_t limit, std::size_t max_list) {

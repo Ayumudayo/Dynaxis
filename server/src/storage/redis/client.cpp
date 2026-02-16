@@ -13,6 +13,12 @@
 #endif
 #include "server/core/util/log.hpp"
 
+/**
+ * @brief Redis 클라이언트 어댑터(redis++/in-memory fallback) 구현입니다.
+ *
+ * 예외를 경계에서 흡수해 서버 본체로 장애 전파를 완화하고,
+ * Pub/Sub·Streams·KV 연산을 공통 인터페이스로 제공해 상위 모듈 결합도를 낮춥니다.
+ */
 namespace server::storage::redis {
 
 #if defined(HAVE_REDIS_PLUS_PLUS)

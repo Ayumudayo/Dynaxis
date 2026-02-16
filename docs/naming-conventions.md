@@ -20,6 +20,35 @@
 
 헤더 상단은 `#pragma once` 로 통일하고, include 순서는 표준 라이브러리 → 서드파티 → 프로젝트 헤더 순으로 유지한다.
 
+## 2.1 C++ 주석 규칙 (Doxygen 스타일)
+- **기본 원칙**: "무엇을 한다"보다 "왜 이 설계가 필요한가"를 우선 설명한다.
+- **적용 대상**:
+  - 공개 API(헤더의 class/struct, public 함수)는 Doxygen 블록을 기본으로 사용한다.
+  - 운영 임계 경로(bootstrap, 네트워크, 라우팅, worker loop)는 `.cpp`에도 `@brief`를 둔다.
+- **권장 태그**:
+  - `@brief`: 요약 + 설계 목적(필수)
+  - `@param`: 입력의 의미/단위/제약(필수: 인자 있는 함수)
+  - `@return`: 반환 계약(필수: 반환값 있는 함수)
+  - `@note`, `@warning`: 운영상 주의점/함정
+- **언어 정책**:
+  - 설명 주석은 한국어(온보딩 기준)로 작성한다.
+  - 코드 심볼/식별자는 ASCII 규칙을 유지한다.
+- **금지 사항**:
+  - 코드 한 줄을 그대로 번역하는 과주석
+  - 거짓 가정(확인되지 않은 동작)을 단정형으로 서술
+  - 생성 파일(`core/include/server/wire/codec.hpp` 등) 직접 주석 수정
+
+예시:
+
+```cpp
+/**
+ * @brief 백엔드 세션을 생성합니다.
+ * @param client_id sticky 라우팅 조회에 사용할 클라이언트 식별자
+ * @return 생성된 세션 포인터. 실패 시 nullptr
+ * @note 연결 성공 후에만 sticky 바인딩을 확정해 좀비 매핑을 방지합니다.
+ */
+```
+
 ## 3. CMake 타깃/바이너리 네이밍
 - **라이브러리**: `server_core`, `gateway_common`, `storage_pg`.
 - **실행 파일**: `<role>_app` 또는 `<tool>`. 예: `server_app`, `gateway_app`, `wb_worker`, `dev_chat_cli`.

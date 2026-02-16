@@ -3,6 +3,12 @@
 #include <algorithm>
 #include <utility>
 
+/**
+ * @brief Connection 기본 템플릿 메서드(on_connect/on_read/on_write) 구현입니다.
+ *
+ * strand 직렬화를 통해 송수신 큐 동시 접근을 방지하고,
+ * 파생 클래스는 프로토콜별 동작만 오버라이드하도록 책임을 분리합니다.
+ */
 namespace server::core::net {
 
 Connection::Connection(std::shared_ptr<Hive> hive,

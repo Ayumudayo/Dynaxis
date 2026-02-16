@@ -10,6 +10,12 @@ using namespace server::core;
 namespace proto = server::core::protocol;
 namespace game_proto = server::protocol;
 
+/**
+ * @brief 세션 종료 시 후처리(cleanup/fanout/audit) 구현입니다.
+ *
+ * 연결 종료 이벤트를 룸/프레즌스/스토리지 관점에서 정리해,
+ * 좀비 세션과 stale presence를 빠르게 제거하고 감사 추적성을 유지합니다.
+ */
 namespace server::app::chat {
 
 void ChatService::on_session_close(std::shared_ptr<Session> s) {

@@ -13,6 +13,12 @@
 // -----------------------------------------------------------------------------
 // Redis Write-Behind 스트림에 수동으로 이벤트를 발행하여 파이프라인을 테스트하는 도구.
 // 사용법: wb_emit [event_type]
+/**
+ * @brief write-behind Redis Stream에 테스트 이벤트를 발행하는 CLI 진입점입니다.
+ * @param argc 커맨드라인 인자 개수
+ * @param argv 커맨드라인 인자 배열
+ * @return 종료 코드(0 정상)
+ */
 int main(int argc, char** argv) {
     try {
 

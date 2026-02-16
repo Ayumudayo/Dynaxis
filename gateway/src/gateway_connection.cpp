@@ -9,6 +9,12 @@
 #include "server/core/protocol/packet.hpp"
 #include "server/protocol/game_opcodes.hpp"
 
+/**
+ * @brief 클라이언트 세션의 핸드셰이크/인증/브리지 전환 구현입니다.
+ *
+ * 첫 로그인 프레임을 안전하게 완성 파싱한 뒤 backend를 연결하고,
+ * 완료 후에는 payload를 투명 전달해 gateway가 애플리케이션 데이터를 변형하지 않게 유지합니다.
+ */
 namespace gateway {
 namespace game_proto = server::protocol;
 

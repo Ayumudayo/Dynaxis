@@ -20,6 +20,11 @@ Knights는 고성능 실시간 채팅을 위한 분산 스택을 지향한다.
 - **Gateway (`gateway_app`)**: 클라이언트 TCP 연결을 terminate하고 인증/세션 관리를 수행한다. Redis Instance Registry를 조회해 backend(`server_app`)를 선택하고 1:1 TCP 브리지를 구성한다.
 - **Server (`server_app`)**: 채팅 비즈니스 로직 처리, Redis Pub/Sub(팬아웃), Redis Streams(write-behind) 이벤트 발행, PostgreSQL 적재 파이프라인을 담당한다.
 
+### 1.1 왜 L4 LB와 Gateway를 분리하는가
+- HAProxy 같은 L4 LB는 TCP 분산에 최적화되어 있지만, 로그인 프레임 해석/인증/세션 stickiness 같은 애플리케이션 정책은 다루지 않는다.
+- 반대로 Gateway가 L4 역할까지 모두 대체하면 외부 트래픽 분산/헬스체크/운영 표준 도구와의 호환성이 떨어진다.
+- 따라서 "네트워크 분산(L4)"과 "애플리케이션 연결 제어(L7 성격)"를 분리해, 확장성과 운영 단순성을 동시에 확보한다.
+
 ## 2. 모듈 설명
 ### server_app
 - Boost.Asio 기반 `core::Acceptor`/`Session`으로 클라이언트(=Gateway의 BackendSession) 연결을 처리한다.
@@ -44,6 +49,11 @@ Knights는 고성능 실시간 채팅을 위한 분산 스택을 지향한다.
 2. Gateway ↔ Server: Gateway가 선택한 backend(server_app)로 TCP 연결을 생성하고 payload를 중계한다.
 3. `USE_REDIS_PUBSUB=1`이면 서버는 Redis로 브로드캐스트하고 다른 서버 인스턴스가 구독한다.
 4. Write-behind 경로가 활성화되어 있으면 서버는 Redis Streams에 이벤트를 적재하고 `wb_worker`가 Postgres에 반영한다.
+
+### 4.1 왜 Redis Pub/Sub 팬아웃이 필요한가
+- 다중 `server_app` 환경에서는 같은 방 사용자들이 서로 다른 인스턴스에 붙어 있을 수 있다.
+- 한 인스턴스에서만 로컬 브로드캐스트하면 다른 인스턴스 사용자에게 메시지가 전달되지 않는다.
+- Redis Pub/Sub을 공통 백플레인으로 두면 서버 간 메시지 동기화 경로를 단순하게 유지할 수 있다.
 
 ## 5. 구성 요소 간 책임
 - **HAProxy**: 외부 TCP 로드밸런서. 여러 `gateway_app` 인스턴스로 연결을 분산하며, 애플리케이션 프로토콜(opcode)은 해석하지 않는다.

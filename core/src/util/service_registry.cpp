@@ -4,6 +4,12 @@
 #include <cstdlib>
 #include <sstream>
 
+/**
+ * @brief 경량 DI 서비스 레지스트리 구현입니다.
+ *
+ * 실행 중 모듈 경계를 넘어 동일 서비스 인스턴스를 공유해야 할 때,
+ * 타입 기반 키와 환경 변수 포인터 공유를 조합해 참조 일관성을 유지합니다.
+ */
 namespace server::core::util::services {
 
 namespace {

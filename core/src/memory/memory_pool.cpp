@@ -3,6 +3,12 @@
 
 #include <stdexcept>
 
+/**
+ * @brief 고정 블록 메모리 풀/버퍼 매니저 구현입니다.
+ *
+ * 잦은 new/delete를 줄여 단편화와 할당 지연을 완화하고,
+ * 풀 고갈 시 실패를 명시적으로 반환해 메모리 상한을 제어합니다.
+ */
 namespace server::core {
 
 // --- MemoryPool 구현 ---

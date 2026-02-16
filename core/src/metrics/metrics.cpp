@@ -2,6 +2,12 @@
 #include <unordered_map>
 #include <mutex>
 
+/**
+ * @brief 기본 no-op 메트릭 백엔드 구현입니다.
+ *
+ * 실제 exporter가 연결되지 않은 초기 단계에서도 호출부 코드를 변경하지 않도록,
+ * Counter/Gauge/Histogram 조회 시 안전한 no-op 객체를 제공합니다.
+ */
 namespace server::core::metrics {
 
 namespace {

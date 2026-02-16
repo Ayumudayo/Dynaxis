@@ -14,6 +14,12 @@
 #include <condition_variable>
 #include <queue>
 
+/**
+ * @brief 비동기 로그 버퍼/출력 파이프라인 구현입니다.
+ *
+ * 요청 처리 스레드는 로그를 큐에 넣고 즉시 복귀하고,
+ * 백그라운드 워커가 실제 출력과 버퍼 관리를 담당해 경로 지연을 낮춥니다.
+ */
 namespace server::core::log {
 
 namespace {

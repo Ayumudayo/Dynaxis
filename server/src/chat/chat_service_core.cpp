@@ -28,6 +28,12 @@ namespace game_proto = server::protocol;
 namespace corelog = server::core::log;
 namespace services = server::core::util::services;
 
+/**
+ * @brief ChatService 코어 상태/설정/플러그인 초기화 구현입니다.
+ *
+ * DB/Redis/Write-behind/Presence/History 설정을 한곳에서 해석해,
+ * 핸들러 로직이 환경별 분기 없이 동일 인터페이스를 사용하도록 만듭니다.
+ */
 namespace server::app::chat {
 
 struct ChatService::HookPluginState {

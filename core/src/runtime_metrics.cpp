@@ -5,6 +5,12 @@
 #include <cstddef>
 #include <vector>
 
+/**
+ * @brief 프로세스 전역 런타임 메트릭 카운터 구현입니다.
+ *
+ * 고빈도 경로에서 락을 피하기 위해 원자 카운터를 사용하고,
+ * 스냅샷 시점에만 집계/정렬해 관측 오버헤드를 최소화합니다.
+ */
 namespace server::core::runtime_metrics {
 
 namespace {

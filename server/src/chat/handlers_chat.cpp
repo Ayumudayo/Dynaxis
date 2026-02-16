@@ -19,6 +19,12 @@ namespace proto = server::core::protocol;
 namespace game_proto = server::protocol;
 namespace corelog = server::core::log;
 
+/**
+ * @brief 채팅/귓속말 핸들러 구현입니다.
+ *
+ * slash command, 권한 검사, 브로드캐스트, write-behind 발행을
+ * 작업 큐에서 순차 처리해 데이터 경합과 I/O 스레드 블로킹을 줄입니다.
+ */
 namespace server::app::chat {
 
 // -----------------------------------------------------------------------------

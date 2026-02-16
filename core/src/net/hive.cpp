@@ -1,5 +1,11 @@
 #include "server/core/net/hive.hpp"
 
+/**
+ * @brief Hive(io_context 래퍼)의 run/stop 수명주기 구현입니다.
+ *
+ * work_guard를 통해 이벤트 루프 조기 종료를 막고,
+ * stop 경로를 단일화해 멀티스레드 종료 순서를 예측 가능하게 유지합니다.
+ */
 namespace server::core::net {
 
 Hive::Hive(io_context& io)

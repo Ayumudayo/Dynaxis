@@ -37,6 +37,12 @@
 
 namespace corelog = server::core::log;
 
+/**
+ * @brief admin_app의 HTTP API/집계/인증 처리 구현입니다.
+ *
+ * 운영 가시성을 위한 읽기 전용(control-plane) 엔드포인트를 제공해,
+ * 서비스 데이터 경로를 건드리지 않고 상태 점검/조사를 수행할 수 있게 합니다.
+ */
 namespace {
 
 namespace asio = boost::asio;

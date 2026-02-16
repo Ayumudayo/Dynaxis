@@ -3,6 +3,12 @@
 #include "server/storage/redis/client.hpp"
 #include <cstdlib>
 
+/**
+ * @brief ping/pong keepalive 핸들러 구현입니다.
+ *
+ * 왕복 연결 확인과 함께 presence TTL을 갱신해,
+ * 네트워크가 살아 있는 사용자만 온라인 집계에 반영되도록 유지합니다.
+ */
 namespace server::app::chat {
 
 void ChatService::on_ping(server::core::Session& s, std::span<const std::uint8_t> payload) {

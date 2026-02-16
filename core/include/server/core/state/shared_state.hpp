@@ -6,9 +6,15 @@
 
 namespace server::core {
 
+/**
+ * @brief 세션 계층이 공유하는 최소 전역 상태입니다.
+ *
+ * connection_count/max_connections는 수용량 보호에 사용하고,
+ * next_session_id는 충돌 가능성을 낮춘 난수 시작값 기반으로 발급합니다.
+ */
 struct SharedState {
     std::atomic<std::size_t> connection_count{0};
-    std::size_t max_connections = 10'000; // 0이면 최대 연결 수를 제한하지 않는다.
+    std::size_t max_connections = 10'000; ///< 0이면 최대 연결 수를 제한하지 않습니다.
     std::atomic<std::uint32_t> next_session_id;
     
     // 생성자: session_id의 시작값을 랜덤하게 설정합니다.
@@ -25,4 +31,3 @@ struct SharedState {
 };
 
 } // namespace server::core
-

@@ -24,6 +24,12 @@ gateway/
 - 인증은 `auth::IAuthenticator` 를 구현해 확장할 수 있습니다 (`ALLOW_ANONYMOUS`, `AUTH_PROVIDER`, `AUTH_ENDPOINT`).
 - Redis SessionDirectory(`gateway/session/<client_id>`)로 sticky routing을 수행하고, Redis Instance Registry의 `active_sessions`를 기준으로 least-connections 방식으로 backend를 선택합니다.
 
+### 왜 Sticky + Least Connections를 함께 쓰는가
+- **Sticky만 사용**하면 특정 backend로 세션이 고착되어 장기적으로 부하가 한쪽으로 쏠릴 수 있습니다.
+- **Least Connections만 사용**하면 재접속 사용자가 매번 다른 backend로 이동해 세션 연속성이 떨어질 수 있습니다.
+- 현재 방식은 "이미 유효한 바인딩은 재사용(Sticky)"하고, 바인딩이 없거나 만료된 경우에만 "가장 한가한 서버 선택(Least Connections)"을 적용해
+  사용자 경험과 분산 효율을 동시에 맞춥니다.
+
 ### Auth 확장 예시
 ```cpp
 class TokenAuthenticator : public gateway::auth::IAuthenticator {

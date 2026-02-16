@@ -16,6 +16,12 @@ namespace proto = server::core::protocol;
 namespace game_proto = server::protocol;
 namespace corelog = server::core::log;
 
+/**
+ * @brief 방 입장(join) 핸들러 구현입니다.
+ *
+ * 비밀번호 검증/멤버십 기록/presence 갱신/입장 브로드캐스트를
+ * 단일 작업 단위로 처리해 상태 불일치를 최소화합니다.
+ */
 namespace server::app::chat {
 
 // -----------------------------------------------------------------------------

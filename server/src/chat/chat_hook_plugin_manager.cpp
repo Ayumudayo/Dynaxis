@@ -11,6 +11,12 @@
 #  include <dlfcn.h>
 #endif
 
+/**
+ * @brief 단일 chat-hook 플러그인 로드/호출/hot-reload 구현입니다.
+ *
+ * ABI 검증과 lock/sentinel, cache-copy를 결합해,
+ * 배포 교체 중에도 서버 본체 안정성을 우선 보장합니다.
+ */
 namespace server::app::chat {
 
 namespace corelog = server::core::log;
@@ -39,7 +45,7 @@ public:
             return false;
         }
 #else
-        // Clear previous error state.
+        // dlerror는 thread-local 상태를 누적하므로 호출 전에 비워준다.
         (void)::dlerror();
         handle_ = ::dlopen(path.c_str(), RTLD_NOW);
         if (!handle_) {
@@ -88,7 +94,7 @@ public:
             error = "library not loaded";
             return nullptr;
         }
-        // Clear previous error state.
+        // dlsym 이전 dlerror 상태를 지워야 현재 심볼 조회 오류를 정확히 구분할 수 있다.
         (void)::dlerror();
         void* addr = ::dlsym(handle_, name);
         const char* msg = ::dlerror();
@@ -167,7 +173,7 @@ static bool copy_to_cache(const std::filesystem::path& src,
     ec.clear();
     std::filesystem::rename(tmp, dst, ec);
     if (ec) {
-        // Try best-effort fallback.
+        // rename 실패(교차 볼륨/백신 간섭 등) 시 copy fallback으로 최대한 복구한다.
         std::error_code copy_ec;
         std::filesystem::copy_file(tmp, dst, std::filesystem::copy_options::overwrite_existing, copy_ec);
         std::error_code rm_ec;
@@ -194,11 +200,12 @@ struct ChatHookPluginManager::LoadedPlugin {
             try {
                 api->destroy(instance);
             } catch (...) {
-                // Never let plugin exceptions escape.
+                // 플러그인 destroy 예외는 서버 종료/리로드 안정성을 해칠 수 있으므로 삼킨다.
             }
         }
 
-        // Explicitly unload before removing the cached file.
+        // 캐시 파일 삭제 전에 라이브러리를 명시적으로 unload한다.
+        // 그렇지 않으면 Windows에서 파일 잠금 때문에 remove가 실패할 수 있다.
         lib.close();
 
         std::error_code ec;
@@ -230,6 +237,8 @@ void ChatHookPluginManager::poll_reload() {
     }
 
     if (cfg_.lock_path.has_value() && file_exists(*cfg_.lock_path)) {
+        // 배포 스크립트가 lock을 올린 동안에는 reload를 보류해
+        // 부분 복사된 바이너리를 읽는 사고를 피한다.
         return;
     }
 
@@ -239,6 +248,7 @@ void ChatHookPluginManager::poll_reload() {
     }
 
     if (last_attempt_mtime_.has_value() && *last_attempt_mtime_ == *mtime) {
+        // 같은 mtime이면 이미 시도한 버전이므로 불필요한 재로드를 피한다.
         return;
     }
 
@@ -283,6 +293,8 @@ void ChatHookPluginManager::poll_reload() {
         return;
     }
 
+    // ABI 엔트리포인트는 C ABI 함수 포인터로 고정한다.
+    // C++ name mangling 차이를 피하고 버전 체크를 단일 지점에서 수행하기 위함이다.
     using GetApiFn = const ChatHookApiV1* (CHAT_HOOK_CALL*)();
     auto get_api = reinterpret_cast<GetApiFn>(sym);
     const ChatHookApiV1* api = nullptr;
@@ -326,9 +338,9 @@ void ChatHookPluginManager::poll_reload() {
 }
 
 ChatHookPluginManager::Result ChatHookPluginManager::on_chat_send(std::uint32_t session_id,
-                                                                  std::string_view room,
-                                                                  std::string_view user,
-                                                                  std::string_view text) const {
+                                                                   std::string_view room,
+                                                                   std::string_view user,
+                                                                   std::string_view text) const {
     Result result{};
     auto mod = current_.load(std::memory_order_acquire);
     if (!mod || !mod->api || !mod->api->on_chat_send) {
@@ -344,6 +356,8 @@ ChatHookPluginManager::Result ChatHookPluginManager::on_chat_send(std::uint32_t 
     in.user = user_s.c_str();
     in.text = text_s.c_str();
 
+    // 플러그인 ABI는 호출자 제공 버퍼에 쓰는 방식이다.
+    // 고정 크기 버퍼를 사용해 할당/해제 비용과 ABI 경계 복잡도를 줄인다.
     std::array<char, 512> notice_buf{};
     std::array<char, 1024> replace_buf{};
     ChatHookStrBufV1 notice_out{notice_buf.data(), static_cast<std::uint32_t>(notice_buf.size()), 0};
@@ -368,6 +382,8 @@ ChatHookPluginManager::Result ChatHookPluginManager::on_chat_send(std::uint32_t 
         if (!b.data || b.capacity == 0) {
             return;
         }
+        // size가 잘못 보고되더라도 capacity-1을 상한으로 잘라
+        // 플러그인 버그가 서버 메모리를 침범하지 않도록 방어한다.
         std::uint32_t n = b.size;
         if (n >= b.capacity) {
             n = b.capacity - 1;

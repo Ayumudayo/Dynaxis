@@ -2,6 +2,9 @@
 #include <server/core/util/paths.hpp>
 #include <filesystem>
 
+/**
+ * @brief 실행 파일 경로/디렉터리 유틸리티의 기본 계약을 검증합니다.
+ */
 using namespace server::core::util::paths;
 
 // 실행 파일 경로 관련 테스트

@@ -5,6 +5,12 @@
 #include "server/protocol/game_opcodes.hpp"
 #include "server/chat/chat_service.hpp"
 
+/**
+ * @brief opcode -> ChatService 핸들러 매핑 구현입니다.
+ *
+ * 네트워크 계층과 비즈니스 계층을 분리하기 위해,
+ * 부트 시점에 디스패처 테이블을 한 번 구성하고 런타임엔 조회만 수행합니다.
+ */
 namespace server::app {
 
 // Gateway나 LoadBalancer가 새 Session을 넘겨주면 opcode → handler 매핑을 모두 등록한다.

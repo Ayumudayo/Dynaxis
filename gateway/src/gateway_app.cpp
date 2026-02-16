@@ -25,6 +25,12 @@
 #include "server/storage/redis/client.hpp"
 #include "server/state/instance_registry.hpp"
 
+/**
+ * @brief GatewayApp/BackendSession의 라우팅·브리지 구현입니다.
+ *
+ * sticky + least-connections 정책으로 backend를 선택하고,
+ * connect timeout/송신 큐 상한으로 장애 전파를 제한합니다.
+ */
 namespace gateway {
 
 namespace {
