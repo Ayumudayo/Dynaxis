@@ -17,6 +17,7 @@
 #include <random>
 #include <array>
 #include <cctype>
+#include <cstring>
 #include <cstdlib>
 #include <sstream>
 #include <utility>
@@ -941,6 +942,61 @@ void ChatService::send_whisper_result(Session& s, bool ok, const std::string& re
     s.async_send(game_proto::MSG_WHISPER_RES, body, 0);
 }
 
+void ChatService::deliver_remote_whisper(const std::vector<std::uint8_t>& body) {
+    if (body.empty()) {
+        return;
+    }
+
+    server::wire::v1::WhisperNotice notice;
+    if (!notice.ParseFromArray(body.data(), static_cast<int>(body.size()))) {
+        corelog::warn("[whisper] failed to parse remote payload");
+        return;
+    }
+
+    if (notice.sender().empty() || notice.recipient().empty() || notice.text().empty()) {
+        corelog::warn("[whisper] invalid remote payload fields");
+        return;
+    }
+
+    std::vector<std::shared_ptr<Session>> targets;
+    {
+        std::lock_guard<std::mutex> lk(state_.mu);
+        auto itset = state_.by_user.find(notice.recipient());
+        if (itset != state_.by_user.end()) {
+            for (auto wit = itset->second.begin(); wit != itset->second.end(); ) {
+                if (auto p = wit->lock()) {
+                    if (!state_.authed.count(p.get()) || state_.guest.count(p.get())) {
+                        ++wit;
+                        continue;
+                    }
+                    targets.emplace_back(std::move(p));
+                    ++wit;
+                } else {
+                    wit = itset->second.erase(wit);
+                }
+            }
+        }
+    }
+
+    if (targets.empty()) {
+        return;
+    }
+
+    notice.set_outgoing(false);
+    std::string incoming_bytes;
+    if (!notice.SerializeToString(&incoming_bytes)) {
+        return;
+    }
+    std::vector<std::uint8_t> incoming(incoming_bytes.begin(), incoming_bytes.end());
+    for (auto& target : targets) {
+        target->async_send(game_proto::MSG_WHISPER_BROADCAST, incoming, 0);
+    }
+
+    corelog::info("[whisper] sender=" + notice.sender() +
+                  " target=" + notice.recipient() +
+                  " status=remote_delivered count=" + std::to_string(targets.size()));
+}
+
 // 귓속말(1:1 채팅)을 처리합니다.
 // 대상 사용자가 같은 서버에 있으면 직접 전송하고, 없으면 Redis Pub/Sub을 통해 전파할 수도 있습니다(현재 구현은 로컬 우선).
 void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const std::string& target_user, const std::string& text) {
@@ -1016,13 +1072,6 @@ void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const st
         return;
     }
 
-    if (targets.empty()) {
-        send_system_notice(*session_sp, "user not found: " + target_user);
-        send_whisper_result(*session_sp, false, "user not found");
-        corelog::info("[whisper] sender=" + sender + " target=" + target_user + " status=not_found");
-        return;
-    }
-
     auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
 
@@ -1032,6 +1081,47 @@ void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const st
     notice.set_text(text);
     notice.set_ts_ms(static_cast<std::uint64_t>(now64));
 
+    const auto send_outgoing = [&]() {
+        notice.set_outgoing(true);
+        std::string outgoing_bytes;
+        notice.SerializeToString(&outgoing_bytes);
+        std::vector<std::uint8_t> outgoing(outgoing_bytes.begin(), outgoing_bytes.end());
+        session_sp->async_send(game_proto::MSG_WHISPER_BROADCAST, outgoing, 0);
+    };
+
+    if (targets.empty()) {
+        bool routed_remote = false;
+        if (redis_) {
+            try {
+                if (const char* use = std::getenv("USE_REDIS_PUBSUB"); use && std::strcmp(use, "0") != 0) {
+                    notice.set_outgoing(false);
+                    std::string incoming_bytes;
+                    if (notice.SerializeToString(&incoming_bytes)) {
+                        std::string message;
+                        message.reserve(3 + gateway_id_.size() + 1 + incoming_bytes.size());
+                        message.append("gw=").append(gateway_id_);
+                        message.push_back('\n');
+                        message.append(incoming_bytes);
+                        const std::string channel = presence_.prefix + std::string("fanout:whisper");
+                        routed_remote = redis_->publish(channel, std::move(message));
+                    }
+                }
+            } catch (...) {}
+        }
+
+        if (!routed_remote) {
+            send_system_notice(*session_sp, "user not found: " + target_user);
+            send_whisper_result(*session_sp, false, "user not found");
+            corelog::info("[whisper] sender=" + sender + " target=" + target_user + " status=not_found");
+            return;
+        }
+
+        send_outgoing();
+        send_whisper_result(*session_sp, true, "");
+        corelog::info("[whisper] sender=" + sender + " target=" + target_user + " status=remote_routed");
+        return;
+    }
+
     notice.set_outgoing(false);
     std::string incoming_bytes;
     notice.SerializeToString(&incoming_bytes);
@@ -1040,11 +1130,7 @@ void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const st
         target->async_send(game_proto::MSG_WHISPER_BROADCAST, incoming, 0);
     }
 
-    notice.set_outgoing(true);
-    std::string outgoing_bytes;
-    notice.SerializeToString(&outgoing_bytes);
-    std::vector<std::uint8_t> outgoing(outgoing_bytes.begin(), outgoing_bytes.end());
-    session_sp->async_send(game_proto::MSG_WHISPER_BROADCAST, outgoing, 0);
+    send_outgoing();
 
     send_whisper_result(*session_sp, true, "");
 }

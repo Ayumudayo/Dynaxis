@@ -113,6 +113,8 @@ class MockRedisClient : public IRedisClient {
 public:
     bool sadd_called = false;
     bool publish_called = false;
+    std::string last_publish_channel;
+    std::string last_publish_message;
     
     // IRedisClient Interface Implementation
     bool health_check() override { return true; }
@@ -146,6 +148,8 @@ public:
     
     bool publish(const std::string& channel, const std::string& message) override {
         publish_called = true;
+        last_publish_channel = channel;
+        last_publish_message = message;
         return true;
     }
     
@@ -398,6 +402,54 @@ TEST_F(ChatServiceTest, Whisper) {
 
     // 검증: 귓속말 결과(WhisperResult) 또는 메시지(WhisperNotice)가 와야 함
     EXPECT_TRUE(WaitForData()) << "Whisper response should be received by peer";
+}
+
+TEST_F(ChatServiceTest, WhisperRoutesViaRedisWhenRecipientIsRemote) {
+    const char* old_pubsub_env = std::getenv("USE_REDIS_PUBSUB");
+    const bool had_old_pubsub = (old_pubsub_env != nullptr);
+    const std::string old_pubsub = had_old_pubsub ? std::string(old_pubsub_env) : std::string();
+#if defined(_WIN32)
+    _putenv_s("USE_REDIS_PUBSUB", "1");
+#else
+    setenv("USE_REDIS_PUBSUB", "1", 1);
+#endif
+
+    // 1. 로그인
+    std::vector<uint8_t> login_payload;
+    write_lp_utf8(login_payload, "test_user");
+    write_lp_utf8(login_payload, "test_token");
+    chat_service_->on_login(*session_, login_payload);
+    ProcessJobs();
+    FlushSessionIO();
+    WaitForData();
+
+    // 2. 로컬에 없는 대상에게 귓속말
+    std::vector<uint8_t> whisper_payload;
+    write_lp_utf8(whisper_payload, "ghost_user");
+    write_lp_utf8(whisper_payload, "Hello remote");
+    chat_service_->on_whisper(*session_, whisper_payload);
+    ProcessJobs();
+    FlushSessionIO();
+
+    EXPECT_TRUE(redis_->publish_called) << "Whisper should be routed via Redis publish";
+    EXPECT_EQ(redis_->last_publish_channel, "fanout:whisper");
+    EXPECT_TRUE(redis_->last_publish_message.rfind("gw=", 0) == 0);
+    EXPECT_NE(redis_->last_publish_message.find('\n'), std::string::npos);
+    EXPECT_TRUE(WaitForData()) << "Sender should receive whisper ack/echo";
+
+#if defined(_WIN32)
+    if (had_old_pubsub) {
+        _putenv_s("USE_REDIS_PUBSUB", old_pubsub.c_str());
+    } else {
+        _putenv_s("USE_REDIS_PUBSUB", "");
+    }
+#else
+    if (had_old_pubsub) {
+        setenv("USE_REDIS_PUBSUB", old_pubsub.c_str(), 1);
+    } else {
+        unsetenv("USE_REDIS_PUBSUB");
+    }
+#endif
 }
 
 // 방 유저 목록 요청 테스트

@@ -361,7 +361,7 @@ int run_server(int argc, char** argv) {
                     }
 
                     // 2. 채널 분기 처리
-                    // channel: prefix + "fanout:room:<room>" OR prefix + "fanout:refresh:<room>"
+                    // channel: prefix + "fanout:room:<room>" OR prefix + "fanout:refresh:<room>" OR prefix + "fanout:whisper"
                     if (channel.find(prefix + "fanout:refresh:") == 0) {
                         // Refresh Notification
                         std::string room = channel.substr((prefix + "fanout:refresh:").size());
@@ -375,6 +375,13 @@ int run_server(int argc, char** argv) {
                         std::string room = channel.substr((prefix + "fanout:room:").size());
                         std::vector<std::uint8_t> body(payload.begin(), payload.end());
                         chat.broadcast_room(room, body, nullptr);
+                        g_subscribe_total++;
+                    }
+                    else if (channel == prefix + "fanout:whisper") {
+                        if (nl == std::string::npos) return;
+                        std::string payload = message.substr(nl + 1);
+                        std::vector<std::uint8_t> body(payload.begin(), payload.end());
+                        chat.deliver_remote_whisper(body);
                         g_subscribe_total++;
                     }
                 }

@@ -152,6 +152,9 @@ public:
      */
     void broadcast_refresh_local(const std::string& room);
 
+    // Redis Pub/Sub로 전달된 원격 귓속말 payload를 로컬 대상 세션에게 전달합니다.
+    void deliver_remote_whisper(const std::vector<std::uint8_t>& body);
+
     struct ChatHookPluginMetric {
         std::string file;
         bool loaded{false};
