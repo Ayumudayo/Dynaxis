@@ -161,7 +161,7 @@
       margin-top: 8px;
       display: grid;
       gap: 8px;
-      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     }
     .trend-card {
       border: 1px solid var(--line);
@@ -218,6 +218,11 @@
       gap: 8px;
       color: var(--muted);
       font-size: 11px;
+    }
+    .trend-meta {
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 2px;
     }
     .status-item {
       border: 1px solid var(--line);
@@ -367,6 +372,10 @@
     @media (max-width: 980px) {
       .col-8, .col-6, .col-4 { grid-column: span 12; }
       .hero-row { justify-content: flex-start; }
+      .trend-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 620px) {
+      .trend-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -670,6 +679,7 @@
       const spanLabel = spanMs >= 60000
         ? ('last ' + Math.max(1, Math.round(spanMs / 60000)) + 'm')
         : ('last ' + Math.max(1, Math.round(spanMs / 1000)) + 's');
+      const sampleCount = windowSlice.length;
 
       const specs = [
         ['http_errors_total', 'Total Errors', 'err'],
@@ -687,13 +697,18 @@
         const windowDelta = sum(steps);
         const peak = steps.length > 0 ? Math.max(...steps) : 0;
         const deltaClass = windowDelta > 0 ? 'up' : 'flat';
+        const deltaLabel = windowDelta > 0
+          ? ('+' + fmtNum(windowDelta) + ' in ' + spanLabel)
+          : ('steady in ' + spanLabel);
 
         return '<div class="trend-card">' +
           '<div class="trend-head"><span class="trend-label">' + label + '</span><span class="trend-total">' + fmtNum(currentTotal) + '</span></div>' +
           sparklineSvg(steps, tone) +
           '<div class="trend-foot">' +
-            '<span class="trend-delta ' + deltaClass + '">' + (windowDelta > 0 ? '+' : '') + fmtNum(windowDelta) + ' in ' + spanLabel + '</span>' +
+            '<span class="trend-delta ' + deltaClass + '">' + deltaLabel + '</span>' +
             '<span class="mono">peak ' + fmtNum(peak) + '/tick</span>' +
+          '</div>' +
+          '<div class="trend-meta">' + fmtNum(sampleCount) + ' samples, ' + Math.max(1, Math.round(stepMs / 1000)) + 's step</div>' +
           '</div>' +
         '</div>';
       }).join('');
