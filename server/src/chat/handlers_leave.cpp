@@ -31,7 +31,7 @@ void ChatService::on_leave(server::core::Session& s, std::span<const std::uint8_
     }
 
     // DB, Redis, fanout 처리까지 필요하므로 job_queue에서 비동기로 처리한다.
-    job_queue_.Push([this, session_sp, room]() {
+    if (!job_queue_.TryPush([this, session_sp, room]() {
         const std::string session_id_str = get_or_create_session_uuid(*session_sp);
         std::string user_uuid;
         std::string room_uuid;
@@ -221,7 +221,10 @@ void ChatService::on_leave(server::core::Session& s, std::span<const std::uint8_
 
         // 마지막으로 로비 상태 스냅샷을 내려 클라이언트 UI를 즉시 업데이트한다.
         send_snapshot(*session_sp, next_room);
-    });
+    })) {
+        session_sp->send_error(proto::errc::SERVER_BUSY, "server busy");
+        corelog::warn("on_leave dropped: job queue full");
+    }
 }
 
 } // namespace server::app::chat

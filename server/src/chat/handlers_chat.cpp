@@ -41,9 +41,12 @@ void ChatService::on_whisper(Session& s, std::span<const std::uint8_t> payload) 
     // whisper 처리는 DB 조회/타 세션 접근이 필요하므로 job_queue에서 비동기로 처리한다.
     // 동시성 문제를 피하기 위해 메인 로직은 JobQueue Worker 스레드에서 실행됩니다.
     // 이렇게 하면 I/O 스레드는 즉시 다음 패킷을 받을 준비를 할 수 있습니다 (Non-blocking).
-    job_queue_.Push([this, session_sp, target = std::move(target), text = std::move(text)]() {
+    if (!job_queue_.TryPush([this, session_sp, target = std::move(target), text = std::move(text)]() {
         dispatch_whisper(session_sp, target, text);
-    });
+    })) {
+        session_sp->send_error(proto::errc::SERVER_BUSY, "server busy");
+        corelog::warn("on_whisper dropped: job queue full");
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -67,7 +70,7 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
     }
 
     auto session_sp = s.shared_from_this();
-    job_queue_.Push([this, session_sp, room = std::move(room), text = std::move(text)]() mutable {
+    if (!job_queue_.TryPush([this, session_sp, room = std::move(room), text = std::move(text)]() mutable {
         corelog::info(std::string("CHAT_SEND: room=") + (room.empty()?"(empty)":room) + ", text=" + text);
         
         // /refresh는 상태 스냅샷을 강제로 다시 받게 하는 관리 명령이다.
@@ -288,7 +291,10 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
                 }
             } catch (...) {}
         }
-    });
+    })) {
+        session_sp->send_error(proto::errc::SERVER_BUSY, "server busy");
+        corelog::warn("on_chat_send dropped: job queue full");
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -334,9 +340,12 @@ void ChatService::handle_refresh(std::shared_ptr<Session> session_sp) {
 
 void ChatService::on_rooms_request(Session& s, std::span<const std::uint8_t>) {
     auto session_sp = s.shared_from_this();
-    job_queue_.Push([this, session_sp]() {
+    if (!job_queue_.TryPush([this, session_sp]() {
         send_rooms_list(*session_sp);
-    });
+    })) {
+        session_sp->send_error(proto::errc::SERVER_BUSY, "server busy");
+        corelog::warn("on_rooms_request dropped: job queue full");
+    }
 }
 
 void ChatService::on_room_users_request(Session& s, std::span<const std::uint8_t> payload) {
@@ -344,7 +353,7 @@ void ChatService::on_room_users_request(Session& s, std::span<const std::uint8_t
     auto sp = std::span<const std::uint8_t>(payload.data(), payload.size());
     proto::read_lp_utf8(sp, requested);
     auto session_sp = s.shared_from_this();
-    job_queue_.Push([this, session_sp, requested = std::move(requested)]() mutable {
+    if (!job_queue_.TryPush([this, session_sp, requested = std::move(requested)]() mutable {
         std::string target = requested;
         if (target.empty()) {
             std::lock_guard<std::mutex> lk(state_.mu);
@@ -352,14 +361,20 @@ void ChatService::on_room_users_request(Session& s, std::span<const std::uint8_t
             target = (it != state_.cur_room.end()) ? it->second : std::string("lobby");
         }
         send_room_users(*session_sp, target);
-    });
+    })) {
+        session_sp->send_error(proto::errc::SERVER_BUSY, "server busy");
+        corelog::warn("on_room_users_request dropped: job queue full");
+    }
 }
 
 void ChatService::on_refresh_request(Session& s, std::span<const std::uint8_t>) {
     auto session_sp = s.shared_from_this();
-    job_queue_.Push([this, session_sp]() {
+    if (!job_queue_.TryPush([this, session_sp]() {
         handle_refresh(session_sp);
-    });
+    })) {
+        session_sp->send_error(proto::errc::SERVER_BUSY, "server busy");
+        corelog::warn("on_refresh_request dropped: job queue full");
+    }
 }
 
 } // namespace server::app::chat

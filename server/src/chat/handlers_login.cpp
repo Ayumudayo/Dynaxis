@@ -43,7 +43,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
     // 로그인은 DB/Redis 작업과 write-behind 이벤트가 함께 수행되므로 job_queue로 넘긴다.
     // I/O 바운드 작업이 많으므로 비동기 처리가 필수적입니다.
     // 메인 I/O 스레드가 블로킹되면 전체 서버의 반응성이 떨어지기 때문입니다.
-    job_queue_.Push([this, session_sp, user, token]() {
+    if (!job_queue_.TryPush([this, session_sp, user, token]() {
         const std::string session_id_str = get_or_create_session_uuid(*session_sp);
         std::string tracked_user_uuid;
         std::string lobby_room_id;
@@ -207,7 +207,10 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         }
         // 로그인 과정도 stream에 남겨 이후 감사/재처리 파이프라인과 동기화한다.
         emit_write_behind_event("session_login", session_id_str, uid_opt, lobby_id_opt, std::move(wb_fields));
-    });
+    })) {
+        session_sp->send_error(proto::errc::SERVER_BUSY, "server busy");
+        corelog::warn("on_login dropped: job queue full");
+    }
 }
 
 } // namespace server::app::chat

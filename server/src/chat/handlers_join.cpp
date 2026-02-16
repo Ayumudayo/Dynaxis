@@ -36,7 +36,7 @@ void ChatService::on_join(server::core::Session& s, std::span<const std::uint8_t
     std::string password = sp;
 
     auto session_sp = s.shared_from_this();
-    job_queue_.Push([this, session_sp, room, password]() {
+    if (!job_queue_.TryPush([this, session_sp, room, password]() {
         const std::string session_id_str = get_or_create_session_uuid(*session_sp);
         std::string user_uuid;
         std::string provided_password = password;
@@ -267,7 +267,10 @@ void ChatService::on_join(server::core::Session& s, std::span<const std::uint8_t
         if (!previous_room.empty() && previous_room != room_to_join) {
             broadcast_refresh(previous_room);
         }
-    });
+    })) {
+        session_sp->send_error(proto::errc::SERVER_BUSY, "server busy");
+        corelog::warn("on_join dropped: job queue full");
+    }
 }
 
 } // namespace server::app::chat
