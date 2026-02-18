@@ -311,6 +311,11 @@ Phase 2 구현 스펙(현재):
   - `room_recent_maxlen` (`5..5000`)
 - `value` (required, unsigned integer)
 
+구현 메모:
+
+- key/range 규칙은 `core/include/server/core/config/runtime_settings.hpp`를 single-source로 사용한다.
+- `admin_app` 입력 검증과 `server_app` 적용 검증이 동일 규칙을 공유한다.
+
 동작:
 
 - Redis Pub/Sub channel `${REDIS_CHANNEL_PREFIX}fanout:admin:settings`

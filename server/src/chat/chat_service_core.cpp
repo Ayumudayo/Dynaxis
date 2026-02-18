@@ -1,5 +1,6 @@
 #include "server/chat/chat_service.hpp"
 #include "server/protocol/game_opcodes.hpp"
+#include "server/core/config/runtime_settings.hpp"
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/util/log.hpp"
@@ -1086,41 +1087,39 @@ void ChatService::admin_apply_runtime_setting(const std::string& key, const std:
             return;
         }
 
-        if (normalized_key == "presence_ttl_sec") {
-            if (*parsed < 5 || *parsed > 3600) {
-                corelog::warn("admin setting rejected: key=presence_ttl_sec reason=out_of_range");
-                return;
-            }
-            presence_.ttl = *parsed;
-            corelog::info("admin setting applied: key=presence_ttl_sec value=" + std::to_string(*parsed));
+        const auto* setting_rule = server::core::config::find_runtime_setting_rule(normalized_key);
+        if (setting_rule == nullptr) {
+            corelog::warn("admin setting rejected: key=" + normalized_key + " reason=unsupported_key");
             return;
         }
 
-        if (normalized_key == "recent_history_limit") {
-            if (*parsed < 5 || *parsed > 2000) {
-                corelog::warn("admin setting rejected: key=recent_history_limit reason=out_of_range");
-                return;
-            }
+        std::uint32_t min_allowed = setting_rule->min_value;
+        if (setting_rule->key_id == server::core::config::RuntimeSettingKey::kRoomRecentMaxlen) {
+            min_allowed = std::max(min_allowed, static_cast<std::uint32_t>(history_.recent_limit));
+        }
+
+        if (*parsed < min_allowed || *parsed > setting_rule->max_value) {
+            corelog::warn("admin setting rejected: key=" + std::string(setting_rule->key_name) + " reason=out_of_range");
+            return;
+        }
+
+        switch (setting_rule->key_id) {
+        case server::core::config::RuntimeSettingKey::kPresenceTtlSec:
+            presence_.ttl = *parsed;
+            break;
+        case server::core::config::RuntimeSettingKey::kRecentHistoryLimit:
             history_.recent_limit = static_cast<std::size_t>(*parsed);
             if (history_.max_list_len < history_.recent_limit) {
                 history_.max_list_len = history_.recent_limit;
             }
-            corelog::info("admin setting applied: key=recent_history_limit value=" + std::to_string(*parsed));
-            return;
-        }
-
-        if (normalized_key == "room_recent_maxlen") {
-            const auto min_allowed = static_cast<std::uint32_t>(history_.recent_limit);
-            if (*parsed < min_allowed || *parsed > 5000) {
-                corelog::warn("admin setting rejected: key=room_recent_maxlen reason=out_of_range");
-                return;
-            }
+            break;
+        case server::core::config::RuntimeSettingKey::kRoomRecentMaxlen:
             history_.max_list_len = static_cast<std::size_t>(*parsed);
-            corelog::info("admin setting applied: key=room_recent_maxlen value=" + std::to_string(*parsed));
-            return;
+            break;
         }
 
-        corelog::warn("admin setting rejected: key=" + normalized_key + " reason=unsupported_key");
+        corelog::info("admin setting applied: key=" + std::string(setting_rule->key_name) +
+                      " value=" + std::to_string(*parsed));
     })) {
         corelog::warn("admin setting dropped: job queue full");
     }

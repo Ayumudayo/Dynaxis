@@ -1,5 +1,6 @@
 #include "server/state/instance_registry.hpp"
 
+#include <array>
 #include <string_view>
 #include <cctype>
 #include <sstream>
@@ -58,6 +59,69 @@ std::vector<InstanceRecord> InMemoryStateBackend::list_instances() const {
 
 namespace detail {
 
+using JsonFieldSetter = void (*)(InstanceRecord&, std::string_view);
+
+void set_instance_id(InstanceRecord& record, std::string_view value) {
+    record.instance_id = value;
+}
+
+void set_host(InstanceRecord& record, std::string_view value) {
+    record.host = value;
+}
+
+void set_role(InstanceRecord& record, std::string_view value) {
+    record.role = value;
+}
+
+void set_port(InstanceRecord& record, std::string_view value) {
+    record.port = static_cast<std::uint16_t>(std::stoul(std::string(value)));
+}
+
+void set_capacity(InstanceRecord& record, std::string_view value) {
+    record.capacity = static_cast<std::uint32_t>(std::stoul(std::string(value)));
+}
+
+void set_active_sessions(InstanceRecord& record, std::string_view value) {
+    record.active_sessions = static_cast<std::uint32_t>(std::stoul(std::string(value)));
+}
+
+void set_ready(InstanceRecord& record, std::string_view value) {
+    if (value == "true" || value == "1") {
+        record.ready = true;
+    } else if (value == "false" || value == "0") {
+        record.ready = false;
+    }
+}
+
+void set_last_heartbeat_ms(InstanceRecord& record, std::string_view value) {
+    record.last_heartbeat_ms = static_cast<std::uint64_t>(std::stoull(std::string(value)));
+}
+
+struct JsonFieldRule {
+    std::string_view key;
+    JsonFieldSetter setter;
+};
+
+constexpr std::array<JsonFieldRule, 8> kJsonFieldRules{{
+    {"instance_id", &set_instance_id},
+    {"host", &set_host},
+    {"role", &set_role},
+    {"port", &set_port},
+    {"capacity", &set_capacity},
+    {"active_sessions", &set_active_sessions},
+    {"ready", &set_ready},
+    {"last_heartbeat_ms", &set_last_heartbeat_ms},
+}};
+
+const JsonFieldSetter find_json_field_setter(std::string_view key) {
+    for (const auto& rule : kJsonFieldRules) {
+        if (rule.key == key) {
+            return rule.setter;
+        }
+    }
+    return nullptr;
+}
+
 // Redis registry와 통신하기 위해 간단한 JSON 직렬화를 구현한다.
 // 외부 라이브러리 의존성을 줄이기 위해 직접 문자열 파싱/생성을 수행합니다.
 // 성능보다는 이식성과 의존성 최소화에 중점을 둔 구현입니다.
@@ -115,28 +179,13 @@ std::optional<InstanceRecord> deserialize_json(std::string_view payload) {
         if (!value.empty() && value.front() == '"') { value.erase(0, 1); }
         if (!value.empty() && value.back() == '"') { value.pop_back(); }
         
+        const auto setter = find_json_field_setter(key);
+        if (setter == nullptr) {
+            continue;
+        }
+
         try {
-            if (key == "instance_id") {
-                record.instance_id = value;
-            } else if (key == "host") {
-                record.host = value;
-            } else if (key == "role") {
-                record.role = value;
-            } else if (key == "port") {
-                record.port = static_cast<std::uint16_t>(std::stoul(value));
-            } else if (key == "capacity") {
-                record.capacity = static_cast<std::uint32_t>(std::stoul(value));
-            } else if (key == "active_sessions") {
-                record.active_sessions = static_cast<std::uint32_t>(std::stoul(value));
-            } else if (key == "ready") {
-                if (value == "true" || value == "1") {
-                    record.ready = true;
-                } else if (value == "false" || value == "0") {
-                    record.ready = false;
-                }
-            } else if (key == "last_heartbeat_ms") {
-                record.last_heartbeat_ms = static_cast<std::uint64_t>(std::stoull(value));
-            }
+            setter(record, value);
         } catch (...) {
             // 파싱 에러 무시 (유연한 처리)
         }

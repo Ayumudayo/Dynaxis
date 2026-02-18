@@ -1,5 +1,6 @@
 #include "server/core/metrics/http_server.hpp"
 #include "server/core/util/log.hpp"
+#include <array>
 #include <algorithm>
 #include <boost/asio/streambuf.hpp>
 #include <boost/asio/read_until.hpp>
@@ -59,6 +60,39 @@ std::string to_lower_ascii(std::string_view value) {
         return static_cast<char>(std::tolower(c));
     });
     return out;
+}
+
+enum class BuiltInRoute {
+    kNone,
+    kMetrics,
+    kLogs,
+    kHealth,
+    kReady,
+};
+
+BuiltInRoute classify_builtin_route(std::string_view target) {
+    struct RouteEntry {
+        std::string_view target;
+        BuiltInRoute route;
+    };
+
+    static constexpr std::array<RouteEntry, 7> kRouteEntries{{
+        {"/", BuiltInRoute::kMetrics},
+        {"/metrics", BuiltInRoute::kMetrics},
+        {"/logs", BuiltInRoute::kLogs},
+        {"/healthz", BuiltInRoute::kHealth},
+        {"/health", BuiltInRoute::kHealth},
+        {"/readyz", BuiltInRoute::kReady},
+        {"/ready", BuiltInRoute::kReady},
+    }};
+
+    for (const auto& entry : kRouteEntries) {
+        if (entry.target == target) {
+            return entry.route;
+        }
+    }
+
+    return BuiltInRoute::kNone;
 }
 
 MetricsHttpServer::MetricsHttpServer(unsigned short port,
@@ -229,14 +263,8 @@ void MetricsHttpServer::do_accept() {
                     const std::string& target = request.target;
                     const bool is_get = request.method == "GET";
                     const bool is_head = request.method == "HEAD";
-                    const bool built_in_target =
-                        target == "/" ||
-                        target == "/metrics" ||
-                        target == "/logs" ||
-                        target == "/healthz" ||
-                        target == "/health" ||
-                        target == "/readyz" ||
-                        target == "/ready";
+                    const BuiltInRoute built_in_route = classify_builtin_route(target);
+                    const bool built_in_target = built_in_route != BuiltInRoute::kNone;
 
                     std::string body;
                     std::string status = "200 OK";
@@ -248,55 +276,66 @@ void MetricsHttpServer::do_accept() {
                         content_type = "text/plain; charset=utf-8";
                         body = "Method Not Allowed\r\n";
                         extra_headers = "Allow: GET, HEAD\r\n";
-                    } else if (target == "/logs") {
-                        if (logs_callback_) {
-                            content_type = "text/plain; charset=utf-8";
-                            body = logs_callback_();
-                        } else {
-                            status = "404 Not Found";
-                            content_type = "text/plain; charset=utf-8";
-                            body = "Not Found\r\n";
-                        }
-                    } else if (target == "/metrics" || target == "/") {
-                        if (callback_) {
-                            body = callback_();
-                        } else {
-                            body = "# No callback registered\n";
-                        }
-                    } else if (target == "/healthz" || target == "/health") {
-                        const bool ok = health_callback_ ? health_callback_() : true;
-                        status = ok ? "200 OK" : "503 Service Unavailable";
-                        content_type = "text/plain; charset=utf-8";
-                        if (health_body_callback_) {
-                            body = health_body_callback_(ok);
-                        } else {
-                            body = ok ? "ok\n" : "unhealthy\n";
-                        }
-                    } else if (target == "/readyz" || target == "/ready") {
-                        const bool ok = ready_callback_ ? ready_callback_() : true;
-                        status = ok ? "200 OK" : "503 Service Unavailable";
-                        content_type = "text/plain; charset=utf-8";
-                        if (ready_body_callback_) {
-                            body = ready_body_callback_(ok);
-                        } else {
-                            body = ok ? "ready\n" : "not ready\n";
-                        }
                     } else {
-                        bool handled_custom = false;
-                        if (route_callback_) {
-                            if (auto custom = route_callback_(request)) {
-                                handled_custom = true;
-                                status = custom->status.empty() ? "200 OK" : std::move(custom->status);
-                                content_type = custom->content_type.empty()
-                                    ? "text/plain; charset=utf-8"
-                                    : std::move(custom->content_type);
-                                body = std::move(custom->body);
+                        switch (built_in_route) {
+                        case BuiltInRoute::kLogs:
+                            if (logs_callback_) {
+                                content_type = "text/plain; charset=utf-8";
+                                body = logs_callback_();
+                            } else {
+                                status = "404 Not Found";
+                                content_type = "text/plain; charset=utf-8";
+                                body = "Not Found\r\n";
                             }
-                        }
-                        if (!handled_custom) {
-                            status = "404 Not Found";
+                            break;
+                        case BuiltInRoute::kMetrics:
+                            if (callback_) {
+                                body = callback_();
+                            } else {
+                                body = "# No callback registered\n";
+                            }
+                            break;
+                        case BuiltInRoute::kHealth: {
+                            const bool ok = health_callback_ ? health_callback_() : true;
+                            status = ok ? "200 OK" : "503 Service Unavailable";
                             content_type = "text/plain; charset=utf-8";
-                            body = "Not Found\r\n";
+                            if (health_body_callback_) {
+                                body = health_body_callback_(ok);
+                            } else {
+                                body = ok ? "ok\n" : "unhealthy\n";
+                            }
+                            break;
+                        }
+                        case BuiltInRoute::kReady: {
+                            const bool ok = ready_callback_ ? ready_callback_() : true;
+                            status = ok ? "200 OK" : "503 Service Unavailable";
+                            content_type = "text/plain; charset=utf-8";
+                            if (ready_body_callback_) {
+                                body = ready_body_callback_(ok);
+                            } else {
+                                body = ok ? "ready\n" : "not ready\n";
+                            }
+                            break;
+                        }
+                        case BuiltInRoute::kNone: {
+                            bool handled_custom = false;
+                            if (route_callback_) {
+                                if (auto custom = route_callback_(request)) {
+                                    handled_custom = true;
+                                    status = custom->status.empty() ? "200 OK" : std::move(custom->status);
+                                    content_type = custom->content_type.empty()
+                                        ? "text/plain; charset=utf-8"
+                                        : std::move(custom->content_type);
+                                    body = std::move(custom->body);
+                                }
+                            }
+                            if (!handled_custom) {
+                                status = "404 Not Found";
+                                content_type = "text/plain; charset=utf-8";
+                                body = "Not Found\r\n";
+                            }
+                            break;
+                        }
                         }
                     }
 

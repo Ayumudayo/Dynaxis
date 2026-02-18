@@ -1,4 +1,5 @@
 #include <iostream>
+#include <array>
 #include <thread>
 #include <vector>
 #include <string>
@@ -7,6 +8,7 @@
 #include <chrono>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <cctype>
 #include <unordered_map>
 
@@ -426,48 +428,93 @@ int run_server(int argc, char** argv) {
             // 통합 패턴 구독 (RedisClientImpl이 단일 구독만 지원하므로)
             std::string pattern_all = config.redis_channel_prefix + std::string("fanout:*");
             std::string gwid = config.gateway_id;
-            
-            redis->start_psubscribe(pattern_all, [&chat, gwid, prefix = config.redis_channel_prefix](const std::string& channel, const std::string& message){
+
+            const std::string refresh_prefix = config.redis_channel_prefix + "fanout:refresh:";
+            const std::string room_prefix = config.redis_channel_prefix + "fanout:room:";
+
+            enum class ExactFanoutChannel {
+                kWhisper,
+                kAdminDisconnect,
+                kAdminAnnounce,
+                kAdminSettings,
+            };
+
+            using ExactChannelEntry = std::pair<std::string, ExactFanoutChannel>;
+            const std::array<ExactChannelEntry, 4> exact_channels{{
+                {config.redis_channel_prefix + "fanout:whisper", ExactFanoutChannel::kWhisper},
+                {config.redis_channel_prefix + "fanout:admin:disconnect", ExactFanoutChannel::kAdminDisconnect},
+                {config.redis_channel_prefix + "fanout:admin:announce", ExactFanoutChannel::kAdminAnnounce},
+                {config.redis_channel_prefix + "fanout:admin:settings", ExactFanoutChannel::kAdminSettings},
+            }};
+
+            redis->start_psubscribe(pattern_all,
+                                    [&chat,
+                                     gwid,
+                                     refresh_prefix,
+                                     room_prefix,
+                                     exact_channels](const std::string& channel, const std::string& message) {
                 // 1. Self-Echo 방지
                 if (message.rfind("gw=", 0) == 0) {
-                    auto nl = message.find('\n'); 
+                    auto nl = message.find('\n');
                     std::string from;
-                    if (nl != std::string::npos) from = message.substr(3, nl - 3);
-                    else from = message.substr(3);
+                    if (nl != std::string::npos) {
+                        from = message.substr(3, nl - 3);
+                    } else {
+                        from = message.substr(3);
+                    }
                     if (from == gwid) {
-                         // g_self_echo_drop_total++; 
-                         return; 
+                        // g_self_echo_drop_total++;
+                        return;
                     }
 
                     // 2. 채널 분기 처리
                     // channel: prefix + "fanout:room:<room>" OR prefix + "fanout:refresh:<room>" OR prefix + "fanout:whisper"
-                    if (channel.find(prefix + "fanout:refresh:") == 0) {
+                    if (channel.rfind(refresh_prefix, 0) == 0) {
                         // Refresh Notification
-                        std::string room = channel.substr((prefix + "fanout:refresh:").size());
+                        std::string room = channel.substr(refresh_prefix.size());
                         chat.broadcast_refresh_local(room);
                         corelog::info("DEBUG: Received refresh notify for room: " + room + " from " + from);
-                    } 
-                    else if (channel.find(prefix + "fanout:room:") == 0) {
+                        return;
+                    }
+
+                    if (channel.rfind(room_prefix, 0) == 0) {
                         // Chat Broadcast
-                        if (nl == std::string::npos) return; // 채팅은 payload 필수
+                        if (nl == std::string::npos) {
+                            return; // 채팅은 payload 필수
+                        }
                         std::string payload = message.substr(nl + 1);
-                        std::string room = channel.substr((prefix + "fanout:room:").size());
+                        std::string room = channel.substr(room_prefix.size());
                         std::vector<std::uint8_t> body(payload.begin(), payload.end());
                         chat.broadcast_room(room, body, nullptr);
                         g_subscribe_total++;
+                        return;
                     }
-                    else if (channel == prefix + "fanout:whisper") {
-                        if (nl == std::string::npos) return;
-                        std::string payload = message.substr(nl + 1);
+
+                    std::optional<ExactFanoutChannel> exact_match;
+                    for (const auto& [name, kind] : exact_channels) {
+                        if (channel == name) {
+                            exact_match = kind;
+                            break;
+                        }
+                    }
+
+                    if (!exact_match.has_value()) {
+                        return;
+                    }
+
+                    if (nl == std::string::npos) {
+                        return;
+                    }
+
+                    const std::string payload = message.substr(nl + 1);
+                    switch (*exact_match) {
+                    case ExactFanoutChannel::kWhisper: {
                         std::vector<std::uint8_t> body(payload.begin(), payload.end());
                         chat.deliver_remote_whisper(body);
                         g_subscribe_total++;
+                        return;
                     }
-                    else if (channel == prefix + "fanout:admin:disconnect") {
-                        if (nl == std::string::npos) {
-                            return;
-                        }
-                        const std::string payload = message.substr(nl + 1);
+                    case ExactFanoutChannel::kAdminDisconnect: {
                         const auto fields = parse_kv_lines(payload);
 
                         auto it = fields.find("client_ids");
@@ -487,12 +534,9 @@ int run_server(int argc, char** argv) {
 
                         chat.admin_disconnect_users(users, reason);
                         g_subscribe_total++;
+                        return;
                     }
-                    else if (channel == prefix + "fanout:admin:announce") {
-                        if (nl == std::string::npos) {
-                            return;
-                        }
-                        const std::string payload = message.substr(nl + 1);
+                    case ExactFanoutChannel::kAdminAnnounce: {
                         const auto fields = parse_kv_lines(payload);
 
                         const auto text_it = fields.find("text");
@@ -502,12 +546,9 @@ int run_server(int argc, char** argv) {
 
                         chat.admin_broadcast_notice(text_it->second);
                         g_subscribe_total++;
+                        return;
                     }
-                    else if (channel == prefix + "fanout:admin:settings") {
-                        if (nl == std::string::npos) {
-                            return;
-                        }
-                        const std::string payload = message.substr(nl + 1);
+                    case ExactFanoutChannel::kAdminSettings: {
                         const auto fields = parse_kv_lines(payload);
 
                         const auto key_it = fields.find("key");
@@ -518,7 +559,11 @@ int run_server(int argc, char** argv) {
 
                         chat.admin_apply_runtime_setting(key_it->second, value_it->second);
                         g_subscribe_total++;
+                        return;
                     }
+                    }
+
+                    return;
                 }
             });
 

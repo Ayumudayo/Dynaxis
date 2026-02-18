@@ -99,6 +99,9 @@ pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build -Observability
   - `key` (`presence_ttl_sec|recent_history_limit|room_recent_maxlen`)
   - `value` (unsigned integer)
 
+설정 key/range 검증은 `core/include/server/core/config/runtime_settings.hpp`의 공통 규칙을 사용한다.
+동일 규칙이 `admin_app` 입력 검증과 `server_app` 런타임 적용 경로에 함께 적용되어 문서/코드 drift를 줄인다.
+
 권한:
 
 - `viewer`: read-only

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cctype>
@@ -31,6 +32,7 @@
 
 #include "server/core/app/app_host.hpp"
 #include "server/core/app/termination_signals.hpp"
+#include "server/core/config/runtime_settings.hpp"
 #include "server/core/metrics/build_info.hpp"
 #include "server/core/metrics/http_server.hpp"
 #include "server/core/util/log.hpp"
@@ -276,11 +278,20 @@ bool is_supported_role(std::string_view role) {
 }
 
 int role_rank(std::string_view role) {
-    if (role == "admin") {
-        return 2;
-    }
-    if (role == "operator") {
-        return 1;
+    struct RoleRankEntry {
+        std::string_view role;
+        int rank;
+    };
+
+    static constexpr std::array<RoleRankEntry, 2> kRoleRanks{{
+        {"admin", 2},
+        {"operator", 1},
+    }};
+
+    for (const auto& entry : kRoleRanks) {
+        if (entry.role == role) {
+            return entry.rank;
+        }
     }
     return 0;
 }
@@ -375,15 +386,25 @@ std::string join_csv(const std::vector<std::string>& values) {
 
 AdminAuthMode parse_auth_mode(std::string_view raw) {
     const std::string mode = to_lower_ascii(trim_ascii(raw));
-    if (mode == "header") {
-        return AdminAuthMode::kHeader;
+
+    struct AuthModeEntry {
+        std::string_view text;
+        AdminAuthMode mode;
+    };
+
+    static constexpr std::array<AuthModeEntry, 4> kAuthModes{{
+        {"header", AdminAuthMode::kHeader},
+        {"bearer", AdminAuthMode::kBearer},
+        {"header_or_bearer", AdminAuthMode::kHeaderOrBearer},
+        {"header-or-bearer", AdminAuthMode::kHeaderOrBearer},
+    }};
+
+    for (const auto& entry : kAuthModes) {
+        if (entry.text == mode) {
+            return entry.mode;
+        }
     }
-    if (mode == "bearer") {
-        return AdminAuthMode::kBearer;
-    }
-    if (mode == "header_or_bearer" || mode == "header-or-bearer") {
-        return AdminAuthMode::kHeaderOrBearer;
-    }
+
     return AdminAuthMode::kOff;
 }
 
@@ -528,43 +549,56 @@ std::string json_details(std::string_view key, std::string_view value) {
 }
 
 std::string resource_from_path(std::string_view path) {
-    if (path == "/api/v1/auth/context") {
-        return "auth_context";
+    struct ExactRoute {
+        std::string_view path;
+        std::string_view resource;
+    };
+
+    static constexpr std::array<ExactRoute, 10> kExactRoutes{{
+        {"/api/v1/auth/context", "auth_context"},
+        {"/api/v1/overview", "overview"},
+        {"/api/v1/instances", "instances"},
+        {"/api/v1/users", "users"},
+        {"/api/v1/users/disconnect", "users_disconnect"},
+        {"/api/v1/announcements", "announcements"},
+        {"/api/v1/settings", "runtime_settings"},
+        {"/api/v1/worker/write-behind", "worker_write_behind"},
+        {"/api/v1/metrics/links", "metrics_links"},
+        {"/admin", "admin_ui"},
+    }};
+
+    for (const auto& route : kExactRoutes) {
+        if (path == route.path) {
+            return std::string(route.resource);
+        }
     }
-    if (path == "/api/v1/overview") {
-        return "overview";
-    }
-    if (path == "/api/v1/instances") {
-        return "instances";
-    }
-    if (path.starts_with("/api/v1/instances/")) {
-        return "instance_detail";
-    }
-    if (path.starts_with("/api/v1/sessions/")) {
-        return "session_lookup";
-    }
-    if (path == "/api/v1/users") {
-        return "users";
-    }
-    if (path == "/api/v1/users/disconnect") {
-        return "users_disconnect";
-    }
-    if (path == "/api/v1/announcements") {
-        return "announcements";
-    }
-    if (path == "/api/v1/settings") {
-        return "runtime_settings";
-    }
-    if (path == "/api/v1/worker/write-behind") {
-        return "worker_write_behind";
-    }
-    if (path == "/api/v1/metrics/links") {
-        return "metrics_links";
-    }
-    if (path == "/admin" || path == "/admin/") {
+
+    if (path == "/admin/") {
         return "admin_ui";
     }
+
+    struct PrefixRoute {
+        std::string_view prefix;
+        std::string_view resource;
+    };
+
+    static constexpr std::array<PrefixRoute, 2> kPrefixRoutes{{
+        {"/api/v1/instances/", "instance_detail"},
+        {"/api/v1/sessions/", "session_lookup"},
+    }};
+
+    for (const auto& route : kPrefixRoutes) {
+        if (path.starts_with(route.prefix)) {
+            return std::string(route.resource);
+        }
+    }
+
     return "unknown";
+}
+
+std::string runtime_setting_range_error_message(const server::core::config::RuntimeSettingRule& rule) {
+    return std::string(rule.key_name) + " must be " +
+           std::to_string(rule.min_value) + ".." + std::to_string(rule.max_value);
 }
 
 std::string ensure_trailing_slash(std::string value) {
@@ -1283,10 +1317,15 @@ private:
             event.latency_ms = static_cast<std::uint64_t>(elapsed.count());
             event.source_ip = request.source_ip.empty() ? std::string("unknown") : request.source_ip;
 
-            if (status_code == 401) {
+            switch (status_code) {
+            case 401:
                 http_unauthorized_total_.fetch_add(1, std::memory_order_relaxed);
-            } else if (status_code == 403) {
+                break;
+            case 403:
                 http_forbidden_total_.fetch_add(1, std::memory_order_relaxed);
+                break;
+            default:
+                break;
             }
 
             if (status_code >= 500) {
@@ -2259,24 +2298,19 @@ private:
                 json_details("value", value));
         }
 
-        if (key == "presence_ttl_sec") {
-            if (parsed_value < 5 || parsed_value > 3600) {
-                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
-                return json_error(request_id, "400 Bad Request", "BAD_REQUEST", "presence_ttl_sec must be 5..3600");
-            }
-        } else if (key == "recent_history_limit") {
-            if (parsed_value < 5 || parsed_value > 2000) {
-                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
-                return json_error(request_id, "400 Bad Request", "BAD_REQUEST", "recent_history_limit must be 5..2000");
-            }
-        } else if (key == "room_recent_maxlen") {
-            if (parsed_value < 5 || parsed_value > 5000) {
-                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
-                return json_error(request_id, "400 Bad Request", "BAD_REQUEST", "room_recent_maxlen must be 5..5000");
-            }
-        } else {
+        const auto* setting_rule = server::core::config::find_runtime_setting_rule(key);
+        if (setting_rule == nullptr) {
             http_errors_total_.fetch_add(1, std::memory_order_relaxed);
             return json_error(request_id, "400 Bad Request", "BAD_REQUEST", "unsupported setting key");
+        }
+
+        if (parsed_value < setting_rule->min_value || parsed_value > setting_rule->max_value) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "400 Bad Request",
+                "BAD_REQUEST",
+                runtime_setting_range_error_message(*setting_rule));
         }
 
         const std::string channel = redis_channel_prefix_ + "fanout:admin:settings";

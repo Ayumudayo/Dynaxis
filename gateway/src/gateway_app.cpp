@@ -14,6 +14,7 @@
 #include <deque>
 #include <iomanip>
 #include <sstream>
+#include <type_traits>
 
 #include <boost/asio/connect.hpp>
 #include <boost/asio/write.hpp>
@@ -49,16 +50,18 @@ constexpr const char* kDefaultServerRegistryPrefix = "gateway/instances/";
 constexpr std::uint32_t kDefaultBackendConnectTimeoutMs = 5000;
 constexpr std::size_t kDefaultBackendSendQueueMaxBytes = 256 * 1024;
 
-std::uint32_t parse_env_u32_bounded(const char* key,
-                                    std::uint32_t fallback,
-                                    std::uint32_t min_value,
-                                    std::uint32_t max_value,
-                                    const char* warning_message) {
+template <typename T>
+T parse_env_integral_bounded(const char* key,
+                             T fallback,
+                             T min_value,
+                             T max_value,
+                             const char* warning_message) {
+    static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>);
     if (const char* value = std::getenv(key); value && *value) {
         try {
             const auto parsed = std::stoull(value);
             if (parsed >= min_value && parsed <= max_value) {
-                return static_cast<std::uint32_t>(parsed);
+                return static_cast<T>(parsed);
             }
         } catch (...) {
         }
@@ -67,22 +70,20 @@ std::uint32_t parse_env_u32_bounded(const char* key,
     return fallback;
 }
 
+std::uint32_t parse_env_u32_bounded(const char* key,
+                                    std::uint32_t fallback,
+                                    std::uint32_t min_value,
+                                    std::uint32_t max_value,
+                                    const char* warning_message) {
+    return parse_env_integral_bounded<std::uint32_t>(key, fallback, min_value, max_value, warning_message);
+}
+
 std::size_t parse_env_size_bounded(const char* key,
                                    std::size_t fallback,
                                    std::size_t min_value,
                                    std::size_t max_value,
                                    const char* warning_message) {
-    if (const char* value = std::getenv(key); value && *value) {
-        try {
-            const auto parsed = std::stoull(value);
-            if (parsed >= min_value && parsed <= max_value) {
-                return static_cast<std::size_t>(parsed);
-            }
-        } catch (...) {
-        }
-        server::core::log::warn(warning_message);
-    }
-    return fallback;
+    return parse_env_integral_bounded<std::size_t>(key, fallback, min_value, max_value, warning_message);
 }
 
 std::pair<std::string, std::uint16_t> parse_listen(std::string_view value, std::uint16_t fallback_port) {
