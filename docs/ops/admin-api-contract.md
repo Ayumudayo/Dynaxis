@@ -1,10 +1,10 @@
-# Admin API Contract (Phase 1: Read-only)
+# Admin API Contract (Phase 2: Control-plane)
 
-본 문서는 `admin_app`의 1차 API 계약을 정의한다.
+본 문서는 `admin_app` API 계약(Phase 2)을 정의한다.
 
-- 목표: 운영자가 분산 상태를 한 곳에서 조회
-- 범위: 조회(Read-only)만 허용
-- 비범위: 세션 강제 종료, drain/undrain, 설정 변경 같은 write 액션
+- 목표: 운영자가 분산 상태 조회 + 제한적 운영 액션을 한 곳에서 수행
+- 범위: 조회(Read) + 제한적 write(연결 종료/공지/런타임 설정)
+- 비범위: drain/undrain, 권한 정책 변경, 영구 설정 저장
 
 관련 문서:
 
@@ -19,18 +19,18 @@
 
 ## 2. 인증/인가 계약
 
-Phase 1 기본 정책:
+기본 정책:
 
 1. 내부 네트워크 접근만 허용 (VPN/allowlist)
 2. `admin_app` 앞단 reverse proxy에서 인증 수행
 3. `admin_app`은 신뢰된 identity header 또는 bearer 토큰을 해석
 
-Phase 1 구현 스펙(현재):
+Phase 2 구현 스펙(현재):
 
 - 보호 경로: `/admin`, `/api/v1/*`
 - 공개 경로: `/healthz`, `/readyz`, `/metrics`
 - `ADMIN_AUTH_MODE`:
-  - `off` (기본값): 인증 비활성(내부망 전용 운영 전제)
+  - `off` (기본값): 인증 비활성(내부망 전용 운영 전제, role=`ADMIN_OFF_ROLE`)
   - `header`: identity header만 허용
   - `bearer`: bearer 토큰만 허용
   - `header_or_bearer`: header 우선, 미존재 시 bearer 허용
@@ -45,11 +45,15 @@ Phase 1 구현 스펙(현재):
   - 토큰 비교값: `ADMIN_BEARER_TOKEN`
   - actor/role 주입값: `ADMIN_BEARER_ACTOR`, `ADMIN_BEARER_ROLE`
   - token 미설정/불일치/형식오류는 `UNAUTHORIZED(401)`
+- Off 모드 스펙:
+  - actor=`anonymous`
+  - role=`ADMIN_OFF_ROLE` (기본 `admin`)
 
 최소 role:
 
-- `viewer`: 모든 Phase 1 조회 API 접근 가능
-- `operator`, `admin`: Phase 1에서는 `viewer`와 동일 권한
+- `viewer`: 조회 API만 접근 가능
+- `operator`: 조회 + 연결 종료/공지
+- `admin`: 조회 + 연결 종료/공지 + 런타임 설정 변경
 
 ## 3. 공통 응답 형식
 
@@ -117,7 +121,7 @@ Phase 1 구현 스펙(현재):
 메모:
 
 - UI는 해당 endpoint를 사용해 현재 로그인 컨텍스트를 표시한다.
-- `mode=off`면 내부망 접근 정책 하에서 익명 `viewer` 컨텍스트로 응답한다.
+- `mode=off`면 내부망 접근 정책 하에서 익명 + `ADMIN_OFF_ROLE` 컨텍스트로 응답한다.
 
 ### 6.1 GET /api/v1/overview
 
@@ -229,6 +233,92 @@ Phase 1 구현 스펙(현재):
 - `dashboards[]`
 - `queries[]`
 
+### 6.7 GET /api/v1/users
+
+목적:
+
+- 현재 접속 사용자 목록 조회(운영 선택/조치 대상)
+
+쿼리:
+
+- 공통: `limit`, `cursor`
+- 추가: `room` (optional)
+
+응답 필드(항목별):
+
+- `client_id`
+- `room`
+- `backend_instance_id` (없으면 null)
+- `backend` (instance 요약, 없으면 null)
+- `source.session_key`
+- `source.room_key`
+
+데이터 소스:
+
+- Redis: `room:users:*`, `gateway/session/{client_id}`
+- instance 캐시: `/api/v1/instances` 내부 캐시 재사용
+
+### 6.8 POST /api/v1/users/disconnect
+
+목적:
+
+- 선택한 사용자 세션 강제 종료 명령 publish
+
+쿼리:
+
+- `client_id` 또는 `client_ids`(comma separated) 중 하나 이상 필수
+- `reason` (optional)
+
+동작:
+
+- Redis Pub/Sub channel `${REDIS_CHANNEL_PREFIX}fanout:admin:disconnect`로 best-effort publish
+- payload는 `client_ids`, `reason`, `actor`, `request_id` 포함
+
+권한:
+
+- `operator`, `admin`
+
+### 6.9 POST /api/v1/announcements
+
+목적:
+
+- 서버 전체 공지 명령 publish
+
+쿼리:
+
+- `text` (required, max 512 bytes)
+- `priority` (`info|warn|critical`, optional)
+
+동작:
+
+- Redis Pub/Sub channel `${REDIS_CHANNEL_PREFIX}fanout:admin:announce`
+
+권한:
+
+- `operator`, `admin`
+
+### 6.10 PATCH /api/v1/settings
+
+목적:
+
+- 런타임 변경 가능한 설정 변경 명령 publish
+
+쿼리:
+
+- `key` (required)
+  - `presence_ttl_sec` (`5..3600`)
+  - `recent_history_limit` (`5..2000`)
+  - `room_recent_maxlen` (`5..5000`)
+- `value` (required, unsigned integer)
+
+동작:
+
+- Redis Pub/Sub channel `${REDIS_CHANNEL_PREFIX}fanout:admin:settings`
+
+권한:
+
+- `admin`
+
 ## 7. 권한 매트릭스
 
 | Endpoint | viewer | operator | admin |
@@ -237,7 +327,11 @@ Phase 1 구현 스펙(현재):
 | GET /api/v1/overview | allow | allow | allow |
 | GET /api/v1/instances | allow | allow | allow |
 | GET /api/v1/instances/{instance_id} | allow | allow | allow |
+| GET /api/v1/users | allow | allow | allow |
 | GET /api/v1/sessions/{client_id} | allow | allow | allow |
+| POST /api/v1/users/disconnect | deny | allow | allow |
+| POST /api/v1/announcements | deny | allow | allow |
+| PATCH /api/v1/settings | deny | deny | allow |
 | GET /api/v1/worker/write-behind | allow | allow | allow |
 | GET /api/v1/metrics/links | allow | allow | allow |
 

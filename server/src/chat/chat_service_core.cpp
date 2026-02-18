@@ -19,6 +19,7 @@
 #include <cctype>
 #include <cstring>
 #include <cstdlib>
+#include <limits>
 #include <sstream>
 #include <utility>
 #include <unordered_set>
@@ -933,6 +934,196 @@ bool ChatService::maybe_handle_chat_hook_plugin(Session& s,
         }
     }
     return out.stop_default;
+}
+
+void ChatService::admin_disconnect_users(const std::vector<std::string>& users, const std::string& reason) {
+    if (users.empty()) {
+        return;
+    }
+
+    std::vector<std::string> targets;
+    targets.reserve(users.size());
+    for (const auto& user : users) {
+        if (!user.empty()) {
+            targets.push_back(user);
+        }
+    }
+    if (targets.empty()) {
+        return;
+    }
+
+    const std::string notice = reason;
+    if (!job_queue_.TryPush([this, targets = std::move(targets), notice]() {
+        std::vector<std::shared_ptr<Session>> sessions;
+        std::unordered_set<Session*> seen;
+
+        {
+            std::lock_guard<std::mutex> lk(state_.mu);
+            for (const auto& user : targets) {
+                auto itset = state_.by_user.find(user);
+                if (itset == state_.by_user.end()) {
+                    continue;
+                }
+
+                for (auto wit = itset->second.begin(); wit != itset->second.end();) {
+                    if (auto session = wit->lock()) {
+                        if (!state_.authed.count(session.get()) || state_.guest.count(session.get())) {
+                            ++wit;
+                            continue;
+                        }
+                        if (seen.insert(session.get()).second) {
+                            sessions.push_back(std::move(session));
+                        }
+                        ++wit;
+                    } else {
+                        wit = itset->second.erase(wit);
+                    }
+                }
+            }
+        }
+
+        for (auto& session : sessions) {
+            if (!notice.empty()) {
+                send_system_notice(*session, notice);
+            }
+            session->stop();
+        }
+
+        corelog::info("admin disconnect applied: requested=" + std::to_string(targets.size()) +
+                      " disconnected=" + std::to_string(sessions.size()));
+    })) {
+        corelog::warn("admin disconnect dropped: job queue full");
+    }
+}
+
+void ChatService::admin_broadcast_notice(const std::string& text) {
+    if (text.empty()) {
+        return;
+    }
+
+    const std::string notice = text;
+    if (!job_queue_.TryPush([this, notice]() {
+        std::vector<std::shared_ptr<Session>> sessions;
+        std::unordered_set<Session*> seen;
+
+        {
+            std::lock_guard<std::mutex> lk(state_.mu);
+            for (auto& [_, room_set] : state_.rooms) {
+                for (auto wit = room_set.begin(); wit != room_set.end();) {
+                    if (auto session = wit->lock()) {
+                        if (!state_.authed.count(session.get()) || state_.guest.count(session.get())) {
+                            ++wit;
+                            continue;
+                        }
+                        if (seen.insert(session.get()).second) {
+                            sessions.push_back(std::move(session));
+                        }
+                        ++wit;
+                    } else {
+                        wit = room_set.erase(wit);
+                    }
+                }
+            }
+        }
+
+        for (auto& session : sessions) {
+            send_system_notice(*session, notice);
+        }
+
+        corelog::info("admin announcement delivered: sessions=" + std::to_string(sessions.size()));
+    })) {
+        corelog::warn("admin announcement dropped: job queue full");
+    }
+}
+
+void ChatService::admin_apply_runtime_setting(const std::string& key, const std::string& value) {
+    if (key.empty() || value.empty()) {
+        return;
+    }
+
+    if (!job_queue_.TryPush([this, key, value]() {
+        auto trim_ascii_local = [](std::string_view input) {
+            std::size_t begin = 0;
+            while (begin < input.size() && std::isspace(static_cast<unsigned char>(input[begin])) != 0) {
+                ++begin;
+            }
+            std::size_t end = input.size();
+            while (end > begin && std::isspace(static_cast<unsigned char>(input[end - 1])) != 0) {
+                --end;
+            }
+            return std::string(input.substr(begin, end - begin));
+        };
+
+        auto to_lower_ascii_local = [](std::string_view input) {
+            std::string out(input);
+            std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            return out;
+        };
+
+        auto parse_u32 = [](std::string_view raw) -> std::optional<std::uint32_t> {
+            if (raw.empty()) {
+                return std::nullopt;
+            }
+            try {
+                std::size_t pos = 0;
+                const auto parsed = std::stoull(std::string(raw), &pos, 10);
+                if (pos != raw.size() || parsed > std::numeric_limits<std::uint32_t>::max()) {
+                    return std::nullopt;
+                }
+                return static_cast<std::uint32_t>(parsed);
+            } catch (...) {
+                return std::nullopt;
+            }
+        };
+
+        const std::string normalized_key = to_lower_ascii_local(trim_ascii_local(key));
+        const std::string normalized_value = trim_ascii_local(value);
+        const auto parsed = parse_u32(normalized_value);
+        if (!parsed) {
+            corelog::warn("admin setting rejected: key=" + normalized_key + " reason=invalid_value");
+            return;
+        }
+
+        if (normalized_key == "presence_ttl_sec") {
+            if (*parsed < 5 || *parsed > 3600) {
+                corelog::warn("admin setting rejected: key=presence_ttl_sec reason=out_of_range");
+                return;
+            }
+            presence_.ttl = *parsed;
+            corelog::info("admin setting applied: key=presence_ttl_sec value=" + std::to_string(*parsed));
+            return;
+        }
+
+        if (normalized_key == "recent_history_limit") {
+            if (*parsed < 5 || *parsed > 2000) {
+                corelog::warn("admin setting rejected: key=recent_history_limit reason=out_of_range");
+                return;
+            }
+            history_.recent_limit = static_cast<std::size_t>(*parsed);
+            if (history_.max_list_len < history_.recent_limit) {
+                history_.max_list_len = history_.recent_limit;
+            }
+            corelog::info("admin setting applied: key=recent_history_limit value=" + std::to_string(*parsed));
+            return;
+        }
+
+        if (normalized_key == "room_recent_maxlen") {
+            const auto min_allowed = static_cast<std::uint32_t>(history_.recent_limit);
+            if (*parsed < min_allowed || *parsed > 5000) {
+                corelog::warn("admin setting rejected: key=room_recent_maxlen reason=out_of_range");
+                return;
+            }
+            history_.max_list_len = static_cast<std::size_t>(*parsed);
+            corelog::info("admin setting applied: key=room_recent_maxlen value=" + std::to_string(*parsed));
+            return;
+        }
+
+        corelog::warn("admin setting rejected: key=" + normalized_key + " reason=unsupported_key");
+    })) {
+        corelog::warn("admin setting dropped: job queue full");
+    }
 }
 
 // 귓속말 전송 결과를 클라이언트에게 알립니다.

@@ -93,7 +93,7 @@ def main() -> int:
         data = overview.get("data", {})
         if data.get("service") != "admin_app":
             raise RuntimeError("overview.service mismatch")
-        if data.get("mode") != "read_only":
+        if data.get("mode") != "control_plane":
             raise RuntimeError("overview.mode mismatch")
         services = data.get("services", {})
         for key in ("gateway", "server", "wb_worker", "haproxy"):
@@ -146,8 +146,20 @@ def main() -> int:
             raise RuntimeError("auth context mode mismatch")
         if auth_data.get("actor") != "anonymous":
             raise RuntimeError("auth context actor mismatch")
-        if auth_data.get("role") != "viewer":
+        role = auth_data.get("role")
+        if role not in ("viewer", "operator", "admin"):
             raise RuntimeError("auth context role mismatch")
+        capabilities = auth_data.get("capabilities", {})
+        for key in ("disconnect", "announce", "settings"):
+            if key not in capabilities:
+                raise RuntimeError(f"auth context capabilities missing '{key}'")
+            if not isinstance(capabilities[key], bool):
+                raise RuntimeError(f"auth context capabilities.{key} expected bool")
+
+        users_payload = load_json("/api/v1/users?limit=10")
+        users_data = users_payload.get("data", {})
+        if "items" not in users_data or "paging" not in users_data:
+            raise RuntimeError("users payload missing items/paging")
 
         instances = wait_for_instances()
         instances_data = instances.get("data", {})

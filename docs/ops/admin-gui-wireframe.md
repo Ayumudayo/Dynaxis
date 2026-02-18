@@ -1,6 +1,6 @@
 # Admin GUI MVP IA / Wireframe
 
-본 문서는 Phase 1(read-only) 기준 운영 GUI 정보구조(IA)와 화면 와이어프레임을 정의한다.
+본 문서는 Phase 2(control-plane) 기준 운영 GUI 정보구조(IA)와 화면 와이어프레임을 정의한다.
 
 관련 문서:
 
@@ -9,13 +9,15 @@
 
 ## 1. IA (Information Architecture)
 
-MVP 네비게이션:
+Phase 2 네비게이션:
 
 1. Dashboard
 2. Instances
-3. Session Lookup
-4. Write-behind
-5. Metrics Links
+3. Connected Users
+4. Session Lookup
+5. Write-behind
+6. Operator Actions
+7. Metrics Links
 
 공통 UI 요소:
 
@@ -80,7 +82,29 @@ API 매핑:
 - `GET /api/v1/instances`
 - `GET /api/v1/instances/{instance_id}`
 
-## 2.3 Session Lookup
+## 2.3 Connected Users
+
+목적:
+
+- 현재 접속 사용자 목록을 확인하고 운영 액션 대상을 선택
+
+구성:
+
+- 테이블 컬럼
+  - checkbox
+  - client_id
+  - room
+  - backend_instance_id
+  - ready
+  - session_key
+- 일괄 Disconnect 버튼 + reason 입력
+
+API 매핑:
+
+- `GET /api/v1/users`
+- `POST /api/v1/users/disconnect`
+
+## 2.4 Session Lookup
 
 목적:
 
@@ -99,7 +123,7 @@ API 매핑:
 
 - `GET /api/v1/sessions/{client_id}`
 
-## 2.4 Write-behind
+## 2.5 Write-behind
 
 목적:
 
@@ -118,7 +142,24 @@ API 매핑:
 
 - `GET /api/v1/worker/write-behind`
 
-## 2.5 Metrics Links
+## 2.6 Operator Actions
+
+목적:
+
+- 서버 전체 공지 및 런타임 설정 변경
+
+구성:
+
+- Announcement form (`text`, `priority`)
+- Runtime settings form (`key`, `value`)
+- role-gated UX (`operator`/`admin`)
+
+API 매핑:
+
+- `POST /api/v1/announcements`
+- `PATCH /api/v1/settings`
+
+## 2.7 Metrics Links
 
 목적:
 
@@ -164,6 +205,8 @@ Phase 1 순서:
 
 1. Dashboard
 2. Instances
-3. Session Lookup
-4. Write-behind
-5. Metrics Links
+3. Connected Users
+4. Session Lookup
+5. Write-behind
+6. Operator Actions
+7. Metrics Links

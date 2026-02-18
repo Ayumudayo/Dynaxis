@@ -155,6 +155,31 @@ public:
     // Redis Pub/Sub로 전달된 원격 귓속말 payload를 로컬 대상 세션에게 전달합니다.
     void deliver_remote_whisper(const std::vector<std::uint8_t>& body);
 
+    /**
+     * @brief 관리자 제어면에서 지정한 사용자 세션들을 강제 종료합니다.
+     *
+     * @param users 종료 대상 사용자 식별자 목록
+     * @param reason 종료 사유(클라이언트 공지용, optional)
+     */
+    void admin_disconnect_users(const std::vector<std::string>& users, const std::string& reason);
+
+    /**
+     * @brief 관리자 공지를 현재 서버의 모든 로컬 사용자 세션에 전송합니다.
+     *
+     * @param text 공지 본문
+     */
+    void admin_broadcast_notice(const std::string& text);
+
+    /**
+     * @brief 런타임 변경 가능한 채팅 설정을 적용합니다.
+     *
+     * 지원 키:
+     * - presence_ttl_sec
+     * - recent_history_limit
+     * - room_recent_maxlen
+     */
+    void admin_apply_runtime_setting(const std::string& key, const std::string& value);
+
     struct ChatHookPluginMetric {
         std::string file;
         bool loaded{false};

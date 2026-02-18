@@ -27,14 +27,14 @@
    - 클러스터 상태(ready/deps/session load)
    - 세션 -> backend 라우팅 상태
    - write-behind 처리 상태
-2. **읽기 전용(Read-only) MVP**로 안전하게 시작
+2. **조회 + 제한적 write**(disconnect/announce/settings) 제공
 3. 기존 데이터 경로(HAProxy -> gateway -> server)와 분리된 제어면(control plane) 확보
 
-### 2.2 비목표 (MVP)
+### 2.2 비목표
 
 - 서버/게이트웨이/워커의 실행 경로를 대규모 리팩터링
 - 브라우저가 Redis/Postgres/Prometheus에 직접 접속
-- 강제 disconnect/drain 같은 변경(write) 액션 즉시 제공
+- drain/undrain, 권한 정책 수정, 영구 설정 저장
 
 ## 3. 설계 결정
 
@@ -123,7 +123,7 @@ Operator Browser
 2. 브라우저 직접 데이터스토어 접근 금지
 3. `admin_app` 장애가 채팅 경로에 영향 주지 않도록 분리 배포
 
-## 6. MVP 범위 (Read-only)
+## 6. MVP 범위 (Read + Write-lite)
 
 ### 6.1 화면/기능
 
@@ -148,6 +148,14 @@ Operator Browser
   - instance registry 목록 + ready/active_sessions
 - `GET /api/v1/sessions/{client_id}`
   - sticky mapping + 대상 instance 상태
+- `GET /api/v1/users`
+  - 현재 접속 사용자 목록 + backend 매핑
+- `POST /api/v1/users/disconnect`
+  - 선택 사용자 강제 종료 명령 publish
+- `POST /api/v1/announcements`
+  - 서버 전체 공지 명령 publish
+- `PATCH /api/v1/settings`
+  - 런타임 설정 변경 명령 publish
 - `GET /api/v1/worker/write-behind`
   - worker backlog/flush/reclaim 요약
 - `GET /api/v1/metrics/links`
@@ -176,7 +184,7 @@ Operator Browser
 - 확장: OIDC(SSO) 연동
 - RBAC 최소 3단계
   - `viewer` (MVP 기본)
-  - `operator` (향후 제한적 write)
+  - `operator` (disconnect/announcement)
   - `admin` (정책/권한 관리)
 
 ### 7.2 감사(Audit)
@@ -185,7 +193,7 @@ Operator Browser
 
 - `actor`, `role`, `request_id`, `source_ip`, `action`, `resource`, `result`, `latency_ms`, `timestamp`
 
-MVP는 read-only라도 감사 로그를 남긴다.
+MVP는 write 액션까지 포함하므로 감사 로그를 필수로 남긴다.
 
 ### 7.3 자격 증명 분리
 
@@ -195,7 +203,7 @@ MVP는 read-only라도 감사 로그를 남긴다.
 
 ## 8. 운영 안전장치
 
-1. 서버측 read-only 모드 플래그(초기값 on)
+1. 서버측 write 액션은 role-gated + channel allowlist 적용
 2. 쿼리 제한: pagination, timeout, max cardinality
 3. Redis key 조회는 범위 제한(prefix 고정) + 과도한 SCAN 금지
 4. 장애 시 admin_app를 즉시 차단 가능한 kill-switch 준비
@@ -208,7 +216,7 @@ MVP는 read-only라도 감사 로그를 남긴다.
 - `admin_app` 스켈레톤(health/ready/metrics) 생성
 - docker stack에 admin profile 초안 추가
 
-### Phase 1 - Read-only MVP
+### Phase 1 - Read-only Baseline
 
 - `overview`, `instances`, `sessions/{client_id}`, `worker/write-behind` API 구현
 - 최소 웹 UI(테이블 + 검색 + 링크)
@@ -220,9 +228,15 @@ MVP는 read-only라도 감사 로그를 남긴다.
 - 필터/검색/시계열 비교 UX 개선
 - 알람 임계치 뷰 제공
 
-### Phase 3 - 제한적 Write Action (선택)
+### Phase 2.5 - Write-lite Control Plane
 
-- drain/undrain 등 저위험 액션부터
+- `users`, `users/disconnect`, `announcements`, `settings` API 구현
+- role-gated UX(viewer/operator/admin) 적용
+- Redis Pub/Sub 기반 명령 채널 연동
+
+### Phase 3 - 고급 Write Action (선택)
+
+- drain/undrain 같은 라우팅 제어
 - 이중 확인 + idempotency key + 감사 강화
 - feature flag 기본 off
 
@@ -230,7 +244,7 @@ MVP는 read-only라도 감사 로그를 남긴다.
 
 - [ ] 브라우저에서 Redis/Postgres/Prometheus 직접 접근 경로가 없는가?
 - [ ] admin_app 권한 모델이 viewer 기본 최소권한인가?
-- [ ] read-only MVP에서 write codepath가 완전히 차단되는가?
+- [ ] write endpoint가 role-gated + 감사 추적 가능한가?
 - [ ] 운영 포트/네트워크가 내부 전용으로 제한되는가?
 - [ ] 감사 로그가 운영 추적에 충분한 필드를 포함하는가?
 

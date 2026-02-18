@@ -153,6 +153,7 @@ services:
     command: ["admin"]
     environment:
       REDIS_URI: tcp://redis:6379
+      REDIS_CHANNEL_PREFIX: "knights:"
       SERVER_REGISTRY_PREFIX: "gateway/instances/"
       SERVER_REGISTRY_TTL: "30"
       GATEWAY_SESSION_PREFIX: "gateway/session/"

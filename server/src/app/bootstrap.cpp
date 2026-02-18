@@ -7,6 +7,8 @@
 #include <chrono>
 #include <filesystem>
 #include <functional>
+#include <cctype>
+#include <unordered_map>
 
 #include <boost/asio.hpp>
 #include <clocale>
@@ -63,6 +65,71 @@ namespace server::app {
 std::atomic<std::uint64_t> g_subscribe_total{0};
 std::atomic<std::uint64_t> g_self_echo_drop_total{0};
 std::atomic<long long>     g_subscribe_last_lag_ms{0};
+
+namespace {
+
+std::string trim_ascii(std::string_view value) {
+    std::size_t begin = 0;
+    while (begin < value.size() && std::isspace(static_cast<unsigned char>(value[begin])) != 0) {
+        ++begin;
+    }
+    std::size_t end = value.size();
+    while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
+        --end;
+    }
+    return std::string(value.substr(begin, end - begin));
+}
+
+std::unordered_map<std::string, std::string> parse_kv_lines(std::string_view payload) {
+    std::unordered_map<std::string, std::string> out;
+    std::size_t start = 0;
+    while (start <= payload.size()) {
+        std::size_t end = payload.find('\n', start);
+        if (end == std::string_view::npos) {
+            end = payload.size();
+        }
+
+        const auto line = payload.substr(start, end - start);
+        const auto eq = line.find('=');
+        if (eq != std::string_view::npos) {
+            const std::string key = trim_ascii(line.substr(0, eq));
+            const std::string value = trim_ascii(line.substr(eq + 1));
+            if (!key.empty()) {
+                out[key] = value;
+            }
+        }
+
+        if (end == payload.size()) {
+            break;
+        }
+        start = end + 1;
+    }
+    return out;
+}
+
+std::vector<std::string> split_csv(std::string_view input) {
+    std::vector<std::string> out;
+    std::size_t start = 0;
+    while (start <= input.size()) {
+        std::size_t end = input.find(',', start);
+        if (end == std::string_view::npos) {
+            end = input.size();
+        }
+
+        std::string token = trim_ascii(input.substr(start, end - start));
+        if (!token.empty()) {
+            out.push_back(std::move(token));
+        }
+
+        if (end == input.size()) {
+            break;
+        }
+        start = end + 1;
+    }
+    return out;
+}
+
+} // namespace
 
 // 메인 서버 실행 함수
 // 1. 설정 로드
@@ -394,6 +461,62 @@ int run_server(int argc, char** argv) {
                         std::string payload = message.substr(nl + 1);
                         std::vector<std::uint8_t> body(payload.begin(), payload.end());
                         chat.deliver_remote_whisper(body);
+                        g_subscribe_total++;
+                    }
+                    else if (channel == prefix + "fanout:admin:disconnect") {
+                        if (nl == std::string::npos) {
+                            return;
+                        }
+                        const std::string payload = message.substr(nl + 1);
+                        const auto fields = parse_kv_lines(payload);
+
+                        auto it = fields.find("client_ids");
+                        if (it == fields.end() || it->second.empty()) {
+                            return;
+                        }
+
+                        auto users = split_csv(it->second);
+                        if (users.empty()) {
+                            return;
+                        }
+
+                        std::string reason = "Disconnected by administrator";
+                        if (const auto reason_it = fields.find("reason"); reason_it != fields.end() && !reason_it->second.empty()) {
+                            reason = reason_it->second;
+                        }
+
+                        chat.admin_disconnect_users(users, reason);
+                        g_subscribe_total++;
+                    }
+                    else if (channel == prefix + "fanout:admin:announce") {
+                        if (nl == std::string::npos) {
+                            return;
+                        }
+                        const std::string payload = message.substr(nl + 1);
+                        const auto fields = parse_kv_lines(payload);
+
+                        const auto text_it = fields.find("text");
+                        if (text_it == fields.end() || text_it->second.empty()) {
+                            return;
+                        }
+
+                        chat.admin_broadcast_notice(text_it->second);
+                        g_subscribe_total++;
+                    }
+                    else if (channel == prefix + "fanout:admin:settings") {
+                        if (nl == std::string::npos) {
+                            return;
+                        }
+                        const std::string payload = message.substr(nl + 1);
+                        const auto fields = parse_kv_lines(payload);
+
+                        const auto key_it = fields.find("key");
+                        const auto value_it = fields.find("value");
+                        if (key_it == fields.end() || value_it == fields.end() || key_it->second.empty() || value_it->second.empty()) {
+                            return;
+                        }
+
+                        chat.admin_apply_runtime_setting(key_it->second, value_it->second);
                         g_subscribe_total++;
                     }
                 }

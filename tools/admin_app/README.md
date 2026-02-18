@@ -1,6 +1,6 @@
 # admin_app
 
-`admin_app`은 운영 관리 콘솔을 위한 read-only control-plane 스켈레톤이다.
+`admin_app`은 운영 관리 콘솔을 위한 control-plane 서비스다.
 
 현재 제공 endpoint:
 
@@ -12,6 +12,10 @@
 - `/api/v1/instances` (JSON)
 - `/api/v1/instances/{instance_id}` (JSON)
 - `/api/v1/sessions/{client_id}` (JSON)
+- `/api/v1/users` (JSON)
+- `/api/v1/users/disconnect` (POST, query)
+- `/api/v1/announcements` (POST, query)
+- `/api/v1/settings` (PATCH, query)
 - `/api/v1/worker/write-behind` (JSON)
 - `/api/v1/metrics/links` (JSON)
 
@@ -26,10 +30,12 @@
 | `REDIS_URI` | Redis 연결 문자열(인스턴스/세션 조회용) | (unset) |
 | `SERVER_REGISTRY_PREFIX` | 인스턴스 레지스트리 prefix | `gateway/instances/` |
 | `GATEWAY_SESSION_PREFIX` | 세션 디렉터리 key prefix | `gateway/session/` |
+| `REDIS_CHANNEL_PREFIX` | fanout/admin command channel prefix | `` |
 | `WB_WORKER_METRICS_URL` | wb_worker metrics URL | `http://127.0.0.1:39093/metrics` |
 | `GRAFANA_BASE_URL` | Grafana base URL 링크 | `http://127.0.0.1:33000` |
 | `PROMETHEUS_BASE_URL` | Prometheus base URL 링크 | `http://127.0.0.1:39090` |
 | `ADMIN_AUTH_MODE` | 인증 모드 (`off`, `header`, `bearer`, `header_or_bearer`) | `off` |
+| `ADMIN_OFF_ROLE` | `ADMIN_AUTH_MODE=off`일 때 적용할 role (`viewer/operator/admin`) | `admin` |
 | `ADMIN_AUTH_USER_HEADER` | header 인증 시 사용자 header 이름 | `X-Admin-User` |
 | `ADMIN_AUTH_ROLE_HEADER` | header 인증 시 역할 header 이름 | `X-Admin-Role` |
 | `ADMIN_BEARER_TOKEN` | bearer 인증 토큰 값 | (unset) |
@@ -78,6 +84,26 @@ pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build -Observability
 - `timeout_ms` (optional, max `5000`)
 - `limit` (optional, max `500`)
 - `cursor` (optional)
+
+## Write Actions (Phase 2)
+
+`admin_app`는 아래 write endpoint를 제공한다. 현재 MetricsHttpServer 제약으로 body 대신 query parameter를 사용한다.
+
+- `POST /api/v1/users/disconnect`
+  - `client_id` 또는 `client_ids`(comma separated)
+  - `reason` (optional)
+- `POST /api/v1/announcements`
+  - `text` (required, max 512 bytes)
+  - `priority` (`info|warn|critical`, optional)
+- `PATCH /api/v1/settings`
+  - `key` (`presence_ttl_sec|recent_history_limit|room_recent_maxlen`)
+  - `value` (unsigned integer)
+
+권한:
+
+- `viewer`: read-only
+- `operator`: disconnect/announcement 가능
+- `admin`: runtime settings 포함 전체 가능
 
 ## 감사 로그
 

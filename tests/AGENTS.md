@@ -29,5 +29,6 @@ Note: `ctest` does not rebuild binaries. If a test executable fails to start wit
 - `tests/python/verify_whisper_cross_instance.py`
 - `tests/python/verify_admin_api.py`
 - `tests/python/verify_admin_auth.py`
+- `tests/python/verify_admin_control_plane_e2e.py`
 
 Most Python tests expect the Docker stack (`docker/stack`) to be running.
