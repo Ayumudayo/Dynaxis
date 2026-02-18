@@ -59,4 +59,6 @@ private:
     std::atomic<bool> stopped_{false};
 };
 
+using TransportListener = Listener;
+
 } // namespace server::core::net

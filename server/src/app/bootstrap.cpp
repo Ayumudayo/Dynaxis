@@ -383,9 +383,9 @@ int run_server(int argc, char** argv) {
 
         // 7. TCP 리스너 시작
         tcp::endpoint ep(tcp::v4(), config.port);
-        auto acceptor = std::make_shared<core::Acceptor>(io, ep, dispatcher, buffer_manager, options, state,
-            [&chat](std::shared_ptr<core::Session> sess){
-                sess->set_on_close([&chat](std::shared_ptr<core::Session> s){ chat.on_session_close(s); });
+        auto acceptor = std::make_shared<core::net::SessionListener>(io, ep, dispatcher, buffer_manager, options, state,
+            [&chat](std::shared_ptr<core::net::Session> sess){
+                sess->set_on_close([&chat](std::shared_ptr<core::net::Session> s){ chat.on_session_close(s); });
             });
         services::set(acceptor);
         acceptor->start();

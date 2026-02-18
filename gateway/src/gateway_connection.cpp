@@ -21,7 +21,7 @@ namespace game_proto = server::protocol;
 GatewayConnection::GatewayConnection(std::shared_ptr<server::core::net::Hive> hive,
                                      std::shared_ptr<auth::IAuthenticator> authenticator,
                                      GatewayApp& app)
-    : server::core::net::Connection(std::move(hive))
+    : server::core::net::TransportConnection(std::move(hive))
     , authenticator_(std::move(authenticator))
     , app_(app)
     , handshake_timer_(io()) {}
@@ -74,9 +74,9 @@ void GatewayConnection::on_disconnect() {
     (void)handshake_timer_.cancel();
 
     if (!session_id_.empty()) {
-        app_.close_backend_session(session_id_);
+        app_.close_backend_connection(session_id_);
     }
-    backend_session_.reset();
+    backend_connection_.reset();
     server::core::log::info("GatewayConnection disconnected");
 }
 
@@ -98,8 +98,8 @@ void GatewayConnection::on_read(const std::uint8_t* data, std::size_t length) {
         return;
     }
 
-    if (!backend_session_) {
-        server::core::log::warn("GatewayConnection missing backend session; dropping payload");
+    if (!backend_connection_) {
+        server::core::log::warn("GatewayConnection missing backend connection; dropping payload");
         return;
     }
 
@@ -213,8 +213,8 @@ bool GatewayConnection::try_finish_handshake() {
     }
     client_id_ = std::move(routing_key);
 
-    open_backend_session();
-    if (!backend_session_) {
+    open_backend_connection();
+    if (!backend_connection_) {
         stop();
         return true;
     }
@@ -227,8 +227,8 @@ bool GatewayConnection::try_finish_handshake() {
     return true;
 }
 
-void GatewayConnection::open_backend_session() {
-    if (backend_session_) {
+void GatewayConnection::open_backend_connection() {
+    if (backend_connection_) {
         return;
     }
 
@@ -238,21 +238,21 @@ void GatewayConnection::open_backend_session() {
 
     auto self = std::static_pointer_cast<GatewayConnection>(shared_from_this());
     std::weak_ptr<GatewayConnection> weak_self = self;
-    backend_session_ = app_.create_backend_session(client_id_, weak_self);
-    if (!backend_session_) {
-        server::core::log::error("GatewayConnection failed to create backend session");
+    backend_connection_ = app_.create_backend_connection(client_id_, weak_self);
+    if (!backend_connection_) {
+        server::core::log::error("GatewayConnection failed to create backend connection");
         stop();
         return;
     }
 
-    session_id_ = backend_session_->session_id();
+    session_id_ = backend_connection_->session_id();
 }
 
 void GatewayConnection::send_to_backend(std::vector<std::uint8_t> payload) {
-    if (!backend_session_) {
+    if (!backend_connection_) {
         return;
     }
-    backend_session_->send(std::move(payload));
+    backend_connection_->send(std::move(payload));
 }
 
 } // namespace gateway

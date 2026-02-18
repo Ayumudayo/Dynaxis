@@ -75,11 +75,11 @@ bool AppHost::healthy() const noexcept {
 }
 
 void AppHost::set_ready(bool ready) noexcept {
-    ready_base_.store(ready, std::memory_order_relaxed);
+    startup_ready_.store(ready, std::memory_order_relaxed);
 }
 
 bool AppHost::ready() const noexcept {
-    return ready_base_.load(std::memory_order_relaxed) && deps_ok_.load(std::memory_order_relaxed);
+    return startup_ready_.load(std::memory_order_relaxed) && deps_ok_.load(std::memory_order_relaxed);
 }
 
 void AppHost::declare_dependency(std::string name, DependencyRequirement requirement) {
@@ -172,7 +172,7 @@ std::string AppHost::readiness_body(bool ok) const {
     if (!healthy()) {
         reasons.emplace_back("unhealthy");
     }
-    if (!ready_base_.load(std::memory_order_relaxed)) {
+    if (!startup_ready_.load(std::memory_order_relaxed)) {
         reasons.emplace_back("starting");
     }
 

@@ -27,7 +27,7 @@
 #include "server/state/instance_registry.hpp"
 
 /**
- * @brief GatewayApp/BackendSession의 라우팅·브리지 구현입니다.
+ * @brief GatewayApp/BackendConnection의 라우팅·브리지 구현입니다.
  *
  * sticky + least-connections 정책으로 backend를 선택하고,
  * connect timeout/송신 큐 상한으로 장애 전파를 제한합니다.
@@ -120,11 +120,11 @@ std::string make_boot_id() {
 
 } // namespace
 
-// --- BackendSession Implementation ---
+// --- BackendConnection Implementation ---
 
-// Re-implementing GatewayApp::BackendSession methods directly
+// Re-implementing GatewayApp::BackendConnection methods directly
 
-GatewayApp::BackendSession::BackendSession(GatewayApp& app,
+GatewayApp::BackendConnection::BackendConnection(GatewayApp& app,
                                             std::string session_id,
                                             std::string client_id,
                                             std::string backend_instance_id,
@@ -146,16 +146,16 @@ GatewayApp::BackendSession::BackendSession(GatewayApp& app,
                            : std::chrono::milliseconds{kDefaultBackendConnectTimeoutMs}) {
 }
 
-GatewayApp::BackendSession::~BackendSession() {
+GatewayApp::BackendConnection::~BackendConnection() {
     close();
 }
 
-void GatewayApp::BackendSession::connect(const std::string& host, std::uint16_t port) {
+void GatewayApp::BackendConnection::connect(const std::string& host, std::uint16_t port) {
     if (closed_.load(std::memory_order_relaxed)) return;
     do_connect(host, port);
 }
 
-void GatewayApp::BackendSession::do_connect(const std::string& host, std::uint16_t port) {
+void GatewayApp::BackendConnection::do_connect(const std::string& host, std::uint16_t port) {
     auto self = shared_from_this();
     auto resolver = std::make_shared<boost::asio::ip::tcp::resolver>(app_.io_);
     
@@ -167,7 +167,7 @@ void GatewayApp::BackendSession::do_connect(const std::string& host, std::uint16
 
             if (ec) {
                 app_.record_backend_resolve_fail();
-                server::core::log::error("BackendSession resolve failed: " + ec.message());
+                server::core::log::error("BackendConnection resolve failed: " + ec.message());
                 if (auto conn = connection_.lock()) {
                     conn->handle_backend_close("resolve failed");
                 } else {
@@ -194,7 +194,7 @@ void GatewayApp::BackendSession::do_connect(const std::string& host, std::uint16
 
                     if (ec) {
                         app_.record_backend_connect_fail();
-                        server::core::log::error("BackendSession connect failed: " + ec.message());
+                        server::core::log::error("BackendConnection connect failed: " + ec.message());
                         if (auto conn = connection_.lock()) {
                             conn->handle_backend_close("connect failed");
                         } else {
@@ -219,7 +219,7 @@ void GatewayApp::BackendSession::do_connect(const std::string& host, std::uint16
         });
 }
 
-void GatewayApp::BackendSession::on_connect_timeout() {
+void GatewayApp::BackendConnection::on_connect_timeout() {
     bool expected = false;
     if (!closed_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
         return;
@@ -227,7 +227,7 @@ void GatewayApp::BackendSession::on_connect_timeout() {
 
     app_.record_backend_connect_timeout();
     server::core::log::warn(
-        "BackendSession connect timeout after " + std::to_string(connect_timeout_.count()) + "ms"
+        "BackendConnection connect timeout after " + std::to_string(connect_timeout_.count()) + "ms"
     );
 
     {
@@ -250,7 +250,7 @@ void GatewayApp::BackendSession::on_connect_timeout() {
     }
 }
 
-void GatewayApp::BackendSession::send(std::vector<std::uint8_t> payload) {
+void GatewayApp::BackendConnection::send(std::vector<std::uint8_t> payload) {
     bool overflow = false;
 
     {
@@ -275,7 +275,7 @@ void GatewayApp::BackendSession::send(std::vector<std::uint8_t> payload) {
     if (overflow) {
         app_.record_backend_send_queue_overflow();
         server::core::log::warn(
-            "BackendSession send queue overflow: max_bytes=" + std::to_string(send_queue_max_bytes_)
+            "BackendConnection send queue overflow: max_bytes=" + std::to_string(send_queue_max_bytes_)
         );
         if (auto conn = connection_.lock()) {
             conn->handle_backend_close("backend send queue overflow");
@@ -285,7 +285,7 @@ void GatewayApp::BackendSession::send(std::vector<std::uint8_t> payload) {
     }
 }
 
-void GatewayApp::BackendSession::do_write() {
+void GatewayApp::BackendConnection::do_write() {
     if (write_queue_.empty()) {
         write_in_progress_ = false;
         return;
@@ -321,7 +321,7 @@ void GatewayApp::BackendSession::do_write() {
         });
 }
 
-void GatewayApp::BackendSession::do_read() {
+void GatewayApp::BackendConnection::do_read() {
     auto self = shared_from_this();
     socket_.async_read_some(boost::asio::buffer(buffer_),
         [self, this](const boost::system::error_code& ec, std::size_t bytes_transferred) {
@@ -329,7 +329,7 @@ void GatewayApp::BackendSession::do_read() {
         });
 }
 
-void GatewayApp::BackendSession::on_read(const boost::system::error_code& ec, std::size_t bytes_transferred) {
+void GatewayApp::BackendConnection::on_read(const boost::system::error_code& ec, std::size_t bytes_transferred) {
     if (ec) {
         if (ec != boost::asio::error::operation_aborted) {
             if (auto conn = connection_.lock()) {
@@ -349,7 +349,7 @@ void GatewayApp::BackendSession::on_read(const boost::system::error_code& ec, st
     }
 }
 
-void GatewayApp::BackendSession::close() {
+void GatewayApp::BackendConnection::close() {
     bool expected = false;
     if (!closed_.compare_exchange_strong(expected, true)) return;
 
@@ -370,7 +370,7 @@ void GatewayApp::BackendSession::close() {
     }
 }
 
-const std::string& GatewayApp::BackendSession::session_id() const {
+const std::string& GatewayApp::BackendConnection::session_id() const {
     return session_id_;
 }
 
@@ -542,7 +542,7 @@ void GatewayApp::stop_infrastructure_probe() {
     }
 }
 
-GatewayApp::BackendSessionPtr GatewayApp::create_backend_session(const std::string& client_id,
+GatewayApp::BackendConnectionPtr GatewayApp::create_backend_connection(const std::string& client_id,
                                                                  std::weak_ptr<GatewayConnection> connection) {
     auto selected = select_best_server(client_id);
     if (!selected) {
@@ -555,7 +555,7 @@ GatewayApp::BackendSessionPtr GatewayApp::create_backend_session(const std::stri
     static std::atomic<std::uint64_t> counter{0};
     std::string session_id = gateway_id_ + "-" + boot_id_ + "-" + std::to_string(++counter);
 
-    auto session = std::make_shared<BackendSession>(
+    auto session = std::make_shared<BackendConnection>(
         *this,
         session_id,
         client_id,
@@ -581,8 +581,8 @@ GatewayApp::BackendSessionPtr GatewayApp::create_backend_session(const std::stri
     return session;
 }
 
-void GatewayApp::close_backend_session(const std::string& session_id) {
-    BackendSessionPtr session;
+void GatewayApp::close_backend_connection(const std::string& session_id) {
+    BackendConnectionPtr session;
     {
         std::lock_guard<std::mutex> lock(session_mutex_);
         auto it = sessions_.find(session_id);
@@ -763,7 +763,7 @@ void GatewayApp::start_listener() {
     }
 
     tcp::endpoint endpoint{address, listen_port_};
-    listener_ = std::make_shared<server::core::net::Listener>(
+    listener_ = std::make_shared<server::core::net::TransportListener>(
         hive_,
         endpoint,
         [authenticator = authenticator_, this](std::shared_ptr<server::core::net::Hive> hive) {

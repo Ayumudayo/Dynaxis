@@ -28,7 +28,7 @@ namespace server::app::chat {
 // 방 입장 (Join) 핸들러
 // -----------------------------------------------------------------------------
 // 사용자가 특정 방에 입장을 요청할 때 호출됩니다.
-void ChatService::on_join(server::core::Session& s, std::span<const std::uint8_t> payload) {
+void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8_t> payload) {
     std::string room;
     std::string sp;
     if (!proto::read_lp_utf8(payload, room)) {

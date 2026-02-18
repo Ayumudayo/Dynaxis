@@ -167,7 +167,7 @@ private:
     std::string name_;
     std::atomic<bool> stop_requested_{false};
     std::atomic<bool> healthy_{true};
-    std::atomic<bool> ready_base_{false};
+    std::atomic<bool> startup_ready_{false};
     std::atomic<bool> deps_ok_{true};
 
     std::atomic<bool> shutdown_ran_{false};

@@ -24,7 +24,7 @@ Chat logic node. Owns room/user state, storage access, and Redis instance regist
 - Discovery: if Redis is present, upsert `InstanceRecord` into `RedisInstanceStateBackend` and refresh via scheduled heartbeat.
 - Routing: `register_routes(dispatcher, chat)` binds opcodes to `ChatService` handlers.
 - Chat hook (experimental): `MSG_CHAT_SEND` can pass through a hot-reloadable plugin chain; plugins can replace outgoing chat text.
-- Listener: `core::Acceptor` accepts sessions and hands frames to `Dispatcher`.
+- Ingress: `core::net::SessionListener` accepts sessions and hands frames to `Dispatcher`.
 - Fanout: optional Redis Pub/Sub `psubscribe` on `${REDIS_CHANNEL_PREFIX}fanout:*` for distributed room broadcasts.
 - Observability: optional `MetricsServer` starts when `METRICS_PORT` is set.
 

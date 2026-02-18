@@ -11,7 +11,7 @@
  */
 namespace server::app::chat {
 
-void ChatService::on_ping(server::core::Session& s, std::span<const std::uint8_t> payload) {
+void ChatService::on_ping(ChatService::NetSession& s, std::span<const std::uint8_t> payload) {
     namespace proto = server::core::protocol;
     std::vector<std::uint8_t> response(payload.begin(), payload.end());
     s.async_send(proto::MSG_PONG, response);

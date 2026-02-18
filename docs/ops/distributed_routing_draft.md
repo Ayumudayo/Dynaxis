@@ -11,7 +11,7 @@
 ## 2. 현재 흐름 요약
 1. Client → HAProxy (TCP) → Gateway (TCP)
 2. Gateway는 Redis Instance Registry를 조회해 backend(server_app)를 선택
-3. Gateway ↔ Server 사이에 TCP 브리지(BackendSession)를 구성하고 payload를 중계
+3. Gateway ↔ Server 사이에 TCP 브리지(`BackendConnection`)를 구성하고 payload를 중계
 4. Redis Pub/Sub/Streams(Write-behind)는 server_app이 담당
 
 ## 3. 설계 상세

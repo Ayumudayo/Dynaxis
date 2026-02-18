@@ -14,7 +14,7 @@
 - **핵심 개념**: `Hive`가 `io_service::work` 생애주기를 관리하고, `Acceptor`/`Connection`이 strand에서 읽기·쓰기·에러 처리를 표준화한다. (`Sapphire/src/common/Network/Hive.cpp:9`, `Sapphire/src/common/Network/Acceptor.cpp:43`, `Sapphire/src/common/Network/Connection.cpp:26`)
 - **추가 관찰**: `Hive::stop()`은 shutdown 플래그를 원자적으로 설정한 뒤 `work_ptr`을 해제하고 no-op를 post하여 블로킹된 `run()`을 깨운다. 덕분에 단일 쓰레드에서 Hive를 돌리다가도 안전하게 중단·재시작(`reset()`)이 가능하다. (`Sapphire/src/common/Network/Hive.cpp:39`)
 - **왜 좋은가**: 접속 수락부터 세션 종료까지 공통 코드로 묶여 재사용성이 높고, `strand`로 직렬화돼 동시성 버그를 줄인다. `m_work_ptr.reset()` + 더미 post로 `run()`을 안전하게 빠져나오는 패턴도 재활용 가치가 있다. (`Sapphire/src/common/Network/Hive.cpp:39`)
-- **Knights 적용 방안**: Knights도 `core::Acceptor`/`Session`을 쓰지만, 별도 경량 서비스(예: 상태 수집기, 내부 RPC) 작성 시 위 스켈레톤을 참고하면 수신 버퍼 크기·큐 관리 등 기본기 구현 시간을 대폭 줄일 수 있다. 특히 `Connection::dispatchRecv`/`dispatchSend` 큐 구조를 가져오면 사용자 정의 프레임을 쉽게 삽입 가능하다. (`Sapphire/src/common/Network/Connection.cpp:129`)
+- **Knights 적용 방안**: Knights도 `core::net::SessionListener`/`core::net::Session`(legacy base: `core::Acceptor`/`Session`)을 쓰지만, 별도 경량 서비스(예: 상태 수집기, 내부 RPC) 작성 시 위 스켈레톤을 참고하면 수신 버퍼 크기·큐 관리 등 기본기 구현 시간을 대폭 줄일 수 있다. 특히 `Connection::dispatchRecv`/`dispatchSend` 큐 구조를 가져오면 사용자 정의 프레임을 쉽게 삽입 가능하다. (`Sapphire/src/common/Network/Connection.cpp:129`)
 - **활용 예시**: Sapphire는 월드 서버에서 Hive를 생성해 전용 네트워크 스레드를 돌리고(`Sapphire/src/world/WorldServer.cpp:371`), 로비 서버는 `make_Hive()`로 공유 Hive를 만들어 여러 acceptor와 세션을 묶는다. 이렇게 “1 Hive = 1 io_context + work” 관례를 지키면 Knights에서도 멀티 서비스 구성이 쉬워진다.
 - **장기 계획**: 현재 Knights는 단일 io_context 구성으로 충분해 Hive 패턴을 즉시 도입하지 않지만, 향후 게이트웨이‒로드 밸런서‒다중 서버 인스턴스 구조로 확장될 때 서비스별 `io_context + work guard` 번들을 독립 운용해야 하므로, Sapphire식 Hive/Connection 레이어를 재검토하고 기반 클래스를 미리 일반화해 둘 예정이다.
 

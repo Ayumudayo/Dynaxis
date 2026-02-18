@@ -128,3 +128,10 @@ public:
 
 } // namespace server::core
 
+namespace server::core::net {
+
+using Session = ::server::core::Session;
+using PacketSession = ::server::core::Session;
+
+} // namespace server::core::net
+

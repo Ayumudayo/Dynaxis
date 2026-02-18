@@ -27,13 +27,14 @@ Knights는 고성능 실시간 채팅을 위한 분산 스택을 지향한다.
 
 ## 2. 모듈 설명
 ### server_app
-- Boost.Asio 기반 `core::Acceptor`/`Session`으로 클라이언트(=Gateway의 BackendSession) 연결을 처리한다.
+- Boost.Asio 기반 `core::net::SessionListener`/`core::net::Session`(legacy: `core::Acceptor`/`core::Session`)으로 클라이언트(=Gateway의 `BackendConnection`) 연결을 처리한다.
 - `core::Dispatcher`가 opcode 별 chat handler를 호출하고, `TaskScheduler`가 health check·presence clean-up·registry heartbeat를 실행한다.
 - Redis Pub/Sub 및 Streams(write-behind)를 사용해 브로드캐스트와 이벤트 적재를 처리한다.
 
 ### gateway_app
 - (보통 HAProxy 뒤에서) 클라이언트 TCP 연결을 terminate한다.
-- Redis Instance Registry를 조회해 backend(server_app)를 선택하고, `BackendSession`으로 TCP 연결을 생성한다.
+- `core::net::TransportListener`가 클라이언트 연결을 수락하고, 각 연결은 `GatewayConnection`(`core::net::TransportConnection` 파생)으로 처리한다.
+- Redis Instance Registry를 조회해 backend(server_app)를 선택하고, `BackendConnection`으로 TCP 연결을 생성한다.
 - `SessionDirectory`(Redis 기반)를 사용해 클라이언트 재접속 시 동일 backend로 라우팅(Sticky)한다.
 
 ## 3. server_app 부팅 순서
@@ -41,7 +42,7 @@ Knights는 고성능 실시간 채팅을 위한 분산 스택을 지향한다.
 2. `asio::io_context`, `TaskScheduler`, `DbWorkerPool`, `BufferManager` 초기화.
 3. DB/Redis 커넥션 및 옵션 구성.
 4. Redis Instance Registry에 서버 인스턴스를 등록하고, 주기적으로 heartbeat(upsert)를 수행한다.
-5. `ChatService`/라우터를 초기화한 뒤 `core::Acceptor`를 시작한다.
+5. `ChatService`/라우터를 초기화한 뒤 `core::net::SessionListener`를 시작한다.
 6. SIGINT/SIGTERM 수신 시 graceful shutdown(레지스트리 엔트리 제거, Pub/Sub 중지 등).
 
 ## 4. 메시지 플로우

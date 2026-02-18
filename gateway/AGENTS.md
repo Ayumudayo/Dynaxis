@@ -10,7 +10,7 @@ Edge TCP gateway: accepts clients, authenticates, selects a backend `server_app`
 - `gateway/include/gateway/auth/`: pluggable authentication.
 
 ## Flow
-- Accept: `server::core::net::Listener` creates `GatewayConnection` per client.
+- Accept: `server::core::net::TransportListener` creates `GatewayConnection`(`server::core::net::TransportConnection` 파생) per client.
 - Handshake/Auth:
   - `GatewayConnection::on_connect()` starts a handshake deadline (3s) and waits for the first full frame.
   - `GatewayConnection::on_read()` buffers bytes into `prebuffer_` (TCP fragmentation-safe) until `try_finish_handshake()` can decode a full `PacketHeader` + payload.
@@ -19,16 +19,16 @@ Edge TCP gateway: accepts clients, authenticates, selects a backend `server_app`
     - Calls `IAuthenticator::authenticate({client_id=user, token, remote_address})`.
     - Derives `client_id_` used for routing/stickiness.
   - Safety limits: handshake buffer cap=64KiB; login payload cap=32KiB.
-- Backend select: `GatewayApp::create_backend_session()` -> `GatewayApp::select_best_server()` returns `SelectedBackend { InstanceRecord, sticky_hit }`.
+- Backend select: `GatewayApp::create_backend_connection()` -> `GatewayApp::select_best_server()` returns `SelectedBackend { InstanceRecord, sticky_hit }`.
   - Sticky: `SessionDirectory::find_backend(client_id)` -> prefer the previous `InstanceRecord` when still active.
   - Least connections: sort candidates by `active_sessions` and pick the lowest.
   - Binding is committed post-connect to avoid zombie mappings.
-- Post-connect binding: `BackendSession` calls `GatewayApp::on_backend_connected()` on successful TCP connect.
+- Post-connect binding: `BackendConnection` calls `GatewayApp::on_backend_connected()` on successful TCP connect.
   - `GatewayApp::on_backend_connected()` -> `SessionDirectory::ensure_backend(client_id, instance_id)` (SETNX + refresh TTL).
 - Bridge:
-  - client -> backend: after handshake, `GatewayConnection` forwards the raw login frame bytes exactly as received, then continues forwarding subsequent reads via `BackendSession::send()`.
-  - backend -> client: `BackendSession::on_read()` -> `GatewayConnection::handle_backend_payload()`.
-- Close: either side closing triggers `GatewayConnection::on_disconnect()` / `handle_backend_close()` and `GatewayApp::close_backend_session()`.
+- client -> backend: after handshake, `GatewayConnection` forwards the raw login frame bytes exactly as received, then continues forwarding subsequent reads via `BackendConnection::send()`.
+- backend -> client: `BackendConnection::on_read()` -> `GatewayConnection::handle_backend_payload()`.
+- Close: either side closing triggers `GatewayConnection::on_disconnect()` / `handle_backend_close()` and `GatewayApp::close_backend_connection()`.
 
 ## Run (Standard Runtime = Docker)
 ```powershell

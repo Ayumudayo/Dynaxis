@@ -64,3 +64,10 @@ private:
 };
 
 } // namespace server::core
+
+namespace server::core::net {
+
+using Acceptor = ::server::core::Acceptor;
+using SessionListener = ::server::core::Acceptor;
+
+} // namespace server::core::net

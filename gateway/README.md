@@ -20,7 +20,7 @@ gateway/
 
 ## 특징
 - Boost.Asio Hive 위에서 다수의 TCP 세션을 처리합니다.
-- 각 클라이언트 세션은 backend(`server_app`) 연결(`BackendSession`)과 1:1로 매칭되어 payload를 중계합니다.
+- 각 클라이언트 세션은 backend(`server_app`) 연결(`BackendConnection`)과 1:1로 매칭되어 payload를 중계합니다.
 - 인증은 `auth::IAuthenticator` 를 구현해 확장할 수 있습니다 (`ALLOW_ANONYMOUS`, `AUTH_PROVIDER`, `AUTH_ENDPOINT`).
 - Redis SessionDirectory(`gateway/session/<client_id>`)로 sticky routing을 수행하고, Redis Instance Registry의 `active_sessions`를 기준으로 least-connections 방식으로 backend를 선택합니다.
 

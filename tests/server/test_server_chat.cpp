@@ -192,7 +192,7 @@ protected:
     BufferManager buffer_manager_{1024, 10};
     std::shared_ptr<SessionOptions> session_options_;
     std::shared_ptr<SharedState> shared_state_;
-    std::shared_ptr<server::core::Session> session_;
+    std::shared_ptr<server::core::net::Session> session_;
 
     boost::asio::ip::tcp::acceptor acceptor_;
     boost::asio::ip::tcp::socket peer_socket_;
@@ -215,7 +215,7 @@ protected:
         socket.connect(acceptor_.local_endpoint());
         acceptor_.accept(peer_socket_); 
         
-        session_ = std::make_shared<server::core::Session>(
+        session_ = std::make_shared<server::core::net::Session>(
             std::move(socket), dispatcher_, buffer_manager_, session_options_, shared_state_
         );
         session_->start(); 

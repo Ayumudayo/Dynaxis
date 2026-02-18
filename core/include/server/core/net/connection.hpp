@@ -158,4 +158,6 @@ private:
     std::atomic<bool> stopped_{false};
 };
 
+using TransportConnection = Connection;
+
 } // namespace server::core::net

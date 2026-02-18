@@ -29,7 +29,7 @@ namespace server::app::chat {
 // 방 퇴장 (Leave) 핸들러
 // -----------------------------------------------------------------------------
 // 사용자가 현재 방에서 나갈 때 호출됩니다.
-void ChatService::on_leave(server::core::Session& s, std::span<const std::uint8_t> payload) {
+void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint8_t> payload) {
     auto session_sp = s.shared_from_this();
     std::string room;
     if (!payload.empty()) {

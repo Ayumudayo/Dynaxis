@@ -10,7 +10,8 @@
 
 ## 2. 주요 모듈
 ### 2.1 네트워크(`core::net`)
-- `Hive`/`Acceptor`/`Session` 조합은 `server_app` 중심으로 사용한다.
+- `Hive`/`SessionListener`/`Session` 조합은 `server_app` 중심으로 사용한다.
+- `Hive`/`TransportListener`/`TransportConnection` 조합은 `gateway_app`의 클라이언트 수락/브리지 경로에서 사용한다.
 - Wire codec과 dispatcher는 opcode 라우팅을 표준화해 신규 메시지를 추가할 때 서비스 코드가 최소화된다.
 - Gateway와 Server가 같은 기반을 공유하므로, 연결 처리/백프레셔 정책을 한 곳에서 조정할 수 있다.
 
@@ -43,7 +44,7 @@
 ## 4. 향후 확장 항목
 | 항목 | 상태 | 메모 |
 | --- | --- | --- |
-| Hive/Connection 재사용 | Gateway/LB/Server가 동일 구현 사용 중 | 필요 시 gRPC 모듈로도 추출 가능 |
+| Hive/Connection 재사용 | Gateway는 `core::net::TransportConnection`, Server는 `core::net::Session` 중심으로 사용 | 필요 시 공통 수명주기 규칙을 추출 가능 |
 | 인증 플러그인 | `auth::IAuthenticator` 인터페이스로 구현, 기본은 NoopAuthenticator | 외부 OAuth 연동 시 구현 교체 |
 | 스크립팅 훅 | Lua/WASM 플러그인을 로드할 수 있도록 Hook 포인트 정의 | 성능 영향 검토 후 단계 도입 |
 | ECS/플러그인 | 채팅 외 모듈을 위한 Entity 시스템은 backlog에 남겨둠 | `docs/roadmap.md` 8번 항목 참조 |

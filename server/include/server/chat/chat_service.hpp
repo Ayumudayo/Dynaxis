@@ -44,6 +44,8 @@ namespace server::app::chat {
  */
 class ChatService {
 public:
+    using NetSession = server::core::net::Session;
+
     /**
      * @brief ChatService 생성자
      * @param io Boost.Asio IO Context (비동기 작업용)
@@ -69,7 +71,7 @@ public:
      * - 중복 접속 처리 (기존 세션 끊기)
      * - 유저 상태 등록
      */
-    void on_login(server::core::Session& s, std::span<const std::uint8_t> payload);
+    void on_login(NetSession& s, std::span<const std::uint8_t> payload);
 
     /**
      * @brief 방 입장 요청 (MSG_JOIN_ROOM) 처리
@@ -77,56 +79,56 @@ public:
      * - 비밀번호 검사 (비공개 방)
      * - 방 멤버십 등록 및 브로드캐스팅
      */
-    void on_join(server::core::Session& s, std::span<const std::uint8_t> payload);
+    void on_join(NetSession& s, std::span<const std::uint8_t> payload);
 
     /**
      * @brief 방 퇴장 요청 (MSG_LEAVE_ROOM) 처리
      */
-    void on_leave(server::core::Session& s, std::span<const std::uint8_t> payload);
+    void on_leave(NetSession& s, std::span<const std::uint8_t> payload);
 
     /**
      * @brief 채팅 메시지 전송 (MSG_CHAT_SEND) 처리
      * - 메시지 DB 저장 (비동기/Write-behind)
      * - 같은 방의 모든 유저에게 브로드캐스팅
      */
-    void on_chat_send(server::core::Session& s, std::span<const std::uint8_t> payload);
+    void on_chat_send(NetSession& s, std::span<const std::uint8_t> payload);
 
     /**
      * @brief 귓속말 요청 (MSG_WHISPER_REQ) 처리
      * - 대상 유저 찾기 (로컬 또는 Redis를 통해 다른 서버 검색)
      * - 메시지 전송
      */
-    void on_whisper(server::core::Session& s, std::span<const std::uint8_t> payload);
+    void on_whisper(NetSession& s, std::span<const std::uint8_t> payload);
 
     /**
      * @brief 핑(Ping) 요청 (MSG_PING) 처리
      * - 연결이 살아있는지 확인하는 Heartbeat
      * - PONG 응답 전송
      */
-    void on_ping(server::core::Session& s, std::span<const std::uint8_t> payload);
+    void on_ping(NetSession& s, std::span<const std::uint8_t> payload);
 
     /**
      * @brief 방 목록 요청 (MSG_ROOMS_REQ) 처리
      * - 현재 활성화된 방 목록 반환
      */
-    void on_rooms_request(server::core::Session& s, std::span<const std::uint8_t> payload);
+    void on_rooms_request(NetSession& s, std::span<const std::uint8_t> payload);
 
     /**
      * @brief 방 참여자 목록 요청 (MSG_ROOM_USERS_REQ) 처리
      */
-    void on_room_users_request(server::core::Session& s, std::span<const std::uint8_t> payload);
+    void on_room_users_request(NetSession& s, std::span<const std::uint8_t> payload);
 
     /**
      * @brief 상태 갱신 요청 (MSG_REFRESH_REQ) 처리
      * - 클라이언트가 재접속 후 놓친 메시지 등을 요청할 때 사용
      */
-    void on_refresh_request(server::core::Session& s, std::span<const std::uint8_t> payload);
+    void on_refresh_request(NetSession& s, std::span<const std::uint8_t> payload);
 
     /**
      * @brief 세션 종료 시 호출 (연결 끊김)
      * - 유저 상태 정리 (방 나가기 처리 등)
      */
-    void on_session_close(std::shared_ptr<server::core::Session> s);
+    void on_session_close(std::shared_ptr<NetSession> s);
 
     /**
      * @brief 특정 방에 메시지를 브로드캐스트합니다.
@@ -138,7 +140,7 @@ public:
      * @param body 전송할 메시지 본문 (직렬화된 Protobuf 등)
      * @param self 발신자 세션 (자신에게는 다시 보내지 않기 위해 사용, nullptr이면 모두에게 전송)
      */
-    void broadcast_room(const std::string& room, const std::vector<std::uint8_t>& body, server::core::Session* self = nullptr);
+    void broadcast_room(const std::string& room, const std::vector<std::uint8_t>& body, NetSession* self = nullptr);
 
     /**
      * @brief 해당 방의 모든 유저에게 상태 갱신 알림(MSG_REFRESH_NOTIFY)을 전송합니다.
@@ -199,7 +201,7 @@ public:
     ChatHookPluginsMetrics chat_hook_plugins_metrics() const;
 
 private:
-    using Session = server::core::Session;
+    using Session = NetSession;
     using WeakSession = std::weak_ptr<Session>;
     using WeakLess = std::owner_less<WeakSession>;
     using RoomSet = std::set<WeakSession, WeakLess>; // 세션들의 집합 (약한 참조로 저장하여 순환 참조 방지)

@@ -44,7 +44,7 @@ Knights는 C++20 기반 분산 채팅 스택입니다: HAProxy(TCP) -> `gateway_
 | `server::app::MetricsServer` | class | `server/src/app/metrics_server.cpp` | server_app `/metrics` endpoint |
 | `gateway::GatewayApp` | class | `gateway/include/gateway/gateway_app.hpp` | 게이트웨이 라이프사이클/백엔드 선택 |
 | `gateway::GatewayApp::run` | method | `gateway/src/gateway_app.cpp` | 게이트웨이 메인 루프(리스너/메트릭 포함) |
-| `gateway::GatewayApp::BackendSession` | class | `gateway/include/gateway/gateway_app.hpp` | backend 연결/브리지 세션(connect timeout + bounded send queue) |
+| `gateway::GatewayApp::BackendConnection` | class | `gateway/include/gateway/gateway_app.hpp` | backend 연결/브리지 세션(connect timeout + bounded send queue) |
 | `gateway::GatewayConnection` | class | `gateway/include/gateway/gateway_connection.hpp` | 클라이언트<->백엔드 브리지 |
 | `WbWorker` | class | `tools/wb_worker/main.cpp` | Redis Streams -> Postgres write-behind |
 | `WbWorker::SleepDbReconnectBackoff` | method | `tools/wb_worker/main.cpp` | DB 장애 시 지수 백오프(+jitter) 재연결 대기 |
@@ -119,3 +119,45 @@ python tools/gen_opcode_docs.py --check
 - `WB_ACK_ON_ERROR=1` + `WB_DLQ_ON_ERROR=0` 조합은 실패 이벤트 유실을 유발할 수 있으므로 운영에서 주의(관측: `wb_error_drop_total`).
 - `Sapphire/`는 참고용으로 동봉된 별도 프로젝트이며, Knights의 런타임/빌드 대상으로 취급하지 않는다.
 - clangd/LSP 정밀 진단이 필요하면 `pwsh scripts/configure_windows_ninja.ps1`로 `build-windows-ninja/compile_commands.json`를 생성한 뒤, repo root에 `compile_commands.json`를 두면 된다(파일은 `.gitignore` 처리됨).
+
+
+## Workflow Orchestration
+
+### 1. Self-Improvement Loop
+- After ANY correction from the user: update 'tasks/lessons.md' with the pattern
+- Write rules for yourself that prevent the same mistake
+- Ruthlessly iterate on these lessons until mistake rate drops
+- Review lessons at session start for relevant project
+
+### 2. Verification Before Done
+- Never mark a task complete without proving it works
+- Diff behavior between main and your changes when relevant
+- Ask yourself: "Would a staff engineer approve this?"
+- Run tests, check logs, demonstrate correctness
+
+### 3. Demand Elegance (Balanced)
+- For non-trivial changes: pause and ask "is there a more elegant way?"
+- If a fix feels hacky: "Knowing everything I know now, implement the elegant solution"
+- Skip this for simple, obvious fixes - don't over-engineer
+- Challenge your own work before presenting it
+
+### 4. Autonomous Bug Fixing
+- When given a bug report: just fix it. Don't ask for hand-holding
+- Point at logs, errors, failing tests - then resolve them
+- Zero context switching required from the user
+- Go fix failing CI tests without being told how
+
+## Task Management
+
+1. ** Plan First **: Write plan to 'tasks/todo.md' with checkable items
+2. ** Verify Plan **: Check in before starting implementation
+3. ** Track Progress **: Mark items complete as you go
+4. ** Explain Changes **: High-level summary at each step
+5. ** Document Results **: Add review section to 'tasks/todo.md'
+6. ** Capture Lessons **: Update `tasks/lessons.md' after corrections
+
+## Core Principles
+
+- ** Simplicity First **: Make every change as simple as possible. Impact minimal code.
+- ** No Laziness **: Find root causes. No temporary fixes. Senior developer standards.
+- ** Minimal Impact **: Changes should only touch what's necessary. Avoid introducing bugs.

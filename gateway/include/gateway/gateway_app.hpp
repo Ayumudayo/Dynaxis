@@ -42,15 +42,15 @@ public:
     };
 
     /**
-     * @brief backend 서버와의 TCP 세션을 관리하는 내부 클래스입니다.
+     * @brief backend 서버와의 TCP 연결을 관리하는 내부 클래스입니다.
      *
      * `GatewayConnection`(클라이언트)과 game server 사이에서
      * payload를 양방향 브리지합니다.
      */
-    class BackendSession : public std::enable_shared_from_this<BackendSession> {
+    class BackendConnection : public std::enable_shared_from_this<BackendConnection> {
     public:
         /**
-         * @brief backend 세션을 생성합니다.
+         * @brief backend 연결을 생성합니다.
          * @param app 상위 GatewayApp 참조
          * @param session_id gateway 내부 세션 ID
          * @param client_id 클라이언트 식별자
@@ -60,7 +60,7 @@ public:
          * @param send_queue_max_bytes backend 송신 큐 최대 바이트
          * @param connect_timeout backend connect timeout
          */
-        BackendSession(GatewayApp& app,
+        BackendConnection(GatewayApp& app,
                        std::string session_id,
                        std::string client_id,
                        std::string backend_instance_id,
@@ -68,7 +68,7 @@ public:
                        std::weak_ptr<GatewayConnection> connection,
                        std::size_t send_queue_max_bytes,
                        std::chrono::milliseconds connect_timeout);
-        ~BackendSession();
+        ~BackendConnection();
 
         /**
          * @brief backend로 TCP connect를 시작합니다.
@@ -83,7 +83,7 @@ public:
          */
         void send(std::vector<std::uint8_t> payload);
 
-        /** @brief backend 세션을 종료합니다. */
+        /** @brief backend 연결을 종료합니다. */
         void close();
 
         /** @brief gateway 내부 세션 ID를 반환합니다. */
@@ -115,7 +115,7 @@ public:
         bool connected_{false};
         bool write_in_progress_{false};
     };
-    using BackendSessionPtr = std::shared_ptr<BackendSession>;
+    using BackendConnectionPtr = std::shared_ptr<BackendConnection>;
 
     GatewayApp();
     ~GatewayApp();
@@ -154,19 +154,19 @@ public:
     }
 
     /**
-     * @brief backend 세션을 생성하고 등록합니다.
+     * @brief backend 연결을 생성하고 등록합니다.
      * @param client_id 클라이언트 식별자
      * @param connection 연결 weak 포인터
-     * @return 생성된 backend 세션
+     * @return 생성된 backend 연결
      */
-    BackendSessionPtr create_backend_session(const std::string& client_id,
+    BackendConnectionPtr create_backend_connection(const std::string& client_id,
                                              std::weak_ptr<GatewayConnection> connection);
 
     /**
-     * @brief session_id에 해당하는 backend 세션을 닫고 제거합니다.
+     * @brief session_id에 해당하는 backend 연결을 닫고 제거합니다.
      * @param session_id gateway 내부 세션 ID
      */
-    void close_backend_session(const std::string& session_id);
+    void close_backend_connection(const std::string& session_id);
     
     /**
      * @brief Redis Registry에서 최적 backend를 선택합니다.
@@ -180,7 +180,7 @@ public:
 
     boost::asio::io_context io_;
     std::shared_ptr<server::core::net::Hive> hive_;
-    std::shared_ptr<server::core::net::Listener> listener_;
+    std::shared_ptr<server::core::net::TransportListener> listener_;
     server::core::app::AppHost app_host_{"gateway_app"};
     std::shared_ptr<auth::IAuthenticator> authenticator_;
     std::string gateway_id_;
@@ -199,7 +199,7 @@ public:
      void stop_infrastructure_probe();
 
     struct SessionState {
-        BackendSessionPtr session;
+        BackendConnectionPtr session;
     };
     std::mutex session_mutex_;
     std::unordered_map<std::string, SessionState> sessions_;

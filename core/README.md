@@ -1,13 +1,13 @@
 # server_core
 
 `core`는 Knights 프로젝트 전역에서 공유하는 C++20 정적 라이브러리(Static Library)입니다.
-Boost.Asio 기반의 고성능 네트워크 계층(Hive/Session/Listener), 멀티스레딩 지원(JobQueue, TaskScheduler), 메모리 관리(MemoryPool), 그리고 로깅 및 유틸리티를 제공합니다.
+Boost.Asio 기반의 고성능 네트워크 계층(Hive/SessionListener/Session + TransportListener/TransportConnection), 멀티스레딩 지원(JobQueue, TaskScheduler), 메모리 관리(MemoryPool), 그리고 로깅 및 유틸리티를 제공합니다.
 
 ## 주요 기능
 
 ### 1. 네트워크 (Network)
 - **비동기 I/O**: Boost.Asio `io_context`와 `strand`를 활용한 Lock-Free에 가까운 동시성 모델.
-- **세션 관리**: `Session` 클래스를 통해 TCP 연결의 생명주기를 관리하며, **Heartbeat(MSG_PING)** 및 **Gather-Write** 최적화를 지원합니다.
+- **세션/연결 관리**: `server_app`은 `SessionListener`/`Session`, `gateway_app`은 `TransportListener`/`TransportConnection` 조합으로 TCP 수명주기를 관리합니다.
 - **패킷 처리**: `Dispatcher`를 통해 수신된 패킷을 적절한 핸들러로 라우팅합니다.
 
 ### 2. 동시성 (Concurrency)
@@ -32,7 +32,7 @@ core/
 │  ├─ config/      # options
 │  ├─ memory/      # BufferManager, MemoryPool
 │  ├─ metrics/     # Runtime metrics (Counter/Gauge)
-│  ├─ net/         # Hive, Listener, Session, Connection, Dispatcher
+│  ├─ net/         # Hive, SessionListener/TransportListener, Session/TransportConnection, Dispatcher
 │  ├─ protocol/    # Packet definition, codec
 │  ├─ state/       # SharedState (global server state)
 │  ├─ storage/     # DB/Redis interfaces
@@ -62,11 +62,11 @@ cmake --build --preset windows-debug --target server_core
 
 ## 사용 예시 (Example)
 
-서버를 구동하는 기본적인 코드는 다음과 같습니다. (의사 코드)
+서버를 구동하는 기본적인 흐름은 다음과 같습니다. (의사 코드)
 
 ```cpp
-#include "server/core/net/listener.hpp"
-#include "server/core/concurrent/thread_manager.hpp"
+#include "server/core/net/acceptor.hpp"
+#include "server/core/net/dispatcher.hpp"
 
 int main() {
     // 1. 설정 및 의존성 초기화
@@ -75,22 +75,16 @@ int main() {
     BufferManager buffer_manager;
     Dispatcher dispatcher;
 
-    // 2. 스레드 매니저 시작 (io_context 구동)
-    ThreadManager thread_manager(4); // 4 threads
+    boost::asio::io_context io;
+    boost::asio::ip::tcp::endpoint ep(boost::asio::ip::tcp::v4(), 6000);
 
-    // 3. 리스너 설정 및 시작
-    // Listener는 내부적으로 Session을 생성하고 Dispatcher와 연결합니다.
-    Listener listener(thread_manager.get_io_context(), 
-                      6000, // Port
-                      dispatcher, 
-                      buffer_manager, 
-                      options, 
-                      shared_state);
-    
-    listener.start();
+    // 2. server_app 경로: SessionListener가 Session을 생성해 Dispatcher로 연결
+    auto acceptor = std::make_shared<server::core::net::SessionListener>(
+        io, ep, dispatcher, buffer_manager, options, shared_state);
+    acceptor->start();
 
-    // 4. 서버 실행 대기
-    thread_manager.join();
+    // 3. 이벤트 루프 실행
+    io.run();
 }
 ```
 

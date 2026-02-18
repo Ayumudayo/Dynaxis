@@ -12,7 +12,7 @@
     - 환경 변수 파싱.
     - `io_context`, `JobQueue`, `ThreadManager` 등 코어 컴포넌트 초기화.
     - DB/Redis 연결 풀 생성.
-    - `Listener`를 시작하여 클라이언트 연결 수락.
+    - `core::net::SessionListener`를 시작하여 클라이언트 연결을 수락하고 `core::net::Session`으로 전달.
 
 2.  **Router (`src/app/router.cpp`)**:
     - `Dispatcher`에 Opcode별 핸들러를 등록합니다.

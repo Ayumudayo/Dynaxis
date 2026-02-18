@@ -13,13 +13,13 @@ Client --TCP--> HAProxy --TCP--> Gateway --TCP--> server_app
 ```
 1. HAProxy는 클라이언트 TCP 연결을 여러 Gateway 인스턴스로 분산한다.
 2. Gateway는 인증 후 Redis Instance Registry를 조회해 backend(server_app)를 선택한다.
-3. Gateway는 선택된 backend로 TCP 연결(BackendSession)을 생성하고 payload를 중계한다.
+3. Gateway는 선택된 backend로 TCP 연결(`BackendConnection`)을 생성하고 payload를 중계한다.
 4. Sticky routing은 Redis SessionDirectory(`gateway/session/<client_id>`)를 통해 유지된다.
 
 ## 2. Gateway 세부
 ### 2.1 주요 컴포넌트
 - `GatewayConnection` : TCP 세션, wire codec, 클라이언트 명령 처리
-- `BackendSession` : Gateway ↔ server_app TCP 중계 세션
+- `BackendConnection` : Gateway ↔ server_app TCP 중계 세션
 - `auth::IAuthenticator` : 플러그형 인증 모듈
 
 ### 2.2 환경 변수

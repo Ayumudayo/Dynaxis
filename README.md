@@ -39,7 +39,7 @@
 
 5.  **Core (`core/`)**:
     -   모든 프로젝트에서 공유하는 정적 라이브러리입니다.
-    -   네트워크(Session, Listener), 동시성(JobQueue, ThreadManager), 메모리 관리(MemoryPool) 등의 공통 기능을 제공합니다.
+    -   네트워크(Session/TransportConnection, SessionListener/TransportListener), 동시성(JobQueue, ThreadManager), 메모리 관리(MemoryPool) 등의 공통 기능을 제공합니다.
 
 ## 아키텍처 다이어그램
 ```mermaid
