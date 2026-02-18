@@ -49,6 +49,7 @@ public:
     bool sadd(const std::string&, const std::string&) override { return true; }
     bool srem(const std::string&, const std::string&) override { return true; }
     bool smembers(const std::string&, std::vector<std::string>&) override { return true; }
+    bool scard(const std::string&, std::size_t& out) override { out = 0; return true; }
     bool del(const std::string& key) override {
         kv_.erase(key);
         lists_.erase(key);

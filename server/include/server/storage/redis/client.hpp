@@ -40,6 +40,9 @@ public:
     
     // Set: 모든 멤버 조회
     virtual bool smembers(const std::string& key, std::vector<std::string>& out) = 0;
+
+    // Set: 멤버 수 조회 (SCARD)
+    virtual bool scard(const std::string& key, std::size_t& out) = 0;
     
     // 키 삭제
     virtual bool del(const std::string& key) = 0;

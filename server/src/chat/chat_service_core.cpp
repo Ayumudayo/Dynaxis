@@ -480,9 +480,14 @@ void ChatService::send_rooms_list(Session& s) {
         for (std::size_t i = 0; i < redis_rooms_list.size(); ++i) {
             const auto& r = redis_rooms_list[i];
             if (r == "lobby") lobby_found = true;
-            
-            std::vector<std::string> users;
-            redis_->smembers("room:users:" + r, users);
+
+            const std::string users_key = "room:users:" + r;
+            std::size_t users_count = 0;
+            if (!redis_->scard(users_key, users_count)) {
+                std::vector<std::string> users;
+                redis_->smembers(users_key, users);
+                users_count = users.size();
+            }
             
             bool locked = false;
             if (password_batch_loaded) {
@@ -492,13 +497,17 @@ void ChatService::send_rooms_list(Session& s) {
                 locked = pw.has_value();
             }
             
-            redis_rooms.push_back({r, users.size(), locked});
+            redis_rooms.push_back({r, users_count, locked});
         }
         
         if (!lobby_found) {
-            std::vector<std::string> users;
-            redis_->smembers("room:users:lobby", users);
-            redis_rooms.push_back({"lobby", users.size(), false});
+            std::size_t users_count = 0;
+            if (!redis_->scard("room:users:lobby", users_count)) {
+                std::vector<std::string> users;
+                redis_->smembers("room:users:lobby", users);
+                users_count = users.size();
+            }
+            redis_rooms.push_back({"lobby", users_count, false});
         }
     }
 
@@ -702,9 +711,14 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
         for (std::size_t i = 0; i < active_rooms.size(); ++i) {
             const auto& r = active_rooms[i];
             if (r == "lobby") lobby_found = true;
-            
-            std::vector<std::string> users;
-            redis_->smembers("room:users:" + r, users);
+
+            const std::string users_key = "room:users:" + r;
+            std::size_t users_count = 0;
+            if (!redis_->scard(users_key, users_count)) {
+                std::vector<std::string> users;
+                redis_->smembers(users_key, users);
+                users_count = users.size();
+            }
             
             bool locked = false;
             if (password_batch_loaded) {
@@ -714,13 +728,17 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
                 locked = pw.has_value();
             }
             
-            redis_rooms.push_back({r, users.size(), locked});
+            redis_rooms.push_back({r, users_count, locked});
         }
         
         if (!lobby_found) {
-            std::vector<std::string> users;
-            redis_->smembers("room:users:lobby", users);
-            redis_rooms.push_back({"lobby", users.size(), false});
+            std::size_t users_count = 0;
+            if (!redis_->scard("room:users:lobby", users_count)) {
+                std::vector<std::string> users;
+                redis_->smembers("room:users:lobby", users);
+                users_count = users.size();
+            }
+            redis_rooms.push_back({"lobby", users_count, false});
         }
     }
 
