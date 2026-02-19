@@ -294,14 +294,7 @@ bool ChatService::write_behind_enabled() const {
 }
 
 bool ChatService::pubsub_enabled() {
-    if (redis_pubsub_enabled_) {
-        return true;
-    }
-    if (const char* use = std::getenv("USE_REDIS_PUBSUB"); use && std::strcmp(use, "0") != 0) {
-        redis_pubsub_enabled_ = true;
-        return true;
-    }
-    return false;
+    return redis_pubsub_enabled_;
 }
 
 // UUID v4 생성 (난수 기반)

@@ -203,12 +203,11 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
                     
                     // 이전 방이 비었는지 확인하고 활성 목록에서 제거 (Room List Sync)
                     if (previous_room != "lobby") {
-                        std::vector<std::string> remaining;
-                        redis_->smembers("room:users:" + previous_room, remaining);
-                        if (remaining.empty()) {
+                        std::size_t remaining = 1;
+                        if (redis_->scard("room:users:" + previous_room, remaining) && remaining == 0) {
                             redis_->srem("rooms:active", previous_room);
                             redis_->del("room:password:" + previous_room);
-                             if (db_pool_) {
+                              if (db_pool_) {
                                 try {
                                     auto uow = db_pool_->make_unit_of_work();
                                     auto found = uow->rooms().find_by_name_exact_ci(previous_room);

@@ -135,12 +135,12 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
                 
                 // 방이 비었는지 확인하고 활성 목록에서 제거 (Room List Sync)
                 if (room_to_leave != "lobby") {
-                    std::vector<std::string> remaining;
-                    redis_->smembers("room:users:" + room_to_leave, remaining);
+                    std::size_t remaining = 1;
+                    (void)redis_->scard("room:users:" + room_to_leave, remaining);
                     
                     // 디버그 로그: 남은 인원 확인
 
-                    if (remaining.empty()) {
+                    if (remaining == 0) {
                         redis_->srem("rooms:active", room_to_leave);
                         redis_->del("room:password:" + room_to_leave);
                         

@@ -267,12 +267,11 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
             try {
                 static std::atomic<std::uint64_t> publish_total{0};
                 std::string channel = presence_.prefix + std::string("fanout:room:") + current_room;
-                std::string payload(reinterpret_cast<const char*>(bytes.data()), bytes.size());
                 std::string message;
-                message.reserve(3 + gateway_id_.size() + payload.size());
+                message.reserve(3 + gateway_id_.size() + bytes.size());
                 message.append("gw=").append(gateway_id_);
                 message.push_back('\n');
-                message.append(payload);
+                message.append(bytes);
                 redis_->publish(channel, std::move(message));
                 auto n = ++publish_total;
                 corelog::info(std::string("metric=publish_total value=") + std::to_string(n) + " room=" + current_room);

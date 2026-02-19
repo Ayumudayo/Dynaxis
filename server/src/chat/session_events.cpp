@@ -100,9 +100,8 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
                 
                 // 방이 비었는지 확인하고 활성 목록에서 제거 (Room List Sync)
                 if (room_left != "lobby") {
-                    std::vector<std::string> remaining;
-                    redis_->smembers("room:users:" + room_left, remaining);
-                    if (remaining.empty()) {
+                    std::size_t remaining = 1;
+                    if (redis_->scard("room:users:" + room_left, remaining) && remaining == 0) {
                         redis_->srem("rooms:active", room_left);
                     }
                 }
