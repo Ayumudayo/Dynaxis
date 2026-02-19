@@ -251,6 +251,10 @@ void GatewayApp::BackendConnection::on_connect_timeout() {
 }
 
 void GatewayApp::BackendConnection::send(std::vector<std::uint8_t> payload) {
+    if (payload.empty()) {
+        return;
+    }
+
     bool overflow = false;
 
     {
@@ -266,6 +270,44 @@ void GatewayApp::BackendConnection::send(std::vector<std::uint8_t> payload) {
         } else {
             queued_bytes_ += payload_bytes;
             write_queue_.push_back(std::move(payload));
+            if (connected_ && !write_in_progress_) {
+                do_write();
+            }
+        }
+    }
+
+    if (overflow) {
+        app_.record_backend_send_queue_overflow();
+        server::core::log::warn(
+            "BackendConnection send queue overflow: max_bytes=" + std::to_string(send_queue_max_bytes_)
+        );
+        if (auto conn = connection_.lock()) {
+            conn->handle_backend_close("backend send queue overflow");
+        } else {
+            close();
+        }
+    }
+}
+
+void GatewayApp::BackendConnection::send(const std::uint8_t* data, std::size_t length) {
+    if (!data || length == 0) {
+        return;
+    }
+
+    bool overflow = false;
+
+    {
+        std::lock_guard<std::mutex> lock(send_mutex_);
+        if (closed_) {
+            return;
+        }
+
+        if (length > send_queue_max_bytes_ ||
+            queued_bytes_ > (send_queue_max_bytes_ - length)) {
+            overflow = true;
+        } else {
+            queued_bytes_ += length;
+            write_queue_.emplace_back(data, data + length);
             if (connected_ && !write_in_progress_) {
                 do_write();
             }

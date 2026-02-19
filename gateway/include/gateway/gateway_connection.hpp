@@ -63,6 +63,7 @@ private:
 
     // 브리지 단계에서 클라이언트 payload를 backend 세션으로 전달한다.
     void send_to_backend(std::vector<std::uint8_t> payload);
+    void send_to_backend(const std::uint8_t* data, std::size_t length);
 
     std::shared_ptr<auth::IAuthenticator> authenticator_;
     GatewayApp& app_;

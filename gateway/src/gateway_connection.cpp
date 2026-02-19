@@ -103,8 +103,7 @@ void GatewayConnection::on_read(const std::uint8_t* data, std::size_t length) {
         return;
     }
 
-    std::vector<std::uint8_t> payload(data, data + length);
-    send_to_backend(std::move(payload));
+    send_to_backend(data, length);
 }
 
 void GatewayConnection::on_error(const boost::system::error_code& ec) {
@@ -253,6 +252,13 @@ void GatewayConnection::send_to_backend(std::vector<std::uint8_t> payload) {
         return;
     }
     backend_connection_->send(std::move(payload));
+}
+
+void GatewayConnection::send_to_backend(const std::uint8_t* data, std::size_t length) {
+    if (!backend_connection_ || !data || length == 0) {
+        return;
+    }
+    backend_connection_->send(data, length);
 }
 
 } // namespace gateway

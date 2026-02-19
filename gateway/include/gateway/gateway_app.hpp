@@ -83,6 +83,13 @@ public:
          */
         void send(std::vector<std::uint8_t> payload);
 
+        /**
+         * @brief backend로 raw bytes를 복사해 비동기 전송 큐에 넣습니다.
+         * @param data 전송할 바이트 포인터
+         * @param length 전송할 바이트 길이
+         */
+        void send(const std::uint8_t* data, std::size_t length);
+
         /** @brief backend 연결을 종료합니다. */
         void close();
 
