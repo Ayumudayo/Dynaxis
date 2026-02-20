@@ -6,6 +6,8 @@
 #include <vector>
 #include <span>
 
+#include "server/core/protocol/opcode_policy.hpp"
+
 namespace server::core {
 
 class Session;
@@ -19,13 +21,17 @@ class Session;
 class Dispatcher {
 public:
     using handler_t = std::function<void(Session&, std::span<const std::uint8_t>)>;
+    using policy_t = server::core::protocol::OpcodePolicy;
 
     /**
      * @brief 특정 msg_id에 대한 핸들러를 등록합니다.
      * @param msg_id 프로토콜 메시지 ID
      * @param handler 수신 payload 처리 콜백
      */
-    void register_handler(std::uint16_t msg_id, handler_t handler);
+    void register_handler(
+        std::uint16_t msg_id,
+        handler_t handler,
+        policy_t policy = server::core::protocol::default_opcode_policy());
 
     /**
      * @brief msg_id에 맞는 핸들러를 찾아 실행합니다.
@@ -37,7 +43,12 @@ public:
     bool dispatch(std::uint16_t msg_id, Session& s, std::span<const std::uint8_t> payload) const;
 
 private:
-    std::unordered_map<std::uint16_t, handler_t> table_;
+    struct Entry {
+        handler_t handler;
+        policy_t policy;
+    };
+
+    std::unordered_map<std::uint16_t, Entry> table_;
 };
 
 } // namespace server::core

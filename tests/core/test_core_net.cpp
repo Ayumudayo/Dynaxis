@@ -47,6 +47,39 @@ TEST(DispatcherTest, RegisterAndDispatch) {
     EXPECT_FALSE(dispatcher.dispatch(9999, session, payload));
 }
 
+TEST(DispatcherTest, BlocksHandlerWhenRequiredStateNotSatisfied) {
+    boost::asio::io_context io;
+    Dispatcher dispatcher;
+    BufferManager buffer_manager(2048, 8);
+    auto options = std::make_shared<SessionOptions>();
+    auto state = std::make_shared<server::core::net::ConnectionRuntimeState>();
+
+    Session session(
+        boost::asio::ip::tcp::socket(io),
+        dispatcher,
+        buffer_manager,
+        options,
+        state
+    );
+
+    bool called = false;
+    server::core::protocol::OpcodePolicy policy{};
+    policy.required_state = server::core::protocol::SessionStatus::kAuthenticated;
+
+    const std::uint16_t msg_id = 2001;
+    dispatcher.register_handler(msg_id, [&](Session&, std::span<const std::uint8_t>) {
+        called = true;
+    }, policy);
+
+    const std::vector<std::uint8_t> payload{9, 8, 7};
+    EXPECT_TRUE(dispatcher.dispatch(msg_id, session, payload));
+    EXPECT_FALSE(called);
+
+    session.set_session_status(server::core::protocol::SessionStatus::kAuthenticated);
+    EXPECT_TRUE(dispatcher.dispatch(msg_id, session, payload));
+    EXPECT_TRUE(called);
+}
+
 TEST(HiveTest, Lifecycle) {
     boost::asio::io_context io;
     Hive hive(io);

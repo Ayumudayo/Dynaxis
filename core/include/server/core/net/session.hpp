@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "server/core/memory/memory_pool.hpp"
+#include "server/core/protocol/opcode_policy.hpp"
 #include "server/core/protocol/packet.hpp"
 
 namespace server::core {
@@ -88,6 +89,22 @@ public:
      */
     std::uint32_t session_id() const { return session_id_; }
 
+    /**
+     * @brief 세션 인증/권한 상태를 갱신합니다.
+     * @param status 새 세션 상태
+     */
+    void set_session_status(server::core::protocol::SessionStatus status) noexcept {
+        session_status_.store(status, std::memory_order_release);
+    }
+
+    /**
+     * @brief 현재 세션 인증/권한 상태를 반환합니다.
+     * @return 현재 세션 상태
+     */
+    server::core::protocol::SessionStatus session_status() const noexcept {
+        return session_status_.load(std::memory_order_acquire);
+    }
+
 private:
     void do_read_header();
     void do_read_body(std::size_t body_len);
@@ -128,6 +145,8 @@ private:
     std::uint32_t tx_seq_{1};
     std::function<void(std::shared_ptr<Session>)> on_close_{};
     std::uint32_t session_id_{0};
+    std::atomic<server::core::protocol::SessionStatus> session_status_{
+        server::core::protocol::SessionStatus::kAny};
 };
 
 } // namespace server::core

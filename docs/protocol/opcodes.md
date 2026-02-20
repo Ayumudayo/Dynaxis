@@ -39,11 +39,11 @@ room chat
 
 | ID | Name | Dir | State | Place | Transport | Delivery | Channel | Desc |
 |---:|------|:---:|:-----:|:-----:|:---------:|:--------:|-------:|------|
-| 0x0100 | `MSG_CHAT_SEND` | `c2s` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 채팅 전송 |
+| 0x0100 | `MSG_CHAT_SEND` | `c2s` | `authenticated` | `inline` | `tcp` | `reliable_ordered` | 0 | 채팅 전송 |
 | 0x0101 | `MSG_CHAT_BROADCAST` | `s2c` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 채팅 브로드캐스트 |
-| 0x0102 | `MSG_JOIN_ROOM` | `c2s` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 룸 입장 |
-| 0x0103 | `MSG_LEAVE_ROOM` | `c2s` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 룸 퇴장 |
-| 0x0104 | `MSG_WHISPER_REQ` | `c2s` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 귓속말 요청 |
+| 0x0102 | `MSG_JOIN_ROOM` | `c2s` | `authenticated` | `inline` | `tcp` | `reliable_ordered` | 0 | 룸 입장 |
+| 0x0103 | `MSG_LEAVE_ROOM` | `c2s` | `authenticated` | `inline` | `tcp` | `reliable_ordered` | 0 | 룸 퇴장 |
+| 0x0104 | `MSG_WHISPER_REQ` | `c2s` | `authenticated` | `inline` | `tcp` | `reliable_ordered` | 0 | 귓속말 요청 |
 | 0x0105 | `MSG_WHISPER_RES` | `s2c` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 귓속말 응답 |
 | 0x0106 | `MSG_WHISPER_BROADCAST` | `s2c` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 귓속말 전달 |
 
@@ -55,7 +55,7 @@ snapshot/refresh
 |---:|------|:---:|:-----:|:-----:|:---------:|:--------:|-------:|------|
 | 0x0200 | `MSG_STATE_SNAPSHOT` | `s2c` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 상태 스냅샷(방 목록+현재 방 유저) |
 | 0x0201 | `MSG_ROOM_USERS` | `s2c` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 특정 방 유저 목록 응답 |
-| 0x0202 | `MSG_ROOMS_REQ` | `c2s` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 방 목록 요청 |
-| 0x0203 | `MSG_ROOM_USERS_REQ` | `c2s` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 특정 방 사용자 목록 요청 |
-| 0x0204 | `MSG_REFRESH_REQ` | `c2s` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 현재 방 스냅샷 요청 |
+| 0x0202 | `MSG_ROOMS_REQ` | `c2s` | `authenticated` | `inline` | `tcp` | `reliable_ordered` | 0 | 방 목록 요청 |
+| 0x0203 | `MSG_ROOM_USERS_REQ` | `c2s` | `authenticated` | `inline` | `tcp` | `reliable_ordered` | 0 | 특정 방 사용자 목록 요청 |
+| 0x0204 | `MSG_REFRESH_REQ` | `c2s` | `authenticated` | `inline` | `tcp` | `reliable_ordered` | 0 | 현재 방 스냅샷 요청 |
 | 0x0205 | `MSG_REFRESH_NOTIFY` | `s2c` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 상태 변경 알림 (클라이언트가 REFRESH_REQ를 보내도록 유도) |

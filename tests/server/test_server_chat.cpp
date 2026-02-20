@@ -8,6 +8,7 @@
 #include <server/storage/redis/client.hpp>
 #include <server/core/config/options.hpp>
 #include <server/core/net/connection_runtime_state.hpp>
+#include <server/core/protocol/protocol_errors.hpp>
 #include <server/core/protocol/packet.hpp>
 #include <server/protocol/game_opcodes.hpp>
 #include "wire.pb.h"
@@ -396,6 +397,38 @@ TEST_F(ChatServiceTest, Login) {
     
     // 검증: Redis에 로비 유저 추가되었는지 (Spy 확인)
     EXPECT_TRUE(redis_->sadd_called) << "User should be added to Redis set";
+}
+
+TEST_F(ChatServiceTest, DispatcherBlocksProtectedOpcodeBeforeLogin) {
+    dispatcher_.register_handler(
+        game_proto::MSG_CHAT_SEND,
+        [this](server::core::Session& s, std::span<const std::uint8_t> payload) {
+            chat_service_->on_chat_send(s, payload);
+        },
+        server::protocol::opcode_policy(game_proto::MSG_CHAT_SEND));
+
+    std::vector<std::uint8_t> payload;
+    write_lp_utf8(payload, "lobby");
+    write_lp_utf8(payload, "hello-before-login");
+
+    EXPECT_TRUE(dispatcher_.dispatch(game_proto::MSG_CHAT_SEND, *session_, payload));
+    FlushSessionIO();
+
+    std::uint16_t msg_id = 0;
+    std::vector<std::uint8_t> body;
+    bool found_err = false;
+    for (int i = 0; i < 4; ++i) {
+        ASSERT_TRUE(WaitForPacket(msg_id, body));
+        if (msg_id == core_proto::MSG_ERR) {
+            found_err = true;
+            break;
+        }
+    }
+
+    ASSERT_TRUE(found_err);
+    ASSERT_GE(body.size(), 2u);
+    const std::uint16_t code = static_cast<std::uint16_t>((static_cast<std::uint16_t>(body[0]) << 8) | body[1]);
+    EXPECT_EQ(code, core_proto::errc::FORBIDDEN);
 }
 
 // 방 입장 테스트

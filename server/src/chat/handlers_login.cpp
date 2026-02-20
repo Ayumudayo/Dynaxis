@@ -1,4 +1,5 @@
 #include "server/chat/chat_service.hpp"
+#include "server/core/protocol/opcode_policy.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/protocol/game_opcodes.hpp"
 #include "server/core/util/log.hpp"
@@ -221,6 +222,8 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         pb.set_is_admin(admin_users_.count(new_user) > 0);
         std::string bytes; pb.SerializeToString(&bytes);
         std::vector<std::uint8_t> res(bytes.begin(), bytes.end());
+
+        session_sp->set_session_status(server::core::protocol::SessionStatus::kAuthenticated);
         session_sp->async_send(game_proto::MSG_LOGIN_RES, res, 0);
 
         // presence:user:{uid} 키의 TTL을 주기적으로 갱신해 온라인 리스트를 유지한다.

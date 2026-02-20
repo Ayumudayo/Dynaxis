@@ -73,24 +73,24 @@
 
 ## 3.1 디스패치 게이트
 
-- [ ] `core/src/net/session.cpp` 또는 `core/src/net/dispatcher.cpp`에 정책 조회 경로 추가
-- [ ] `required_state` 검증 실패 시 일관된 에러 처리 적용
-- [ ] `processing_place` 적용 지점 정의 및 초기 적용(TCP 경로)
+- [x] `core/src/net/session.cpp` 또는 `core/src/net/dispatcher.cpp`에 정책 조회 경로 추가
+- [x] `required_state` 검증 실패 시 일관된 에러 처리 적용
+- [x] `processing_place` 적용 지점 정의 및 초기 적용(TCP 경로)
 
 ## 3.2 라우팅 계층 반영
 
-- [ ] `server/src/app/router.cpp` 등록 경로와 정책 메타 정합성 확인
-- [ ] 정책-핸들러 불일치 검증(시작 시점 assert/log) 추가
+- [x] `server/src/app/router.cpp` 등록 경로와 정책 메타 정합성 확인
+- [x] 정책-핸들러 불일치 검증(시작 시점 assert/log) 추가
 
 ## 3.3 검증
 
-- [ ] 단위 테스트: 상태 제약 허용/거부 케이스
-- [ ] 통합 테스트: 로그인 전 금지 opcode 차단
-- [ ] 기존 chat 경로 회귀 없음 확인
+- [x] 단위 테스트: 상태 제약 허용/거부 케이스
+- [x] 통합 테스트: 로그인 전 금지 opcode 차단
+- [x] 기존 chat 경로 회귀 없음 확인
 
 완료 기준:
 
-- [ ] TCP-only 환경에서 정책 게이트가 안정적으로 동작
+- [x] TCP-only 환경에서 정책 게이트가 안정적으로 동작
 
 ---
 
