@@ -8,17 +8,24 @@
 #include <server/storage/redis/client.hpp>
 #include <server/core/config/options.hpp>
 #include <server/core/net/connection_runtime_state.hpp>
+#include <server/core/protocol/packet.hpp>
+#include <server/protocol/game_opcodes.hpp>
 #include "wire.pb.h"
 #include <boost/asio.hpp>
 #include <thread>
 #include <chrono>
 #include <vector>
+#include <array>
+#include <optional>
+#include <cstdlib>
 #include <iostream>
 
 using namespace server::app::chat;
 using namespace server::core;
 using namespace server::core::storage;
 using namespace server::storage::redis;
+namespace game_proto = server::protocol;
+namespace core_proto = server::core::protocol;
 
 /**
  * @brief ChatService 주요 경로(로그인/입장/채팅/리프레시) 통합 동작을 검증합니다.
@@ -281,6 +288,94 @@ protected:
         for(int i=0; i<timeout_ms/10; ++i) {
             if (ReadFromPeer()) return true;
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return false;
+    }
+
+    void LoginAs(const std::string& user, const std::string& token = "test_token") {
+        std::vector<uint8_t> login_payload;
+        write_lp_utf8(login_payload, user);
+        write_lp_utf8(login_payload, token);
+        chat_service_->on_login(*session_, login_payload);
+        ProcessJobs();
+        FlushSessionIO();
+    }
+
+    void JoinRoom(const std::string& room, const std::string& password = "") {
+        std::vector<uint8_t> join_payload;
+        write_lp_utf8(join_payload, room);
+        write_lp_utf8(join_payload, password);
+        chat_service_->on_join(*session_, join_payload);
+        ProcessJobs();
+        FlushSessionIO();
+    }
+
+    void SendChat(const std::string& room, const std::string& text) {
+        std::vector<uint8_t> payload;
+        write_lp_utf8(payload, room);
+        write_lp_utf8(payload, text);
+        chat_service_->on_chat_send(*session_, payload);
+        ProcessJobs();
+        FlushSessionIO();
+    }
+
+    bool WaitForPacket(std::uint16_t& msg_id, std::vector<std::uint8_t>& payload, int timeout_ms = 300) {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+        boost::system::error_code ec;
+        std::size_t available = 0;
+
+        while (std::chrono::steady_clock::now() < deadline) {
+            FlushSessionIO();
+            available = peer_socket_.available(ec);
+            if (!ec && available >= core_proto::k_header_bytes) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        if (ec || available < core_proto::k_header_bytes) {
+            return false;
+        }
+
+        std::array<std::uint8_t, core_proto::k_header_bytes> header_buf{};
+        boost::asio::read(peer_socket_, boost::asio::buffer(header_buf), ec);
+        if (ec) {
+            return false;
+        }
+
+        core_proto::PacketHeader header{};
+        core_proto::decode_header(header_buf.data(), header);
+        msg_id = header.msg_id;
+
+        payload.assign(header.length, 0);
+        if (header.length > 0) {
+            boost::asio::read(peer_socket_, boost::asio::buffer(payload), ec);
+            if (ec) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    bool WaitForBroadcastText(const std::string& expected_substring, int timeout_ms = 500) {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+        while (std::chrono::steady_clock::now() < deadline) {
+            std::uint16_t msg_id = 0;
+            std::vector<std::uint8_t> payload;
+            if (!WaitForPacket(msg_id, payload, 60)) {
+                continue;
+            }
+            if (msg_id != game_proto::MSG_CHAT_BROADCAST) {
+                continue;
+            }
+            server::wire::v1::ChatBroadcast pb;
+            if (!pb.ParseFromArray(payload.data(), static_cast<int>(payload.size()))) {
+                continue;
+            }
+            if (pb.text().find(expected_substring) != std::string::npos) {
+                return true;
+            }
         }
         return false;
     }
@@ -557,6 +652,85 @@ TEST_F(ChatServiceTest, Refresh) {
     // NOTE: on_refresh_request 구현에 따라 응답이 없을 수도 있음(단순 갱신).
     // 여기서는 실행에 문제가 없는지 확인.
     SUCCEED();
+}
+
+TEST_F(ChatServiceTest, BlacklistCommandsRoundTrip) {
+    LoginAs("test_user");
+    WaitForData();
+
+    SendChat("lobby", "/blacklist add blocked_user");
+    EXPECT_TRUE(WaitForBroadcastText("blacklist add: blocked_user"));
+
+    SendChat("lobby", "/blacklist list");
+    EXPECT_TRUE(WaitForBroadcastText("blacklist: blocked_user"));
+
+    SendChat("lobby", "/blacklist remove blocked_user");
+    EXPECT_TRUE(WaitForBroadcastText("blacklist remove: blocked_user"));
+}
+
+TEST_F(ChatServiceTest, AdminModerationCommandsDeniedForNonAdmin) {
+    LoginAs("regular_user");
+    WaitForData();
+
+    SendChat("lobby", "/mute target_user 30");
+    EXPECT_TRUE(WaitForBroadcastText("mute denied: admin only"));
+
+    SendChat("lobby", "/gkick target_user");
+    EXPECT_TRUE(WaitForBroadcastText("global kick denied: admin only"));
+}
+
+TEST_F(ChatServiceTest, AdminModerationCommandsAllowedForAdmin) {
+    const char* old_admin_env = std::getenv("CHAT_ADMIN_USERS");
+    const bool had_old_admin_env = (old_admin_env != nullptr);
+    const std::string old_admin_value = had_old_admin_env ? std::string(old_admin_env) : std::string();
+
+#if defined(_WIN32)
+    _putenv_s("CHAT_ADMIN_USERS", "admin_user");
+#else
+    setenv("CHAT_ADMIN_USERS", "admin_user", 1);
+#endif
+
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    LoginAs("admin_user");
+    WaitForData();
+
+    SendChat("lobby", "/mute target_user 30");
+    EXPECT_TRUE(WaitForBroadcastText("mute applied: user=target_user"));
+
+    SendChat("lobby", "/unmute target_user");
+    EXPECT_TRUE(WaitForBroadcastText("unmute applied: user=target_user"));
+
+    SendChat("lobby", "/ban target_user 60");
+    EXPECT_TRUE(WaitForBroadcastText("ban applied: user=target_user"));
+
+    SendChat("lobby", "/unban target_user");
+    EXPECT_TRUE(WaitForBroadcastText("unban applied: user=target_user"));
+
+#if defined(_WIN32)
+    if (had_old_admin_env) {
+        _putenv_s("CHAT_ADMIN_USERS", old_admin_value.c_str());
+    } else {
+        _putenv_s("CHAT_ADMIN_USERS", "");
+    }
+#else
+    if (had_old_admin_env) {
+        setenv("CHAT_ADMIN_USERS", old_admin_value.c_str(), 1);
+    } else {
+        unsetenv("CHAT_ADMIN_USERS");
+    }
+#endif
+}
+
+TEST_F(ChatServiceTest, RoomOwnerCanRemoveOwnRoom) {
+    LoginAs("owner_user");
+    WaitForData();
+
+    JoinRoom("owner_room");
+    WaitForData();
+
+    SendChat("owner_room", "/room remove");
+    EXPECT_TRUE(WaitForBroadcastText("room removed: owner_room"));
 }
 
 // 세션 종료 테스트

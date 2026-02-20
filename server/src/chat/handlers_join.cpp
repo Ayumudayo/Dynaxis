@@ -110,7 +110,13 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
 
             const bool has_password = !expected_password.empty();
             const bool password_ok = has_password && !provided_password.empty() && verify_room_password(provided_password, expected_password);
-            if (room_to_join != "lobby" && !is_admin_user && !is_room_owner && !has_room_invite && !password_ok) {
+            const bool room_exists =
+                state_.rooms.find(room_to_join) != state_.rooms.end() ||
+                state_.room_owners.find(room_to_join) != state_.room_owners.end() ||
+                state_.room_passwords.find(room_to_join) != state_.room_passwords.end() ||
+                has_password;
+
+            if (room_to_join != "lobby" && room_exists && !is_admin_user && !is_room_owner && !has_room_invite && !password_ok) {
                 session_sp->send_error(proto::errc::FORBIDDEN, has_password ? "room locked" : "invite required");
                 return;
             }

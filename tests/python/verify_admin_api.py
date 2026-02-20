@@ -150,11 +150,25 @@ def main() -> int:
         if role not in ("viewer", "operator", "admin"):
             raise RuntimeError("auth context role mismatch")
         capabilities = auth_data.get("capabilities", {})
-        for key in ("disconnect", "announce", "settings"):
+        for key in ("disconnect", "announce", "settings", "moderation"):
             if key not in capabilities:
                 raise RuntimeError(f"auth context capabilities missing '{key}'")
             if not isinstance(capabilities[key], bool):
                 raise RuntimeError(f"auth context capabilities.{key} expected bool")
+
+        moderation_paths = [
+            "/api/v1/users/mute?client_id=admin_api_probe&duration_sec=30&reason=api-check",
+            "/api/v1/users/unmute?client_id=admin_api_probe&reason=api-check",
+            "/api/v1/users/ban?client_id=admin_api_probe&duration_sec=60&reason=api-check",
+            "/api/v1/users/unban?client_id=admin_api_probe&reason=api-check",
+            "/api/v1/users/kick?client_id=admin_api_probe&reason=api-check",
+        ]
+        for path in moderation_paths:
+            status, _, payload = request_json(path, method="POST")
+            if status != 200:
+                raise RuntimeError(f"{path} expected 200, got {status}")
+            if (payload or {}).get("data", {}).get("accepted") is not True:
+                raise RuntimeError(f"{path} missing accepted=true")
 
         users_payload = load_json("/api/v1/users?limit=10")
         users_data = users_payload.get("data", {})
