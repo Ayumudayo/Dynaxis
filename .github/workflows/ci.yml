@@ -127,10 +127,22 @@ jobs:
         run: |
           python tools/gen_opcode_docs.py --check
 
+      - name: Validate Generated Opcode Headers
+        shell: pwsh
+        run: |
+          python tools/gen_opcodes.py core/protocol/system_opcodes.json core/include/server/core/protocol/system_opcodes.hpp
+          python tools/gen_opcodes.py server/protocol/game_opcodes.json server/include/server/protocol/game_opcodes.hpp
+          git diff --exit-code -- core/include/server/core/protocol/system_opcodes.hpp server/include/server/protocol/game_opcodes.hpp
+
       - name: Validate Doxygen Coverage
         shell: pwsh
         run: |
           python tools/check_doxygen_coverage.py
+
+      - name: Run Doxygen Tool Unit Tests
+        shell: pwsh
+        run: |
+          python tests/python/test_check_doxygen_coverage.py
 
       - name: Validate Wire Codec Specs
         shell: pwsh
@@ -184,6 +196,20 @@ jobs:
       - name: Validate Opcode Specs
         run: |
           python3 tools/gen_opcode_docs.py --check
+
+      - name: Validate Generated Opcode Headers
+        run: |
+          python3 tools/gen_opcodes.py core/protocol/system_opcodes.json core/include/server/core/protocol/system_opcodes.hpp
+          python3 tools/gen_opcodes.py server/protocol/game_opcodes.json server/include/server/protocol/game_opcodes.hpp
+          git diff --exit-code -- core/include/server/core/protocol/system_opcodes.hpp server/include/server/protocol/game_opcodes.hpp
+
+      - name: Validate Doxygen Coverage
+        run: |
+          python3 tools/check_doxygen_coverage.py
+
+      - name: Run Doxygen Tool Unit Tests
+        run: |
+          python3 tests/python/test_check_doxygen_coverage.py
 
       - name: Docker Info
         run: |

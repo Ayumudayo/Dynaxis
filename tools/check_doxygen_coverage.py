@@ -115,6 +115,53 @@ def find_preceding_doxygen_block(lines: list[str], decl_line_index: int) -> str 
     return None
 
 
+def _collect_function_declaration(lines: list[str], start_index: int) -> tuple[str | None, int]:
+    collected: list[str] = []
+    saw_open_paren = False
+    saw_close_paren = False
+
+    index = start_index
+    while index < len(lines):
+        stripped = lines[index].strip()
+
+        # Multiline declaration can contain blank lines, but only after declaration starts.
+        if not stripped:
+            if saw_open_paren:
+                index += 1
+                continue
+            return None, start_index
+
+        if "{" in stripped or "}" in stripped:
+            return None, start_index
+
+        sanitized = stripped.split("//", 1)[0].strip()
+        if not sanitized:
+            index += 1
+            continue
+
+        if not saw_open_paren and any(sanitized.startswith(prefix) for prefix in SKIP_FUNCTION_PREFIXES):
+            return None, start_index
+
+        collected.append(sanitized)
+
+        if "(" in sanitized:
+            saw_open_paren = True
+        if ")" in sanitized:
+            saw_close_paren = True
+
+        if ";" in sanitized:
+            if not (saw_open_paren and saw_close_paren):
+                return None, start_index
+
+            declaration = " ".join(collected)
+            declaration = declaration.split(";", 1)[0].strip() + ";"
+            return declaration, index
+
+        index += 1
+
+    return None, start_index
+
+
 def check_header_file(path: Path, root: Path) -> list[Issue]:
     text = path.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
@@ -124,7 +171,9 @@ def check_header_file(path: Path, root: Path) -> list[Issue]:
     class_stack: list[ScopeState] = []
     brace_depth = 0
 
-    for idx, line in enumerate(lines):
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
         stripped = line.strip()
 
         if class_stack:
@@ -166,29 +215,38 @@ def check_header_file(path: Path, root: Path) -> list[Issue]:
         if _is_function_declaration_candidate(stripped):
             scope = class_stack[-1] if class_stack else None
 
-            # Class member declarations are valid only at the direct class body depth.
-            if scope and brace_depth != scope.depth:
-                pass
-            elif scope and scope.access != "public":
-                pass
-            else:
-                block = find_preceding_doxygen_block(lines, idx)
-                if block is not None:
-                    missing = _missing_function_tags(stripped, block, scope.name if scope else None)
-                    if missing:
-                        symbol = _extract_decl_symbol(stripped)
-                        issues.append(
-                            Issue(
-                                file=rel,
-                                line=idx + 1,
-                                symbol=symbol,
-                                missing_tags=tuple(missing),
+            # Only inspect public member declarations at direct class depth.
+            if scope and scope.access == "public" and brace_depth == scope.depth:
+                declaration, end_idx = _collect_function_declaration(lines, idx)
+                if declaration is not None:
+                    block = find_preceding_doxygen_block(lines, idx)
+                    if block is not None:
+                        missing = _missing_function_tags(declaration, block, scope.name)
+                        if missing:
+                            symbol = _extract_decl_symbol(declaration)
+                            issues.append(
+                                Issue(
+                                    file=rel,
+                                    line=idx + 1,
+                                    symbol=symbol,
+                                    missing_tags=tuple(missing),
+                                )
                             )
-                        )
+
+                    # Consume full declaration range so multiline signatures are checked once.
+                    while idx <= end_idx:
+                        line_for_depth = lines[idx]
+                        brace_depth += line_for_depth.count("{") - line_for_depth.count("}")
+                        while class_stack and brace_depth < class_stack[-1].depth:
+                            class_stack.pop()
+                        idx += 1
+                    continue
 
         brace_depth += line.count("{") - line.count("}")
         while class_stack and brace_depth < class_stack[-1].depth:
             class_stack.pop()
+
+        idx += 1
 
     return issues
 
@@ -196,9 +254,7 @@ def check_header_file(path: Path, root: Path) -> list[Issue]:
 def _is_function_declaration_candidate(stripped: str) -> bool:
     if not stripped:
         return False
-    if not stripped.endswith(";"):
-        return False
-    if "(" not in stripped or ")" not in stripped:
+    if "(" not in stripped:
         return False
     if "{" in stripped or "}" in stripped:
         return False
@@ -216,6 +272,9 @@ def _extract_decl_symbol(stripped: str) -> str:
 
 
 def _missing_function_tags(stripped: str, block: str, class_name: str | None) -> list[str]:
+    if "= delete" in stripped or "= default" in stripped:
+        return []
+
     prefix = stripped.split("(", 1)[0].strip()
     params_text = stripped[stripped.find("(") + 1 : stripped.rfind(")")].strip()
 
