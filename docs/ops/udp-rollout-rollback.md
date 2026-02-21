@@ -1,6 +1,6 @@
-# UDP Rollout/Rollback Checklist
+# 전송 프로토콜(UDP) 전환 점검표(rollout/rollback)
 
-이 문서는 UDP ingress canary 오픈과 TCP-only 롤백을 운영자가 즉시 실행할 수 있도록 정리한다.
+이 문서는 UDP 수신(ingress) 카나리(canary) 오픈과 TCP-only 롤백을 운영자가 즉시 실행할 수 있도록 정리한다.
 
 ## 1. 준비
 
@@ -8,7 +8,7 @@
 - gateway build flag 확인: `/metrics`에서 `gateway_udp_ingress_feature_enabled 1`
 - 관측 스택(권장): `pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build -Observability`
 
-## 2. Canary 롤아웃 (gateway-1 only)
+## 2. 카나리 롤아웃 (gateway-1만)
 
 ```powershell
 pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build -Observability -EnvFile docker/stack/.env.udp-canary.example
@@ -21,7 +21,7 @@ pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build -Observability -EnvFi
 
 ## 3. 점진 확장
 
-canary 안정화 후 `.env` 오버라이드에서 `GATEWAY2_UDP_LISTEN=0.0.0.0:7000`을 설정해 확장한다.
+카나리 안정화 후 `.env` 오버라이드에서 `GATEWAY2_UDP_LISTEN=0.0.0.0:7000`을 설정해 확장한다.
 
 확장 조건(최소):
 - `GatewayUdpEstimatedLossHigh`, `GatewayUdpJitterHigh` 알람 없음
@@ -49,8 +49,8 @@ pwsh scripts/rehearse_udp_rollout_rollback.ps1 -NoBuild
 ```
 
 완료 기준:
-- canary 오픈 -> rollback까지 10분 이내
-- rollback 후 TCP smoke 성공
+- 카나리 오픈 -> 롤백까지 10분 이내
+- 롤백 후 TCP 스모크(smoke) 성공
 - 사후 기록에 원인/대응/재시도 조건 기재
 
 ## 6. 사후 분석 및 재시도 조건
@@ -63,4 +63,4 @@ pwsh scripts/rehearse_udp_rollout_rollback.ps1 -NoBuild
 재시도 조건:
 - 이전 장애 원인에 대한 수정 적용
 - 최소 24시간 알람 안정 상태 확인
-- canary 범위를 1 gateway에서 다시 시작
+- 카나리 범위를 1개 gateway에서 다시 시작

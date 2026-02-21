@@ -8,7 +8,7 @@ Windows는 개발/디버깅(빌드/클라이언트) 용도로 유지한다.
 - C++20 컴파일러
 - Python 3 (선택: opcodes/wire codegen 자동 실행)
 
-## Windows (개발 빌드)
+## 윈도우(Windows) 개발 빌드
 
 ### 1) vcpkg 준비(권장, 최초 1회)
 ```powershell
@@ -34,22 +34,22 @@ ctest --preset windows-test
 - `build-windows/gateway/Debug/gateway_app.exe`
 - `build-windows/Debug/wb_worker.exe`
 
-## Linux (표준 런타임 = Docker full stack)
+## 리눅스(Linux) (표준 런타임 = Docker 풀스택)
 
 `scripts/deploy_docker.ps1`를 통해 base 이미지/compose profile/포트 매핑을 일관되게 유지한다.
 
 ```powershell
-# Stack up
+# 스택 기동
 pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build
 
-# Stack up + Observability(Prometheus/Grafana)
+# 스택 기동 + 관측성(Observability: Prometheus/Grafana)
 pwsh scripts/run_full_stack_observability.ps1
 
-# Down
+# 스택 종료
 pwsh scripts/deploy_docker.ps1 -Action down
 ```
 
-## Sanitizers (ASan/UBSan)
+## 메모리/정의되지 않은 동작 검사 (Sanitizer: ASan/UBSan)
 
 - CMake 옵션: `KNIGHTS_ENABLE_SANITIZERS=ON`
 - 프리셋: `linux-asan`

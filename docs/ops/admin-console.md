@@ -127,15 +127,15 @@ Operator Browser
 
 ### 6.1 화면/기능
 
-1. Cluster Overview
+1. 클러스터 개요
    - 서비스별 up/ready/dependency 상태
    - instance별 active sessions
-2. Routing & Session Lookup
+2. 라우팅 및 세션 조회
    - client_id 입력 -> sticky backend 조회
    - backend별 레지스트리 레코드 확인
-3. Write-behind Status
+3. Write-behind 상태
    - `wb_pending`, flush/ack/reclaim 추세
-4. Fanout Overview
+4. Fanout 개요
    - room/whisper fanout 관련 지표/로그 링크
 
 ### 6.2 신규 API (제안)
@@ -210,31 +210,31 @@ MVP는 write 액션까지 포함하므로 감사 로그를 필수로 남긴다.
 
 ## 9. 단계별 실행 계획
 
-### Phase 0 - Spec & Skeleton
+### 단계 0 - 명세 및 스켈레톤
 
 - 본 문서 확정
 - `admin_app` 스켈레톤(health/ready/metrics) 생성
 - docker stack에 admin profile 초안 추가
 
-### Phase 1 - Read-only Baseline
+### 단계 1 - 읽기 전용 기준선
 
 - `overview`, `instances`, `sessions/{client_id}`, `worker/write-behind` API 구현
 - 최소 웹 UI(테이블 + 검색 + 링크)
 - 감사 로그/권한(viewer) 적용
 
-### Phase 2 - 운영 편의 강화
+### 단계 2 - 운영 편의 강화
 
 - fanout/whisper 전용 운영 지표 보강
 - 필터/검색/시계열 비교 UX 개선
 - 알람 임계치 뷰 제공
 
-### Phase 2.5 - Write-lite Control Plane
+### 단계 2.5 - Write-lite 제어면
 
 - `users`, `users/disconnect`, `announcements`, `settings` API 구현
 - role-gated UX(viewer/operator/admin) 적용
 - Redis Pub/Sub 기반 명령 채널 연동
 
-### Phase 3 - 고급 Write Action (선택)
+### 단계 3 - 고급 쓰기 액션 (선택)
 
 - drain/undrain 같은 라우팅 제어
 - 이중 확인 + idempotency key + 감사 강화

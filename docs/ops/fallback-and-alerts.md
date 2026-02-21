@@ -1,6 +1,6 @@
-# Fallback & Alerts (상세)
+# 장애 대응(Fallback) 및 알림(Alerts) (상세)
 
-서비스 중 장애가 발생했을 때 어떤 fallback 을 사용할지, 어떤 알람을 걸어야 하는지 정리한다.
+서비스 중 장애가 발생했을 때 어떤 fallback을 사용할지, 어떤 알림을 설정해야 하는지 정리한다.
 
 ## 1. 시나리오별 대응
 | 시나리오 | 현상 | 즉시 조치 | Fallback |
@@ -24,7 +24,7 @@
 
 AlertManager → Slack → On-call 순으로 전달하고, runbook 절차에 따라 대응한다.
 
-## 3. Fallback 절차 세부
+## 3. Fallback 절차 상세
 ### 3.1 Redis 장애 대응
 1. Redis 복구가 최우선(Sticky/Instance Registry/PubSub 경로 모두 영향)
 2. Redis 복구 전에는 신규 라우팅이 불안정할 수 있으므로, 필요 시 Gateway 트래픽을 제한하거나(HAProxy 백엔드 제외) 점진적으로 복구
@@ -41,7 +41,7 @@ AlertManager → Slack → On-call 순으로 전달하고, runbook 절차에 따
 3. HAProxy 백엔드/헬스체크 설정이 최신인지 확인
 
 ## 4. 로그 규칙
-- 모든 fallback/알람 관련 조치는 `metric=*` 형식과 `action=fallback-{type}` 태그를 포함한 INFO 로그로 남긴다.
+- 모든 fallback/알림 관련 조치는 `metric=*` 형식과 `action=fallback-{type}` 태그를 포함한 INFO 로그로 남긴다.
 - 예: `metric=gateway_backend_connect_fail_total value=1 action=fallback-drain-gateway`.
 
 ## 5. 참고 문서

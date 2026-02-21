@@ -1,4 +1,4 @@
-# Redis Write-Behind for Session Activities
+# 세션 이벤트용 Redis Write-Behind
 
 목표: 세션에서 발생하는 고빈도 이벤트를 Redis에 임시 저장하고, 주기적으로(또는 임계 도달 시) RDB(PostgreSQL)에 배치 커밋하여 RDB I/O를 줄이고 지연을 낮춘다.
 
@@ -77,7 +77,7 @@
   - `DB_URI`, `REDIS_URI`
   - `METRICS_PORT`(설정 시 `/metrics` 노출; server_app / wb_worker 공용)
 
-## Streams 운영 키/그룹/필드 정리
+## 스트림(Streams) 운영 키/그룹/필드 정리
 - 생산 키: `session_events`(=`REDIS_STREAM_KEY`)
 - 소비 키: `session_events`(동일 스트림, 컨슈머 그룹 기반)
 - 그룹: `wb_group`(예시, 설정 키 `WB_GROUP`로 주입)

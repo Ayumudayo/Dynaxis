@@ -1,8 +1,8 @@
-# Gateway & HAProxy 운영 가이드 (상세)
+# 게이트웨이(Gateway) 및 HAProxy 운영 안내서 (상세)
 
 Gateway를 수평 확장하기 위해 외부 TCP(L4) 로드밸런서(예: HAProxy)를 사용하는 배포/운영 가이드다.
 
-> Note: 과거 문서에는 `load_balancer_app`(gRPC Stream 기반 커스텀 LB)가 포함되어 있었으나, 현재 코드/빌드 타깃에는 존재하지 않는다.
+> 참고: 과거 문서에는 `load_balancer_app`(gRPC Stream 기반 커스텀 LB)가 포함되어 있었으나, 현재 코드/빌드 타깃에는 존재하지 않는다.
 
 ## 1. 전체 흐름
 ```
@@ -80,9 +80,9 @@ listen stats
 ## 4. 배포 & 스케일링
 | 작업 | 절차 |
 | --- | --- |
-| Rolling Update | HAProxy 설정 반영 → Gateway 순서. readinessProbe 성공 후 다음 단계 진행 |
-| Scale-out | Gateway replica 수 증가. sticky 정보는 Redis에 저장되므로 Gateway는 무상태(stateless)로 확장 가능 |
-| Multi-region | Redis, RDS 를 region 별로 두고, Gateway/Edge LB(예: HAProxy)를 각 region 에 배치. 전역 라우팅은 외부 L7(LB or Anycast) 에서 처리 |
+| 롤링 업데이트 | HAProxy 설정 반영 → Gateway 순서. readinessProbe 성공 후 다음 단계 진행 |
+| 수평 확장(Scale-out) | Gateway replica 수 증가. sticky 정보는 Redis에 저장되므로 Gateway는 무상태(stateless)로 확장 가능 |
+| 멀티 리전(Multi-region) | Redis, RDS를 리전별로 두고, Gateway/Edge LB(예: HAProxy)를 각 리전에 배치. 전역 라우팅은 외부 L7(LB 또는 Anycast)에서 처리 |
 
 ## 5. 모니터링
 - Gateway 로그: 인증 실패, backend 선택/연결 실패, Pub/Sub lag, send queue overflow

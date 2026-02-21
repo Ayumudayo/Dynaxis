@@ -1,4 +1,4 @@
-# 운영 체크리스트 (Runbook – Expanded)
+# 운영 체크리스트 (확장판)
 
 ## 1. 배포 전/후 공통 점검
 1. `.env` / Secrets 확인 (`DB_URI`, `REDIS_URI`, `METRICS_PORT`)
@@ -46,22 +46,22 @@
 3. rollback: `pwsh scripts/deploy_docker.ps1 -Action up -Detached -Observability -EnvFile docker/stack/.env.udp-rollback.example`
 4. rollback 후 `gateway_udp_enabled`가 양 gateway에서 0인지 확인하고 `python tests/python/verify_pong.py`로 TCP smoke 검증
 
-## 4. Smoke 테스트 절차
+## 4. 스모크 테스트 절차
 1. devclient 실행 → `/login runbook` → `/join lobby` → `/chat runbook-check`
 2. `/refresh` 로 snapshot 정상 반환 여부 확인
 3. `wb_emit` 로 write-behind 이벤트 발행 → `wb_worker` 로그 확인
 4. Grafana 대시보드 스크린샷 저장 (배포 후 5분)
 
-## 5. Incident Report 작성 템플릿
+## 5. 장애 보고서 작성 템플릿
 ```
 - 날짜/시간:
-- 탐지 경로 (Alert, 고객, 내부 모니터링):
+- 탐지 경로 (알림, 고객, 내부 모니터링):
 - 영향 범위:
 - 원인 요약:
 - 조치 내용:
 - 재발 방지:
 ```
-모든 주요 장애는 24시간 내 Incident Report 를 작성한다.
+모든 주요 장애는 24시간 내 장애 보고서를 작성한다.
 
 ## 6. 참고
 - `docs/ops/fallback-and-alerts.md`

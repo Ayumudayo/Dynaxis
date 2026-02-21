@@ -1,23 +1,23 @@
-# Deployment Guide
+# 배포 가이드
 
-이 문서는 Dev(Compose)와 Prod(Kubernetes/AWS) 환경을 모두 아우르는 배포 절차를 정리한다. “왜 이 단계를 수행하는가?” 까지 설명해 운영자가 그대로 따라할 수 있도록 작성했다.
+이 문서는 개발(Dev, Compose)과 운영(Prod, Kubernetes/AWS) 환경을 모두 아우르는 배포 절차를 정리한다. "왜 이 단계를 수행하는가?"까지 설명해 운영자가 그대로 따라할 수 있도록 작성했다.
 
 ## 1. 공통 준비물
-| 항목 | Dev | Stage/Prod |
+| 항목 | 개발(Dev) | 스테이지/운영(Stage/Prod) |
 | --- | --- | --- |
 | OS | Windows 11 + PowerShell 7 / WSL2 Ubuntu | Amazon Linux 2 / Ubuntu 22.04 |
-| 필수 도구 | CMake 3.20+, vcpkg, Docker Desktop | kubectl, helm, terraform, aws cli |
+| 필수 도구 | CMake 3.20+, vcpkg, Docker Desktop | kubectl, helm, terraform, AWS CLI |
 | 외부 서비스 | Redis 6+, PostgreSQL 13+ | Amazon ElastiCache, Amazon RDS |
 | 필수 Secrets | `DB_URI`, `REDIS_URI` | AWS Secrets Manager 또는 KMS |
 
 `.env` 예시는 `docs/configuration.md` 를 참고한다. 환경별로 `.env.server`, `.env.gateway` 를 분리해 ConfigMap/Secret 에 주입하는 것을 권장한다. (HAProxy는 별도 설정 파일로 관리)
 
-## 2. Dev 환경 (Docker Compose)
+## 2. 개발(Dev) 환경 (Docker Compose)
 ### 2.1 권장: 전체 스택 Docker (HAProxy 포함)
 Windows에서 개발하더라도 서버 스택 런타임은 **Linux 컨테이너**로 통일한다.
 
 ```powershell
-# Windows / WSL / Linux (pwsh)
+# 윈도우/WSL/리눅스 (pwsh)
 pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build
 ```
 
@@ -47,20 +47,20 @@ pwsh scripts/run_full_stack_observability.ps1
 UDP canary/rollback 리허설 시에는 env 파일 오버라이드로 실행한다:
 
 ```powershell
-# canary (gateway-1 UDP on, gateway-2 UDP off)
+# 카나리(canary) (gateway-1 UDP on, gateway-2 UDP off)
 pwsh scripts/deploy_docker.ps1 -Action up -Detached -Observability -EnvFile docker/stack/.env.udp-canary.example
 
-# rollback (TCP-only)
+# 롤백(rollback) (TCP-only)
 pwsh scripts/deploy_docker.ps1 -Action up -Detached -Observability -EnvFile docker/stack/.env.udp-rollback.example
 ```
 
-### 2.3 Dev 검증 체크리스트
+### 2.3 개발(Dev) 검증 체크리스트
 1. HAProxy 엔드포인트로 접속: `127.0.0.1:6000`
 2. server/gateway metrics 확인(옵션): `/metrics` 200 OK
 3. `WRITE_BEHIND_ENABLED=1` 설정 시 `wb_worker`가 backlog를 처리하는지 확인
 
-## 3. Prod 환경 (AWS + Kubernetes)
-> 참고: 이 저장소에는 Helm chart(`charts/*`)가 포함되어 있지 않다. Prod chart/IaC는 별도 운영 저장소에서 관리한다.
+## 3. 운영(Prod) 환경 (AWS + Kubernetes)
+> 참고: 이 저장소에는 Helm chart(`charts/*`)가 포함되어 있지 않다. 운영(Prod) chart/IaC는 별도 운영 저장소에서 관리한다.
 
 ### 3.1 인프라 (Terraform)
 1. `terraform init && terraform apply` 로 VPC/Subnet/SecurityGroup/ElastiCache/RDS/SecretsManager 생성
@@ -74,7 +74,7 @@ pwsh scripts/deploy_docker.ps1 -Action up -Detached -Observability -EnvFile dock
 4. `gateway`에는 `GATEWAY_BACKEND_CONNECT_TIMEOUT_MS`, `GATEWAY_BACKEND_SEND_QUEUE_MAX_BYTES`를 환경별로 명시한다.
 5. UDP ingress 사용 시 `GATEWAY_UDP_BIND_TTL_MS`, `GATEWAY_UDP_BIND_FAIL_WINDOW_MS`, `GATEWAY_UDP_BIND_FAIL_LIMIT`, `GATEWAY_UDP_BIND_BLOCK_MS`를 환경별 트래픽 특성에 맞게 조정한다.
 
-Edge Load Balancer는 클러스터 외부(예: HAProxy, AWS NLB)에서 `gateway` Service로 TCP 트래픽을 분산한다.
+엣지 로드밸런서(Edge Load Balancer)는 클러스터 외부(예: HAProxy, AWS NLB)에서 `gateway` Service로 TCP 트래픽을 분산한다.
 
 ### 3.3 배포 검증 순서
 1. `kubectl rollout status deploy/server-app`
@@ -92,12 +92,12 @@ helm rollback gateway <REV>
 ## 4. 배포 전략 요약
 | 상황 | 전략 |
 | --- | --- |
-| 소규모 수정 | rolling update (Deployment) + readinessProbe 조절 |
+| 소규모 수정 | 롤링 업데이트(rolling update, Deployment) + readinessProbe 조절 |
 | 대규모 schema 변경 | ① migration ② server_app 배포 ③ 워커 배포 순으로 진행 |
-| 긴급 Hotfix | Helm Chart 의 `canary` values 로 1대만 교체 후 smoke -> 전체 롤아웃 |
+| 긴급 핫픽스(Hotfix) | Helm chart의 `canary` values로 1대만 교체 후 스모크(smoke) 확인 -> 전체 롤아웃 |
 
 ## 5. 참고 자료
-- `docs/ops/prewarm.md` – 새 인스턴스 pre-warm
+- `docs/ops/prewarm.md` – 새 인스턴스 사전 워밍업(pre-warm)
 - `docs/ops/runbook.md` – 알람 대응 순서
 - `docs/ops/fallback-and-alerts.md` – 장애 시 fallback
 - `docs/ops/udp-rollout-rollback.md` – UDP canary/rollback 실행 절차

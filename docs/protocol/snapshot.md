@@ -6,7 +6,7 @@
 - 기본 옵션은 단일 패킷(Option A)으로, `MSG_STATE_SNAPSHOT` 한 개에 모든 데이터를 담는다.
 - 메시지가 매우 길어질 경우에 대비해 BEGIN/CHUNK/END 프레이밍(Option B)을 리저브해 두며, `count`가 상한을 초과하면 자동으로 CHUNK 모드로 전환한다.
 
-## Payload 구조
+## 페이로드(payload) 구조
 - opcode: `MSG_STATE_SNAPSHOT` (`server/protocol/game_opcodes.json`, `docs/protocol/opcodes.md`)
 - 모든 정수는 big-endian, 문자열은 `lp_utf8`(length-prefixed UTF-8)을 사용한다.
 - 필드
