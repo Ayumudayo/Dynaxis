@@ -1,4 +1,4 @@
-# Sapphire 코어 인프라에서 활용할 수 있는 패턴
+# 코어 인프라에서 활용 가능한 Sapphire 패턴
 
 ## 1. 서비스 로케이터와 모듈 간 공유 레지스트리
 - **핵심 개념**: `Common::Service` 템플릿이 타입을 키로 삼아 `shared_ptr`를 저장하고, 모든 DLL/실행 파일이 동일 슬롯을 참조한다. (`Sapphire/src/common/Service.h:33`, `Sapphire/src/common/Service.h:70`, `Sapphire/src/common/ServiceRegistry.cpp:18`)

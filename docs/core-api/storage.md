@@ -1,15 +1,15 @@
-# Storage API Guide
+# 스토리지(Storage) API 가이드
 
-## Stability
-- This module currently has no `[Stable]` public headers.
-- Storage contracts are classified as `[Internal]` and may change without compatibility guarantees.
+## 안정성
+- 이 모듈은 현재 `[Stable]` 공개 헤더를 제공하지 않습니다.
+- 저장소 계약은 `[Internal]`로 분류되며 호환성 보장 없이 변경될 수 있습니다.
 
-## Current Contract Shape
-- Internal contracts cover repository interfaces, `IUnitOfWork`, `IConnectionPool`, and `DbWorkerPool`.
-- Repository DTO and interface sets remain chat-domain specific (`user/room/message/membership/session`).
-- Public engine consumers should avoid direct dependency on storage internals.
+## 현재 계약 형태
+- 내부 계약은 repository 인터페이스, `IUnitOfWork`, `IConnectionPool`, `DbWorkerPool`를 포함합니다.
+- repository DTO와 인터페이스 집합은 채팅 도메인(`user/room/message/membership/session`)에 종속되어 있습니다.
+- 공개 엔진 소비자는 저장소 내부 구현에 직접 의존하지 않아야 합니다.
 
-## Usage Rules
-- Keep repository calls inside `IUnitOfWork` commit/rollback boundaries.
-- Keep async DB execution behind app/service adapters.
-- Treat all storage symbols as internal until a generic, engine-neutral SPI is introduced.
+## 사용 규칙
+- repository 호출은 `IUnitOfWork`의 commit/rollback 경계 내부에서 수행합니다.
+- 비동기 DB 실행은 앱/서비스 어댑터 뒤로 숨깁니다.
+- 범용 엔진 중립 SPI가 도입되기 전까지 저장소 심볼은 모두 내부 전용으로 취급합니다.

@@ -1,11 +1,11 @@
-# P2 Network Abstraction Boundary Plan
+# 2단계(P2) 네트워크 추상화 경계 계획
 
-## 1. Goal
+## 1. 목표
 
-`Acceptor`/`Listener`, `Session`/`Connection` naming overlap의 영향 반경을 고정하고,
-행동 통합 대상/비대상을 먼저 확정한 뒤 안전한 단계적 rename/integration 순서를 정의한다.
+`Acceptor`/`Listener`, `Session`/`Connection` 네이밍 충돌(naming overlap)의 영향 반경을 고정하고,
+행동 통합 대상/비대상을 먼저 확정한 뒤 안전한 단계적 이름 변경(rename)/통합(integration) 순서를 정의한다.
 
-## 2. Current Boundary (As-Is)
+## 2. 현재 경계(현행: As-Is)
 
 - `server_app` ingress: `core::net::SessionListener` + `core::net::Session` (legacy base: `core::Acceptor` + `core::Session`)
   - construction: `server/src/app/bootstrap.cpp`
@@ -21,9 +21,9 @@
 - `Session`은 server chat domain과 강결합되어 있고,
   `Connection`은 gateway bridge transport 계층과 강결합되어 있다.
 
-## 3. Scope Lock (Unify Targets vs Non-Targets)
+## 3. 범위 고정(통합 대상 vs 비대상)
 
-### 3.1 Unify Targets (P2 대상)
+### 3.1 통합 대상(P2 대상)
 
 1. 용어 경계 명시화
    - `Acceptor`/`Listener`와 `Session`/`Connection`의 책임 경계를 문서/코드 주석에서 명확히 통일
@@ -32,47 +32,47 @@
 3. 단계적 alias 기반 migration 경로 확보
    - 하위 호환을 유지한 상태로 점진적 이름 전환 가능하도록 설계
 
-### 3.2 Non-Targets (P2 비대상)
+### 3.2 비대상(Non-Targets, P2 비대상)
 
 1. `storage::Session` (`core/include/server/core/storage/repositories.hpp`) rename
 2. Prometheus metric 이름 변경 (`chat_session_*` 등)
 3. HTTP 문자열 `Connection: close` 계열 변경
 4. 즉시 대규모 breaking rename (단일 커밋으로 전체 타입명 교체)
 
-## 4. Impact Map Summary
+## 4. 영향도 맵 요약
 
 ### 4.1 `Acceptor` / `Listener`
 
-- Definitions
+- 정의
   - `core/include/server/core/net/acceptor.hpp`
   - `core/include/server/core/net/listener.hpp`
-- Implementations
+- 구현
   - `core/src/net/acceptor.cpp`
   - `core/src/net/listener.cpp`
-- Construction / ownership
+- 생성/소유
   - `server/src/app/bootstrap.cpp`
   - `gateway/src/gateway_app.cpp`
   - `gateway/include/gateway/gateway_app.hpp`
-- Build coupling
+- 빌드 결합
   - `core/CMakeLists.txt`
 
 ### 4.2 `Session` / `Connection`
 
-- Definitions
+- 정의
   - `core/include/server/core/net/session.hpp`
   - `core/include/server/core/net/connection.hpp`
-- Server API coupling (`Session`)
+- Server API 결합(`Session`)
   - `server/include/server/chat/chat_service.hpp`
   - `server/src/app/router.cpp`
   - `server/src/app/bootstrap.cpp`
-- Gateway API coupling (`Connection`)
+- Gateway API 결합(`Connection`)
   - `gateway/include/gateway/gateway_connection.hpp`
   - `gateway/src/gateway_connection.cpp`
-- Tests
+- 테스트
   - `tests/core/test_core_net.cpp`
   - `tests/server/test_server_chat.cpp`
 
-### 4.3 Docs/Knowledge coupling
+### 4.3 문서/지식 결합
 
 - `server/README.md`
 - `docs/server-architecture.md`
@@ -81,13 +81,13 @@
 - `gateway/AGENTS.md`
 - `core/README.md`
 
-## 5. Staged Rename / Integration Order
+## 5. 단계별 이름 변경(Rename)/통합 순서
 
-### Phase 0: Terminology alignment (doc-first)
+### 단계 0(Phase 0): 용어 정렬(doc-first)
 
 - 문서와 AGENTS에서 현재 코드 경계(`Acceptor` vs `Listener`, `Session` vs `Connection`)를 정확히 반영
 
-### Phase 1: Compatibility aliases (no behavior change)
+### 단계 1(Phase 1): 호환 별칭(alias) 도입(동작 변경 없음)
 
 - 새 역할 기반 alias 도입 (예: `ServerSession`, `TransportConnection`, `ServerAcceptor`, `GatewayListener`)
 - 기존 이름은 유지하되 deprecated 전환 계획만 공지
@@ -101,22 +101,22 @@
   - `core/include/server/core/net/connection.hpp`
     - `server::core::net::TransportConnection`
 
-### Phase 2: Consumer migration (module by module)
+### 단계 2(Phase 2): 소비자 마이그레이션(module by module)
 
 - server-side 사용처를 새 alias로 전환 (`bootstrap`, `router`, `chat_service`, tests)
 - gateway-side 사용처를 새 alias로 전환 (`gateway_app`, `gateway_connection`, tests)
 
-### Phase 3: Optional behavior extraction
+### 단계 3(Phase 3): 선택적 동작 추출
 
 - `Acceptor`/`Listener` 공통 accept-loop 유틸을 추출하되, 클래스 자체는 분리 유지
 - retry/backoff와 factory 모델을 억지로 단일 클래스에 합치지 않음
 
-### Phase 4: Legacy removal
+### 단계 4(Phase 4): 레거시 제거
 
 - 충분한 안정화 기간 이후 legacy 이름 제거
 - 제거 전 CI + smoke + distributed routing 시나리오 통과를 gate로 설정
 
-## 6. Acceptance Criteria Before Any Breaking Rename
+## 6. 파괴적 이름 변경(Rename) 이전 수용 기준
 
 1. 문서/AGENTS 용어 일치 상태 확보
    - `server/AGENTS.md`, `gateway/AGENTS.md`, `docs/server-architecture.md`, `docs/core-design.md`, `core/README.md` 반영 완료
@@ -125,7 +125,7 @@
 4. `storage::Session` 등 동명이인 영역과의 충돌 없음이 검증됨
 5. legacy 이름 제거 전 include 참조가 0임을 grep으로 확인
 
-## 7. Top Risks and Mitigations
+## 7. 주요 리스크와 대응
 
 1. Accept-loop 동작 회귀
    - 리스크: `Acceptor`의 retry/backoff/max-connection guard가 `Listener` 흐름으로 치환되며 누락될 수 있음
@@ -150,14 +150,14 @@
 5. 문서/지식베이스 drift 재발
    - 리스크: 코드 rename 이후 AGENTS/architecture 문서가 늦게 반영되어 재혼선 유발
    - 근거 파일: `server/AGENTS.md`, `gateway/AGENTS.md`, `docs/server-architecture.md`, `docs/core-design.md`
-   - 대응: "doc-first"를 단계 0 gate로 고정하고, rename PR마다 문서 동시 갱신 필수화
+- 대응: "doc-first"를 단계 0 게이트(gate)로 고정하고, rename PR마다 문서 동시 갱신 필수화
 
-## 8. Bottom Line
+## 8. 결론
 
 P2는 "강제 단일 클래스화"가 아니라, **역할 경계 고정 + 호환 계층 기반 점진 이행**으로 진행한다.
-즉시 대규모 rename 대신 doc-first -> compatibility alias -> consumer migration -> legacy removal 순서를 유지한다.
+즉시 대규모 rename 대신 doc-first -> 호환 alias(compatibility alias) -> 소비자 마이그레이션(consumer migration) -> 레거시 제거(legacy removal) 순서를 유지한다.
 
-## 9. Progress Snapshot
+## 9. 진행 스냅샷
 
 - Phase 0 (doc-first): 완료
 - Phase 1 (compat aliases): 완료

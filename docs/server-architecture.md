@@ -1,4 +1,4 @@
-# Server Architecture Overview
+# 서버 아키텍처 개요
 
 Knights의 현재 실행 토폴로지는 `gateway_app`와 `server_app` 중심이며, **외부 TCP 로드밸런서(예: HAProxy)** 를 두어 `gateway_app` 인스턴스를 수평 확장하는 배포 모델을 전제로 한다.
 
@@ -12,7 +12,7 @@ HAProxy (TCP, L4)  ──>  gateway_app  ── TCP ──>  server_app
                       └── Redis (Instance Registry / SessionDirectory / PubSub / Streams)
 ```
 
-> **Note**: 과거 문서에는 `load_balancer_app`(gRPC Stream 기반 커스텀 LB) 계층이 포함되어 있었으나, 현재 코드/빌드 타깃에는 존재하지 않는다. 본 문서는 **HAProxy 기반 배포**와 **Gateway 내부 라우팅(Sticky + Least Connections)** 을 기준으로 정리한다.
+> **참고**: 과거 문서에는 `load_balancer_app`(gRPC Stream 기반 커스텀 LB) 계층이 포함되어 있었으나, 현재 코드/빌드 타깃에는 존재하지 않는다. 본 문서는 **HAProxy 기반 배포**와 **Gateway 내부 라우팅(Sticky + Least Connections)** 을 기준으로 정리한다.
 
 ## 1. 개요
 Knights는 고성능 실시간 채팅을 위한 분산 스택을 지향한다.
@@ -26,12 +26,12 @@ Knights는 고성능 실시간 채팅을 위한 분산 스택을 지향한다.
 - 따라서 "네트워크 분산(L4)"과 "애플리케이션 연결 제어(L7 성격)"를 분리해, 확장성과 운영 단순성을 동시에 확보한다.
 
 ## 2. 모듈 설명
-### server_app
+### 서버 앱(server_app)
 - Boost.Asio 기반 `core::net::SessionListener`/`core::net::Session`(legacy: `core::Acceptor`/`core::Session`)으로 클라이언트(=Gateway의 `BackendConnection`) 연결을 처리한다.
 - `core::Dispatcher`가 opcode 별 chat handler를 호출하고, `TaskScheduler`가 health check·presence clean-up·registry heartbeat를 실행한다.
 - Redis Pub/Sub 및 Streams(write-behind)를 사용해 브로드캐스트와 이벤트 적재를 처리한다.
 
-### gateway_app
+### 게이트웨이 앱(gateway_app)
 - (보통 HAProxy 뒤에서) 클라이언트 TCP 연결을 terminate한다.
 - `core::net::TransportListener`가 클라이언트 연결을 수락하고, 각 연결은 `GatewayConnection`(`core::net::TransportConnection` 파생)으로 처리한다.
 - Redis Instance Registry를 조회해 backend(server_app)를 선택하고, `BackendConnection`으로 TCP 연결을 생성한다.
@@ -62,13 +62,13 @@ Knights는 고성능 실시간 채팅을 위한 분산 스택을 지향한다.
 - **Server**: `PORT`, `SERVER_ADVERTISE_HOST/PORT`, `SERVER_REGISTRY_PREFIX/TTL`, `SERVER_HEARTBEAT_INTERVAL`로 Instance Registry에 자신을 등록/갱신한다.
 - **Persistence**: PostgreSQL은 SoR, Redis는 캐시/팬아웃/스트림 레이어. 자세한 전략은 `docs/db/redis-strategy.md` 참고.
 
-## 5. Privacy & Audit (Room Rotation)
+## 5. 프라이버시(Privacy) 및 감사(Audit) (Room Rotation)
 Knights는 채팅 내역의 영구 보존(Audit)과 프라이버시(Privacy)를 동시에 만족하기 위해 **Room Rotation** 전략을 사용한다.
 - **방 닫기 (Soft Delete)**: 방의 마지막 유저가 나가면 해당 방은 `is_active=false`로 설정되고 `closed_at`이 기록된다.
 - **새로운 UUID 발급**: 이후 동일한 이름의 방이 생성되면, 이전 방(Old UUID)은 무시되고 새로운 UUID를 가진 방이 생성된다.
 - **결과**: 이전 채팅 내역은 DB에 보존되지만, 새로운 방에서는 조회되지 않아 프라이버시가 보호된다.
 
-## 6. Guest Identity
+## 6. 게스트 식별(Guest Identity)
 게스트 유저("guest-123")의 경우, 클라이언트가 자신의 식별자를 알 수 있도록 `StateSnapshot` 프로토콜에 `your_name` 필드를 추가했다.
 - 서버는 스냅샷 전송 시 세션에 할당된 이름을 `your_name`에 담아 보낸다.
 - 클라이언트는 이를 받아 자신의 닉네임으로 설정하고, 메시지 전송 시 "me" 식별에 사용한다.

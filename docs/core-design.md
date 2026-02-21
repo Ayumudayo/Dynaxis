@@ -1,4 +1,4 @@
-# Core Design Notes
+# 코어(Core) 설계 노트
 
 `server_core`는 Knights 공용 런타임으로, 네트워크 I/O·동시성·저장소·운영 유틸리티를 묶은 C++20 라이브러리다. `gateway_app`, `server_app`이 이 모듈을 링크해 동일한 패턴(Hive, ServiceRegistry, metrics 등)을 재사용한다. (HAProxy는 외부 인프라 컴포넌트로, 본 리포의 core를 링크하지 않는다.)
 

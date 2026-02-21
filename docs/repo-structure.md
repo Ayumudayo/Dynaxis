@@ -46,7 +46,7 @@
 - `devclient/`는 `clients/devcli/`로 이동한다.
 - `protocol/`(커스텀 바이너리)과 `proto/`(Protobuf)는 목적이 다르므로 유지하되, 생성물은 소스 트리에 커밋하지 않는다.
 
-## CMake 규칙
+## 빌드 시스템(CMake) 규칙
 - 상위 CMake는 전역 include 디렉터리/컴파일 옵션을 최소화하고, 하위 타깃에만 필요한 설정을 부여한다.
 - 타깃/네임스페이스/출력물에 프로젝트명(예: knights) 금지. 예시:
   - 라이브러리: `server_core` (STATIC/SHARED 선택), `gateway_service_lib`

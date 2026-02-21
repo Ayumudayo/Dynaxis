@@ -1,4 +1,4 @@
-# TCP/UDP 투트랙 전송 + Opcode 정책 메타 모델 변경 리포트
+# 투트랙 전송(TCP/UDP) + Opcode 정책 메타 모델 변경 리포트
 
 ## 1. 문서 목적
 
@@ -8,20 +8,20 @@
 - 변경: `opcode = ID + 상태 제약 + 처리 위치 + 전송/신뢰성 정책`
 - 목표: MMORPG 트래픽(TCP)과 FPS 트래픽(UDP)을 단일 코어 정책으로 운용
 
-핵심 원칙은 **Two-track transport, one-track game logic** 이다.
+핵심 원칙은 **투트랙 전송(Two-track transport), 원트랙 게임 로직(one-track game logic)** 이다.
 
 ---
 
-## 2. 변경 모델 정의 (As-Is / To-Be)
+## 2. 변경 모델 정의 (현행 As-Is / 목표 To-Be)
 
-## 2.1 As-Is
+## 2.1 현행(As-Is)
 
 - 전송: TCP 중심 (`Session`, `Acceptor`, `Listener`)
 - 디스패치: `msg_id -> handler` (`Dispatcher` + `router.cpp`)
 - 프로토콜: 길이 기반 프레임 + 헤더 시퀀스 필드
 - 정책 위치: 세션/핸들러/운영 규칙에 분산
 
-## 2.2 To-Be
+## 2.2 목표(To-Be)
 
 Opcode 정책을 단일 메타로 승격한다.
 
@@ -241,7 +241,7 @@ struct OpcodePolicy {
 
 ## 4. 변경 전략 (단계별)
 
-## Phase 0: 정책 모델 고정 (문서/스키마)
+## 단계 0(Phase 0): 정책 모델 고정 (문서/스키마)
 
 - 정책 필드 및 기본값 정의
 - opcode 분류표(TCP-only / UDP-candidate / dual) 확정
@@ -251,7 +251,7 @@ struct OpcodePolicy {
 
 - 스키마 초안, 분류표, 리스크 레지스터
 
-## Phase 1: 코드생성 확장 (동작 무변경)
+## 단계 1(Phase 1): 코드생성 확장 (동작 무변경)
 
 - JSON + generator 확장
 - generated metadata API 추가
@@ -262,7 +262,7 @@ struct OpcodePolicy {
 - policy-aware generated headers
 - schema validator + docs 업데이트
 
-## Phase 2: 코어 정책 게이트 도입 (TCP only)
+## 단계 2(Phase 2): 코어 정책 게이트 도입 (TCP only)
 
 - dispatcher 전에 `required_state`/`processing_place` gate 연결
 - TCP 트래픽만 대상으로 검증
@@ -271,7 +271,7 @@ struct OpcodePolicy {
 
 - policy gate + 테스트
 
-## Phase 3: UDP ingress 도입 (제한 롤아웃)
+## 단계 3(Phase 3): UDP ingress 도입 (제한 롤아웃)
 
 - UDP 세션 도입
 - TCP 인증 연동 바인딩
@@ -281,7 +281,7 @@ struct OpcodePolicy {
 
 - dual ingress + UDP 품질 메트릭
 
-## Phase 4: 투트랙 운영 안정화
+## 단계 4(Phase 4): 투트랙 운영 안정화
 
 - opcode별 전송 정책 점진 확대
 - 운영 대시보드/알람/런북 정착
