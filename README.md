@@ -159,7 +159,6 @@ flowchart TB
 | **Core** | [`core/`](core/README.md) | 네트워크, 스레딩, 로깅 등 공용 라이브러리 |
 | **Server** | [`server/`](server/README.md) | 채팅 비즈니스 로직 및 데이터 처리 |
 | **Gateway** | [`gateway/`](gateway/README.md) | 클라이언트 연결 및 인증 담당 프론트엔드 |
-
 | **Client GUI** | [`client_gui/`](client_gui/README.md) | Dear ImGui 기반 그래픽 채팅 클라이언트 |
 | **Tools** | [`tools/`](tools/README.md) | Write-Behind 워커, 마이그레이션 도구 등 |
 
