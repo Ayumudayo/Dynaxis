@@ -65,8 +65,8 @@ flowchart TB
 
     subgraph AccessLayer ["ACCESS LAYER"]
         direction TB
-        EdgeLB["Edge LB\n(HAProxy, TCP)"]:::component
-        Gateway["Gateway Server\n(Session & Routing)"]:::gateway
+        EdgeLB["Edge LB<br/>(HAProxy, TCP)"]:::component
+        Gateway["Gateway Server<br/>(Session & Routing)"]:::gateway
     end
 
     subgraph ServiceLayer ["SERVICE LAYER"]
@@ -81,12 +81,12 @@ flowchart TB
 
     subgraph StateLayer ["STATE & DATA LAYER"]
         direction TB
-        RedisPrimary[("Redis (Hot Data)\nSession/PubSub")]:::redis
+        RedisPrimary[("Redis (Hot Data)<br/>Session/PubSub")]:::redis
         
         subgraph Async ["Async Persistence"]
             direction TB
             WbWorker["Write-Behind Worker"]:::component
-            Postgres[("PostgreSQL\n(Cold Data)")]:::db
+            Postgres[("PostgreSQL<br/>(Cold Data)")]:::db
         end
     end
 
