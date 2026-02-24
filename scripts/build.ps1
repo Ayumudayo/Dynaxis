@@ -10,6 +10,7 @@ param(
   [string]$Config = "RelWithDebInfo",
   [string]$BuildDir = "",
   [string]$Target = "",
+  [switch]$ClientOnly,
   [switch]$Clean,
   [string]$InstallPrefix = "",
   [ValidateSet('none','server','client','both')]
@@ -74,9 +75,30 @@ $onWindows = $false
 try { if ($IsWindows) { $onWindows = $true } } catch { }
 if (-not $onWindows) { $onWindows = ($PSVersionTable.PSEdition -eq 'Desktop' -or $env:OS -like '*Windows*') }
 
+if ($ClientOnly -and -not $onWindows) {
+  Warn "ClientOnly mode is Windows-only. Falling back to the default preset selection."
+  $ClientOnly = $false
+}
+
+if ($ClientOnly) {
+  if ($Config -ne 'Release') {
+    Warn "ClientOnly mode enforces Release build to reduce artifact size. Config '$Config' -> 'Release'"
+    $Config = 'Release'
+  }
+  if (-not $Target -or $Target -eq '') {
+    $Target = 'client_gui'
+    Info "ClientOnly mode: default target set to client_gui"
+  }
+}
+
 if (-not $BuildDir -or $BuildDir -eq '') {
   # CMakePresets.json의 기본 binaryDir과 일치시키는 것을 전제로 한다.
-  if ($onWindows) { $BuildDir = 'build-windows' } else { $BuildDir = 'build-linux' }
+  if ($onWindows) {
+    if ($ClientOnly) { $BuildDir = 'build-windows-client' }
+    else { $BuildDir = 'build-windows' }
+  } else {
+    $BuildDir = 'build-linux'
+  }
 }
 Info "BuildDir=$BuildDir"
 
@@ -87,9 +109,14 @@ if ($Clean) {
 # 제너레이터 설정 및 프리셋 선택
 if (-not $Generator -or $Generator -eq '') {
   if ($onWindows) { 
-      $Preset = "windows"
-      $BuildPreset = "windows-debug"
-      if ($Config -eq "RelWithDebInfo") { $BuildPreset = "windows-release" }
+      if ($ClientOnly) {
+          $Preset = "windows-client"
+          $BuildPreset = "windows-client-release"
+      } else {
+          $Preset = "windows"
+          $BuildPreset = "windows-debug"
+          if ($Config -eq "RelWithDebInfo") { $BuildPreset = "windows-release" }
+      }
   } else { 
       $Preset = "linux"
       $BuildPreset = "linux-debug"

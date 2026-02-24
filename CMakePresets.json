@@ -82,6 +82,23 @@
       }
     },
     {
+      "name": "windows-client",
+      "inherits": "windows-base",
+      "displayName": "Windows Client Release (VS2022)",
+      "description": "Low-footprint client_gui-only profile (Release + vcpkg release libs)",
+      "binaryDir": "${sourceDir}/build-windows-client",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows-release",
+        "BUILD_SERVER_STACK": "OFF",
+        "BUILD_GATEWAY_APP": "OFF",
+        "BUILD_SERVER_TESTS": "OFF",
+        "BUILD_WRITE_BEHIND_TOOLS": "OFF",
+        "BUILD_ADMIN_APP": "OFF",
+        "BUILD_MIGRATIONS_RUNNER": "OFF",
+        "VCPKG_MANIFEST_FEATURES": "windows-client"
+      }
+    },
+    {
       "name": "windows-ninja",
       "inherits": "windows-ninja-base",
       "displayName": "Windows (Ninja)",
@@ -145,6 +162,12 @@
       "configurePreset": "windows-core-engine",
       "configuration": "Debug",
       "displayName": "Windows Core Engine Debug"
+    },
+    {
+      "name": "windows-client-release",
+      "configurePreset": "windows-client",
+      "configuration": "Release",
+      "displayName": "Windows Client Release"
     },
     {
       "name": "windows-ninja-debug",

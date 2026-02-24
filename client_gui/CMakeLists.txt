@@ -73,14 +73,10 @@ endif()
 # Post-Build (Copy DLLs if needed)
 # ---------------------------------------------------------------------------
 if (WIN32)
-    # Copy Protobuf/Abseil/OpenSSL/Zlib/Boost DLLs
+    # Copy runtime DLLs resolved by CMake target metadata.
     add_custom_command(TARGET client_gui POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/$<$<CONFIG:Debug>:debug/>bin/libprotobuf$<$<CONFIG:Debug>:d>.dll"
-        "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/$<$<CONFIG:Debug>:debug/>bin/libprotoc$<$<CONFIG:Debug>:d>.dll"
-        "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/$<$<CONFIG:Debug>:debug/>bin/abseil_dll.dll"
-        "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/$<$<CONFIG:Debug>:debug/>bin/libssl-3-x64.dll"
-        "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/$<$<CONFIG:Debug>:debug/>bin/libcrypto-3-x64.dll"
-        "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/$<$<CONFIG:Debug>:debug/>bin/zlib$<$<CONFIG:Debug>:d>1.dll"
-        $<TARGET_FILE_DIR:client_gui>)
+        $<TARGET_RUNTIME_DLLS:client_gui>
+        $<TARGET_FILE_DIR:client_gui>
+        COMMAND_EXPAND_LISTS)
 endif()

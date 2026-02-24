@@ -1,12 +1,57 @@
-x-knights-app: &knights-app
-  image: knights-app:local
+x-knights-server: &knights-server
+  image: knights-server:local
   pull_policy: never
 
-x-knights-app-build: &knights-app-build
-  <<: *knights-app
+x-knights-server-build: &knights-server-build
+  <<: *knights-server
   build:
     context: ../..
     dockerfile: Dockerfile
+    target: server-runtime
+
+x-knights-gateway: &knights-gateway
+  image: knights-gateway:local
+  pull_policy: never
+
+x-knights-gateway-build: &knights-gateway-build
+  <<: *knights-gateway
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+    target: gateway-runtime
+
+x-knights-worker: &knights-worker
+  image: knights-worker:local
+  pull_policy: never
+
+x-knights-worker-build: &knights-worker-build
+  <<: *knights-worker
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+    target: worker-runtime
+
+x-knights-admin: &knights-admin
+  image: knights-admin:local
+  pull_policy: never
+
+x-knights-admin-build: &knights-admin-build
+  <<: *knights-admin
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+    target: admin-runtime
+
+x-knights-migrator: &knights-migrator
+  image: knights-migrator:local
+  pull_policy: never
+
+x-knights-migrator-build: &knights-migrator-build
+  <<: *knights-migrator
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+    target: migrator-runtime
 
 services:
 
@@ -43,7 +88,7 @@ services:
       retries: 10
 
   migrator:
-    <<: *knights-app-build
+    <<: *knights-migrator-build
     command: ["migrate"]
     environment:
       DB_URI: postgresql://${POSTGRES_USER:-knights}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-knights_db}
@@ -55,7 +100,7 @@ services:
       - knights-stack
 
   server-1:
-    <<: *knights-app
+    <<: *knights-server-build
     command: ["server"]
     environment:
       PORT: "5000"
@@ -91,7 +136,7 @@ services:
       - "${SERVER1_METRICS_HOST_PORT:-39091}:9090"
 
   server-2:
-    <<: *knights-app
+    <<: *knights-server
     command: ["server"]
     environment:
       PORT: "5000"
@@ -127,7 +172,7 @@ services:
       - "${SERVER2_METRICS_HOST_PORT:-39092}:9090"
 
   wb_worker:
-    <<: *knights-app
+    <<: *knights-worker-build
     command: ["worker"]
     environment:
       DB_URI: postgresql://${POSTGRES_USER:-knights}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-knights_db}
@@ -149,7 +194,7 @@ services:
       - "${WB_WORKER_METRICS_HOST_PORT:-39093}:9090"
 
   admin-app:
-    <<: *knights-app
+    <<: *knights-admin-build
     command: ["admin"]
     environment:
       REDIS_URI: tcp://redis:6379
@@ -180,7 +225,7 @@ services:
       retries: 10
 
   gateway-1:
-    <<: *knights-app
+    <<: *knights-gateway-build
     command: ["gateway"]
     environment:
       GATEWAY_LISTEN: "0.0.0.0:6000"
@@ -205,7 +250,7 @@ services:
       - "${GATEWAY1_METRICS_HOST_PORT:-36001}:6001"
 
   gateway-2:
-    <<: *knights-app
+    <<: *knights-gateway
     command: ["gateway"]
     environment:
       GATEWAY_LISTEN: "0.0.0.0:6000"

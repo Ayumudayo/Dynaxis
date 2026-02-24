@@ -14,8 +14,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 # System Build Tools and Runtime Dependencies
 # ==============================================================================
 RUN apt-get update && apt-get install -y \
+    --no-install-recommends \
     # Build essentials
     build-essential \
+    cmake \
+    ninja-build \
     git \
     curl \
     zip \
@@ -24,21 +27,14 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     linux-libc-dev \
     ca-certificates \
-    gpg \
     wget \
-    bison \
-    flex \
     python3 \
-    python3-dev \
     # C++ libraries (system packages)
     libboost-dev \
     libboost-system-dev \
     protobuf-compiler \
     libprotobuf-dev \
-    libgrpc++-dev \
-    protobuf-compiler-grpc \
     libpq-dev \
-    libgtest-dev \
     nlohmann-json3-dev \
     libhiredis-dev \
     liblz4-dev \
@@ -51,15 +47,6 @@ RUN apt-get update && apt-get install -y \
 # Environment configuration
 ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
 ENV CMAKE_MAKE_PROGRAM=/usr/bin/ninja
-
-# ==============================================================================
-# Build Tool: CMake 3.27
-# ==============================================================================
-# Ubuntu 24.04 ships CMake 3.22, we need 3.27 for better C++20 support
-RUN wget -q -O cmake.sh https://github.com/Kitware/CMake/releases/download/v3.27.7/cmake-3.27.7-linux-x86_64.sh && \
-    chmod +x cmake.sh && \
-    ./cmake.sh --skip-license --prefix=/usr/local && \
-    rm cmake.sh
 
 # ==============================================================================
 # Source Build: libpqxx 7.9.0 (C++20 ABI Compatibility)
@@ -93,13 +80,6 @@ RUN git clone --depth 1 https://github.com/sewenew/redis-plus-plus.git && \
     cd ../.. && \
     rm -rf redis-plus-plus && \
     ldconfig
-
-# ==============================================================================
-# Build Tool: Ninja
-# ==============================================================================
-RUN apt-get update && \
-    apt-get install -y ninja-build && \
-    rm -rf /var/lib/apt/lists/*
 
 # ==============================================================================
 # Application Workspace

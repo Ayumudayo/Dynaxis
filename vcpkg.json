@@ -4,6 +4,17 @@
   "description": "Chat server + GUI client (Windows dev uses vcpkg)",
   "dependencies": [],
   "features": {
+    "windows-client": {
+      "description": "Windows client-only dependencies (client_gui + shared core/proto)",
+      "dependencies": [
+        "boost-asio",
+        "protobuf",
+        "openssl",
+        "lz4",
+        "glfw3",
+        "opengl"
+      ]
+    },
     "windows-dev": {
       "description": "Windows development dependencies (server/tools + client_gui)",
       "dependencies": [
