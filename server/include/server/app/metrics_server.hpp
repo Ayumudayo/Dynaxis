@@ -1,8 +1,8 @@
 #pragma once
 
 #include <memory>
-#include <thread>
-#include <boost/asio.hpp>
+
+#include "server/core/metrics/http_server.hpp"
 
 namespace server::app {
 
@@ -30,12 +30,8 @@ public:
     void stop();
 
 private:
-    void do_accept();
-
     unsigned short port_;
-    std::shared_ptr<boost::asio::io_context> io_context_;
-    std::shared_ptr<boost::asio::ip::tcp::acceptor> acceptor_;
-    std::unique_ptr<std::thread> thread_;
+    std::unique_ptr<server::core::metrics::MetricsHttpServer> http_server_;
 };
 
 } // namespace server::app

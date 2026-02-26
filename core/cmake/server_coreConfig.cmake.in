@@ -1,0 +1,26 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+if("@SERVER_USE_HEADER_ONLY_BOOST_SYSTEM@" STREQUAL "ON")
+    find_dependency(Boost CONFIG REQUIRED)
+else()
+    find_dependency(Boost CONFIG REQUIRED COMPONENTS system)
+endif()
+
+find_dependency(OpenSSL REQUIRED)
+
+find_dependency(lz4 CONFIG QUIET)
+if (NOT TARGET lz4::lz4)
+    find_dependency(PkgConfig REQUIRED)
+    pkg_check_modules(LZ4 REQUIRED IMPORTED_TARGET liblz4)
+    if (NOT TARGET lz4::lz4)
+        add_library(lz4::lz4 INTERFACE IMPORTED)
+        target_include_directories(lz4::lz4 INTERFACE ${LZ4_INCLUDE_DIRS})
+        target_link_libraries(lz4::lz4 INTERFACE ${LZ4_LIBRARIES})
+    endif()
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/server_coreTargets.cmake")
+
+check_required_components(server_core)

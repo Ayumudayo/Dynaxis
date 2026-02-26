@@ -2,6 +2,12 @@
 #include <lz4.h>
 #include <iostream>
 
+/**
+ * @brief LZ4 압축/해제 구현입니다.
+ *
+ * 네트워크/스토리지 경로에서 페이로드 크기를 줄여 대역폭을 절감하되,
+ * 잘못된 입력은 예외로 즉시 차단해 데이터 무결성을 보호합니다.
+ */
 namespace server::core::compression {
 
 std::vector<uint8_t> Compressor::compress(std::span<const uint8_t> data) {

@@ -20,14 +20,35 @@
       },
       "toolchainFile": "${sourceDir}/cmake/knights_vcpkg_toolchain.cmake",
       "cacheVariables": {
-        "VCPKG_TARGET_TRIPLET": "x64-windows"
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_MANIFEST_FEATURES": "windows-dev"
+      }
+    },
+    {
+      "name": "windows-ninja-base",
+      "hidden": true,
+      "displayName": "Windows Ninja Base",
+      "description": "Base configuration for Windows using Ninja (for clangd/compile_commands.json)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-windows-ninja",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "toolchainFile": "${sourceDir}/cmake/knights_vcpkg_toolchain.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_MANIFEST_FEATURES": "windows-dev"
       }
     },
     {
       "name": "linux-base",
       "hidden": true,
       "displayName": "Linux Base",
-      "description": "Base configuration for Linux using Ninja and vcpkg",
+      "description": "Base configuration for Linux using Ninja (system deps)",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-linux",
       "condition": {
@@ -35,10 +56,9 @@
         "lhs": "${hostSystemName}",
         "rhs": "Windows"
       },
-      "toolchainFile": "${sourceDir}/cmake/knights_vcpkg_toolchain.cmake",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "VCPKG_TARGET_TRIPLET": "x64-linux"
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     },
     {
@@ -46,6 +66,55 @@
       "inherits": "windows-base",
       "displayName": "Windows (VS2022)",
       "description": "Windows configuration using Visual Studio 2022"
+    },
+    {
+      "name": "windows-core-engine",
+      "inherits": "windows-base",
+      "displayName": "Windows Core Engine (VS2022)",
+      "description": "Standalone server_core-only profile (no server/gateway/tools/tests)",
+      "binaryDir": "${sourceDir}/build-windows-core-engine",
+      "cacheVariables": {
+        "BUILD_SERVER_STACK": "OFF",
+        "BUILD_GATEWAY_APP": "OFF",
+        "BUILD_SERVER_TESTS": "OFF",
+        "BUILD_WRITE_BEHIND_TOOLS": "OFF",
+        "BUILD_ADMIN_APP": "OFF"
+      }
+    },
+    {
+      "name": "windows-client",
+      "inherits": "windows-base",
+      "displayName": "Windows Client Release (VS2022)",
+      "description": "Low-footprint client_gui-only profile (Release + vcpkg release libs)",
+      "binaryDir": "${sourceDir}/build-windows-client",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows-release",
+        "BUILD_SERVER_STACK": "OFF",
+        "BUILD_GATEWAY_APP": "OFF",
+        "BUILD_SERVER_TESTS": "OFF",
+        "BUILD_WRITE_BEHIND_TOOLS": "OFF",
+        "BUILD_ADMIN_APP": "OFF",
+        "BUILD_MIGRATIONS_RUNNER": "OFF",
+        "VCPKG_MANIFEST_FEATURES": "windows-client"
+      }
+    },
+    {
+      "name": "windows-ninja",
+      "inherits": "windows-ninja-base",
+      "displayName": "Windows (Ninja)",
+      "description": "Windows configuration using Ninja (Debug, exports compile_commands.json)"
+    },
+    {
+      "name": "windows-ninja-release",
+      "inherits": "windows-ninja-base",
+      "displayName": "Windows Release (Ninja)",
+      "description": "Windows configuration using Ninja (Release, exports compile_commands.json)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_MANIFEST_FEATURES": "windows-dev"
+      }
     },
     {
       "name": "linux",
@@ -60,7 +129,18 @@
       "description": "Linux configuration using Ninja (Release)",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "VCPKG_TARGET_TRIPLET": "x64-linux"
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "linux-asan",
+      "inherits": "linux-base",
+      "displayName": "Linux ASan/UBSan (Ninja)",
+      "description": "Linux configuration using Ninja (Debug, ASan+UBSan)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "KNIGHTS_ENABLE_SANITIZERS": "ON"
       }
     }
   ],
@@ -78,6 +158,30 @@
       "displayName": "Windows Release"
     },
     {
+      "name": "windows-core-engine-debug",
+      "configurePreset": "windows-core-engine",
+      "configuration": "Debug",
+      "displayName": "Windows Core Engine Debug"
+    },
+    {
+      "name": "windows-client-release",
+      "configurePreset": "windows-client",
+      "configuration": "Release",
+      "displayName": "Windows Client Release"
+    },
+    {
+      "name": "windows-ninja-debug",
+      "configurePreset": "windows-ninja",
+      "configuration": "Debug",
+      "displayName": "Windows Ninja Debug"
+    },
+    {
+      "name": "windows-ninja-release",
+      "configurePreset": "windows-ninja-release",
+      "configuration": "Release",
+      "displayName": "Windows Ninja Release"
+    },
+    {
       "name": "linux-debug",
       "configurePreset": "linux",
       "configuration": "Debug",
@@ -88,6 +192,12 @@
       "configurePreset": "linux-release",
       "configuration": "Release",
       "displayName": "Linux Release"
+    },
+    {
+      "name": "linux-asan",
+      "configurePreset": "linux-asan",
+      "configuration": "Debug",
+      "displayName": "Linux ASan/UBSan"
     }
   ],
   "testPresets": [

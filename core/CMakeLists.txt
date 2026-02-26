@@ -1,4 +1,5 @@
 add_library(server_core
+    src/app/app_host.cpp
     src/net/acceptor.cpp
     src/net/session.cpp
     src/net/dispatcher.cpp
@@ -20,6 +21,52 @@ add_library(server_core
     src/security/cipher.cpp
     src/compression/compressor.cpp
 )
+add_library(server_core::server_core ALIAS server_core)
+
+# -----------------------------------------------------------------------------
+# Build metadata (git hash/describe + build time)
+#
+# - Exposed to C++ via `server/core/build_info.hpp`.
+# - Kept as compile definitions to avoid generated files.
+# - Fallbacks to "unknown" when git is unavailable (eg. source archive builds).
+# -----------------------------------------------------------------------------
+find_package(Git QUIET)
+
+set(KNIGHTS_GIT_HASH "unknown")
+set(KNIGHTS_GIT_DESCRIBE "unknown")
+if (GIT_FOUND)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        RESULT_VARIABLE _knights_git_hash_res
+        OUTPUT_VARIABLE _knights_git_hash_out
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if (_knights_git_hash_res EQUAL 0 AND NOT _knights_git_hash_out STREQUAL "")
+        set(KNIGHTS_GIT_HASH "${_knights_git_hash_out}")
+    endif()
+
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" describe --always --dirty
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        RESULT_VARIABLE _knights_git_desc_res
+        OUTPUT_VARIABLE _knights_git_desc_out
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if (_knights_git_desc_res EQUAL 0 AND NOT _knights_git_desc_out STREQUAL "")
+        set(KNIGHTS_GIT_DESCRIBE "${_knights_git_desc_out}")
+    endif()
+endif()
+
+string(TIMESTAMP KNIGHTS_BUILD_TIME_UTC "%Y-%m-%dT%H:%M:%SZ" UTC)
+
+target_compile_definitions(server_core PUBLIC
+    KNIGHTS_GIT_HASH="${KNIGHTS_GIT_HASH}"
+    KNIGHTS_GIT_DESCRIBE="${KNIGHTS_GIT_DESCRIBE}"
+    KNIGHTS_BUILD_TIME_UTC="${KNIGHTS_BUILD_TIME_UTC}"
+)
 
 find_package(OpenSSL REQUIRED)
 find_package(lz4 CONFIG QUIET)
@@ -33,9 +80,10 @@ endif()
 
 target_link_libraries(server_core PUBLIC OpenSSL::SSL OpenSSL::Crypto lz4::lz4)
 
-target_include_directories(server_core PUBLIC include)
-# protobuf 생성 헤더 경로 추가
-target_include_directories(server_core PUBLIC ${CMAKE_BINARY_DIR}/proto)
+target_include_directories(server_core PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
 
 if (SERVER_USE_HEADER_ONLY_BOOST_SYSTEM)
     # 헤더온리 boost::system 사용: 라이브러리 링크 생략, 매크로 정의 필요
@@ -62,11 +110,44 @@ if (TARGET generate_wire_codec)
     add_dependencies(server_core generate_wire_codec)
 endif()
 
-# 설치 규칙: 다른 프로그램이 코어의 패킷 구조를 공유할 수 있도록 export
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+set(SERVER_CORE_PACKAGE_VERSION "1.0.0")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/include/server/core/api/version.hpp" _server_core_api_version_hpp)
+string(REGEX MATCH "version_string\\(\\) noexcept \\{ return \"([0-9]+\\.[0-9]+\\.[0-9]+)\"; \\}" _server_core_api_version_match "${_server_core_api_version_hpp}")
+if (CMAKE_MATCH_1)
+    set(SERVER_CORE_PACKAGE_VERSION "${CMAKE_MATCH_1}")
+endif()
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/server_coreConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/server_coreConfig.cmake"
+    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/server_core"
+)
+
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/server_coreConfigVersion.cmake"
+    VERSION "${SERVER_CORE_PACKAGE_VERSION}"
+    COMPATIBILITY SameMajorVersion
+)
+
 install(TARGETS server_core
-        ARCHIVE DESTINATION lib
-        LIBRARY DESTINATION lib
-        RUNTIME DESTINATION bin)
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
-        DESTINATION include
+        EXPORT server_coreTargets
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+
+install(EXPORT server_coreTargets
+        FILE server_coreTargets.cmake
+        NAMESPACE server_core::
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/server_core")
+
+install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/server_coreConfig.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/server_coreConfigVersion.cmake"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/server_core")
+
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
         FILES_MATCHING PATTERN "*.hpp")

@@ -11,6 +11,9 @@
 #include <optional>
 #include <unordered_map>
 
+/**
+ * @brief ChatService 최근 메시지 캐시 적재/조회 동작을 검증하는 테스트 파일입니다.
+ */
 namespace server::app::chat {
 struct ChatServiceHistoryTester {
     static void OverrideHistoryConfig(ChatService& svc, std::size_t limit, std::size_t max_list) {
@@ -46,6 +49,11 @@ public:
     bool sadd(const std::string&, const std::string&) override { return true; }
     bool srem(const std::string&, const std::string&) override { return true; }
     bool smembers(const std::string&, std::vector<std::string>&) override { return true; }
+    bool scard(const std::string&, std::size_t& out) override { out = 0; return true; }
+    bool scard_many(const std::vector<std::string>& keys, std::vector<std::size_t>& out) override {
+        out.assign(keys.size(), 0);
+        return true;
+    }
     bool del(const std::string& key) override {
         kv_.erase(key);
         lists_.erase(key);
@@ -55,6 +63,19 @@ public:
         auto it = kv_.find(key);
         if (it == kv_.end()) return std::nullopt;
         return it->second;
+    }
+    bool mget(const std::vector<std::string>& keys, std::vector<std::optional<std::string>>& out) override {
+        out.clear();
+        out.reserve(keys.size());
+        for (const auto& key : keys) {
+            auto it = kv_.find(key);
+            if (it == kv_.end()) {
+                out.emplace_back(std::nullopt);
+            } else {
+                out.emplace_back(it->second);
+            }
+        }
+        return true;
     }
     bool set_if_not_exists(const std::string&, const std::string&, unsigned int) override { return true; }
     bool set_if_equals(const std::string&, const std::string&, const std::string&, unsigned int) override { return true; }
@@ -101,6 +122,18 @@ public:
                     long long, std::size_t, std::vector<StreamEntry>&) override { return true; }
     bool xack(const std::string&, const std::string&, const std::string&) override { return true; }
     bool xpending(const std::string&, const std::string&, long long& total) override { total = 0; return true; }
+    bool xautoclaim(const std::string&,
+                    const std::string&,
+                    const std::string&,
+                    long long,
+                    const std::string& start,
+                    std::size_t,
+                    StreamAutoClaimResult& out) override {
+        out.next_start_id = start;
+        out.entries.clear();
+        out.deleted_ids.clear();
+        return true;
+    }
 
     void erase_payload(const std::string& key) { kv_.erase(key); }
 

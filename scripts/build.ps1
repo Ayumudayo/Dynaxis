@@ -1,7 +1,7 @@
 <#
   빌드/구성 스크립트 (PowerShell)
-  - Windows/MSVC default. All dependencies come from vcpkg manifest (cpkg.json).
-  - WSL/Linux follows the same flow; Boost and the rest install via vcpkg as well.
+  - Windows/MSVC default. Dependencies come from vcpkg manifest features (see vcpkg.json).
+  - Linux runtime is Docker (system packages + source builds in Dockerfile.base). This script does not auto-run vcpkg on Linux.
 #>
 [CmdletBinding()]
 param(
@@ -10,6 +10,7 @@ param(
   [string]$Config = "RelWithDebInfo",
   [string]$BuildDir = "",
   [string]$Target = "",
+  [switch]$ClientOnly,
   [switch]$Clean,
   [string]$InstallPrefix = "",
   [ValidateSet('none','server','client','both')]
@@ -19,7 +20,7 @@ param(
   [string]$VcpkgTriplet = "",
   [switch]$ReleasePackage,
   [string]$ReleaseOutput = "artifacts",
-  [string[]]$ReleaseTargets = @('server_app','gateway_app','load_balancer_app','dev_chat_cli','wb_worker'),
+  [string[]]$ReleaseTargets = @('server_app','gateway_app','dev_chat_cli','wb_worker'),
   [switch]$ReleaseZip,
   [int]$MaxJobs = 0
 )
@@ -74,8 +75,30 @@ $onWindows = $false
 try { if ($IsWindows) { $onWindows = $true } } catch { }
 if (-not $onWindows) { $onWindows = ($PSVersionTable.PSEdition -eq 'Desktop' -or $env:OS -like '*Windows*') }
 
+if ($ClientOnly -and -not $onWindows) {
+  Warn "ClientOnly mode is Windows-only. Falling back to the default preset selection."
+  $ClientOnly = $false
+}
+
+if ($ClientOnly) {
+  if ($Config -ne 'Release') {
+    Warn "ClientOnly mode enforces Release build to reduce artifact size. Config '$Config' -> 'Release'"
+    $Config = 'Release'
+  }
+  if (-not $Target -or $Target -eq '') {
+    $Target = 'client_gui'
+    Info "ClientOnly mode: default target set to client_gui"
+  }
+}
+
 if (-not $BuildDir -or $BuildDir -eq '') {
-  if ($onWindows) { $BuildDir = 'build-msvc' } else { $BuildDir = 'build-linux' }
+  # CMakePresets.json의 기본 binaryDir과 일치시키는 것을 전제로 한다.
+  if ($onWindows) {
+    if ($ClientOnly) { $BuildDir = 'build-windows-client' }
+    else { $BuildDir = 'build-windows' }
+  } else {
+    $BuildDir = 'build-linux'
+  }
 }
 Info "BuildDir=$BuildDir"
 
@@ -86,9 +109,14 @@ if ($Clean) {
 # 제너레이터 설정 및 프리셋 선택
 if (-not $Generator -or $Generator -eq '') {
   if ($onWindows) { 
-      $Preset = "windows"
-      $BuildPreset = "windows-debug"
-      if ($Config -eq "RelWithDebInfo") { $BuildPreset = "windows-release" }
+      if ($ClientOnly) {
+          $Preset = "windows-client"
+          $BuildPreset = "windows-client-release"
+      } else {
+          $Preset = "windows"
+          $BuildPreset = "windows-debug"
+          if ($Config -eq "RelWithDebInfo") { $BuildPreset = "windows-release" }
+      }
   } else { 
       $Preset = "linux"
       $BuildPreset = "linux-debug"
@@ -103,10 +131,16 @@ $vcpkgJsonExists = Test-Path 'vcpkg.json'
 if (-not $VcpkgTriplet -or $VcpkgTriplet -eq '') {
   if ($onWindows) { $VcpkgTriplet = 'x64-windows' } else { $VcpkgTriplet = 'x64-linux' }
 }
-if ($UseVcpkg -or $vcpkgJsonExists) {
+$shouldUseVcpkg = $UseVcpkg -or ($onWindows -and $vcpkgJsonExists)
+if ($UseVcpkg -and -not $onWindows) {
+  Warn "UseVcpkg requested on non-Windows; Linux presets are configured for system dependencies (no vcpkg toolchain)."
+}
+
+if ($shouldUseVcpkg) {
   $setupScript = Join-Path $PSScriptRoot 'setup_vcpkg.ps1'
   if (-not (Test-Path $setupScript)) { Fail "setup_vcpkg.ps1 스크립트를 찾을 수 없습니다: $setupScript" }
-  $vcpkgRoot = & $setupScript -Triplet $VcpkgTriplet
+  # CMake preset(toolchain) will run manifest install; here we only ensure vcpkg is cloned/bootstrapped.
+  $vcpkgRoot = & $setupScript -Triplet $VcpkgTriplet -SkipInstall
   if (-not $vcpkgRoot) { Fail "vcpkg root 경로를 확인할 수 없습니다." }
   Info "vcpkg root: $vcpkgRoot"
   # Presets handle toolchain file, but we might need to ensure vcpkg is bootstrapped
@@ -117,9 +151,33 @@ Info "CMake 구성 중... (Preset: $Preset)"
 if ($LASTEXITCODE -ne 0) { Fail "CMake 구성 실패" }
 
 Info "빌드 중... (Preset: $BuildPreset)"
-$buildArgs = @('--build', '--preset', $BuildPreset)
+
+$buildArgs = @()
 if ($Target -and $Target -ne '') {
-    $buildArgs += @('--target', $Target)
+  # Visual Studio generator는 타깃별 .vcxproj가 서브 디렉터리에 생성될 수 있어
+  # `cmake --build --preset ... --target <name>`가 실패할 수 있다.
+  # (예: build-windows/gateway/gateway_app.vcxproj)
+  # 이 경우 해당 .vcxproj가 있는 디렉터리를 빌드 디렉터리로 사용한다.
+  if ($onWindows) {
+    $resolvedBuildDir = $BuildDir
+    try { $resolvedBuildDir = (Resolve-Path $BuildDir).Path } catch {}
+    $proj = $null
+    try {
+      $proj = Get-ChildItem -Path $resolvedBuildDir -Recurse -File -Filter "$Target.vcxproj" -ErrorAction SilentlyContinue |
+              Sort-Object FullName |
+              Select-Object -First 1
+    } catch {}
+
+    if ($proj) {
+      $buildArgs = @('--build', $proj.DirectoryName, '--config', $Config, '--target', $Target)
+    } else {
+      $buildArgs = @('--build', '--preset', $BuildPreset, '--target', $Target)
+    }
+  } else {
+    $buildArgs = @('--build', '--preset', $BuildPreset, '--target', $Target)
+  }
+} else {
+  $buildArgs = @('--build', '--preset', $BuildPreset)
 }
 
 if ($MaxJobs -gt 0) {

@@ -9,6 +9,12 @@
 // -----------------------------------------------------------------------------
 // 특정 event_id가 PostgreSQL에 저장되었는지 확인하는 유틸리티.
 // 사용법: wb_check <event_id>
+/**
+ * @brief `session_events`에 event_id가 존재하는지 확인하는 CLI 진입점입니다.
+ * @param argc 커맨드라인 인자 개수
+ * @param argv 커맨드라인 인자 배열
+ * @return 종료 코드(0: found, 5: not found)
+ */
 int main(int argc, char** argv) {
     try {
         // .env 로드

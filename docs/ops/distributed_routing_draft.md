@@ -1,74 +1,66 @@
-# 게이트웨이·로드밸런서 분산 라우팅 초안 (Detailed)
+# 게이트웨이 분산 라우팅 초안 (HAProxy 전제)
 
-> 목적: Consistent Hash + Sticky Session + Instance Registry 조합으로 게이트웨이와 로드밸런서를 안정적으로 확장하기 위한 상세 설계.
+> 목적: 외부 TCP(L4) 로드밸런서(예: HAProxy)로 **Gateway 수평 확장**을 하고, Gateway 내부에서 **Sticky Session + Instance Registry + Least Connections** 조합으로 backend(`server_app`)를 안정적으로 선택하기 위한 상세 설계.
 
 ## 1. 목표
-1. **Consistent Hash 자동화** – backend 풀 증감에 1초 내 반응, 링 재구성 이벤트 로그·지표 노출
-2. **Sticky Session 신뢰도** – Redis TTL, 로컬 캐시, fallback 로직을 명확히 정의
-3. **Gateway 인증 확장** – NoopAuthenticator 외부로 JWT/HMAC, 사설 OAuth 등을 붙이기 쉬운 구조
-4. **관측 가능성** – Prometheus/Grafana/로그를 통해 문제 지점을 즉시 확인할 수 있도록 메트릭 설계
+1. **Gateway 수평 확장** - HAProxy가 여러 `gateway_app` 인스턴스로 연결을 분산
+2. **백엔드(Backend) 선택 자동화** - Instance Registry(`active_sessions`) 기반 least-connections 라우팅
+3. **Sticky Session 신뢰도** - Redis TTL + 로컬 캐시 + fallback 로직을 명확히 정의
+4. **관측 가능성** - Prometheus/Grafana/로그를 통해 병목/장애 지점을 확인할 수 있도록 지표 설계
 
 ## 2. 현재 흐름 요약
-1. Client → Gateway (TCP) → Load Balancer (gRPC Stream)
-2. LB는 Redis SessionDirectory + Consistent Hash 링으로 backend 결정
-3. backend 연결 후 Gateway와 TCP payload 를 프락시
-4. heartbeat/metrics/log 로 상태 확인
+1. 클라이언트(Client) -> HAProxy (TCP) -> Gateway (TCP)
+2. Gateway는 Redis Instance Registry를 조회해 backend(`server_app`)를 선택
+3. Gateway ↔ Server 사이에 TCP 브리지(`BackendConnection`)를 구성하고 payload를 중계
+4. Redis Pub/Sub/Streams(Write-behind)는 server_app이 담당
 
 ## 3. 설계 상세
-### 3.1 Consistent Hash
-| 단계 | 설명 |
-| --- | --- |
-| 링 Seed | `static_backends` + Registry snapshot + health OK 인 노드만 사용 |
-| 링 갱신 트리거 | ① Helm deploy ② Instance Registry TTL 만료 ③ 운영자 API 호출 |
-| 데이터 구조 | `std::map<uint32_t, BackendRef>` (virtual node 128개) + RCU 카피 |
-| 이벤트 | `lb_hash_rebuild_total` Counter, `core::log::info("hash_rebuild new=<n> removed=<m>")`
+### 3.1 백엔드(Backend) 선택(Least Connections)
+- 입력: Instance Registry의 `InstanceRecord{instance_id, host, port, active_sessions, ...}` 목록
+- 선택: `active_sessions`가 가장 작은 backend 1개 선택
+- 개선(선택): 최소값 동률이 여러 개면 랜덤/라운드로빈으로 분산해 편중을 줄인다
 
-Pseudo-code:
+의사 코드(Pseudo-code):
 ```cpp
-auto snapshot = registry.fetch();
-auto healthy = filter(snapshot, [](auto& rec){ return rec.status == "ready"; });
-auto new_ring = build_ring(healthy, static_backends_);
-std::atomic_store(&hash_ring_, new_ring);
+auto instances = registry.list_instances();
+auto candidates = filter_valid(instances);
+auto selected = min_by(candidates, [](auto& rec){ return rec.active_sessions; });
+return {selected.host, selected.port, selected.instance_id};
 ```
 
 ### 3.2 Sticky Session
 - Redis 키: `gateway/session/<client_id>`
-- 값: `{"backend":"server-1","expires":"..."}` (JSON) 또는 plain string
-- TTL: `LB_SESSION_TTL` seconds (기본 45)
+- 값: backend `instance_id` (plain string)
+- TTL: Gateway SessionDirectory TTL (현재 구현은 600초)
 - 로컬 캐시: `std::unordered_map` + `steady_clock::time_point expires`
-- Fallback: Redis miss → Consistent Hash → Redis SETNX → 캐시 저장
+- fallback:
+  - sticky hit + backend alive -> 해당 backend 사용
+  - sticky miss/invalid -> 3.1의 least-connections -> Redis set/refresh -> 캐시 저장
 
 ### 3.3 Gateway 인증
 | Hook | 설명 |
 | --- | --- |
-| `validate_connect(SessionContext&, AuthPayload&)` | 최초 접속 시 호출, subject 반환 |
-| `on_token_refresh` (후속) | 장시간 연결 시 토큰 갱신을 트리거 |
+| `auth::IAuthenticator::authenticate` | 최초 접속 시 호출, subject/client_id 반환 |
 
-토큰 헤더 예시:
-```
-client-id: user42
-authorization: Bearer <jwt>
-```
-실패 시 Gateway는 `ROUTE_KIND_CLIENT_CLOSE` + `AUTH_FAILED` 를 전송하고 Load Balancer 세션을 닫는다.
+실패 시 Gateway는 연결 종료 또는 에러 응답을 전송한다.
 
 ### 3.4 운영
 - Pre-warm: `docs/ops/prewarm.md`
-- 알람: `sum(increase(lb_backend_idle_close_total[5m]))`, `chat_subscribe_last_lag_ms`
-- 롤링 업데이트: LB → Gateway → Server 순, 링 TTL 을 2배 이상으로 늘린 뒤 진행
+- 롤링 업데이트: HAProxy 설정 반영 -> Gateway -> Server 순
+- 알람/지표: Gateway backend 연결 실패율, Redis latency, server active sessions, write-behind 지표
 
 ## 4. 구현 체크리스트
-1. [ ] 링 재구성 코드가 O(n log n) 이하인지 확인
-2. [ ] Redis SETNX / TTL 조합에 race 는 없는가?
-3. [ ] gRPC Stream 재연결 시 exponential backoff 적용
-4. [ ] Prometheus 로그 파서가 `metric=lb_backend_idle_close_total` 을 수집하는가
-5. [ ] runbook/알람 문서가 최신 상태인가
+1. [ ] backend 선택이 비정상 값(host/port 누락)을 필터링하는가?
+2. [ ] Redis sticky SETNX/TTL 조합에 경쟁 조건(race)은 없는가?
+3. [ ] Instance Registry TTL 만료 시 gateway가 오래된(stale) backend를 제거하는가?
+4. [ ] runbook/알람 문서가 최신 상태인가?
 
 ## 5. 개방 이슈
-- Sticky session 을 완전히 없애고 Consistent Hash 만으로 충분한가?
-- Gateway 인증 실패 정보를 Load Balancer가 별도 통계로 수집해야 하는가?
-- Redis 장애 시 fallback 으로 in-memory cache 만으로 운영 가능한가?
+- Sticky session을 완전히 없애고 least-connections만으로 충분한가?
+- Redis 장애 시 fallback으로 in-memory cache만으로 운영 가능한가?
+- active_sessions 집계 정확도를 높이기 위한 지표/업데이트 주기가 필요한가?
 
 ## 6. 다음 단계
-1. 위 체크리스트를 기반으로 Design Spec 확정 → 리뷰 미팅
+1. 위 체크리스트를 기반으로 설계 명세(Design Spec) 확정 -> 리뷰
 2. `docs/roadmap.md` 에 P1/P2 항목 연결
-3. CI 에 Gateway/LB 통합 테스트, idle close 지표 검증 추가
+3. CI에 E2E 테스트(다중 Gateway + HAProxy + 다중 Server) 시나리오 추가

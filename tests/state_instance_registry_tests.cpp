@@ -7,6 +7,9 @@
 
 using namespace server::state;
 
+/**
+ * @brief 인스턴스 레지스트리(in-memory/Redis/Consul adapter) 동작을 검증합니다.
+ */
 namespace {
 
 InstanceRecord sample_record() {
@@ -17,6 +20,7 @@ InstanceRecord sample_record() {
     record.role = "chat";
     record.capacity = 100;
     record.active_sessions = 12;
+    record.ready = true;
     record.last_heartbeat_ms = 42;
     return record;
 }
@@ -62,6 +66,21 @@ public:
         return it->second;
     }
 
+    bool mget(const std::vector<std::string>& keys,
+              std::vector<std::optional<std::string>>& out) override {
+        out.clear();
+        out.reserve(keys.size());
+        for (const auto& key : keys) {
+            auto it = store_.find(key);
+            if (it == store_.end()) {
+                out.push_back(std::nullopt);
+            } else {
+                out.push_back(it->second);
+            }
+        }
+        return true;
+    }
+
     std::string last_key;
     std::string last_value;
     unsigned int last_ttl{0};
@@ -99,11 +118,13 @@ TEST(RedisInstanceStateBackendTests, PersistsWithSetex) {
     auto client = std::make_shared<FakeRedisClient>();
     RedisInstanceStateBackend backend(client, "gateway/test", std::chrono::seconds{5});
     auto record = sample_record();
+    record.ready = false;
 
     // Upsert 시 SETEX 호출 확인
     EXPECT_TRUE(backend.upsert(record));
     EXPECT_EQ(client->setex_calls, 1u);
     EXPECT_NE(client->last_key.find("gateway/test/"), std::string::npos);
+    EXPECT_NE(client->last_value.find("\"ready\":false"), std::string::npos);
 
     // Touch 시에도 SETEX 호출되어 TTL 갱신 확인
     EXPECT_TRUE(backend.touch("core-1", 1234));
@@ -113,10 +134,25 @@ TEST(RedisInstanceStateBackendTests, PersistsWithSetex) {
     auto all = backend.list_instances();
     ASSERT_EQ(all.size(), 1u);
     EXPECT_EQ(all.front().last_heartbeat_ms, 1234u);
+    EXPECT_FALSE(all.front().ready);
 
     // Remove 시 DEL 호출 확인
     EXPECT_TRUE(backend.remove("core-1"));
     EXPECT_EQ(client->del_calls, 1u);
+}
+
+TEST(InstanceRegistryJsonTests, MissingReadyDefaultsToTrue) {
+    auto parsed = detail::deserialize_json(
+        "{\"instance_id\":\"legacy\",\"host\":\"127.0.0.1\",\"port\":7000,\"role\":\"chat\",\"capacity\":10,\"active_sessions\":1,\"last_heartbeat_ms\":123}");
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_TRUE(parsed->ready);
+}
+
+TEST(InstanceRegistryJsonTests, ParsesExplicitReadyFalse) {
+    auto parsed = detail::deserialize_json(
+        "{\"instance_id\":\"s1\",\"host\":\"127.0.0.1\",\"port\":7000,\"role\":\"chat\",\"capacity\":10,\"active_sessions\":1,\"ready\":false,\"last_heartbeat_ms\":123}");
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_FALSE(parsed->ready);
 }
 
 TEST(ConsulInstanceStateBackendTests, UsesCallbacks) {

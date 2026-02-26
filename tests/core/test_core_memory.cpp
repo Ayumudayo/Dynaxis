@@ -3,6 +3,9 @@
 #include <vector>
 #include <thread>
 
+/**
+ * @brief MemoryPool/BufferManager의 기본 할당 및 RAII 반환 동작을 검증합니다.
+ */
 using namespace server::core;
 
 // MemoryPool 기본 할당 테스트

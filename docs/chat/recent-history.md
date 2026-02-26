@@ -1,4 +1,4 @@
-# Recent Room History on Join (Redis-backed)
+# 입장 시 최근 룸 기록 (Redis 기반)
 
 최근 접속자가 방에 합류할 때 DB를 전부 다시 읽지 않고 Redis 캐시를 우선 활용하도록 한 설계 문서이다. 목적은 ① 마지막 대화 20건 정도를 즉시 보여 주고, ② 이미 읽은 영역과 새 메시지 영역을 명확히 구분하며, ③ Redis 장애 시에도 Postgres 로우를 안전하게 폴백하는 것이다.
 
@@ -13,7 +13,7 @@
   - `ROOM_RECENT_MAXLEN` (기본 200) : Redis LIST 최대 길이
   - `CACHE_TTL_RECENT_MSGS` (기본 6시간) : 메시지 payload TTL
 
-## Join 시 플로우 (`chat_service_core.cpp::send_snapshot`)
+## 입장(Join) 시 플로우 (`chat_service_core.cpp::send_snapshot`)
 1. **룸 ID 확보** : 메모리 캐시(`state_.room_ids`) 확인 후 없으면 `ensure_room_id_ci()`로 생성/조회.
 2. **Redis 조회** :
    - `LRANGE room:{rid}:recent -RECENT_HISTORY_LIMIT -1` 호출.
@@ -38,7 +38,7 @@
 - Redis 연결 실패, 파서 오류 등은 WARN 로그와 함께 즉시 DB 경로로 돌아간다.
 - Postgres 조회가 실패하면 snapshot은 빈 메시지 목록으로라도 전송되며, `last_seen_id`는 0으로 남는다.
 
-## UI 가이드
+## 사용자 인터페이스(UI) 가이드
 - `snapshot_complete` 이벤트를 받을 때 `last_seen_id`를 저장해 이후 `/refresh` 나 poll 시 기준으로 사용한다.
 - `id <= last_seen_id` 인 메시지는 “이미 읽음” 상태로 처리하고, 그보다 큰 id만 신규 메시지로 강조한다.
 - `/refresh` 명령은 서버 측에서 snapshot을 다시 보내므로 프론트엔드는 지연이 발생할 수 있음을 사용자에게 안내한다.

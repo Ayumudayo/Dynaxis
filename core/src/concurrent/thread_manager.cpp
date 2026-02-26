@@ -1,6 +1,12 @@
 #include "server/core/concurrent/thread_manager.hpp"
 #include "server/core/concurrent/job_queue.hpp"
 
+/**
+ * @brief JobQueue 소비용 고정 워커 스레드 풀 구현입니다.
+ *
+ * 작업마다 스레드를 만들지 않고 재사용해 생성/파괴 오버헤드를 줄이며,
+ * 종료 시점에는 queue stop 신호로 모든 워커를 질서 있게 수렴시킵니다.
+ */
 namespace server::core {
 
 ThreadManager::ThreadManager(JobQueue& job_queue)
@@ -14,7 +20,15 @@ ThreadManager::~ThreadManager() {
 // 각 워커 스레드는 JobQueue::Pop()이 nullptr를 반환할 때까지 반복 실행됩니다.
 // 이를 통해 스레드 생성/삭제 오버헤드를 줄이고 안정적인 작업 처리를 보장합니다.
 void ThreadManager::Start(int num_threads) {
-    stopped_.store(false, std::memory_order_relaxed);
+    if (num_threads <= 0) {
+        return;
+    }
+
+    bool expected = true;
+    if (!stopped_.compare_exchange_strong(expected, false, std::memory_order_acq_rel)) {
+        return;
+    }
+
     threads_.reserve(num_threads);
     for (int i = 0; i < num_threads; ++i) {
         threads_.emplace_back([this] { WorkerLoop(); });

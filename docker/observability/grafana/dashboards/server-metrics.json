@@ -202,8 +202,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "chat_dispatch_last_latency_ms",
-          "legendFormat": "last",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(chat_dispatch_latency_ms_bucket{instance=~\"$instance\"}[5m])))",
+          "legendFormat": "p50",
           "range": true,
           "refId": "A"
         },
@@ -212,8 +212,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "chat_dispatch_avg_latency_ms",
-          "legendFormat": "avg",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(chat_dispatch_latency_ms_bucket{instance=~\"$instance\"}[5m])))",
+          "legendFormat": "p95",
           "range": true,
           "refId": "B"
         },
@@ -222,8 +222,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "chat_dispatch_max_latency_ms",
-          "legendFormat": "max",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(chat_dispatch_latency_ms_bucket{instance=~\"$instance\"}[5m])))",
+          "legendFormat": "p99",
           "range": true,
           "refId": "C"
         }
@@ -245,8 +245,8 @@
       "id": 6,
       "targets": [
         {
-          "expr": "chat_dispatch_latency_avg_ms",
-          "legendFormat": "{{instance}}",
+          "expr": "sum(rate(chat_dispatch_latency_ms_sum{instance=~\"$instance\"}[5m])) / clamp_min(sum(rate(chat_dispatch_latency_ms_count{instance=~\"$instance\"}[5m])), 1)",
+          "legendFormat": "avg_5m",
           "refId": "A"
         }
       ],
@@ -1372,95 +1372,6 @@
         }
       ],
       "title": "Gateway Total Connections",
-      "type": "stat",
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto"
-      }
-    },
-    {
-      "collapsed": false,
-      "datasource": {
-        "type": "datasource",
-        "uid": "-- Mixed --"
-      },
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 93
-      },
-      "id": 1093,
-      "panels": [],
-      "title": "Load Balancer",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 6,
-        "x": 0,
-        "y": 94
-      },
-      "id": 2003,
-      "targets": [
-        {
-          "expr": "lb_backends_active",
-          "legendFormat": "{{instance}}",
-          "refId": "A"
-        }
-      ],
-      "title": "LB Active Backends",
-      "type": "stat",
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "auto",
-        "textMode": "auto",
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto"
-      }
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 6,
-        "x": 6,
-        "y": 94
-      },
-      "id": 24,
-      "targets": [
-        {
-          "expr": "lb_backend_idle_close_total",
-          "legendFormat": "{{instance}}",
-          "refId": "A"
-        }
-      ],
-      "title": "LB Idle Close Total",
       "type": "stat",
       "options": {
         "reduceOptions": {

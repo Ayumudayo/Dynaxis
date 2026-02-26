@@ -32,12 +32,14 @@ namespace server::core::net {
 class Connection : public std::enable_shared_from_this<Connection> {
 public:
     using socket_type = boost::asio::ip::tcp::socket;
+    static constexpr std::size_t k_default_send_queue_max = 256 * 1024;
 
     /**
      * @brief 생성자
      * @param hive I/O 컨텍스트를 관리하는 Hive 객체 (스레드 풀과 연결됨)
      */
-    explicit Connection(std::shared_ptr<Hive> hive);
+    explicit Connection(std::shared_ptr<Hive> hive,
+                        std::size_t send_queue_max_bytes = k_default_send_queue_max);
     virtual ~Connection();
 
     // 복사 방지: 연결 객체는 고유해야 하므로 복사를 금지합니다.
@@ -47,6 +49,7 @@ public:
     /**
      * @brief 내부 소켓 객체를 반환합니다.
      * 주로 연결 수락(Accept) 시 소켓을 초기화하기 위해 사용됩니다.
+     * @return 내부 TCP 소켓 참조
      */
     socket_type& socket();
 
@@ -64,6 +67,7 @@ public:
 
     /**
      * @brief 연결이 종료되었는지 확인합니다.
+     * @return 연결이 정지 상태면 `true`
      */
     bool is_stopped() const;
 
@@ -75,7 +79,7 @@ public:
      * 
      * @param data 전송할 바이트 배열
      */
-    void async_send(const std::vector<std::uint8_t>& data);
+    void async_send(std::vector<std::uint8_t> data);
 
 protected:
     // ======================================================================
@@ -139,17 +143,23 @@ private:
      * 현재 전송 중인 데이터가 없을 때만 호출됩니다.
      */
     void do_write();
+    void finalize_stop();
 
     std::shared_ptr<Hive> hive_;
     socket_type socket_;
+    boost::asio::strand<boost::asio::any_io_executor> strand_;
     
     // 수신 버퍼: 한 번에 최대 4KB까지 읽습니다.
     std::array<std::uint8_t, 4096> read_buffer_{};
     
     // 송신 큐: 전송 대기 중인 패킷들을 저장합니다.
     std::deque<std::vector<std::uint8_t>> write_queue_;
+    std::size_t queued_bytes_{0};
+    std::size_t send_queue_max_bytes_{k_default_send_queue_max};
     
     std::atomic<bool> stopped_{false};
 };
+
+using TransportConnection = Connection;
 
 } // namespace server::core::net

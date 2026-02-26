@@ -2,6 +2,12 @@
 
 #include <utility>
 
+/**
+ * @brief Listener 공통 accept 루프 구현입니다.
+ *
+ * connection factory로 생성 전략을 분리해 gateway/server가 동일 루프를 재사용하고,
+ * 리스너는 transport 초기화와 수락 책임만 담당합니다.
+ */
 namespace server::core::net {
 
 Listener::Listener(std::shared_ptr<Hive> hive,

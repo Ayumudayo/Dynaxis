@@ -1,4 +1,4 @@
-# wb_dlq_replayer
+# 사후 처리 큐(DLQ) 재처리기(wb_dlq_replayer)
 
 `wb_dlq_replayer`는 write-behind DLQ(Stream)로 떨어진 이벤트를 다시 PostgreSQL에 적재하고, 성공 여부에 따라 DLQ → 본 스트림 또는 DEAD 스트림으로 정리하는 유틸리티다. 장애 복구 시 DLQ를 빠르게 비우고, 재시도 정책을 조정할 때 사용한다.
 
@@ -9,7 +9,7 @@ tools/wb_dlq_replayer/
 ```
 
 ## 동작 개요
-1. `.env` 또는 환경 변수에서 Redis·PostgreSQL 정보를 읽는다.
+1. 환경 변수에서 Redis·PostgreSQL 정보를 읽는다.
 2. `WB_DLQ_STREAM`에 소비자 그룹(`WB_GROUP_DLQ`)을 만들고, XREADGROUP으로 이벤트를 끊임없이 읽는다.
 3. 각 이벤트를 PostgreSQL `session_events` 테이블에 `INSERT ... ON CONFLICT DO NOTHING`으로 반영한다.
 4. 성공하면 DLQ ACK 후 종료, 실패하면 백오프/재시도(`WB_RETRY_MAX`, `WB_RETRY_BACKOFF_MS`)를 수행한다.
@@ -28,12 +28,13 @@ tools/wb_dlq_replayer/
 | `WB_RETRY_MAX` | 재시도 횟수 | `5` |
 | `WB_RETRY_BACKOFF_MS` | 재시도 간 백오프(ms) | `250` |
 
-`.env`가 있을 경우 자동으로 로드하고, 이후 OS 환경 변수가 우선한다.
+`.env`는 개발 편의용 예시 파일이며, 애플리케이션이 자동으로 로드하지 않는다.
+로컬에서는 쉘/스크립트에서 `.env`를 로드한 뒤 실행하거나, OS 환경 변수로 직접 주입해야 한다.
 
 ## 빌드 및 실행
 ```powershell
-cmake --build build-msvc --target wb_dlq_replayer
-.\build-msvc\tools\Debug\wb_dlq_replayer.exe
+scripts/build.ps1 -Config Debug -Target wb_dlq_replayer
+.\build-windows\tools\Debug\wb_dlq_replayer.exe
 ```
 
 ## 운영 팁

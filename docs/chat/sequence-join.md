@@ -1,4 +1,4 @@
-# Sequence: Join → Snapshot → Fanout
+# 시퀀스: 입장(Join) → 스냅샷(Snapshot) → 팬아웃(Fanout)
 
 목표: 룸 입장 과정에서 스냅샷을 먼저 적용하고, 이어지는 브로드캐스트 스트림과 자연스럽게 이어 붙여 중복/누락 없이 최신 상태를 제공한다.
 
@@ -14,7 +14,7 @@
    - `snapshot_complete` 이벤트를 받은 뒤 입력창/전송 버튼을 활성화한다.
 5. **Server → Client (Fanout)**: 이후 브로드캐스트 `MSG_CHAT_BROADCAST{id,...}`를 그대로 전달. 클라이언트는 `id <= max(wm, max_id)`인 메시지를 버린다. (server/src/chat/handlers_chat.cpp:214)
 
-## Redis / Postgres 폴백
+## 캐시/DB 대체 경로(폴백, Redis/Postgres)
 - Redis 장애 시 바로 Postgres에서 스냅샷을 구성한 뒤 Redis LIST/JSON을 재구축한다.
 - Postgres 장애 시 캐시에 남아 있는 메시지만 전송하고 브로드캐스트로 덮어쓰며, UI에는 “최근 기록 제한” 배지를 표시한다.
 

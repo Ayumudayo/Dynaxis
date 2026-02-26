@@ -16,6 +16,12 @@
 #  include <unistd.h>
 #endif
 
+/**
+ * @brief 프로세스 크래시 시 최소 정보를 안전하게 남기는 핸들러 구현입니다.
+ *
+ * signal-safe 범위에서만 출력/스택덤프를 수행해,
+ * 장애 원인 추적 단서를 남기면서 2차 크래시 위험을 줄입니다.
+ */
 namespace server::core::util::crash {
 
 namespace {

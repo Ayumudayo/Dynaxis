@@ -9,21 +9,25 @@
 #include "server/storage/redis/client.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/storage/connection_pool.hpp"
-#include "server/core/storage/unit_of_work.hpp"
-#include "server/core/storage/repositories.hpp"
 
 using namespace server::core;
 namespace proto = server::core::protocol;
 namespace game_proto = server::protocol;
 namespace corelog = server::core::log;
 
+/**
+ * @brief 방 퇴장(leave) 핸들러 구현입니다.
+ *
+ * 룸 멤버십 정리와 presence/DB 상태 갱신을 함께 수행해,
+ * 연결 종료 직후에도 룸 목록과 사용자 표시가 빠르게 수렴하도록 합니다.
+ */
 namespace server::app::chat {
 
 // -----------------------------------------------------------------------------
 // 방 퇴장 (Leave) 핸들러
 // -----------------------------------------------------------------------------
 // 사용자가 현재 방에서 나갈 때 호출됩니다.
-void ChatService::on_leave(server::core::Session& s, std::span<const std::uint8_t> payload) {
+void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint8_t> payload) {
     auto session_sp = s.shared_from_this();
     std::string room;
     if (!payload.empty()) {
@@ -31,7 +35,7 @@ void ChatService::on_leave(server::core::Session& s, std::span<const std::uint8_
     }
 
     // DB, Redis, fanout 처리까지 필요하므로 job_queue에서 비동기로 처리한다.
-    job_queue_.Push([this, session_sp, room]() {
+    if (!job_queue_.TryPush([this, session_sp, room]() {
         const std::string session_id_str = get_or_create_session_uuid(*session_sp);
         std::string user_uuid;
         std::string room_uuid;
@@ -63,10 +67,14 @@ void ChatService::on_leave(server::core::Session& s, std::span<const std::uint8_
             // 방에서 세션 제거
             auto itroom = state_.rooms.find(room_to_leave);
             if (itroom != state_.rooms.end()) {
-                itroom->second.erase(session_sp);
                 auto it2 = state_.user.find(session_sp.get());
                 sender_name = (it2 != state_.user.end()) ? it2->second : std::string("guest");
                 if (auto it_uuid = state_.user_uuid.find(session_sp.get()); it_uuid != state_.user_uuid.end()) { user_uuid = it_uuid->second; }
+                const bool was_owner =
+                    (room_to_leave != "lobby") &&
+                    (state_.room_owners.find(room_to_leave) != state_.room_owners.end()) &&
+                    (state_.room_owners[room_to_leave] == sender_name);
+                itroom->second.erase(session_sp);
                 
                 // 퇴장 알림을 보낼 대상(방에 남은 사람들) 수집
                 auto itb = state_.rooms.find(room_to_leave);
@@ -77,8 +85,42 @@ void ChatService::on_leave(server::core::Session& s, std::span<const std::uint8_
                     if (set.empty() && room_to_leave != std::string("lobby")) { 
                         state_.rooms.erase(itb); 
                         state_.room_passwords.erase(room_to_leave);
+                        state_.room_owners.erase(room_to_leave);
+                        state_.room_invites.erase(room_to_leave);
+                    } else if (was_owner && room_to_leave != std::string("lobby")) {
+                        std::string new_owner;
+                        for (const auto& weak : set) {
+                            if (auto candidate = weak.lock()) {
+                                auto user_it = state_.user.find(candidate.get());
+                                if (user_it != state_.user.end()) {
+                                    new_owner = user_it->second;
+                                    if (new_owner != "guest") {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if (!new_owner.empty()) {
+                            state_.room_owners[room_to_leave] = new_owner;
+                        }
                     }
                 }
+
+                std::vector<std::shared_ptr<Session>> filtered_targets;
+                filtered_targets.reserve(targets.size());
+                for (auto& target : targets) {
+                    auto receiver_it = state_.user.find(target.get());
+                    if (receiver_it == state_.user.end()) {
+                        continue;
+                    }
+                    const std::string& receiver = receiver_it->second;
+                    if (auto blk_it = state_.user_blacklists.find(receiver);
+                        blk_it != state_.user_blacklists.end() && blk_it->second.count(sender_name) > 0) {
+                        continue;
+                    }
+                    filtered_targets.push_back(target);
+                }
+                targets = std::move(filtered_targets);
             }
             // 사용자를 로비로 이동시킴
             state_.cur_room[session_sp.get()] = std::string("lobby");
@@ -129,12 +171,12 @@ void ChatService::on_leave(server::core::Session& s, std::span<const std::uint8_
                 
                 // 방이 비었는지 확인하고 활성 목록에서 제거 (Room List Sync)
                 if (room_to_leave != "lobby") {
-                    std::vector<std::string> remaining;
-                    redis_->smembers("room:users:" + room_to_leave, remaining);
+                    std::size_t remaining = 1;
+                    (void)redis_->scard("room:users:" + room_to_leave, remaining);
                     
                     // 디버그 로그: 남은 인원 확인
 
-                    if (remaining.empty()) {
+                    if (remaining == 0) {
                         redis_->srem("rooms:active", room_to_leave);
                         redis_->del("room:password:" + room_to_leave);
                         
@@ -151,6 +193,8 @@ void ChatService::on_leave(server::core::Session& s, std::span<const std::uint8_
                                 {
                                     std::lock_guard<std::mutex> lk(state_.mu);
                                     state_.room_ids.erase(room_to_leave);
+                                    state_.room_owners.erase(room_to_leave);
+                                    state_.room_invites.erase(room_to_leave);
                                 }
                             } catch (const std::exception& e) {
                                 corelog::error("failed to close room: " + std::string(e.what()));
@@ -175,6 +219,22 @@ void ChatService::on_leave(server::core::Session& s, std::span<const std::uint8_
                 auto& set = itb->second;
                 collect_room_sessions(set, t2);
             }
+
+            std::vector<std::shared_ptr<Session>> filtered_lobby_targets;
+            filtered_lobby_targets.reserve(t2.size());
+            for (auto& target : t2) {
+                auto receiver_it = state_.user.find(target.get());
+                if (receiver_it == state_.user.end()) {
+                    continue;
+                }
+                const std::string& receiver = receiver_it->second;
+                if (auto blk_it = state_.user_blacklists.find(receiver);
+                    blk_it != state_.user_blacklists.end() && blk_it->second.count(sender_name) > 0) {
+                    continue;
+                }
+                filtered_lobby_targets.push_back(target);
+            }
+            t2 = std::move(filtered_lobby_targets);
         }
         
         server::wire::v1::ChatBroadcast pb2;
@@ -193,7 +253,7 @@ void ChatService::on_leave(server::core::Session& s, std::span<const std::uint8_
 
         // 로비와 해당 방에 있는 다른 유저들에게 새로고침 알림 전송
         broadcast_refresh("lobby");
-        if (!room_to_leave.empty()) {
+        if (!room_to_leave.empty() && room_to_leave != "lobby") {
             broadcast_refresh(room_to_leave);
         }
 
@@ -221,7 +281,10 @@ void ChatService::on_leave(server::core::Session& s, std::span<const std::uint8_
 
         // 마지막으로 로비 상태 스냅샷을 내려 클라이언트 UI를 즉시 업데이트한다.
         send_snapshot(*session_sp, next_room);
-    });
+    })) {
+        session_sp->send_error(proto::errc::SERVER_BUSY, "server busy");
+        corelog::warn("on_leave dropped: job queue full");
+    }
 }
 
 } // namespace server::app::chat

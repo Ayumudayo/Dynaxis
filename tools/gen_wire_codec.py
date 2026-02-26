@@ -6,11 +6,15 @@ import sys
 from pathlib import Path
 
 HEADER_TMPL = """// 자동 생성 파일: tools/gen_wire_codec.py에 의해 생성됨
+/**
+ * @file
+ * @brief Protobuf wire codec 자동 생성 헤더입니다.
+ * @note tools/gen_wire_codec.py로 생성됩니다. 직접 수정하지 마세요.
+ */
 #pragma once
 #include <cstdint>
 #include <string>
 #include <vector>
-#include "server/core/protocol/opcodes.hpp"
 #include "wire.pb.h"
 
 namespace server {{ namespace wire {{ namespace codec {{
@@ -22,13 +26,13 @@ constexpr std::uint16_t MsgId() {{ return 0; }}
 // MsgId<T> 특수화: Protobuf 타입 -> msg_id
 {msgid_specs}
 
-// Encode helpers: Protobuf -> payload bytes
+// 인코드 헬퍼: Protobuf -> payload 바이트
 {encode_specs}
 
-// Decode helpers: payload bytes -> Protobuf
+// 디코드 헬퍼: payload 바이트 -> Protobuf
 {decode_specs}
 
-// Utility: msg_id로 타입명을 얻기(디버그)
+// 유틸리티: msg_id로 타입명을 얻기(디버그)
 inline const char* TypeName(std::uint16_t id) {{
   switch (id) {{
 {typename_cases}
@@ -45,7 +49,7 @@ def parse_id(v: str) -> int:
 
 def main():
     if len(sys.argv) != 3:
-        print("usage: gen_wire_codec.py <wire_map.json> <out_header>")
+        print("사용법: gen_wire_codec.py <wire_map.json> <out_header>")
         return 2
     spec_path = Path(sys.argv[1])
     out_header = Path(sys.argv[2])
@@ -53,7 +57,7 @@ def main():
     data = json.loads(spec_path.read_text(encoding="utf-8"))
     entries = data.get("entries", [])
 
-    # sort by id
+    # ID 기준으로 정렬
     items = []
     seen = set()
     for e in entries:
@@ -61,13 +65,13 @@ def main():
         typ = e["type"].strip()
         name = e.get("name", typ.split("::")[-1])
         if mid in seen:
-            raise ValueError(f"duplicated id 0x{mid:04X}")
+            raise ValueError(f"중복 id 0x{mid:04X}")
         seen.add(mid)
         items.append((mid, typ, name))
     items.sort(key=lambda x: x[0])
 
     def ns(msg):
-        # protocol.hpp uses namespace server::core::protocol
+        # protocol.hpp는 server::core::protocol 네임스페이스를 사용합니다.
         return "server::core::protocol"
 
     msgid_specs = []
@@ -76,9 +80,9 @@ def main():
     typename_cases = []
     for mid, typ, name in items:
         msgid_specs.append(f"template<> inline constexpr std::uint16_t MsgId<{typ}>() {{ return {ns('') }::MSG_{'_' if False else ''}; }}")
-        # The line above cannot get name from typ; build using provided mapping names
-        # However protocol.hpp constant names are not derivable; so generate a direct constexpr mapping function instead.
-    # Rebuild using a different approach (no template dependency on protocol constant names)
+        # 위 라인은 typ만으로 상수명을 역추론할 수 없어 매핑 기반으로 다시 구성합니다.
+        # protocol.hpp 상수명은 자동 유도할 수 없으므로 직접 constexpr 매핑 함수를 생성합니다.
+    # 다른 방식으로 다시 구성합니다(프로토콜 상수명 템플릿 의존 제거)
     msgid_specs.clear()
     for mid, typ, name in items:
         msgid_specs.append(f"template<> inline constexpr std::uint16_t MsgId<{typ}>() {{ return 0x{mid:04X}; }}")

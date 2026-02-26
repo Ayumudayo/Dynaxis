@@ -6,6 +6,12 @@
 #include <string>
 #include <chrono>
 
+/**
+ * @brief server_app 환경 변수 기반 설정 로더 구현입니다.
+ *
+ * 실행 인자/환경 변수 우선순위를 명확히 유지해,
+ * 로컬 실행과 컨테이너 배포에서 동일한 설정 규칙을 보장합니다.
+ */
 namespace server::app {
 
 namespace corelog = server::core::log;
@@ -29,6 +35,15 @@ bool ServerConfig::load(int argc, char** argv) {
     if (const char* val = std::getenv("LOG_BUFFER_CAPACITY"); val && *val) {
         auto cap = std::strtoull(val, nullptr, 10);
         if (cap > 0) log_buffer_capacity = static_cast<std::size_t>(cap);
+    }
+
+    if (const char* val = std::getenv("CHAT_JOB_QUEUE_MAX"); val && *val) {
+        auto cap = std::strtoull(val, nullptr, 10);
+        if (cap > 0) job_queue_max = static_cast<std::size_t>(cap);
+    }
+    if (const char* val = std::getenv("CHAT_DB_JOB_QUEUE_MAX"); val && *val) {
+        auto cap = std::strtoull(val, nullptr, 10);
+        if (cap > 0) db_job_queue_max = static_cast<std::size_t>(cap);
     }
 
     // 3. 인스턴스 레지스트리 설정

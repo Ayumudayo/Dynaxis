@@ -13,6 +13,9 @@ using server::core::Job;
 using server::core::JobQueue;
 using server::core::ThreadManager;
 
+/**
+ * @brief JobQueue/ThreadManager의 대기/깨움/실행/정지 동작을 검증합니다.
+ */
 // 큐가 비어있을 때 Pop()이 블로킹(대기)되는지 확인합니다.
 TEST(JobQueueTests, PopBlocksUntilJobArrives) {
     JobQueue queue;

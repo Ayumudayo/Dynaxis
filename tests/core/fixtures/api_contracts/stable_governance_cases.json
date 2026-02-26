@@ -1,0 +1,50 @@
+{
+  "cases": [
+    {
+      "name": "stable_header_without_version_or_matrix",
+      "changed": [
+        "core/include/server/core/net/listener.hpp"
+      ],
+      "expected_error_substrings": [
+        "Stable header changed without API version update",
+        "Stable header changed without compatibility matrix update"
+      ]
+    },
+    {
+      "name": "stable_header_with_version_only",
+      "changed": [
+        "core/include/server/core/net/listener.hpp",
+        "core/include/server/core/api/version.hpp"
+      ],
+      "expected_error_substrings": [
+        "Stable header changed without compatibility matrix update"
+      ]
+    },
+    {
+      "name": "stable_header_with_matrix_only",
+      "changed": [
+        "core/include/server/core/net/listener.hpp",
+        "docs/core-api/compatibility-matrix.json"
+      ],
+      "expected_error_substrings": [
+        "Stable header changed without API version update"
+      ]
+    },
+    {
+      "name": "stable_header_with_required_companion_updates",
+      "changed": [
+        "core/include/server/core/net/listener.hpp",
+        "core/include/server/core/api/version.hpp",
+        "docs/core-api/compatibility-matrix.json"
+      ],
+      "expected_error_substrings": []
+    },
+    {
+      "name": "non_stable_change_has_no_stable_governance_error",
+      "changed": [
+        "core/src/net/listener.cpp"
+      ],
+      "expected_error_substrings": []
+    }
+  ]
+}

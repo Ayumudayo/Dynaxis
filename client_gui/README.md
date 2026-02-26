@@ -16,8 +16,11 @@
 단독으로 빌드하려면 다음 명령어를 참고하세요.
 
 ```powershell
-# 프로젝트 루트에서 실행
-cmake --build build-windows --target client_gui
+# 프로젝트 루트에서 실행 (권장: client-only release)
+pwsh scripts/build.ps1 -ClientOnly -Target client_gui
+
+# (직접 CMake 사용 시)
+cmake --build build-windows-client --config Release --target client_gui
 ```
 
 ## 🚀 사용법 (Usage)
@@ -37,10 +40,19 @@ cmake --build build-windows --target client_gui
     *   예: `/join secret 1234` (비공개방)
 *   `/w <닉네임> <메시지>`: 특정 유저에게 귓속말을 보냅니다.
     *   예: `/w user1 안녕하세요`
+*   `/invite <닉네임> [방이름]`: 특정 유저를 방에 초대합니다. (룸 소유자/관리자)
+*   `/kick <닉네임> [방이름]`: 특정 유저를 방에서 강퇴합니다. (룸 소유자/관리자)
+*   `/room remove [방이름]`: 현재 방(또는 지정 방)을 제거하고 인원을 로비로 이동시킵니다. (룸 소유자/관리자)
+*   `/block <닉네임>` / `/unblock <닉네임>` / `/blacklist list`: 개인 차단 목록을 관리합니다.
+*   `/mute <닉네임> [초]`: 특정 유저를 일정 시간 뮤트합니다. (관리자 전용)
+*   `/ban <닉네임> [초]`: 특정 유저를 일정 시간 밴합니다. (관리자 전용)
+*   `/unmute <닉네임>` / `/unban <닉네임>` / `/gkick <닉네임>`: 전역 제재 해제/강제 종료 (관리자 전용)
+
+알 수 없는 slash 명령은 서버 측 커맨드로 그대로 전달됩니다.
 
 ### 3. UI 조작
 *   **Rooms 패널**: 현재 방 목록을 보여줍니다. 클릭하여 입장하거나, 우클릭 메뉴를 사용할 수 있습니다.
-*   **Users 패널**: 현재 방에 있는 유저 목록입니다. 우클릭하여 귓속말을 보낼 수 있습니다.
+*   **Users 패널**: 현재 방에 있는 유저 목록입니다. 우클릭 컨텍스트 메뉴로 귓속말, 방 초대/강퇴를 바로 실행할 수 있고, 관리자 계정일 때만 뮤트/밴 메뉴가 표시됩니다.
 *   **Leave 버튼**: 현재 방을 나가고 로비로 돌아갑니다.
 
 ## 🏗️ 아키텍처 (Architecture)

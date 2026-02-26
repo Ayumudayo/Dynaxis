@@ -4,12 +4,19 @@ project(ServerProject LANGUAGES CXX)
 option(SERVER_ENABLE_TLS "Enable TLS(Asio SSL)" OFF)
 option(SERVER_ENABLE_PROFILING "Enable profiling markers" OFF)
 option(SERVER_USE_HEADER_ONLY_BOOST_SYSTEM "Use header-only boost::system (no lib link)" OFF)
+option(KNIGHTS_ENABLE_SANITIZERS "Enable sanitizers (ASan+UBSan)" OFF)
+option(KNIGHTS_ENABLE_IPO "Enable interprocedural optimization (IPO/LTO)" OFF)
+option(KNIGHTS_ENABLE_GATEWAY_UDP_INGRESS "Enable gateway UDP ingress feature path" ON)
 option(BUILD_SERVER_STACK "Build server libraries and server_app" ON)
 option(BUILD_GATEWAY_APP "Build gateway_app" ON)
 
 
 option(BUILD_SERVER_TESTS "Build server tests" ON)
+option(BUILD_GTEST_TESTS "Build GTest-based unit tests" ON)
+option(BUILD_CONTRACT_TESTS "Build non-GTest contract/governance checks" ON)
 option(BUILD_WRITE_BEHIND_TOOLS "Build write-behind helper tools" ON)
+option(BUILD_ADMIN_APP "Build admin management app" ON)
+option(BUILD_MIGRATIONS_RUNNER "Build migrations runner tool" ON)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -20,6 +27,32 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
 if (MSVC)
     add_compile_options(/utf-8 /MP)
+endif()
+
+if (KNIGHTS_ENABLE_SANITIZERS)
+    message(STATUS "Sanitizers enabled (ASan+UBSan where supported)")
+
+    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+        add_link_options(-fsanitize=address,undefined)
+    elseif (MSVC)
+        # NOTE: MSVC ASan support depends on toolchain/runtime; keep opt-in.
+        add_compile_options(/fsanitize=address)
+        add_link_options(/INCREMENTAL:NO)
+    else()
+        message(WARNING "KNIGHTS_ENABLE_SANITIZERS=ON but unsupported compiler: ${CMAKE_CXX_COMPILER_ID}")
+    endif()
+endif()
+
+if (KNIGHTS_ENABLE_IPO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT KNIGHTS_IPO_SUPPORTED OUTPUT KNIGHTS_IPO_OUTPUT)
+    if (KNIGHTS_IPO_SUPPORTED)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+        message(STATUS "IPO/LTO enabled (KNIGHTS_ENABLE_IPO=ON)")
+    else()
+        message(WARNING "KNIGHTS_ENABLE_IPO=ON but IPO is not supported: ${KNIGHTS_IPO_OUTPUT}")
+    endif()
 endif()
 
 if (NOT BUILD_SERVER_STACK)
@@ -138,22 +171,62 @@ else()
 endif()
 endif()
 
-# migrations runner (requires libpqxx)
-add_executable(migrations_runner tools/migrations/runner.cpp)
-target_include_directories(migrations_runner PRIVATE ${CMAKE_SOURCE_DIR}/core/include)
-find_package(libpqxx CONFIG QUIET)
-if (libpqxx_FOUND AND TARGET libpqxx::pqxx)
-  target_link_libraries(migrations_runner PRIVATE libpqxx::pqxx)
-else()
-  pkg_check_modules(libpqxx QUIET IMPORTED_TARGET libpqxx)
-  if (libpqxx_FOUND)
-    target_link_libraries(migrations_runner PRIVATE PkgConfig::libpqxx)
+if (BUILD_ADMIN_APP)
+  add_executable(admin_app tools/admin_app/main.cpp)
+  target_link_libraries(admin_app PRIVATE server_core)
+  if (TARGET server_storage_redis)
+    target_link_libraries(admin_app PRIVATE server_storage_redis)
+  endif()
+  if (TARGET server_state)
+    target_link_libraries(admin_app PRIVATE server_state)
+  endif()
+
+  add_custom_command(TARGET admin_app POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/tools/admin_app/admin_ui.html"
+            "$<TARGET_FILE_DIR:admin_app>/admin_ui.html")
+
+  if (WIN32 AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.21")
+    # Ensure local execution works without manually extending PATH.
+    add_custom_command(TARGET admin_app POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              $<TARGET_RUNTIME_DLLS:admin_app>
+              $<TARGET_FILE_DIR:admin_app>
+      COMMAND_EXPAND_LISTS)
+
+    # Copy release bin first (contains hiredis.dll required by some debug import chains).
+    add_custom_command(TARGET admin_app POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+              "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin"
+              "$<TARGET_FILE_DIR:admin_app>")
+
+    # Some transitive runtime DLLs (e.g. OpenSSL legacy/zlib chain) are not
+    # always surfaced via imported target metadata; mirror vcpkg bin for safety.
+    add_custom_command(TARGET admin_app POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+              "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/$<$<CONFIG:Debug>:debug/>bin"
+              "$<TARGET_FILE_DIR:admin_app>")
+  endif()
+endif()
+
+if (BUILD_MIGRATIONS_RUNNER)
+  # migrations runner (requires libpqxx)
+  add_executable(migrations_runner tools/migrations/runner.cpp)
+  target_include_directories(migrations_runner PRIVATE ${CMAKE_SOURCE_DIR}/core/include)
+  find_package(libpqxx CONFIG QUIET)
+  if (libpqxx_FOUND AND TARGET libpqxx::pqxx)
+    target_link_libraries(migrations_runner PRIVATE libpqxx::pqxx)
   else()
-    find_package(unofficial-libpqxx CONFIG QUIET)
-    if (unofficial-libpqxx_FOUND AND TARGET unofficial::libpqxx::libpqxx)
-      target_link_libraries(migrations_runner PRIVATE unofficial::libpqxx::libpqxx)
+    pkg_check_modules(libpqxx QUIET IMPORTED_TARGET libpqxx)
+    if (libpqxx_FOUND)
+      target_link_libraries(migrations_runner PRIVATE PkgConfig::libpqxx)
     else()
-      message(WARNING "libpqxx not found — migrations_runner will fail to link")
+      find_package(unofficial-libpqxx CONFIG QUIET)
+      if (unofficial-libpqxx_FOUND AND TARGET unofficial::libpqxx::libpqxx)
+        target_link_libraries(migrations_runner PRIVATE unofficial::libpqxx::libpqxx)
+      else()
+        message(WARNING "libpqxx not found — migrations_runner will fail to link")
+      endif()
     endif()
   endif()
 endif()

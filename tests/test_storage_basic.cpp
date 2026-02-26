@@ -8,6 +8,9 @@
 #include "server/core/storage/connection_pool.hpp"
 #include "server/core/storage/repositories.hpp"
 
+/**
+ * @brief Postgres 저장소 기본 시나리오(방/메시지/멤버십) 통합 검증 테스트입니다.
+ */
 using namespace server::core::storage;
 
 namespace {
@@ -86,4 +89,3 @@ TEST(StorageBasic, RoomMessageMembershipHappyPath) {
         EXPECT_EQ(*last_seen, msg_id);
     }
 }
-

@@ -1,12 +1,16 @@
 #include "server/core/runtime_metrics.hpp"
 
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
-#include <utility>
 #include <vector>
 
+/**
+ * @brief 프로세스 전역 런타임 메트릭 카운터 구현입니다.
+ *
+ * 고빈도 경로에서 락을 피하기 위해 원자 카운터를 사용하고,
+ * 스냅샷 시점에만 집계/정렬해 관측 오버헤드를 최소화합니다.
+ */
 namespace server::core::runtime_metrics {
 
 namespace {
@@ -18,6 +22,7 @@ struct RuntimeCounters {
     std::atomic<std::uint64_t> session_stopped_total{0};
     std::atomic<std::uint64_t> session_active{0};
     std::atomic<std::uint64_t> session_timeout_total{0};
+    std::atomic<std::uint64_t> session_write_timeout_total{0};
     std::atomic<std::uint64_t> heartbeat_timeout_total{0};
     std::atomic<std::uint64_t> send_queue_drop_total{0};
     std::atomic<std::uint64_t> packet_total{0};
@@ -32,13 +37,24 @@ struct RuntimeCounters {
     std::atomic<std::uint64_t> dispatch_latency_count{0};
     std::atomic<std::uint64_t> dispatch_latency_last_ns{0};
     std::atomic<std::uint64_t> dispatch_latency_max_ns{0};
+    std::array<std::atomic<std::uint64_t>, kDispatchLatencyBucketUpperBoundsNs.size()> dispatch_latency_bucket_counts{};
     std::atomic<std::uint64_t> job_queue_depth{0};
     std::atomic<std::uint64_t> job_queue_depth_peak{0};
+    std::atomic<std::uint64_t> job_queue_capacity{0};
+    std::atomic<std::uint64_t> job_queue_reject_total{0};
+    std::atomic<std::uint64_t> job_queue_push_wait_sum_ns{0};
+    std::atomic<std::uint64_t> job_queue_push_wait_count{0};
+    std::atomic<std::uint64_t> job_queue_push_wait_max_ns{0};
     std::atomic<std::uint64_t> memory_pool_capacity{0};
     std::atomic<std::uint64_t> memory_pool_in_use{0};
     std::atomic<std::uint64_t> memory_pool_in_use_peak{0};
     std::atomic<std::uint64_t> db_job_queue_depth{0};
     std::atomic<std::uint64_t> db_job_queue_depth_peak{0};
+    std::atomic<std::uint64_t> db_job_queue_capacity{0};
+    std::atomic<std::uint64_t> db_job_queue_reject_total{0};
+    std::atomic<std::uint64_t> db_job_queue_push_wait_sum_ns{0};
+    std::atomic<std::uint64_t> db_job_queue_push_wait_count{0};
+    std::atomic<std::uint64_t> db_job_queue_push_wait_max_ns{0};
     std::atomic<std::uint64_t> db_job_processed_total{0};
     std::atomic<std::uint64_t> db_job_failed_total{0};
     // opcode 단위 집계를 위해 16bit 전체 공간을 미리 확보한다. (프로파일 기반으로 대부분은 0을 유지)
@@ -68,6 +84,10 @@ void record_session_stop() {
 
 void record_session_timeout() {
     counters().session_timeout_total.fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_session_write_timeout() {
+    counters().session_write_timeout_total.fetch_add(1, std::memory_order_relaxed);
 }
 
 void record_heartbeat_timeout() {
@@ -118,6 +138,13 @@ void record_dispatch_attempt(bool handler_found, std::chrono::nanoseconds elapse
     while (current_max < ns && !max_ref.compare_exchange_weak(current_max, ns, std::memory_order_relaxed)) {
         // retry until successfully updated or observed newer max
     }
+
+    for (std::size_t i = 0; i < kDispatchLatencyBucketUpperBoundsNs.size(); ++i) {
+        if (ns <= kDispatchLatencyBucketUpperBoundsNs[i]) {
+            counters().dispatch_latency_bucket_counts[i].fetch_add(1, std::memory_order_relaxed);
+            break;
+        }
+    }
 }
 
 void record_dispatch_exception() {
@@ -135,6 +162,29 @@ void record_job_queue_depth(std::size_t depth) {
     }
 }
 
+void register_job_queue_capacity(std::size_t capacity) {
+    counters().job_queue_capacity.store(static_cast<std::uint64_t>(capacity), std::memory_order_relaxed);
+}
+
+void record_job_queue_reject() {
+    counters().job_queue_reject_total.fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_job_queue_push_wait(std::chrono::nanoseconds waited) {
+    const auto ns = static_cast<std::uint64_t>(waited.count() <= 0 ? 0 : waited.count());
+    if (ns == 0) {
+        return;
+    }
+    counters().job_queue_push_wait_sum_ns.fetch_add(ns, std::memory_order_relaxed);
+    counters().job_queue_push_wait_count.fetch_add(1, std::memory_order_relaxed);
+
+    auto& max_ref = counters().job_queue_push_wait_max_ns;
+    std::uint64_t current_max = max_ref.load(std::memory_order_relaxed);
+    while (current_max < ns && !max_ref.compare_exchange_weak(current_max, ns, std::memory_order_relaxed)) {
+        // retry
+    }
+}
+
 void record_db_job_queue_depth(std::size_t depth) {
     counters().db_job_queue_depth.store(static_cast<std::uint64_t>(depth), std::memory_order_relaxed);
     auto& peak_ref = counters().db_job_queue_depth_peak;
@@ -142,6 +192,29 @@ void record_db_job_queue_depth(std::size_t depth) {
     std::uint64_t value = static_cast<std::uint64_t>(depth);
     // DB worker pool도 동일 로직으로 가장 심했던 backlog를 추적한다.
     while (current_peak < value && !peak_ref.compare_exchange_weak(current_peak, value, std::memory_order_relaxed)) {
+        // retry
+    }
+}
+
+void register_db_job_queue_capacity(std::size_t capacity) {
+    counters().db_job_queue_capacity.store(static_cast<std::uint64_t>(capacity), std::memory_order_relaxed);
+}
+
+void record_db_job_queue_reject() {
+    counters().db_job_queue_reject_total.fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_db_job_queue_push_wait(std::chrono::nanoseconds waited) {
+    const auto ns = static_cast<std::uint64_t>(waited.count() <= 0 ? 0 : waited.count());
+    if (ns == 0) {
+        return;
+    }
+    counters().db_job_queue_push_wait_sum_ns.fetch_add(ns, std::memory_order_relaxed);
+    counters().db_job_queue_push_wait_count.fetch_add(1, std::memory_order_relaxed);
+
+    auto& max_ref = counters().db_job_queue_push_wait_max_ns;
+    std::uint64_t current_max = max_ref.load(std::memory_order_relaxed);
+    while (current_max < ns && !max_ref.compare_exchange_weak(current_max, ns, std::memory_order_relaxed)) {
         // retry
     }
 }
@@ -193,6 +266,7 @@ Snapshot snapshot() {
     snap.session_stopped_total = c.session_stopped_total.load(std::memory_order_relaxed);
     snap.session_active = c.session_active.load(std::memory_order_relaxed);
     snap.session_timeout_total = c.session_timeout_total.load(std::memory_order_relaxed);
+    snap.session_write_timeout_total = c.session_write_timeout_total.load(std::memory_order_relaxed);
     snap.heartbeat_timeout_total = c.heartbeat_timeout_total.load(std::memory_order_relaxed);
     snap.send_queue_drop_total = c.send_queue_drop_total.load(std::memory_order_relaxed);
     snap.packet_total = c.packet_total.load(std::memory_order_relaxed);
@@ -207,10 +281,23 @@ Snapshot snapshot() {
     snap.dispatch_latency_count = c.dispatch_latency_count.load(std::memory_order_relaxed);
     snap.dispatch_latency_last_ns = c.dispatch_latency_last_ns.load(std::memory_order_relaxed);
     snap.dispatch_latency_max_ns = c.dispatch_latency_max_ns.load(std::memory_order_relaxed);
+    for (std::size_t i = 0; i < snap.dispatch_latency_bucket_counts.size(); ++i) {
+        snap.dispatch_latency_bucket_counts[i] = c.dispatch_latency_bucket_counts[i].load(std::memory_order_relaxed);
+    }
     snap.job_queue_depth = c.job_queue_depth.load(std::memory_order_relaxed);
     snap.job_queue_depth_peak = c.job_queue_depth_peak.load(std::memory_order_relaxed);
+    snap.job_queue_capacity = c.job_queue_capacity.load(std::memory_order_relaxed);
+    snap.job_queue_reject_total = c.job_queue_reject_total.load(std::memory_order_relaxed);
+    snap.job_queue_push_wait_sum_ns = c.job_queue_push_wait_sum_ns.load(std::memory_order_relaxed);
+    snap.job_queue_push_wait_count = c.job_queue_push_wait_count.load(std::memory_order_relaxed);
+    snap.job_queue_push_wait_max_ns = c.job_queue_push_wait_max_ns.load(std::memory_order_relaxed);
     snap.db_job_queue_depth = c.db_job_queue_depth.load(std::memory_order_relaxed);
     snap.db_job_queue_depth_peak = c.db_job_queue_depth_peak.load(std::memory_order_relaxed);
+    snap.db_job_queue_capacity = c.db_job_queue_capacity.load(std::memory_order_relaxed);
+    snap.db_job_queue_reject_total = c.db_job_queue_reject_total.load(std::memory_order_relaxed);
+    snap.db_job_queue_push_wait_sum_ns = c.db_job_queue_push_wait_sum_ns.load(std::memory_order_relaxed);
+    snap.db_job_queue_push_wait_count = c.db_job_queue_push_wait_count.load(std::memory_order_relaxed);
+    snap.db_job_queue_push_wait_max_ns = c.db_job_queue_push_wait_max_ns.load(std::memory_order_relaxed);
     snap.db_job_processed_total = c.db_job_processed_total.load(std::memory_order_relaxed);
     snap.db_job_failed_total = c.db_job_failed_total.load(std::memory_order_relaxed);
     snap.memory_pool_capacity = c.memory_pool_capacity.load(std::memory_order_relaxed);

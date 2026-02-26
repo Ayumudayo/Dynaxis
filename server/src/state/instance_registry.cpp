@@ -1,13 +1,19 @@
 #include "server/state/instance_registry.hpp"
 
+#include <array>
 #include <string_view>
 #include <cctype>
 #include <sstream>
 #include <utility>
 
-#include "server/core/util/log.hpp"
 #include "server/storage/redis/client.hpp"
 
+/**
+ * @brief 인스턴스 레지스트리(in-memory + Redis) 구현입니다.
+ *
+ * heartbeat + TTL 기반으로 활성 인스턴스를 추적해,
+ * 게이트웨이가 죽은 서버를 빠르게 제외하고 살아 있는 후보만 선택할 수 있게 합니다.
+ */
 namespace server::state {
 
 namespace {
@@ -53,6 +59,69 @@ std::vector<InstanceRecord> InMemoryStateBackend::list_instances() const {
 
 namespace detail {
 
+using JsonFieldSetter = void (*)(InstanceRecord&, std::string_view);
+
+void set_instance_id(InstanceRecord& record, std::string_view value) {
+    record.instance_id = value;
+}
+
+void set_host(InstanceRecord& record, std::string_view value) {
+    record.host = value;
+}
+
+void set_role(InstanceRecord& record, std::string_view value) {
+    record.role = value;
+}
+
+void set_port(InstanceRecord& record, std::string_view value) {
+    record.port = static_cast<std::uint16_t>(std::stoul(std::string(value)));
+}
+
+void set_capacity(InstanceRecord& record, std::string_view value) {
+    record.capacity = static_cast<std::uint32_t>(std::stoul(std::string(value)));
+}
+
+void set_active_sessions(InstanceRecord& record, std::string_view value) {
+    record.active_sessions = static_cast<std::uint32_t>(std::stoul(std::string(value)));
+}
+
+void set_ready(InstanceRecord& record, std::string_view value) {
+    if (value == "true" || value == "1") {
+        record.ready = true;
+    } else if (value == "false" || value == "0") {
+        record.ready = false;
+    }
+}
+
+void set_last_heartbeat_ms(InstanceRecord& record, std::string_view value) {
+    record.last_heartbeat_ms = static_cast<std::uint64_t>(std::stoull(std::string(value)));
+}
+
+struct JsonFieldRule {
+    std::string_view key;
+    JsonFieldSetter setter;
+};
+
+constexpr std::array<JsonFieldRule, 8> kJsonFieldRules{{
+    {"instance_id", &set_instance_id},
+    {"host", &set_host},
+    {"role", &set_role},
+    {"port", &set_port},
+    {"capacity", &set_capacity},
+    {"active_sessions", &set_active_sessions},
+    {"ready", &set_ready},
+    {"last_heartbeat_ms", &set_last_heartbeat_ms},
+}};
+
+const JsonFieldSetter find_json_field_setter(std::string_view key) {
+    for (const auto& rule : kJsonFieldRules) {
+        if (rule.key == key) {
+            return rule.setter;
+        }
+    }
+    return nullptr;
+}
+
 // Redis registry와 통신하기 위해 간단한 JSON 직렬화를 구현한다.
 // 외부 라이브러리 의존성을 줄이기 위해 직접 문자열 파싱/생성을 수행합니다.
 // 성능보다는 이식성과 의존성 최소화에 중점을 둔 구현입니다.
@@ -65,6 +134,7 @@ std::string serialize_json(const InstanceRecord& record) {
     oss << "\"role\":\"" << record.role << "\",";
     oss << "\"capacity\":" << record.capacity << ',';
     oss << "\"active_sessions\":" << record.active_sessions << ',';
+    oss << "\"ready\":" << (record.ready ? "true" : "false") << ',';
     oss << "\"last_heartbeat_ms\":" << record.last_heartbeat_ms;
     oss << '}';
     return oss.str();
@@ -109,22 +179,13 @@ std::optional<InstanceRecord> deserialize_json(std::string_view payload) {
         if (!value.empty() && value.front() == '"') { value.erase(0, 1); }
         if (!value.empty() && value.back() == '"') { value.pop_back(); }
         
+        const auto setter = find_json_field_setter(key);
+        if (setter == nullptr) {
+            continue;
+        }
+
         try {
-            if (key == "instance_id") {
-                record.instance_id = value;
-            } else if (key == "host") {
-                record.host = value;
-            } else if (key == "role") {
-                record.role = value;
-            } else if (key == "port") {
-                record.port = static_cast<std::uint16_t>(std::stoul(value));
-            } else if (key == "capacity") {
-                record.capacity = static_cast<std::uint32_t>(std::stoul(value));
-            } else if (key == "active_sessions") {
-                record.active_sessions = static_cast<std::uint32_t>(std::stoul(value));
-            } else if (key == "last_heartbeat_ms") {
-                record.last_heartbeat_ms = static_cast<std::uint64_t>(std::stoull(value));
-            }
+            setter(record, value);
         } catch (...) {
             // 파싱 에러 무시 (유연한 처리)
         }
@@ -155,6 +216,15 @@ public:
             return std::nullopt;
         }
         return client_->get(key);
+    }
+
+    bool mget(const std::vector<std::string>& keys,
+              std::vector<std::optional<std::string>>& out) override {
+        if (!client_) {
+            out.clear();
+            return false;
+        }
+        return client_->mget(keys, out);
     }
 
     bool setex(const std::string& key, const std::string& value, unsigned int ttl_sec) override {
@@ -243,10 +313,21 @@ bool RedisInstanceStateBackend::reload_cache_from_backend() const {
     if (!client_->scan_keys(key_prefix_ + "*", keys)) {
         return false;
     }
+    std::vector<std::optional<std::string>> payloads;
+    const bool batch_loaded = !keys.empty()
+        && client_->mget(keys, payloads)
+        && payloads.size() == keys.size();
+
     std::unordered_map<std::string, InstanceRecord> next;
     next.reserve(keys.size());
-    for (const auto& key : keys) {
-        auto payload = client_->get(key);
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+        const auto& key = keys[i];
+        std::optional<std::string> payload;
+        if (batch_loaded) {
+            payload = std::move(payloads[i]);
+        } else {
+            payload = client_->get(key);
+        }
         if (!payload || payload->empty()) {
             continue;
         }
@@ -269,7 +350,27 @@ bool RedisInstanceStateBackend::reload_cache_from_backend() const {
 
 std::vector<InstanceRecord> RedisInstanceStateBackend::list_instances() const {
     if (client_) {
-        reload_cache_from_backend();
+        const auto now = std::chrono::steady_clock::now();
+        bool should_reload = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (now - last_reload_attempt_ >= reload_min_interval_) {
+                last_reload_attempt_ = now;
+                should_reload = true;
+            }
+        }
+
+        if (should_reload) {
+            bool expected = false;
+            if (reload_in_progress_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+                const bool ok = reload_cache_from_backend();
+                reload_in_progress_.store(false, std::memory_order_release);
+                if (ok) {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    last_reload_ok_ = now;
+                }
+            }
+        }
     }
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<InstanceRecord> result;

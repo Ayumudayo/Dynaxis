@@ -3,6 +3,12 @@
 #include <limits>
 #include <memory>
 
+/**
+ * @brief TaskScheduler의 지연/주기 작업 스케줄링 구현입니다.
+ *
+ * 별도 타이머 스레드 없이 `poll()` 기반 pull 모델을 사용해,
+ * 이벤트 루프 틱 제어권을 호출자에게 남기면서 주기 작업을 안정적으로 수행합니다.
+ */
 namespace server::core::concurrent {
 
 TaskScheduler::TaskScheduler() = default;

@@ -29,6 +29,7 @@ void ClientApp::disconnect() {
     net_client_.close();
     data_.is_connected = false;
     data_.is_logged_in = false;
+    data_.is_admin = false;
 }
 
 void ClientApp::login(const std::string& username) {
@@ -64,7 +65,7 @@ void ClientApp::process_command(const std::string& input) {
                 data_.add_log("[usage] /join <room> [password]");
             }
         }
-        else if (cmd == "/w") {
+        else if (cmd == "/w" || cmd == "/whisper") {
             size_t msg_split = args.find(' ');
             if (msg_split != std::string::npos) {
                 std::string target = args.substr(0, msg_split);
@@ -75,7 +76,12 @@ void ClientApp::process_command(const std::string& input) {
             }
         }
         else {
-            data_.add_log("[error] Unknown command: " + cmd);
+            // 서버에서 처리하는 slash 명령(/invite, /kick, /mute, /ban 등)은 원문 그대로 전달한다.
+            if (data_.is_connected && data_.is_logged_in) {
+                net_client_.send_chat(data_.current_room, input);
+            } else {
+                data_.add_log("[error] Not connected or not logged in");
+            }
         }
     } else {
         // 일반 채팅
@@ -117,9 +123,10 @@ void ClientApp::setup_callbacks() {
         });
     });
 
-    net_client_.set_on_login_res([this](std::string effective_user, std::uint32_t sid) {
-        event_queue_.push([this, effective_user, sid]() {
+    net_client_.set_on_login_res([this](std::string effective_user, std::uint32_t sid, bool is_admin) {
+        event_queue_.push([this, effective_user, sid, is_admin]() {
             data_.is_logged_in = true;
+            data_.is_admin = is_admin;
             data_.add_log("[system] Logged in as: " + effective_user + " (SID: " + std::to_string(sid) + ")");
         });
     });
@@ -128,6 +135,7 @@ void ClientApp::setup_callbacks() {
         event_queue_.push([this, reason]() {
             data_.is_connected = false;
             data_.is_logged_in = false;
+            data_.is_admin = false;
             data_.add_log("[system] Disconnected: " + reason);
         });
     });

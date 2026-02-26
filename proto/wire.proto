@@ -8,6 +8,7 @@ message LoginRes {
   string effective_user = 1;
   uint32 session_id = 2;
   string message = 3;
+  bool is_admin = 4;
 }
 
 message ChatBroadcast {

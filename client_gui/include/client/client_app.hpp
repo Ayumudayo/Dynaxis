@@ -28,6 +28,7 @@ struct RoomInfo {
 struct AppData {
     bool is_connected = false;
     bool is_logged_in = false;
+    bool is_admin = false;
     
     std::string current_room = "lobby";
     std::vector<std::string> user_list;

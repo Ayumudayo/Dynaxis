@@ -46,7 +46,7 @@
 - `devclient/`는 `clients/devcli/`로 이동한다.
 - `protocol/`(커스텀 바이너리)과 `proto/`(Protobuf)는 목적이 다르므로 유지하되, 생성물은 소스 트리에 커밋하지 않는다.
 
-## CMake 규칙
+## 빌드 시스템(CMake) 규칙
 - 상위 CMake는 전역 include 디렉터리/컴파일 옵션을 최소화하고, 하위 타깃에만 필요한 설정을 부여한다.
 - 타깃/네임스페이스/출력물에 프로젝트명(예: knights) 금지. 예시:
   - 라이브러리: `server_core` (STATIC/SHARED 선택), `gateway_service_lib`
@@ -57,7 +57,7 @@
 - 코드생성(예: opcode/wire codec, Protobuf)은 각각 전용 `add_custom_command/target`로 캡슐화하고, 소비 타깃에서
   `add_dependencies(… generate_xxx)`로 연결한다.
 - 설치/배포(선택): `core`는 `install(TARGETS … EXPORT …)`로 외부 서버에서도 재사용 가능하게 패키징.
-- 모듈 온/오프: `BUILD_SERVER_STACK`, `BUILD_GATEWAY_APP`, `BUILD_LOAD_BALANCER_APP`, `BUILD_DEVCLIENT_APP`, `BUILD_WRITE_BEHIND_TOOLS`, `BUILD_SERVER_TESTS` 옵션으로 필요한 서브프로젝트만 선택적으로 빌드한다. 하위 디렉터리는 해당 옵션이 켜진 경우에만 `add_subdirectory` 된다.
+- 모듈 온/오프: `BUILD_SERVER_STACK`, `BUILD_GATEWAY_APP`, `BUILD_LOAD_BALANCER_APP`, `BUILD_DEVCLIENT_APP`, `BUILD_WRITE_BEHIND_TOOLS`, `BUILD_SERVER_TESTS` 옵션으로 필요한 서브프로젝트만 선택적으로 빌드한다. 테스트는 `BUILD_GTEST_TESTS`/`BUILD_CONTRACT_TESTS`로 세분화해 GTest 의존 경로와 비의존 경로를 분리한다.
 
 ## 네임스페이스/명명 규칙(요약)
 - 금지: `knights`, `Knights`를 코드/네임스페이스/바이너리/타깃/패키지명에 사용.

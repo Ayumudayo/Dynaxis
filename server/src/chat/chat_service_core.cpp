@@ -1,20 +1,28 @@
 #include "server/chat/chat_service.hpp"
 #include "server/protocol/game_opcodes.hpp"
-#include "server/core/protocol/frame.hpp"
+#include "server/config/runtime_settings.hpp"
+#include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/util/service_registry.hpp"
+#include "server/core/concurrent/task_scheduler.hpp"
 #include "server/core/concurrent/job_queue.hpp"
+#include "server/wire/codec.hpp"
+#include "chat_hook_plugin_chain.hpp"
 #include "wire.pb.h"
 // 저장소 연동 헤더
 #include "server/core/storage/connection_pool.hpp"
-#include "server/core/storage/repositories.hpp"
 #include "server/storage/redis/client.hpp"
+
+#include <openssl/sha.h>
 
 #include <algorithm>
 #include <random>
 #include <array>
+#include <cctype>
+#include <cstring>
 #include <cstdlib>
+#include <limits>
 #include <sstream>
 #include <utility>
 #include <unordered_set>
@@ -24,7 +32,53 @@ namespace game_proto = server::protocol;
 namespace corelog = server::core::log;
 namespace services = server::core::util::services;
 
+/**
+ * @brief ChatService 코어 상태/설정/플러그인 초기화 구현입니다.
+ *
+ * DB/Redis/Write-behind/Presence/History 설정을 한곳에서 해석해,
+ * 핸들러 로직이 환경별 분기 없이 동일 인터페이스를 사용하도록 만듭니다.
+ */
 namespace server::app::chat {
+
+struct ChatService::HookPluginState {
+    explicit HookPluginState(ChatHookPluginChain::Config cfg)
+        : chain(std::move(cfg)) {}
+    ChatHookPluginChain chain;
+};
+
+namespace {
+
+constexpr std::string_view kRoomPasswordHashPrefix = "sha256:";
+
+std::string legacy_hash_room_password(std::string_view password) {
+    std::hash<std::string> hasher;
+    const std::size_t value = hasher(std::string(password));
+    std::ostringstream oss;
+    oss << std::hex << value;
+    return oss.str();
+}
+
+std::string sha256_hex(std::string_view input) {
+    std::array<unsigned char, SHA256_DIGEST_LENGTH> digest{};
+    if (SHA256(reinterpret_cast<const unsigned char*>(input.data()), input.size(), digest.data()) == nullptr) {
+        return {};
+    }
+
+    static constexpr char kHexDigits[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(digest.size() * 2);
+    for (unsigned char byte : digest) {
+        out.push_back(kHexDigits[(byte >> 4) & 0x0F]);
+        out.push_back(kHexDigits[byte & 0x0F]);
+    }
+    return out;
+}
+
+bool has_room_password_hash_prefix(std::string_view value) {
+    return value.rfind(kRoomPasswordHashPrefix, 0) == 0;
+}
+
+} // namespace
 
 // ChatService 생성자: 주요 의존성을 주입받고 환경 변수로부터 설정을 로드합니다.
 ChatService::ChatService(boost::asio::io_context& io,
@@ -79,6 +133,10 @@ ChatService::ChatService(boost::asio::io_context& io,
         presence_.prefix = prefix;
     }
 
+    if (const char* use = std::getenv("USE_REDIS_PUBSUB"); use && std::strcmp(use, "0") != 0) {
+        redis_pubsub_enabled_ = true;
+    }
+
     // 환경 변수 읽기 헬퍼 함수
     const auto read_env = [](const char* primary, const char* secondary = nullptr) -> const char* {
         if (primary) {
@@ -93,6 +151,61 @@ ChatService::ChatService(boost::asio::io_context& io,
         }
         return nullptr;
     };
+
+    const auto split_csv = [](std::string_view raw) {
+        std::vector<std::string> out;
+        std::string current;
+        auto flush = [&]() {
+            std::size_t begin = 0;
+            while (begin < current.size() && std::isspace(static_cast<unsigned char>(current[begin])) != 0) {
+                ++begin;
+            }
+            std::size_t end = current.size();
+            while (end > begin && std::isspace(static_cast<unsigned char>(current[end - 1])) != 0) {
+                --end;
+            }
+            if (end > begin) {
+                out.emplace_back(current.substr(begin, end - begin));
+            }
+            current.clear();
+        };
+        for (char c : raw) {
+            if (c == ',' || c == ';') {
+                flush();
+                continue;
+            }
+            current.push_back(c);
+        }
+        flush();
+        return out;
+    };
+
+    if (const char* admins_env = read_env("CHAT_ADMIN_USERS", "ADMIN_USERS"); admins_env && *admins_env) {
+        for (const auto& user : split_csv(admins_env)) {
+            admin_users_.insert(user);
+        }
+    }
+
+    const auto parse_u32_bounded = [](const char* raw,
+                                      std::uint32_t fallback,
+                                      std::uint32_t min_value,
+                                      std::uint32_t max_value) {
+        if (!raw || !*raw) {
+            return fallback;
+        }
+        char* end = nullptr;
+        const unsigned long parsed = std::strtoul(raw, &end, 10);
+        if (end == raw || parsed < min_value || parsed > max_value) {
+            return fallback;
+        }
+        return static_cast<std::uint32_t>(parsed);
+    };
+
+    spam_message_threshold_ = parse_u32_bounded(std::getenv("CHAT_SPAM_THRESHOLD"), 6, 3, 100);
+    spam_window_sec_ = parse_u32_bounded(std::getenv("CHAT_SPAM_WINDOW_SEC"), 5, 1, 120);
+    spam_mute_sec_ = parse_u32_bounded(std::getenv("CHAT_SPAM_MUTE_SEC"), 30, 5, 86400);
+    spam_ban_sec_ = parse_u32_bounded(std::getenv("CHAT_SPAM_BAN_SEC"), 600, 10, 604800);
+    spam_ban_violation_threshold_ = parse_u32_bounded(std::getenv("CHAT_SPAM_BAN_VIOLATIONS"), 3, 1, 20);
 
     // 최근 대화 내역(History) 관련 설정
     if (const char* limit_env = read_env("RECENT_HISTORY_LIMIT", "SNAPSHOT_RECENT_LIMIT")) {
@@ -134,6 +247,125 @@ ChatService::ChatService(boost::asio::io_context& io,
     } else {
         corelog::warn("Write-behind disabled (set WRITE_BEHIND_ENABLED=1 to enable)");
     }
+
+    // Optional chat-hook plugins (hot-reloadable shared libraries)
+    {
+        ChatHookPluginChain::Config cfg;
+
+        const auto split_paths = [](const char* raw) -> std::vector<std::filesystem::path> {
+            std::vector<std::filesystem::path> out;
+            if (!raw || !*raw) {
+                return out;
+            }
+
+            auto trim = [](std::string& s) {
+                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
+                    s.erase(s.begin());
+                }
+                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
+                    s.pop_back();
+                }
+            };
+
+            std::string cur;
+            for (const char* p = raw; *p; ++p) {
+                const char c = *p;
+                if (c == ';' || c == ',') {
+                    trim(cur);
+                    if (!cur.empty()) {
+                        out.emplace_back(cur);
+                    }
+                    cur.clear();
+                    continue;
+                }
+                cur.push_back(c);
+            }
+            trim(cur);
+            if (!cur.empty()) {
+                out.emplace_back(cur);
+            }
+            return out;
+        };
+
+        bool enabled = false;
+        if (const char* list = std::getenv("CHAT_HOOK_PLUGIN_PATHS"); list && *list) {
+            cfg.plugin_paths = split_paths(list);
+            enabled = !cfg.plugin_paths.empty();
+        }
+
+        if (!enabled) {
+            if (const char* dir = std::getenv("CHAT_HOOK_PLUGINS_DIR"); dir && *dir) {
+                cfg.plugins_dir = std::filesystem::path(dir);
+                enabled = true;
+            }
+        }
+
+        if (!enabled) {
+            if (const char* val = std::getenv("CHAT_HOOK_PLUGIN_PATH"); val && *val) {
+                cfg.plugin_paths.emplace_back(val);
+                enabled = true;
+            }
+        }
+
+        if (enabled) {
+            if (const char* cache = std::getenv("CHAT_HOOK_CACHE_DIR"); cache && *cache) {
+                cfg.cache_dir = cache;
+            }
+            if (const char* lock = std::getenv("CHAT_HOOK_LOCK_PATH"); lock && *lock) {
+                cfg.single_lock_path = lock;
+            }
+
+            hook_plugin_ = std::make_unique<HookPluginState>(std::move(cfg));
+            hook_plugin_->chain.poll_reload();
+
+            unsigned long interval_ms = 500;
+            if (const char* interval = std::getenv("CHAT_HOOK_RELOAD_INTERVAL_MS"); interval && *interval) {
+                interval_ms = std::strtoul(interval, nullptr, 10);
+            }
+            if (interval_ms > 0) {
+                if (auto scheduler = services::get<server::core::concurrent::TaskScheduler>()) {
+                    scheduler->schedule_every([this]() {
+                        if (!hook_plugin_) {
+                            return;
+                        }
+                        (void)job_queue_.TryPush([this]() {
+                            if (hook_plugin_) {
+                                hook_plugin_->chain.poll_reload();
+                            }
+                        });
+                    }, std::chrono::milliseconds{static_cast<long long>(interval_ms)});
+                }
+            }
+        }
+    }
+}
+
+ChatService::~ChatService() = default;
+
+ChatService::ChatHookPluginsMetrics ChatService::chat_hook_plugins_metrics() const {
+    ChatHookPluginsMetrics out{};
+    if (!hook_plugin_) {
+        out.enabled = false;
+        out.mode = "none";
+        return out;
+    }
+
+    const auto snap = hook_plugin_->chain.metrics_snapshot();
+    out.enabled = snap.configured;
+    out.mode = snap.mode;
+    out.plugins.reserve(snap.plugins.size());
+    for (const auto& p : snap.plugins) {
+        ChatHookPluginMetric m{};
+        m.file = p.plugin_path.filename().string();
+        m.loaded = p.loaded;
+        m.name = p.name;
+        m.version = p.version;
+        m.reload_attempt_total = p.reload_attempt_total;
+        m.reload_success_total = p.reload_success_total;
+        m.reload_failure_total = p.reload_failure_total;
+        out.plugins.push_back(std::move(m));
+    }
+    return out;
 }
 
 // 방별 Strand(직렬화된 실행 컨텍스트)를 반환합니다.
@@ -150,6 +382,10 @@ ChatService::Strand& ChatService::strand_for(const std::string& room) {
 
 bool ChatService::write_behind_enabled() const {
     return write_behind_.enabled && static_cast<bool>(redis_);
+}
+
+bool ChatService::pubsub_enabled() {
+    return redis_pubsub_enabled_;
 }
 
 // UUID v4 생성 (난수 기반)
@@ -311,26 +547,63 @@ void ChatService::send_rooms_list(Session& s) {
         redis_available = true;
         std::vector<std::string> redis_rooms_list;
         redis_->smembers("rooms:active", redis_rooms_list);
+
+        std::vector<std::string> password_keys;
+        std::vector<std::string> user_count_keys;
+        password_keys.reserve(redis_rooms_list.size());
+        user_count_keys.reserve(redis_rooms_list.size());
+        for (const auto& r : redis_rooms_list) {
+            password_keys.push_back("room:password:" + r);
+            user_count_keys.push_back("room:users:" + r);
+        }
+
+        std::vector<std::optional<std::string>> password_values;
+        const bool password_batch_loaded = !password_keys.empty()
+            && redis_->mget(password_keys, password_values)
+            && password_values.size() == password_keys.size();
+
+        std::vector<std::size_t> user_counts;
+        const bool users_count_batch_loaded = !user_count_keys.empty()
+            && redis_->scard_many(user_count_keys, user_counts)
+            && user_counts.size() == user_count_keys.size();
         
         bool lobby_found = false;
-            
-        for (const auto& r : redis_rooms_list) {
+
+        for (std::size_t i = 0; i < redis_rooms_list.size(); ++i) {
+            const auto& r = redis_rooms_list[i];
             if (r == "lobby") lobby_found = true;
-            
-            std::vector<std::string> users;
-            redis_->smembers("room:users:" + r, users);
+
+            std::size_t users_count = 0;
+            if (users_count_batch_loaded) {
+                users_count = user_counts[i];
+            } else {
+                const auto& users_key = user_count_keys[i];
+                if (!redis_->scard(users_key, users_count)) {
+                    std::vector<std::string> users;
+                    redis_->smembers(users_key, users);
+                    users_count = users.size();
+                }
+            }
             
             bool locked = false;
-            auto pw = redis_->get("room:password:" + r);
-            if (pw.has_value()) locked = true;
+            if (password_batch_loaded) {
+                locked = password_values[i].has_value();
+            } else {
+                auto pw = redis_->get("room:password:" + r);
+                locked = pw.has_value();
+            }
             
-            redis_rooms.push_back({r, users.size(), locked});
+            redis_rooms.push_back({r, users_count, locked});
         }
         
         if (!lobby_found) {
-            std::vector<std::string> users;
-            redis_->smembers("room:users:lobby", users);
-            redis_rooms.push_back({"lobby", users.size(), false});
+            std::size_t users_count = 0;
+            if (!redis_->scard("room:users:lobby", users_count)) {
+                std::vector<std::string> users;
+                redis_->smembers("room:users:lobby", users);
+                users_count = users.size();
+            }
+            redis_rooms.push_back({"lobby", users_count, false});
         }
     }
 
@@ -415,15 +688,13 @@ void ChatService::broadcast_refresh(const std::string& room) {
     broadcast_refresh_local(room);
 
     // 2. Redis Pub/Sub으로 다른 서버에 전파
-    if (redis_) {
+    if (redis_ && pubsub_enabled()) {
         try {
-            if (const char* use = std::getenv("USE_REDIS_PUBSUB"); use && std::strcmp(use, "0") != 0) {
-                // fanout:refresh:<room> 채널 사용
-                std::string channel = presence_.prefix + std::string("fanout:refresh:") + room;
-                // Payload는 gwid만 있으면 됨 (self-echo 방지용)
-                std::string message = "gw=" + gateway_id_;
-                redis_->publish(channel, std::move(message));
-            }
+            // fanout:refresh:<room> 채널 사용
+            std::string channel = presence_.prefix + std::string("fanout:refresh:") + room;
+            // Payload는 gwid만 있으면 됨 (self-echo 방지용)
+            std::string message = "gw=" + gateway_id_;
+            redis_->publish(channel, std::move(message));
         } catch (...) {}
     }
 }
@@ -433,6 +704,8 @@ void ChatService::broadcast_refresh(const std::string& room) {
 void ChatService::send_room_users(Session& s, const std::string& target) {
     std::vector<std::string> names;
     bool allow = true;
+    std::string viewer;
+
     {
         std::lock_guard<std::mutex> lk(state_.mu);
         auto itroom = state_.rooms.find(target);
@@ -453,30 +726,13 @@ void ChatService::send_room_users(Session& s, const std::string& target) {
                 }
             }
         }
-        
+
         if (is_locked && !is_member) {
             allow = false;
-        } else {
-            // Redis에서 전체 사용자 목록 조회 (분산 환경 지원)
-            if (redis_) {
-                std::vector<std::string> redis_users;
-                if (redis_->smembers("room:users:" + target, redis_users)) {
-                    names = std::move(redis_users);
-                }
-            }
-            // Redis가 없거나 실패한 경우 로컬 상태를 fallback으로 사용
-            if (names.empty() && itroom != state_.rooms.end()) {
-                 for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) {
-                    if (auto p = wit->lock()) {
-                        auto itu = state_.user.find(p.get());
-                        std::string name = (itu != state_.user.end()) ? itu->second : std::string("guest");
-                        names.push_back(std::move(name));
-                        ++wit;
-                    } else {
-                        wit = itroom->second.erase(wit);
-                    }
-                }
-            }
+        }
+
+        if (auto viewer_it = state_.user.find(&s); viewer_it != state_.user.end()) {
+            viewer = viewer_it->second;
         }
     }
 
@@ -485,9 +741,45 @@ void ChatService::send_room_users(Session& s, const std::string& target) {
         return;
     }
 
+    // Redis에서 전체 사용자 목록 조회 (분산 환경 지원)
+    if (redis_) {
+        std::vector<std::string> redis_users;
+        if (redis_->smembers("room:users:" + target, redis_users)) {
+            names = std::move(redis_users);
+        }
+    }
+
+    // Redis가 없거나 실패한 경우 로컬 상태를 fallback으로 사용
+    if (names.empty()) {
+        std::lock_guard<std::mutex> lk(state_.mu);
+        auto itroom = state_.rooms.find(target);
+        if (itroom != state_.rooms.end()) {
+            for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) {
+                if (auto p = wit->lock()) {
+                    auto itu = state_.user.find(p.get());
+                    std::string name = (itu != state_.user.end()) ? itu->second : std::string("guest");
+                    names.push_back(std::move(name));
+                    ++wit;
+                } else {
+                    wit = itroom->second.erase(wit);
+                }
+            }
+        }
+    }
+
     server::wire::v1::RoomUsers pb;
     pb.set_room(target);
+    std::unordered_set<std::string> blocked;
+    {
+        std::lock_guard<std::mutex> lk(state_.mu);
+        if (auto it = state_.user_blacklists.find(viewer); it != state_.user_blacklists.end()) {
+            blocked = it->second;
+        }
+    }
     for (const auto& name : names) {
+        if (blocked.count(name) > 0) {
+            continue;
+        }
         pb.add_users(name);
     }
     std::string bytes;
@@ -519,26 +811,62 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
         redis_available = true;
         std::vector<std::string> active_rooms;
         redis_->smembers("rooms:active", active_rooms);
-        std::string room_list_str;
-        for (const auto& r : active_rooms) room_list_str += r + ", ";
-        bool lobby_found = false;
+
+        std::vector<std::string> password_keys;
+        std::vector<std::string> user_count_keys;
+        password_keys.reserve(active_rooms.size());
+        user_count_keys.reserve(active_rooms.size());
         for (const auto& r : active_rooms) {
+            password_keys.push_back("room:password:" + r);
+            user_count_keys.push_back("room:users:" + r);
+        }
+
+        std::vector<std::optional<std::string>> password_values;
+        const bool password_batch_loaded = !password_keys.empty()
+            && redis_->mget(password_keys, password_values)
+            && password_values.size() == password_keys.size();
+
+        std::vector<std::size_t> user_counts;
+        const bool users_count_batch_loaded = !user_count_keys.empty()
+            && redis_->scard_many(user_count_keys, user_counts)
+            && user_counts.size() == user_count_keys.size();
+
+        bool lobby_found = false;
+        for (std::size_t i = 0; i < active_rooms.size(); ++i) {
+            const auto& r = active_rooms[i];
             if (r == "lobby") lobby_found = true;
-            
-            std::vector<std::string> users;
-            redis_->smembers("room:users:" + r, users);
+
+            std::size_t users_count = 0;
+            if (users_count_batch_loaded) {
+                users_count = user_counts[i];
+            } else {
+                const auto& users_key = user_count_keys[i];
+                if (!redis_->scard(users_key, users_count)) {
+                    std::vector<std::string> users;
+                    redis_->smembers(users_key, users);
+                    users_count = users.size();
+                }
+            }
             
             bool locked = false;
-            auto pw = redis_->get("room:password:" + r);
-            if (pw.has_value()) locked = true;
+            if (password_batch_loaded) {
+                locked = password_values[i].has_value();
+            } else {
+                auto pw = redis_->get("room:password:" + r);
+                locked = pw.has_value();
+            }
             
-            redis_rooms.push_back({r, users.size(), locked});
+            redis_rooms.push_back({r, users_count, locked});
         }
         
         if (!lobby_found) {
-            std::vector<std::string> users;
-            redis_->smembers("room:users:lobby", users);
-            redis_rooms.push_back({"lobby", users.size(), false});
+            std::size_t users_count = 0;
+            if (!redis_->scard("room:users:lobby", users_count)) {
+                std::vector<std::string> users;
+                redis_->smembers("room:users:lobby", users);
+                users_count = users.size();
+            }
+            redis_rooms.push_back({"lobby", users_count, false});
         }
     }
 
@@ -576,6 +904,18 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
         }
     }
 
+    std::string viewer_name;
+    std::unordered_set<std::string> viewer_blocked;
+    {
+        std::lock_guard<std::mutex> lk(state_.mu);
+        if (auto it = state_.user.find(&s); it != state_.user.end()) {
+            viewer_name = it->second;
+            if (auto blk_it = state_.user_blacklists.find(viewer_name); blk_it != state_.user_blacklists.end()) {
+                viewer_blocked = blk_it->second;
+            }
+        }
+    }
+
     // 3. 현재 방 유저 목록 조회 (Redis 우선, Fallback 로컬)
     {
         std::vector<std::string> user_list;
@@ -589,6 +929,9 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
         
         if (loaded_from_redis) {
             for (const auto& name : user_list) {
+                if (viewer_blocked.count(name) > 0) {
+                    continue;
+                }
                 pb.add_users(name);
             }
         } else {
@@ -600,6 +943,10 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
                     if (auto p = wit->lock()) {
                         auto itu = state_.user.find(p.get());
                         std::string name = (itu != state_.user.end()) ? itu->second : std::string("guest");
+                        if (viewer_blocked.count(name) > 0) {
+                            ++wit;
+                            continue;
+                        }
                         pb.add_users(name); ++wit;
                     } else { wit = itroom->second.erase(wit); }
                 }
@@ -753,12 +1100,39 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
 
 // 외부에서 수신한 브로드캐스트(예: Redis Pub/Sub)를 해당 방의 로컬 세션들에게 전달합니다.
 void ChatService::broadcast_room(const std::string& room, const std::vector<std::uint8_t>& body, Session* self) {
+    (void)self;
+    std::string sender;
+    {
+        server::wire::v1::ChatBroadcast pb;
+        if (server::wire::codec::Decode(body.data(), body.size(), pb)) {
+            sender = pb.sender();
+        }
+    }
+
     std::vector<std::shared_ptr<Session>> targets;
     {
         std::lock_guard<std::mutex> lk(state_.mu);
         auto it = state_.rooms.find(room);
         if (it != state_.rooms.end()) {
             collect_room_sessions(it->second, targets);
+        }
+
+        if (!sender.empty()) {
+            std::vector<std::shared_ptr<Session>> filtered_targets;
+            filtered_targets.reserve(targets.size());
+            for (auto& target : targets) {
+                auto receiver_it = state_.user.find(target.get());
+                if (receiver_it == state_.user.end()) {
+                    continue;
+                }
+                const std::string& receiver = receiver_it->second;
+                if (auto blk_it = state_.user_blacklists.find(receiver);
+                    blk_it != state_.user_blacklists.end() && blk_it->second.count(sender) > 0) {
+                    continue;
+                }
+                filtered_targets.push_back(target);
+            }
+            targets = std::move(filtered_targets);
         }
     }
     for (auto& t : targets) {
@@ -783,6 +1157,334 @@ void ChatService::send_system_notice(Session& s, const std::string& text) {
     s.async_send(game_proto::MSG_CHAT_BROADCAST, body, 0);
 }
 
+bool ChatService::maybe_handle_chat_hook_plugin(Session& s,
+                                                const std::string& room,
+                                                const std::string& sender,
+                                                std::string& text) {
+    if (!hook_plugin_) {
+        return false;
+    }
+
+    auto out = hook_plugin_->chain.on_chat_send(s.session_id(), room, sender, text);
+    for (const auto& notice : out.notices) {
+        if (!notice.empty()) {
+            send_system_notice(s, notice);
+        }
+    }
+    return out.stop_default;
+}
+
+void ChatService::admin_disconnect_users(const std::vector<std::string>& users, const std::string& reason) {
+    if (users.empty()) {
+        return;
+    }
+
+    std::vector<std::string> targets;
+    targets.reserve(users.size());
+    for (const auto& user : users) {
+        if (!user.empty()) {
+            targets.push_back(user);
+        }
+    }
+    if (targets.empty()) {
+        return;
+    }
+
+    const std::string notice = reason;
+    if (!job_queue_.TryPush([this, targets = std::move(targets), notice]() {
+        std::vector<std::shared_ptr<Session>> sessions;
+        std::unordered_set<Session*> seen;
+
+        {
+            std::lock_guard<std::mutex> lk(state_.mu);
+            for (const auto& user : targets) {
+                auto itset = state_.by_user.find(user);
+                if (itset == state_.by_user.end()) {
+                    continue;
+                }
+
+                for (auto wit = itset->second.begin(); wit != itset->second.end();) {
+                    if (auto session = wit->lock()) {
+                        if (!state_.authed.count(session.get()) || state_.guest.count(session.get())) {
+                            ++wit;
+                            continue;
+                        }
+                        if (seen.insert(session.get()).second) {
+                            sessions.push_back(std::move(session));
+                        }
+                        ++wit;
+                    } else {
+                        wit = itset->second.erase(wit);
+                    }
+                }
+            }
+        }
+
+        for (auto& session : sessions) {
+            if (!notice.empty()) {
+                send_system_notice(*session, notice);
+            }
+            session->stop();
+        }
+
+        corelog::info("admin disconnect applied: requested=" + std::to_string(targets.size()) +
+                      " disconnected=" + std::to_string(sessions.size()));
+    })) {
+        corelog::warn("admin disconnect dropped: job queue full");
+    }
+}
+
+void ChatService::admin_broadcast_notice(const std::string& text) {
+    if (text.empty()) {
+        return;
+    }
+
+    const std::string notice = text;
+    if (!job_queue_.TryPush([this, notice]() {
+        std::vector<std::shared_ptr<Session>> sessions;
+        std::unordered_set<Session*> seen;
+
+        {
+            std::lock_guard<std::mutex> lk(state_.mu);
+            for (auto& [_, room_set] : state_.rooms) {
+                for (auto wit = room_set.begin(); wit != room_set.end();) {
+                    if (auto session = wit->lock()) {
+                        if (!state_.authed.count(session.get()) || state_.guest.count(session.get())) {
+                            ++wit;
+                            continue;
+                        }
+                        if (seen.insert(session.get()).second) {
+                            sessions.push_back(std::move(session));
+                        }
+                        ++wit;
+                    } else {
+                        wit = room_set.erase(wit);
+                    }
+                }
+            }
+        }
+
+        for (auto& session : sessions) {
+            send_system_notice(*session, notice);
+        }
+
+        corelog::info("admin announcement delivered: sessions=" + std::to_string(sessions.size()));
+    })) {
+        corelog::warn("admin announcement dropped: job queue full");
+    }
+}
+
+void ChatService::admin_apply_runtime_setting(const std::string& key, const std::string& value) {
+    if (key.empty() || value.empty()) {
+        return;
+    }
+
+    if (!job_queue_.TryPush([this, key, value]() {
+        auto trim_ascii_local = [](std::string_view input) {
+            std::size_t begin = 0;
+            while (begin < input.size() && std::isspace(static_cast<unsigned char>(input[begin])) != 0) {
+                ++begin;
+            }
+            std::size_t end = input.size();
+            while (end > begin && std::isspace(static_cast<unsigned char>(input[end - 1])) != 0) {
+                --end;
+            }
+            return std::string(input.substr(begin, end - begin));
+        };
+
+        auto to_lower_ascii_local = [](std::string_view input) {
+            std::string out(input);
+            std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            return out;
+        };
+
+        auto parse_u32 = [](std::string_view raw) -> std::optional<std::uint32_t> {
+            if (raw.empty()) {
+                return std::nullopt;
+            }
+            try {
+                std::size_t pos = 0;
+                const auto parsed = std::stoull(std::string(raw), &pos, 10);
+                if (pos != raw.size() || parsed > std::numeric_limits<std::uint32_t>::max()) {
+                    return std::nullopt;
+                }
+                return static_cast<std::uint32_t>(parsed);
+            } catch (...) {
+                return std::nullopt;
+            }
+        };
+
+        const std::string normalized_key = to_lower_ascii_local(trim_ascii_local(key));
+        const std::string normalized_value = trim_ascii_local(value);
+        const auto parsed = parse_u32(normalized_value);
+        if (!parsed) {
+            corelog::warn("admin setting rejected: key=" + normalized_key + " reason=invalid_value");
+            return;
+        }
+
+        const auto* setting_rule = server::config::find_runtime_setting_rule(normalized_key);
+        if (setting_rule == nullptr) {
+            corelog::warn("admin setting rejected: key=" + normalized_key + " reason=unsupported_key");
+            return;
+        }
+
+        std::uint32_t min_allowed = setting_rule->min_value;
+        if (setting_rule->key_id == server::config::RuntimeSettingKey::kRoomRecentMaxlen) {
+            min_allowed = std::max(min_allowed, static_cast<std::uint32_t>(history_.recent_limit));
+        }
+
+        if (*parsed < min_allowed || *parsed > setting_rule->max_value) {
+            corelog::warn("admin setting rejected: key=" + std::string(setting_rule->key_name) + " reason=out_of_range");
+            return;
+        }
+
+        switch (setting_rule->key_id) {
+        case server::config::RuntimeSettingKey::kPresenceTtlSec:
+            presence_.ttl = *parsed;
+            break;
+        case server::config::RuntimeSettingKey::kRecentHistoryLimit:
+            history_.recent_limit = static_cast<std::size_t>(*parsed);
+            if (history_.max_list_len < history_.recent_limit) {
+                history_.max_list_len = history_.recent_limit;
+            }
+            break;
+        case server::config::RuntimeSettingKey::kRoomRecentMaxlen:
+            history_.max_list_len = static_cast<std::size_t>(*parsed);
+            break;
+        }
+
+        corelog::info("admin setting applied: key=" + std::string(setting_rule->key_name) +
+                      " value=" + std::to_string(*parsed));
+    })) {
+        corelog::warn("admin setting dropped: job queue full");
+    }
+}
+
+void ChatService::admin_apply_user_moderation(const std::string& op,
+                                              const std::vector<std::string>& users,
+                                              std::uint32_t duration_sec,
+                                              const std::string& reason) {
+    if (op.empty() || users.empty()) {
+        return;
+    }
+
+    const auto trim_ascii_local = [](std::string_view input) {
+        std::size_t begin = 0;
+        while (begin < input.size() && std::isspace(static_cast<unsigned char>(input[begin])) != 0) {
+            ++begin;
+        }
+        std::size_t end = input.size();
+        while (end > begin && std::isspace(static_cast<unsigned char>(input[end - 1])) != 0) {
+            --end;
+        }
+        return std::string(input.substr(begin, end - begin));
+    };
+
+    const auto to_lower_ascii_local = [](std::string_view input) {
+        std::string out(input);
+        std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return out;
+    };
+
+    std::vector<std::string> targets;
+    targets.reserve(users.size());
+    for (const auto& user : users) {
+        const std::string trimmed = trim_ascii_local(user);
+        if (!trimmed.empty()) {
+            targets.push_back(trimmed);
+        }
+    }
+    if (targets.empty()) {
+        return;
+    }
+
+    std::string normalized_op = to_lower_ascii_local(trim_ascii_local(op));
+    std::string normalized_reason = trim_ascii_local(reason);
+
+    if (!job_queue_.TryPush([this,
+                             normalized_op = std::move(normalized_op),
+                             targets = std::move(targets),
+                             duration_sec,
+                             normalized_reason = std::move(normalized_reason)]() {
+        const auto now = std::chrono::steady_clock::now();
+        std::vector<std::shared_ptr<Session>> affected_sessions;
+        std::unordered_set<Session*> seen;
+
+        auto add_user_sessions = [&](const std::string& user) {
+            auto itset = state_.by_user.find(user);
+            if (itset == state_.by_user.end()) {
+                return;
+            }
+            for (auto wit = itset->second.begin(); wit != itset->second.end();) {
+                if (auto session = wit->lock()) {
+                    if (seen.insert(session.get()).second) {
+                        affected_sessions.push_back(std::move(session));
+                    }
+                    ++wit;
+                } else {
+                    wit = itset->second.erase(wit);
+                }
+            }
+        };
+
+        {
+            std::lock_guard<std::mutex> lk(state_.mu);
+            for (const auto& user : targets) {
+                if (normalized_op == "mute") {
+                    const std::uint32_t seconds = duration_sec > 0 ? duration_sec : spam_mute_sec_;
+                    const std::string applied_reason = normalized_reason.empty() ? "muted by administrator" : normalized_reason;
+                    state_.muted_users[user] = {now + std::chrono::seconds(seconds), applied_reason};
+                } else if (normalized_op == "unmute") {
+                    state_.muted_users.erase(user);
+                } else if (normalized_op == "ban") {
+                    const std::uint32_t seconds = duration_sec > 0 ? duration_sec : spam_ban_sec_;
+                    const auto expires_at = now + std::chrono::seconds(seconds);
+                    const std::string applied_reason = normalized_reason.empty() ? "banned by administrator" : normalized_reason;
+                    state_.banned_users[user] = {expires_at, applied_reason};
+
+                    if (auto ip_it = state_.user_last_ip.find(user); ip_it != state_.user_last_ip.end() && !ip_it->second.empty()) {
+                        state_.banned_ips[ip_it->second] = expires_at;
+                    }
+                    if (auto hwid_it = state_.user_last_hwid_hash.find(user); hwid_it != state_.user_last_hwid_hash.end() && !hwid_it->second.empty()) {
+                        state_.banned_hwid_hashes[hwid_it->second] = expires_at;
+                    }
+                    add_user_sessions(user);
+                } else if (normalized_op == "unban") {
+                    state_.banned_users.erase(user);
+                    if (auto ip_it = state_.user_last_ip.find(user); ip_it != state_.user_last_ip.end() && !ip_it->second.empty()) {
+                        state_.banned_ips.erase(ip_it->second);
+                    }
+                    if (auto hwid_it = state_.user_last_hwid_hash.find(user); hwid_it != state_.user_last_hwid_hash.end() && !hwid_it->second.empty()) {
+                        state_.banned_hwid_hashes.erase(hwid_it->second);
+                    }
+                } else if (normalized_op == "kick") {
+                    add_user_sessions(user);
+                }
+            }
+        }
+
+        if (normalized_op == "ban" || normalized_op == "kick") {
+            const std::string notice = normalized_reason.empty()
+                ? (normalized_op == "ban" ? "temporarily banned" : "disconnected by administrator")
+                : normalized_reason;
+            for (auto& session : affected_sessions) {
+                send_system_notice(*session, notice);
+                session->stop();
+            }
+        }
+
+        corelog::info("admin moderation applied: op=" + normalized_op +
+                      " requested=" + std::to_string(targets.size()) +
+                      " sessions=" + std::to_string(affected_sessions.size()));
+    })) {
+        corelog::warn("admin moderation dropped: job queue full");
+    }
+}
+
 // 귓속말 전송 결과를 클라이언트에게 알립니다.
 void ChatService::send_whisper_result(Session& s, bool ok, const std::string& reason) {
     server::wire::v1::WhisperResult pb;
@@ -794,6 +1496,65 @@ void ChatService::send_whisper_result(Session& s, bool ok, const std::string& re
     pb.SerializeToString(&bytes);
     std::vector<std::uint8_t> body(bytes.begin(), bytes.end());
     s.async_send(game_proto::MSG_WHISPER_RES, body, 0);
+}
+
+void ChatService::deliver_remote_whisper(const std::vector<std::uint8_t>& body) {
+    if (body.empty()) {
+        return;
+    }
+
+    server::wire::v1::WhisperNotice notice;
+    if (!notice.ParseFromArray(body.data(), static_cast<int>(body.size()))) {
+        corelog::warn("[whisper] failed to parse remote payload");
+        return;
+    }
+
+    if (notice.sender().empty() || notice.recipient().empty() || notice.text().empty()) {
+        corelog::warn("[whisper] invalid remote payload fields");
+        return;
+    }
+
+    std::vector<std::shared_ptr<Session>> targets;
+    {
+        std::lock_guard<std::mutex> lk(state_.mu);
+        if (auto blk_it = state_.user_blacklists.find(notice.recipient());
+            blk_it != state_.user_blacklists.end() && blk_it->second.count(notice.sender()) > 0) {
+            return;
+        }
+        auto itset = state_.by_user.find(notice.recipient());
+        if (itset != state_.by_user.end()) {
+            for (auto wit = itset->second.begin(); wit != itset->second.end(); ) {
+                if (auto p = wit->lock()) {
+                    if (!state_.authed.count(p.get()) || state_.guest.count(p.get())) {
+                        ++wit;
+                        continue;
+                    }
+                    targets.emplace_back(std::move(p));
+                    ++wit;
+                } else {
+                    wit = itset->second.erase(wit);
+                }
+            }
+        }
+    }
+
+    if (targets.empty()) {
+        return;
+    }
+
+    notice.set_outgoing(false);
+    std::string incoming_bytes;
+    if (!notice.SerializeToString(&incoming_bytes)) {
+        return;
+    }
+    std::vector<std::uint8_t> incoming(incoming_bytes.begin(), incoming_bytes.end());
+    for (auto& target : targets) {
+        target->async_send(game_proto::MSG_WHISPER_BROADCAST, incoming, 0);
+    }
+
+    corelog::debug("[whisper] sender=" + notice.sender() +
+                   " target=" + notice.recipient() +
+                   " status=remote_delivered count=" + std::to_string(targets.size()));
 }
 
 // 귓속말(1:1 채팅)을 처리합니다.
@@ -832,14 +1593,30 @@ void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const st
     if (target_user == sender) {
         send_system_notice(*session_sp, "cannot whisper to yourself");
         send_whisper_result(*session_sp, false, "cannot whisper to yourself");
-        corelog::info("[whisper] sender=" + sender + " target=" + target_user + " status=self_target");
+        corelog::debug("[whisper] sender=" + sender + " target=" + target_user + " status=self_target");
         return;
     }
 
     std::vector<std::shared_ptr<Session>> targets;
     bool ineligible_found = false;
+    bool blocked_by_sender = false;
+    bool blocked_by_target = false;
     {
         std::lock_guard<std::mutex> lk(state_.mu);
+        if (auto sender_blk_it = state_.user_blacklists.find(sender);
+            sender_blk_it != state_.user_blacklists.end() && sender_blk_it->second.count(target_user) > 0) {
+            blocked_by_sender = true;
+        }
+        if (auto target_blk_it = state_.user_blacklists.find(target_user);
+            target_blk_it != state_.user_blacklists.end() && target_blk_it->second.count(sender) > 0) {
+            blocked_by_target = true;
+        }
+
+        if (blocked_by_sender || blocked_by_target) {
+            // behave similar to offline/hidden target for privacy
+            ineligible_found = true;
+        }
+
         auto itset = state_.by_user.find(target_user);
         if (itset != state_.by_user.end()) {
             for (auto wit = itset->second.begin(); wit != itset->second.end(); ) {
@@ -849,6 +1626,11 @@ void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const st
                         continue;
                     }
                     if (!state_.authed.count(p.get()) || state_.guest.count(p.get())) {
+                        ineligible_found = true;
+                        ++wit;
+                        continue;
+                    }
+                    if (blocked_by_sender || blocked_by_target) {
                         ineligible_found = true;
                         ++wit;
                         continue;
@@ -865,16 +1647,15 @@ void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const st
     }
 
     if (targets.empty() && ineligible_found) {
+        if (blocked_by_sender) {
+            send_system_notice(*session_sp, "whisper denied: unblock target first");
+            send_whisper_result(*session_sp, false, "recipient blocked by sender");
+            corelog::debug("[whisper] sender=" + sender + " target=" + target_user + " status=blocked_by_sender");
+            return;
+        }
         send_system_notice(*session_sp, "user cannot receive whispers (login required): " + target_user);
         send_whisper_result(*session_sp, false, "recipient not eligible");
-        corelog::info("[whisper] sender=" + sender + " target=" + target_user + " status=recipient_guest");
-        return;
-    }
-
-    if (targets.empty()) {
-        send_system_notice(*session_sp, "user not found: " + target_user);
-        send_whisper_result(*session_sp, false, "user not found");
-        corelog::info("[whisper] sender=" + sender + " target=" + target_user + " status=not_found");
+        corelog::debug("[whisper] sender=" + sender + " target=" + target_user + " status=recipient_guest_or_blocked");
         return;
     }
 
@@ -887,6 +1668,45 @@ void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const st
     notice.set_text(text);
     notice.set_ts_ms(static_cast<std::uint64_t>(now64));
 
+    const auto send_outgoing = [&]() {
+        notice.set_outgoing(true);
+        std::string outgoing_bytes;
+        notice.SerializeToString(&outgoing_bytes);
+        std::vector<std::uint8_t> outgoing(outgoing_bytes.begin(), outgoing_bytes.end());
+        session_sp->async_send(game_proto::MSG_WHISPER_BROADCAST, outgoing, 0);
+    };
+
+    if (targets.empty()) {
+        bool routed_remote = false;
+        if (redis_ && pubsub_enabled()) {
+            try {
+                notice.set_outgoing(false);
+                std::string incoming_bytes;
+                if (notice.SerializeToString(&incoming_bytes)) {
+                    std::string message;
+                    message.reserve(3 + gateway_id_.size() + 1 + incoming_bytes.size());
+                    message.append("gw=").append(gateway_id_);
+                    message.push_back('\n');
+                    message.append(incoming_bytes);
+                    const std::string channel = presence_.prefix + std::string("fanout:whisper");
+                    routed_remote = redis_->publish(channel, std::move(message));
+                }
+            } catch (...) {}
+        }
+
+        if (!routed_remote) {
+            send_system_notice(*session_sp, "user not found: " + target_user);
+            send_whisper_result(*session_sp, false, "user not found");
+            corelog::debug("[whisper] sender=" + sender + " target=" + target_user + " status=not_found");
+            return;
+        }
+
+        send_outgoing();
+        send_whisper_result(*session_sp, true, "");
+        corelog::debug("[whisper] sender=" + sender + " target=" + target_user + " status=remote_routed");
+        return;
+    }
+
     notice.set_outgoing(false);
     std::string incoming_bytes;
     notice.SerializeToString(&incoming_bytes);
@@ -895,22 +1715,46 @@ void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const st
         target->async_send(game_proto::MSG_WHISPER_BROADCAST, incoming, 0);
     }
 
-    notice.set_outgoing(true);
-    std::string outgoing_bytes;
-    notice.SerializeToString(&outgoing_bytes);
-    std::vector<std::uint8_t> outgoing(outgoing_bytes.begin(), outgoing_bytes.end());
-    session_sp->async_send(game_proto::MSG_WHISPER_BROADCAST, outgoing, 0);
+    send_outgoing();
 
     send_whisper_result(*session_sp, true, "");
 }
 
-// 방 비밀번호 해싱 (간단한 std::hash 사용, 실제 서비스에선 더 강력한 해시 권장)
+// 방 비밀번호 해싱 (versioned format)
 std::string ChatService::hash_room_password(const std::string& password) {
-    std::hash<std::string> hasher;
-    std::size_t value = hasher(password);
-    std::ostringstream oss;
-    oss << std::hex << value;
-    return oss.str();
+    std::string digest = sha256_hex(password);
+    if (digest.empty()) {
+        return {};
+    }
+    return std::string(kRoomPasswordHashPrefix) + digest;
+}
+
+std::string ChatService::hash_hwid_token(std::string_view token) const {
+    if (token.empty()) {
+        return {};
+    }
+    std::string digest = sha256_hex(token);
+    if (digest.empty()) {
+        return {};
+    }
+    return std::string("hwid:") + digest;
+}
+
+bool ChatService::verify_room_password(const std::string& password, const std::string& stored_hash) {
+    if (stored_hash.empty()) {
+        return false;
+    }
+
+    if (has_room_password_hash_prefix(stored_hash)) {
+        return hash_room_password(password) == stored_hash;
+    }
+
+    // Backward compatibility for legacy hashes.
+    return legacy_hash_room_password(password) == stored_hash;
+}
+
+bool ChatService::is_modern_room_password_hash(const std::string& stored_hash) const {
+    return has_room_password_hash_prefix(stored_hash);
 }
 
 // 방 이름으로 Room ID(UUID)를 조회하거나 생성합니다. (Case-Insensitive)
@@ -987,8 +1831,10 @@ bool ChatService::load_recent_messages_from_cache(
     if (ids.empty()) {
         return false;
     }
-    std::vector<server::wire::v1::StateSnapshot::SnapshotMessage> parsed;
-    parsed.reserve(ids.size());
+
+    std::vector<std::uint64_t> valid_ids;
+    valid_ids.reserve(ids.size());
+
     bool partial_hit = false;
     for (const auto& id_str : ids) {
         char* endptr = nullptr;
@@ -998,18 +1844,58 @@ bool ChatService::load_recent_messages_from_cache(
             corelog::warn("recent history cache miss: invalid id entry=" + id_str);
             continue;
         }
-        auto payload = redis_->get(make_recent_message_key(value));
-        if (!payload) {
-            partial_hit = true;
-            continue;
+        valid_ids.emplace_back(value);
+    }
+
+    if (valid_ids.empty()) {
+        return false;
+    }
+
+    std::vector<server::wire::v1::StateSnapshot::SnapshotMessage> parsed;
+    parsed.reserve(valid_ids.size());
+
+    bool batch_loaded = false;
+    {
+        std::vector<std::string> keys;
+        keys.reserve(valid_ids.size());
+        for (const auto id : valid_ids) {
+            keys.emplace_back(make_recent_message_key(id));
         }
-        server::wire::v1::StateSnapshot::SnapshotMessage message;
-        if (!message.ParseFromString(*payload)) {
-            partial_hit = true;
-            corelog::warn("recent history cache miss: corrupted payload");
-            continue;
+
+        std::vector<std::optional<std::string>> payloads;
+        if (redis_->mget(keys, payloads) && payloads.size() == keys.size()) {
+            batch_loaded = true;
+            for (std::size_t i = 0; i < payloads.size(); ++i) {
+                if (!payloads[i].has_value()) {
+                    partial_hit = true;
+                    continue;
+                }
+                server::wire::v1::StateSnapshot::SnapshotMessage message;
+                if (!message.ParseFromString(*payloads[i])) {
+                    partial_hit = true;
+                    corelog::warn("recent history cache miss: corrupted payload");
+                    continue;
+                }
+                parsed.emplace_back(std::move(message));
+            }
         }
-        parsed.emplace_back(std::move(message));
+    }
+
+    if (!batch_loaded) {
+        for (const auto id : valid_ids) {
+            auto payload = redis_->get(make_recent_message_key(id));
+            if (!payload) {
+                partial_hit = true;
+                continue;
+            }
+            server::wire::v1::StateSnapshot::SnapshotMessage message;
+            if (!message.ParseFromString(*payload)) {
+                partial_hit = true;
+                corelog::warn("recent history cache miss: corrupted payload");
+                continue;
+            }
+            parsed.emplace_back(std::move(message));
+        }
     }
     if (parsed.empty()) {
         return false;

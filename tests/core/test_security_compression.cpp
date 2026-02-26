@@ -4,6 +4,9 @@
 #include <string>
 #include <vector>
 
+/**
+ * @brief 암복호화(AES-GCM)와 압축(LZ4) 왕복 무결성 동작을 검증합니다.
+ */
 using namespace server::core::security;
 using namespace server::core::compression;
 

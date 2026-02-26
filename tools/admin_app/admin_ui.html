@@ -1,0 +1,1979 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Knights Admin Console</title>
+  <style>
+    :root {
+      --bg-0: #0a1118;
+      --bg-1: #132230;
+      --panel: #101b26e8;
+      --ink: #e4edf4;
+      --muted: #8da2b2;
+      --ok: #34be7a;
+      --warn: #f0b357;
+      --err: #e16a6a;
+      --line: #273848;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 700px at 0% -20%, #3f2b22 0%, transparent 65%),
+        radial-gradient(900px 600px at 120% 0%, #193643 0%, transparent 62%),
+        linear-gradient(135deg, var(--bg-0), var(--bg-1));
+      font-family: "Avenir Next", "Segoe UI Variable", "Trebuchet MS", sans-serif;
+      min-height: 100vh;
+    }
+    .page {
+      width: min(1200px, calc(100vw - 24px));
+      margin: 12px auto 24px;
+      display: grid;
+      gap: 12px;
+    }
+    .hero {
+      border: 1px solid #3a5364;
+      background: linear-gradient(145deg, #163546f2, #1d4f68f0);
+      color: #f5fafc;
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 12px 28px #00000055;
+    }
+    .hero h1 {
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: 0.3px;
+    }
+    .hero p {
+      margin: 6px 0 0;
+      color: #c8dce6;
+      font-size: 13px;
+    }
+    .hero-note {
+      margin: 8px 0 0;
+      font-size: 12px;
+      color: #c8dce6;
+    }
+    .hero-note.ok { color: #d8ffeb; }
+    .hero-note.warn { color: #ffe9ca; }
+    .hero-note.err { color: #ffe1e1; }
+    .hero-row {
+      margin-top: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .row-left, .row-right {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .hero-tools {
+      align-items: flex-start;
+      gap: 10px;
+    }
+    .section-nav {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+    .nav-btn {
+      border: 1px solid #5f7b8f;
+      background: #0f243199;
+      color: #d6e6ef;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 11px;
+      letter-spacing: 0.2px;
+      cursor: pointer;
+    }
+    .nav-btn:hover {
+      background: #18384a;
+    }
+    .quick-jump {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin: 0;
+      padding: 0;
+    }
+    .quick-select {
+      border: 1px solid #5f7b8f;
+      background: #0f2431cc;
+      color: #d6e6ef;
+      border-radius: 10px;
+      padding: 7px 9px;
+      font-size: 12px;
+    }
+    .quick-input {
+      min-width: 210px;
+      border: 1px solid #5f7b8f;
+      border-radius: 10px;
+      padding: 7px 10px;
+      font-size: 12px;
+      color: #e8f3f9;
+      background: #0f2431cc;
+    }
+    .quick-input::placeholder {
+      color: #93adbc;
+    }
+    .quick-go {
+      border-color: #ffffff77;
+      background: #ffffff24;
+    }
+    .btn {
+      border: 1px solid #557185;
+      background: #132836;
+      color: #e9f4f9;
+      border-radius: 10px;
+      padding: 7px 11px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .btn:hover { background: #ffffff33; }
+    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+    .chip {
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      border: 1px solid transparent;
+      text-transform: uppercase;
+      background: #132836;
+      color: #d6e6ef;
+    }
+    .chip.ok { border-color: #7ad8af8f; color: #dbffe9; }
+    .chip.warn { border-color: #f8cb8a9a; color: #fff0db; }
+    .chip.err { border-color: #f5a7a7a3; color: #ffe7e7; }
+    .panel {
+      border: 1px solid #2c3e4e;
+      border-radius: 14px;
+      background: var(--panel);
+      box-shadow: 0 8px 18px #00000044;
+      overflow: hidden;
+    }
+    .panel-head {
+      border-bottom: 1px solid var(--line);
+      padding: 11px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      background: linear-gradient(180deg, #132434, #101b26);
+    }
+    .panel-head h2 {
+      margin: 0;
+      font-size: 14px;
+      letter-spacing: 0.2px;
+    }
+    .panel-body { padding: 12px 14px 14px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 12px;
+    }
+    .col-12 { grid-column: span 12; }
+    .col-8 { grid-column: span 8; }
+    .col-6 { grid-column: span 6; }
+    .col-4 { grid-column: span 4; }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 10px;
+    }
+    .kpi {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px;
+      background: #0f1a24;
+    }
+    .kpi .label {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    .kpi .value {
+      margin-top: 4px;
+      font-size: 24px;
+      font-weight: 700;
+      color: #d9e9f4;
+    }
+    .status-list {
+      display: grid;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .trend-grid {
+      margin-top: 8px;
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    }
+    .trend-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #0f1a24;
+      padding: 8px 9px;
+      display: grid;
+      gap: 4px;
+    }
+    .trend-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+    }
+    .trend-label {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    .trend-total {
+      font-size: 15px;
+      font-weight: 700;
+      color: #d9e9f4;
+    }
+    .trend-delta {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
+    .trend-delta.up { color: var(--err); }
+    .trend-delta.flat { color: #3f545e; }
+    .trend-delta.down { color: var(--ok); }
+    .sparkline {
+      width: 100%;
+      height: 36px;
+      display: block;
+    }
+    .sparkline path {
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .sparkline .grid {
+      stroke: #274155;
+      stroke-width: 1;
+    }
+    .trend-foot {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .trend-meta {
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 2px;
+    }
+    .status-item {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #0f1a24;
+      padding: 8px 9px;
+      font-size: 12px;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+    }
+    .pill {
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border: 1px solid var(--line);
+      color: #b8cbda;
+      background: #122231;
+    }
+    .pill.ok { border-color: #2f7b56; color: var(--ok); background: #11281d; }
+    .pill.err { border-color: #7f3a3a; color: var(--err); background: #2a1212; }
+    .pill.warn { border-color: #8e6b38; color: var(--warn); background: #2b2112; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      padding: 8px 6px;
+      vertical-align: top;
+    }
+    th {
+      color: #9ab0bf;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.35px;
+      font-size: 11px;
+    }
+    tr:hover td { background: #162939; }
+    tr.selected td { background: #1b3244; }
+    .table-link {
+      border: none;
+      background: transparent;
+      color: #7bc2e2;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      cursor: pointer;
+      padding: 0;
+      font: inherit;
+      text-align: left;
+    }
+    .table-link:hover { color: #95d4ef; }
+    .mono {
+      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-size: 11px;
+      color: #a9c0cd;
+    }
+    .muted { color: var(--muted); font-size: 12px; }
+    .error-box {
+      border: 1px solid #7d3f3f;
+      border-radius: 10px;
+      background: #2b1717;
+      color: #f2b9b9;
+      padding: 9px 10px;
+      font-size: 12px;
+      margin-top: 8px;
+    }
+    .session-form {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .input {
+      flex: 1;
+      min-width: 210px;
+      border: 1px solid #3d5669;
+      border-radius: 10px;
+      background: #0f1c27;
+      padding: 8px 10px;
+      font-size: 13px;
+      color: #e2edf4;
+    }
+    .action {
+      border: 1px solid #3e6d82;
+      border-radius: 10px;
+      padding: 8px 12px;
+      background: linear-gradient(180deg, #1f536a, #173f53);
+      color: #f7fdff;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .action:hover { filter: brightness(1.04); }
+    .instances-toolbar {
+      margin-top: 8px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .input.input-compact {
+      min-width: 220px;
+      max-width: 360px;
+      flex: 0 1 340px;
+    }
+    .panel-anchor {
+      scroll-margin-top: 16px;
+    }
+    .links {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+    .link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #365266;
+      border-radius: 10px;
+      padding: 7px 10px;
+      color: #a8d2e8;
+      background: #122432;
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .detail-grid {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      margin-top: 8px;
+    }
+    .detail-item {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #0f1a24;
+      padding: 8px 9px;
+    }
+    .detail-item .k {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    .detail-item .v {
+      margin-top: 3px;
+      font-size: 12px;
+      color: #d6e6ef;
+      word-break: break-word;
+    }
+    .toolbar {
+      margin-top: 8px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .action-grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      margin-top: 8px;
+    }
+    .action-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #0f1a24;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+    }
+    .textarea {
+      min-height: 88px;
+      resize: vertical;
+      border: 1px solid #3d5669;
+      border-radius: 10px;
+      background: #0f1c27;
+      color: #e2edf4;
+      padding: 8px 10px;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    .check {
+      width: 14px;
+      height: 14px;
+      accent-color: #4caad7;
+    }
+    .danger {
+      border-color: #844242;
+      background: linear-gradient(180deg, #6a2929, #4f2020);
+    }
+    .ghost {
+      border-color: #4b6373;
+      background: #122432;
+      color: #d6e6ef;
+    }
+    .footer {
+      color: #56666d;
+      font-size: 11px;
+      text-align: right;
+      padding: 2px 4px;
+    }
+    @media (max-width: 980px) {
+      .col-8, .col-6, .col-4 { grid-column: span 12; }
+      .hero-row { justify-content: flex-start; }
+      .trend-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .quick-jump { width: 100%; }
+      .section-nav { width: 100%; }
+      .quick-input { min-width: 160px; }
+      .instances-toolbar { justify-content: flex-start; }
+    }
+    @media (max-width: 620px) {
+      .trend-grid { grid-template-columns: 1fr; }
+      .nav-btn { flex: 1 1 calc(50% - 6px); text-align: center; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <h1>Knights Admin Console</h1>
+      <p>Control plane for cluster status, user operations, and write-behind observability.</p>
+      <div class="hero-row">
+        <div class="row-left">
+          <button id="refresh-now" type="button" class="btn">Refresh now</button>
+          <label class="chip" title="auto refresh toggle"><input id="auto-refresh" type="checkbox" checked /> Auto refresh</label>
+          <label class="chip">Interval
+            <select id="refresh-interval" style="margin-left:4px;border:none;background:transparent;color:inherit;">
+              <option value="3000">3s</option>
+              <option value="5000" selected>5s</option>
+              <option value="10000">10s</option>
+              <option value="30000">30s</option>
+            </select>
+          </label>
+        </div>
+        <div class="row-right">
+          <span id="auth-chip" class="chip warn">Auth unknown</span>
+          <span id="overall-chip" class="chip warn">Loading</span>
+          <span id="last-updated" class="chip">never</span>
+        </div>
+      </div>
+      <div class="hero-row hero-tools">
+        <form id="quick-jump-form" class="quick-jump" aria-label="Quick jump form">
+          <select id="quick-jump-kind" class="quick-select" aria-label="Quick jump target kind">
+            <option value="auto" selected>Auto</option>
+            <option value="instance">Instance</option>
+            <option value="session">Session</option>
+          </select>
+          <input id="quick-jump-input" class="quick-input" type="text" placeholder="Quick jump: instance_id or client_id" autocomplete="off" />
+          <button type="submit" class="btn quick-go">Jump</button>
+        </form>
+        <nav class="section-nav" aria-label="Admin sections">
+          <button type="button" class="nav-btn" data-nav-target="section-overview">Overview</button>
+          <button type="button" class="nav-btn" data-nav-target="section-worker">Write-behind</button>
+          <button type="button" class="nav-btn" data-nav-target="section-instances">Instances</button>
+          <button type="button" class="nav-btn" data-nav-target="section-users">Users</button>
+          <button type="button" class="nav-btn" data-nav-target="section-session">Session</button>
+          <button type="button" class="nav-btn" data-nav-target="section-actions">Actions</button>
+          <button type="button" class="nav-btn" data-nav-target="section-links">Links</button>
+        </nav>
+      </div>
+      <p id="auth-hint" class="hero-note warn">Checking access context...</p>
+    </section>
+
+    <section class="grid">
+      <article id="section-overview" class="panel col-8 panel-anchor">
+        <div class="panel-head">
+          <h2>Cluster Overview</h2>
+          <span id="mode-pill" class="pill">mode: unknown</span>
+        </div>
+        <div class="panel-body">
+          <div class="cards" id="overview-cards"></div>
+          <div class="status-list" id="service-status"></div>
+          <div id="audit-trend" class="trend-grid"><div class="muted">Audit trend data is warming up...</div></div>
+          <div id="overview-error"></div>
+        </div>
+      </article>
+
+      <article id="section-worker" class="panel col-4 panel-anchor">
+        <div class="panel-head"><h2>Write-behind</h2><span id="worker-chip" class="pill">unknown</span></div>
+        <div class="panel-body">
+          <div class="cards" id="worker-cards"></div>
+          <div id="worker-error"></div>
+        </div>
+      </article>
+
+      <article id="section-instances" class="panel col-12 panel-anchor">
+        <div class="panel-head">
+          <h2>Instances</h2>
+          <div class="row-right">
+            <label class="chip">Sort
+              <select id="instances-sort" style="margin-left:4px;border:none;background:transparent;color:inherit;">
+                <option value="load" selected>Load order</option>
+                <option value="active_desc">Active desc</option>
+                <option value="active_asc">Active asc</option>
+                <option value="heartbeat_desc">Heartbeat desc</option>
+                <option value="heartbeat_asc">Heartbeat asc</option>
+              </select>
+            </label>
+            <label class="chip">Limit
+              <select id="instances-limit" style="margin-left:4px;border:none;background:transparent;color:inherit;">
+                <option value="20">20</option>
+                <option value="50">50</option>
+                <option value="100" selected>100</option>
+                <option value="200">200</option>
+              </select>
+            </label>
+            <button id="instances-next" type="button" class="btn" disabled>Next</button>
+            <button id="instances-reset" type="button" class="btn">Reset</button>
+            <span id="instances-page" class="chip">page 1</span>
+            <span id="instances-chip" class="pill">unknown</span>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="muted">Source: <span class="mono">gateway/instances/*</span></div>
+          <div class="instances-toolbar">
+            <input id="instances-filter" class="input input-compact" type="text" placeholder="Filter by instance id, host, role" autocomplete="off" />
+            <span id="instances-summary" class="muted">showing 0 items</span>
+          </div>
+          <div style="overflow-x:auto;margin-top:8px;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Instance</th>
+                  <th>Role</th>
+                  <th>Address</th>
+                  <th>Ready</th>
+                  <th>Active Sessions</th>
+                  <th>Heartbeat (ms)</th>
+                  <th>Registry Key</th>
+                </tr>
+              </thead>
+              <tbody id="instances-body"></tbody>
+            </table>
+          </div>
+          <div id="instance-detail" style="margin-top:10px;" class="muted">Select an instance to see detail.</div>
+          <div id="instances-error"></div>
+        </div>
+      </article>
+
+      <article id="section-users" class="panel col-12 panel-anchor">
+        <div class="panel-head">
+          <h2>Connected Users</h2>
+          <div class="row-right">
+            <label class="chip">Limit
+              <select id="users-limit" style="margin-left:4px;border:none;background:transparent;color:inherit;">
+                <option value="50">50</option>
+                <option value="100" selected>100</option>
+                <option value="200">200</option>
+              </select>
+            </label>
+            <button id="users-next" type="button" class="btn" disabled>Next</button>
+            <button id="users-reset" type="button" class="btn">Reset</button>
+            <span id="users-page" class="chip">page 1</span>
+            <span id="users-chip" class="pill">unknown</span>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="muted">Source: <span class="mono">room:users:* + gateway/session/*</span></div>
+          <div class="toolbar">
+            <div class="row-left">
+              <input id="users-filter" class="input input-compact" type="text" placeholder="Filter by client, room, backend" autocomplete="off" />
+              <button id="users-refresh" type="button" class="btn">Refresh users</button>
+              <span id="users-summary" class="muted">showing 0 users</span>
+            </div>
+            <div class="row-right">
+              <input id="disconnect-reason" class="input input-compact" type="text" placeholder="Disconnect reason (optional)" autocomplete="off" />
+              <button id="disconnect-selected" type="button" class="action danger" disabled>Disconnect Selected</button>
+            </div>
+          </div>
+          <div style="overflow-x:auto;margin-top:8px;">
+            <table>
+              <thead>
+                <tr>
+                  <th><input id="users-select-all" class="check" type="checkbox" /></th>
+                  <th>Client</th>
+                  <th>Room</th>
+                  <th>Backend</th>
+                  <th>Ready</th>
+                  <th>Session Key</th>
+                </tr>
+              </thead>
+              <tbody id="users-body"></tbody>
+            </table>
+          </div>
+          <div id="users-error"></div>
+        </div>
+      </article>
+
+      <article id="section-session" class="panel col-6 panel-anchor">
+        <div class="panel-head"><h2>Session Lookup</h2><span class="pill">sticky routing</span></div>
+        <div class="panel-body">
+          <form id="session-form" class="session-form">
+            <input id="session-input" class="input" type="text" placeholder="client_id (e.g. user-42)" required />
+            <button type="submit" class="action">Lookup</button>
+          </form>
+          <div id="session-result" style="margin-top:10px;"></div>
+        </div>
+      </article>
+
+      <article id="section-actions" class="panel col-12 panel-anchor">
+        <div class="panel-head"><h2>Operator Actions</h2><span id="actions-chip" class="pill warn">viewer mode</span></div>
+        <div class="panel-body">
+          <div class="action-grid">
+            <section class="action-card">
+              <h3 style="margin:0;font-size:13px;">Global Announcement</h3>
+              <textarea id="announce-text" class="textarea" placeholder="Notice text (max 512 bytes)"></textarea>
+              <div class="row-left">
+                <label class="chip">Priority
+                  <select id="announce-priority" style="margin-left:4px;border:none;background:transparent;color:inherit;">
+                    <option value="info" selected>info</option>
+                    <option value="warn">warn</option>
+                    <option value="critical">critical</option>
+                  </select>
+                </label>
+                <button id="announce-send" type="button" class="action">Send Announcement</button>
+              </div>
+            </section>
+
+            <section class="action-card">
+              <h3 style="margin:0;font-size:13px;">Runtime Setting Change</h3>
+              <label class="muted" for="setting-key">Setting key</label>
+              <select id="setting-key" class="input">
+                <option value="presence_ttl_sec">presence_ttl_sec (5..3600)</option>
+                <option value="recent_history_limit">recent_history_limit (5..2000)</option>
+                <option value="room_recent_maxlen">room_recent_maxlen (5..5000)</option>
+              </select>
+              <label class="muted" for="setting-value">Value</label>
+              <input id="setting-value" class="input" type="number" min="5" max="5000" step="1" value="30" />
+              <button id="setting-apply" type="button" class="action">Apply Runtime Setting</button>
+            </section>
+
+            <section class="action-card">
+              <h3 style="margin:0;font-size:13px;">Global Moderation (Admin)</h3>
+              <input id="mod-targets" class="input" type="text" placeholder="client_id or comma-separated client_ids" />
+              <input id="mod-duration" class="input" type="number" min="0" step="1" value="0" />
+              <input id="mod-reason" class="input" type="text" placeholder="Reason (optional)" autocomplete="off" />
+              <div class="row-left" style="gap:6px;flex-wrap:wrap;">
+                <button id="mod-mute" type="button" class="action">Mute</button>
+                <button id="mod-unmute" type="button" class="action">Unmute</button>
+                <button id="mod-ban" type="button" class="action danger">Ban</button>
+                <button id="mod-unban" type="button" class="action">Unban</button>
+                <button id="mod-kick" type="button" class="action danger">Kick</button>
+              </div>
+            </section>
+          </div>
+          <div id="actions-error" style="margin-top:8px;"></div>
+        </div>
+      </article>
+
+      <article id="section-links" class="panel col-6 panel-anchor">
+        <div class="panel-head"><h2>Metrics Links</h2><span class="pill">jump</span></div>
+        <div class="panel-body">
+          <div class="links" id="metrics-links"></div>
+          <div id="links-error"></div>
+        </div>
+      </article>
+    </section>
+
+    <div class="footer" id="footer-meta">ready</div>
+  </main>
+
+  <script>
+    const dom = {
+      refreshNow: document.getElementById('refresh-now'),
+      autoRefresh: document.getElementById('auto-refresh'),
+      refreshInterval: document.getElementById('refresh-interval'),
+      quickJumpForm: document.getElementById('quick-jump-form'),
+      quickJumpKind: document.getElementById('quick-jump-kind'),
+      quickJumpInput: document.getElementById('quick-jump-input'),
+      navButtons: document.querySelectorAll('[data-nav-target]'),
+      overallChip: document.getElementById('overall-chip'),
+      authChip: document.getElementById('auth-chip'),
+      authHint: document.getElementById('auth-hint'),
+      lastUpdated: document.getElementById('last-updated'),
+      modePill: document.getElementById('mode-pill'),
+      overviewCards: document.getElementById('overview-cards'),
+      serviceStatus: document.getElementById('service-status'),
+      auditTrend: document.getElementById('audit-trend'),
+      overviewError: document.getElementById('overview-error'),
+      workerCards: document.getElementById('worker-cards'),
+      workerChip: document.getElementById('worker-chip'),
+      workerError: document.getElementById('worker-error'),
+      instancesBody: document.getElementById('instances-body'),
+      instanceDetail: document.getElementById('instance-detail'),
+      instancesSort: document.getElementById('instances-sort'),
+      instancesFilter: document.getElementById('instances-filter'),
+      instancesSummary: document.getElementById('instances-summary'),
+      instancesLimit: document.getElementById('instances-limit'),
+      instancesNext: document.getElementById('instances-next'),
+      instancesReset: document.getElementById('instances-reset'),
+      instancesPage: document.getElementById('instances-page'),
+      instancesChip: document.getElementById('instances-chip'),
+      instancesError: document.getElementById('instances-error'),
+      usersLimit: document.getElementById('users-limit'),
+      usersNext: document.getElementById('users-next'),
+      usersReset: document.getElementById('users-reset'),
+      usersPage: document.getElementById('users-page'),
+      usersChip: document.getElementById('users-chip'),
+      usersFilter: document.getElementById('users-filter'),
+      usersRefresh: document.getElementById('users-refresh'),
+      usersSummary: document.getElementById('users-summary'),
+      usersBody: document.getElementById('users-body'),
+      usersError: document.getElementById('users-error'),
+      usersSelectAll: document.getElementById('users-select-all'),
+      disconnectReason: document.getElementById('disconnect-reason'),
+      disconnectSelected: document.getElementById('disconnect-selected'),
+      sessionForm: document.getElementById('session-form'),
+      sessionInput: document.getElementById('session-input'),
+      sessionResult: document.getElementById('session-result'),
+      actionsChip: document.getElementById('actions-chip'),
+      actionsError: document.getElementById('actions-error'),
+      announceText: document.getElementById('announce-text'),
+      announcePriority: document.getElementById('announce-priority'),
+      announceSend: document.getElementById('announce-send'),
+      settingKey: document.getElementById('setting-key'),
+      settingValue: document.getElementById('setting-value'),
+      settingApply: document.getElementById('setting-apply'),
+      modTargets: document.getElementById('mod-targets'),
+      modDuration: document.getElementById('mod-duration'),
+      modReason: document.getElementById('mod-reason'),
+      modMute: document.getElementById('mod-mute'),
+      modUnmute: document.getElementById('mod-unmute'),
+      modBan: document.getElementById('mod-ban'),
+      modUnban: document.getElementById('mod-unban'),
+      modKick: document.getElementById('mod-kick'),
+      metricsLinks: document.getElementById('metrics-links'),
+      linksError: document.getElementById('links-error'),
+      footerMeta: document.getElementById('footer-meta')
+    };
+
+    const state = {
+      timer: null,
+      refreshMs: 5000,
+      inFlight: false,
+      authMode: 'unknown',
+      authRole: 'viewer',
+      selectedInstanceId: null,
+      instancesItems: [],
+      instancesById: {},
+      instancesLimit: 100,
+      instancesCursor: null,
+      instancesNextCursor: null,
+      instancesPage: 1,
+      instancesTotal: null,
+      instancesSort: 'load',
+      instancesFilter: '',
+      usersItems: [],
+      usersLimit: 100,
+      usersCursor: null,
+      usersNextCursor: null,
+      usersPage: 1,
+      usersTotal: null,
+      usersFilter: '',
+      selectedUsers: new Set(),
+    };
+
+    function setChip(node, text, kind) {
+      node.textContent = text;
+      const base = node.className.includes('pill') ? 'pill ' : 'chip ';
+      node.className = base + (kind || 'warn');
+    }
+
+    function scrollToSection(sectionId) {
+      const node = document.getElementById(sectionId);
+      if (!node) {
+        return;
+      }
+      node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function asError(text) {
+      return '<div class="error-box">' + text + '</div>';
+    }
+
+    function detailsText(details) {
+      if (!details || typeof details !== 'object') {
+        return '';
+      }
+      const pairs = Object.entries(details).map(([k, v]) => k + '=' + String(v));
+      return pairs.join(', ');
+    }
+
+    function fmtTime(ms) {
+      if (!ms) return 'n/a';
+      const d = new Date(ms);
+      return d.toISOString().replace('T', ' ').replace('Z', ' UTC');
+    }
+
+    function fmtNum(v) {
+      return Number(v || 0).toLocaleString();
+    }
+
+    function safeText(v) {
+      if (v === undefined || v === null) {
+        return '';
+      }
+      return String(v)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function readInt(v, fallback) {
+      const n = Number(v);
+      if (!Number.isFinite(n) || n <= 0) {
+        return fallback;
+      }
+      return Math.floor(n);
+    }
+
+    function toNum(v) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) {
+        return 0;
+      }
+      return n;
+    }
+
+    function sum(values) {
+      if (!Array.isArray(values)) {
+        return 0;
+      }
+      return values.reduce((acc, cur) => acc + toNum(cur), 0);
+    }
+
+    function sparklinePath(values, width, height, padding) {
+      if (!Array.isArray(values) || values.length === 0) {
+        return '';
+      }
+      const points = values.map((v) => Math.max(0, toNum(v)));
+      const max = Math.max(...points, 1);
+      const min = Math.min(...points, 0);
+      const range = Math.max(1, max - min);
+
+      if (points.length === 1) {
+        const y = height - padding - (((points[0] - min) / range) * (height - (padding * 2)));
+        return `M ${padding} ${y} L ${width - padding} ${y}`;
+      }
+
+      let d = '';
+      for (let i = 0; i < points.length; i += 1) {
+        const x = padding + ((width - (padding * 2)) * (i / (points.length - 1)));
+        const y = height - padding - (((points[i] - min) / range) * (height - (padding * 2)));
+        d += (i === 0 ? 'M ' : ' L ') + x + ' ' + y;
+      }
+      return d;
+    }
+
+    function sparklineSvg(values, toneClass) {
+      const width = 150;
+      const height = 36;
+      const padding = 2;
+      const path = sparklinePath(values, width, height, padding);
+      if (!path) {
+        return '<span class="muted">n/a</span>';
+      }
+
+      let stroke = '#3f545e';
+      if (toneClass === 'err') {
+        stroke = '#b62f2f';
+      } else if (toneClass === 'warn') {
+        stroke = '#b06b1c';
+      } else if (toneClass === 'ok') {
+        stroke = '#1f8454';
+      }
+
+      return '<svg class="sparkline" viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none" role="img" aria-label="trend">' +
+        '<path class="grid" d="M 0 ' + (height - 1) + ' L ' + width + ' ' + (height - 1) + '"></path>' +
+        '<path style="stroke:' + stroke + ';" d="' + path + '"></path>' +
+        '</svg>';
+    }
+
+    function toStepSeries(points, key) {
+      if (!Array.isArray(points) || points.length === 0) {
+        return [];
+      }
+      const out = [];
+      for (let i = 0; i < points.length; i += 1) {
+        const current = toNum(points[i] && points[i][key]);
+        const prev = i > 0 ? toNum(points[i - 1] && points[i - 1][key]) : current;
+        out.push(Math.max(0, current - prev));
+      }
+      return out;
+    }
+
+    function renderAuditTrend(data) {
+      const counts = data && data.counts ? data.counts : {};
+      const trend = data && data.audit_trend ? data.audit_trend : {};
+      const points = Array.isArray(trend.points) ? trend.points : [];
+      const stepMs = readInt(trend.step_ms, state.refreshMs);
+      const windowPoints = Math.min(points.length, 120);
+      const windowSlice = points.slice(-windowPoints);
+
+      if (windowSlice.length === 0) {
+        dom.auditTrend.innerHTML = '<div class="muted">Audit trend data is warming up...</div>';
+        return;
+      }
+
+      const spanMs = Math.max(0, (windowSlice.length - 1) * stepMs);
+      const spanLabel = spanMs >= 60000
+        ? ('last ' + Math.max(1, Math.round(spanMs / 60000)) + 'm')
+        : ('last ' + Math.max(1, Math.round(spanMs / 1000)) + 's');
+      const sampleCount = windowSlice.length;
+
+      const specs = [
+        ['http_errors_total', 'Total Errors', 'err'],
+        ['http_server_errors_total', '5xx Errors', 'err'],
+        ['http_unauthorized_total', '401 Unauthorized', 'warn'],
+        ['http_forbidden_total', '403 Forbidden', 'warn'],
+      ];
+
+      dom.auditTrend.innerHTML = specs.map((spec) => {
+        const key = spec[0];
+        const label = spec[1];
+        const tone = spec[2];
+        const currentTotal = toNum(counts[key]);
+        const steps = toStepSeries(windowSlice, key);
+        const windowDelta = sum(steps);
+        const peak = steps.length > 0 ? Math.max(...steps) : 0;
+        const deltaClass = windowDelta > 0 ? 'up' : 'flat';
+        const deltaLabel = windowDelta > 0
+          ? ('+' + fmtNum(windowDelta) + ' in ' + spanLabel)
+          : ('steady in ' + spanLabel);
+
+        return '<div class="trend-card">' +
+          '<div class="trend-head"><span class="trend-label">' + label + '</span><span class="trend-total">' + fmtNum(currentTotal) + '</span></div>' +
+          sparklineSvg(steps, tone) +
+          '<div class="trend-foot">' +
+            '<span class="trend-delta ' + deltaClass + '">' + deltaLabel + '</span>' +
+            '<span class="mono">peak ' + fmtNum(peak) + '/tick</span>' +
+          '</div>' +
+          '<div class="trend-meta">' + fmtNum(sampleCount) + ' samples, ' + Math.max(1, Math.round(stepMs / 1000)) + 's step</div>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+    }
+
+    function isOperatorRole() {
+      return state.authRole === 'operator' || state.authRole === 'admin';
+    }
+
+    function isAdminRole() {
+      return state.authRole === 'admin';
+    }
+
+    function updateAccessUi() {
+      const canWrite = isOperatorRole();
+      const canSettings = isAdminRole();
+
+      if (canSettings) {
+        setChip(dom.actionsChip, 'admin write enabled', 'ok');
+      } else if (canWrite) {
+        setChip(dom.actionsChip, 'operator write enabled', 'warn');
+      } else {
+        setChip(dom.actionsChip, 'viewer mode', 'warn');
+      }
+
+      dom.announceSend.disabled = !canWrite;
+      dom.disconnectSelected.disabled = !canSettings || state.selectedUsers.size === 0;
+      dom.settingApply.disabled = !canSettings;
+      dom.settingKey.disabled = !canSettings;
+      dom.settingValue.disabled = !canSettings;
+      dom.modTargets.disabled = !canSettings;
+      dom.modDuration.disabled = !canSettings;
+      dom.modReason.disabled = !canSettings;
+      dom.modMute.disabled = !canSettings;
+      dom.modUnmute.disabled = !canSettings;
+      dom.modBan.disabled = !canSettings;
+      dom.modUnban.disabled = !canSettings;
+      dom.modKick.disabled = !canSettings;
+    }
+
+    function updateDisconnectButtonState() {
+      dom.disconnectSelected.disabled = !isAdminRole() || state.selectedUsers.size === 0;
+    }
+
+    async function apiRequest(method, path) {
+      try {
+        const res = await fetch(path, {
+          method,
+          headers: { 'Accept': 'application/json' }
+        });
+        let payload = null;
+        try {
+          payload = await res.json();
+        } catch (_) {
+          payload = null;
+        }
+        if (res.ok) {
+          return {
+            ok: true,
+            data: payload && payload.data ? payload.data : null,
+            meta: payload ? payload.meta : null,
+          };
+        }
+        const err = payload && payload.error ? payload.error : {};
+        return {
+          ok: false,
+          status: res.status,
+          code: err.code || 'HTTP_ERROR',
+          message: err.message || ('HTTP ' + res.status),
+          details: err.details || null,
+        };
+      } catch (e) {
+        return {
+          ok: false,
+          status: 0,
+          code: 'NETWORK_ERROR',
+          message: e && e.message ? e.message : 'network error',
+          details: null,
+        };
+      }
+    }
+
+    async function apiGet(path) {
+      return apiRequest('GET', path);
+    }
+
+    function applyAuthError(source, res) {
+      if (!res || (res.status !== 401 && res.status !== 403)) {
+        return false;
+      }
+      const detail = detailsText(res.details);
+      const reason = res.status === 403
+        ? 'Access denied for the current role.'
+        : 'Authentication is required.';
+      const suffix = detail ? (' Details: ' + detail + '.') : '';
+      state.authRole = 'viewer';
+      setChip(dom.authChip, res.status === 403 ? 'Forbidden' : 'Unauthorized', 'err');
+      dom.authHint.textContent = source + ': ' + reason + suffix + ' Configure trusted proxy headers or bearer token.';
+      dom.authHint.className = 'hero-note err';
+      updateAccessUi();
+      return true;
+    }
+
+    async function refreshAuthContext() {
+      const res = await apiGet('/api/v1/auth/context');
+      if (!res.ok) {
+        state.authRole = 'viewer';
+        if (!applyAuthError('Auth context', res)) {
+          setChip(dom.authChip, 'Auth unknown', 'warn');
+          dom.authHint.textContent = 'Unable to resolve access context: ' + res.code + ' - ' + res.message;
+          dom.authHint.className = 'hero-note warn';
+        }
+        updateAccessUi();
+        return false;
+      }
+
+      const data = res.data || {};
+      const actor = data.actor || 'anonymous';
+      const role = data.role || 'viewer';
+      const mode = data.mode || 'unknown';
+      state.authMode = mode;
+      state.authRole = role;
+
+      const userHeader = data.headers && data.headers.user ? data.headers.user : 'x-admin-user';
+      const roleHeader = data.headers && data.headers.role ? data.headers.role : 'x-admin-role';
+
+      const chipKind = mode === 'off' ? 'warn' : 'ok';
+      setChip(dom.authChip, role + ' @ ' + actor, chipKind);
+
+      if (mode === 'off') {
+        dom.authHint.textContent = 'Auth mode: off (internal network only).';
+        dom.authHint.className = 'hero-note warn';
+      } else {
+        dom.authHint.textContent = 'Auth mode: ' + mode + ' (headers: ' + userHeader + ', ' + roleHeader + ').';
+        dom.authHint.className = 'hero-note ok';
+      }
+      updateAccessUi();
+      return true;
+    }
+
+    function renderOverview(data) {
+      const counts = (data && data.counts) || {};
+      const services = (data && data.services) || {};
+      const updatedAt = (data && data.updated_at) || {};
+      const cards = [
+        ['Instances Total', fmtNum(counts.instances_total)],
+        ['Instances Ready', fmtNum(counts.instances_ready)],
+        ['Instances Not Ready', fmtNum(counts.instances_not_ready)],
+        ['HTTP Errors', fmtNum(counts.http_errors_total)],
+        ['HTTP 5xx', fmtNum(counts.http_server_errors_total)],
+        ['401 Unauthorized', fmtNum(counts.http_unauthorized_total)],
+        ['403 Forbidden', fmtNum(counts.http_forbidden_total)],
+        ['Redis Available', services.redis && services.redis.available ? 'yes' : 'no'],
+      ];
+      dom.overviewCards.innerHTML = cards
+        .map((c) => '<div class="kpi"><div class="label">' + c[0] + '</div><div class="value">' + c[1] + '</div></div>')
+        .join('');
+
+      const redisOk = services.redis && services.redis.available;
+      const workerOk = services.wb_metrics && services.wb_metrics.available;
+      dom.serviceStatus.innerHTML =
+        '<div class="status-item"><span>Redis Dependency</span><span class="pill ' + (redisOk ? 'ok' : 'err') + '">' + (redisOk ? 'available' : 'degraded') + '</span></div>' +
+        '<div class="status-item"><span>WB Metrics Dependency</span><span class="pill ' + (workerOk ? 'ok' : 'warn') + '">' + (workerOk ? 'available' : 'degraded') + '</span></div>' +
+        '<div class="status-item"><span>Instances Snapshot</span><span class="mono">' + fmtTime(updatedAt.instances_ms) + '</span></div>' +
+        '<div class="status-item"><span>Worker Snapshot</span><span class="mono">' + fmtTime(updatedAt.worker_ms) + '</span></div>';
+
+      const mode = data && data.mode ? data.mode : 'unknown';
+      setChip(dom.modePill, 'mode: ' + mode, mode === 'control_plane' ? 'ok' : 'warn');
+
+      const ok = !!(data && data.healthy && data.ready);
+      setChip(dom.overallChip, ok ? 'Healthy' : 'Degraded', ok ? 'ok' : 'warn');
+      renderAuditTrend(data);
+      dom.overviewError.innerHTML = '';
+    }
+
+    function renderInstances(items) {
+      state.instancesItems = Array.isArray(items) ? items.slice() : [];
+      state.instancesById = {};
+
+      if (dom.instancesSummary) {
+        dom.instancesSummary.textContent = 'showing 0 of 0';
+      }
+
+      if (!Array.isArray(items)) {
+        dom.instancesBody.innerHTML = '<tr><td colspan="7" class="muted">No instance data</td></tr>';
+        if (!state.selectedInstanceId) {
+          dom.instanceDetail.textContent = 'Select an instance to see detail.';
+        }
+        return;
+      }
+      if (items.length === 0) {
+        dom.instancesBody.innerHTML = '<tr><td colspan="7" class="muted">No instances currently registered</td></tr>';
+        if (!state.selectedInstanceId) {
+          dom.instanceDetail.textContent = 'No registered instance available.';
+        }
+        return;
+      }
+
+      for (const item of state.instancesItems) {
+        if (item && item.instance_id) {
+          state.instancesById[item.instance_id] = item;
+        }
+      }
+
+      let viewItems = state.instancesItems.slice();
+
+      const filterText = (state.instancesFilter || '').trim().toLowerCase();
+      if (filterText) {
+        viewItems = viewItems.filter((it) => {
+          const haystack = [
+            it && it.instance_id ? String(it.instance_id) : '',
+            it && it.host ? String(it.host) : '',
+            it && it.role ? String(it.role) : '',
+            it && it.source && it.source.registry_key ? String(it.source.registry_key) : '',
+          ].join(' ').toLowerCase();
+          return haystack.includes(filterText);
+        });
+      }
+
+      switch (state.instancesSort) {
+        case 'active_desc':
+          viewItems.sort((a, b) => toNum(b && b.active_sessions) - toNum(a && a.active_sessions));
+          break;
+        case 'active_asc':
+          viewItems.sort((a, b) => toNum(a && a.active_sessions) - toNum(b && b.active_sessions));
+          break;
+        case 'heartbeat_desc':
+          viewItems.sort((a, b) => toNum(b && b.last_heartbeat_ms) - toNum(a && a.last_heartbeat_ms));
+          break;
+        case 'heartbeat_asc':
+          viewItems.sort((a, b) => toNum(a && a.last_heartbeat_ms) - toNum(b && b.last_heartbeat_ms));
+          break;
+        default:
+          break;
+      }
+
+      const readyShown = viewItems.reduce((acc, it) => acc + (it && it.ready ? 1 : 0), 0);
+      if (dom.instancesSummary) {
+        dom.instancesSummary.textContent =
+          'showing ' + fmtNum(viewItems.length) +
+          ' of ' + fmtNum(state.instancesItems.length) +
+          ' | ready ' + fmtNum(readyShown);
+      }
+
+      if (viewItems.length === 0) {
+        const emptyMessage = filterText
+          ? 'No instances match the current filter'
+          : 'No instances currently registered';
+        dom.instancesBody.innerHTML =
+          '<tr><td colspan="7" class="muted">' + safeText(emptyMessage) + '</td></tr>';
+        if (!state.selectedInstanceId) {
+          dom.instanceDetail.textContent = filterText
+            ? 'No filtered instance available. Adjust filter or clear it.'
+            : 'No registered instance available.';
+        }
+        return;
+      }
+
+      dom.instancesBody.innerHTML = viewItems.map((it) => {
+        const ready = !!it.ready;
+        const id = it.instance_id || '';
+        const selected = state.selectedInstanceId && state.selectedInstanceId === id;
+        const instanceCell = id
+          ? '<button type="button" class="table-link" data-instance-id="' + safeText(id) + '">' + safeText(id) + '</button>'
+          : '-';
+        return '<tr class="' + (selected ? 'selected' : '') + '">' +
+          '<td class="mono">' + instanceCell + '</td>' +
+          '<td>' + safeText(it.role || '-') + '</td>' +
+          '<td class="mono">' + safeText(it.host || '-') + ':' + safeText(it.port || 0) + '</td>' +
+          '<td><span class="pill ' + (ready ? 'ok' : 'err') + '">' + (ready ? 'ready' : 'not-ready') + '</span></td>' +
+          '<td>' + fmtNum(it.active_sessions) + '</td>' +
+          '<td class="mono">' + fmtNum(it.last_heartbeat_ms) + '</td>' +
+          '<td class="mono">' + safeText((it.source && it.source.registry_key) || '-') + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    function updateInstancesPaging(paging) {
+      const limit = readInt(paging && paging.limit, state.instancesLimit);
+      state.instancesLimit = limit;
+      if (String(dom.instancesLimit.value) !== String(limit)) {
+        dom.instancesLimit.value = String(limit);
+      }
+
+      const cursor = paging && paging.cursor !== null && paging.cursor !== undefined
+        ? String(paging.cursor)
+        : null;
+      state.instancesCursor = cursor;
+      state.instancesNextCursor = paging && paging.next_cursor !== null && paging.next_cursor !== undefined
+        ? String(paging.next_cursor)
+        : null;
+      state.instancesTotal = readInt(paging && paging.total, 0);
+
+      let pageNo = 1;
+      if (cursor !== null) {
+        const offset = Number(cursor);
+        if (Number.isFinite(offset) && offset >= 0 && limit > 0) {
+          pageNo = Math.floor(offset / limit) + 1;
+        }
+      }
+      state.instancesPage = pageNo;
+
+      const totalText = state.instancesTotal > 0 ? (' / total ' + fmtNum(state.instancesTotal)) : '';
+      dom.instancesPage.textContent = 'page ' + pageNo + totalText;
+      dom.instancesNext.disabled = !state.instancesNextCursor;
+    }
+
+    function renderInstanceDetail(data) {
+      const ready = !!data.ready;
+      const metricsUrl = data.metrics_url || '';
+      const metricsLink = metricsUrl
+        ? '<a class="link" href="' + safeText(metricsUrl) + '" target="_blank" rel="noreferrer">Open metrics</a>'
+        : '<span class="muted">n/a</span>';
+
+      dom.instanceDetail.innerHTML =
+        '<div class="panel-head" style="margin:-1px -1px 0;border:1px solid var(--line);border-radius:10px 10px 0 0;background:#f8fcfd;"><h2>Instance Detail</h2><span class="pill ' + (ready ? 'ok' : 'err') + '">' + (ready ? 'ready' : 'not-ready') + '</span></div>' +
+        '<div class="detail-grid">' +
+          '<div class="detail-item"><div class="k">Instance</div><div class="v mono">' + safeText(data.instance_id || '-') + '</div></div>' +
+          '<div class="detail-item"><div class="k">Address</div><div class="v mono">' + safeText(data.host || '-') + ':' + safeText(data.port || 0) + '</div></div>' +
+          '<div class="detail-item"><div class="k">Role</div><div class="v">' + safeText(data.role || '-') + '</div></div>' +
+          '<div class="detail-item"><div class="k">Active Sessions</div><div class="v">' + fmtNum(data.active_sessions) + '</div></div>' +
+          '<div class="detail-item"><div class="k">Ready Reason</div><div class="v">' + safeText(data.ready_reason || '-') + '</div></div>' +
+          '<div class="detail-item"><div class="k">Last Heartbeat</div><div class="v mono">' + fmtNum(data.last_heartbeat_ms) + '</div></div>' +
+          '<div class="detail-item"><div class="k">Registry Key</div><div class="v mono">' + safeText((data.source && data.source.registry_key) || '-') + '</div></div>' +
+          '<div class="detail-item"><div class="k">Metrics URL</div><div class="v">' + metricsLink + '</div></div>' +
+        '</div>';
+    }
+
+    async function loadInstanceDetail(instanceId) {
+      if (!instanceId) {
+        return false;
+      }
+
+      const res = await apiGet('/api/v1/instances/' + encodeURIComponent(instanceId));
+      if (!res.ok) {
+        applyAuthError('Instance detail', res);
+        dom.instanceDetail.innerHTML = asError('Instance detail: ' + res.code + ' - ' + res.message);
+        return false;
+      }
+
+      const data = res.data || {};
+      state.selectedInstanceId = data.instance_id || instanceId;
+      renderInstanceDetail(data);
+
+      const items = Array.isArray(state.instancesItems) ? state.instancesItems : [];
+      if (items.length > 0) {
+        renderInstances(items);
+      }
+      return true;
+    }
+
+    function renderUsers(items) {
+      state.usersItems = Array.isArray(items) ? items.slice() : [];
+
+      let viewItems = state.usersItems.slice();
+      const filterText = (state.usersFilter || '').trim().toLowerCase();
+      if (filterText) {
+        viewItems = viewItems.filter((it) => {
+          const backend = it && it.backend_instance_id ? String(it.backend_instance_id) : '';
+          const room = it && it.room ? String(it.room) : '';
+          const user = it && it.client_id ? String(it.client_id) : '';
+          return (user + ' ' + room + ' ' + backend).toLowerCase().includes(filterText);
+        });
+      }
+
+      if (dom.usersSummary) {
+        dom.usersSummary.textContent =
+          'showing ' + fmtNum(viewItems.length) +
+          ' of ' + fmtNum(state.usersItems.length) +
+          ' | selected ' + fmtNum(state.selectedUsers.size);
+      }
+
+      if (viewItems.length === 0) {
+        dom.usersBody.innerHTML = '<tr><td colspan="6" class="muted">No connected users found</td></tr>';
+        dom.usersSelectAll.checked = false;
+        updateDisconnectButtonState();
+        return;
+      }
+
+      dom.usersBody.innerHTML = viewItems.map((it) => {
+        const clientId = it && it.client_id ? String(it.client_id) : '';
+        const selected = state.selectedUsers.has(clientId);
+        const backend = it && it.backend ? it.backend : null;
+        const backendId = it && it.backend_instance_id ? String(it.backend_instance_id) : '-';
+        const backendReady = backend && backend.ready;
+        const sourceKey = it && it.source && it.source.session_key ? String(it.source.session_key) : '-';
+        return '<tr>' +
+          '<td><input class="check" type="checkbox" data-user-id="' + safeText(clientId) + '" ' + (selected ? 'checked' : '') + ' /></td>' +
+          '<td class="mono">' + safeText(clientId || '-') + '</td>' +
+          '<td>' + safeText((it && it.room) || '-') + '</td>' +
+          '<td class="mono">' + safeText(backendId) + '</td>' +
+          '<td><span class="pill ' + (backendReady ? 'ok' : 'warn') + '">' + (backendReady ? 'ready' : 'unknown') + '</span></td>' +
+          '<td class="mono">' + safeText(sourceKey) + '</td>' +
+          '</tr>';
+      }).join('');
+
+      const allVisibleSelected = viewItems.every((it) => state.selectedUsers.has(String(it.client_id || '')));
+      dom.usersSelectAll.checked = allVisibleSelected;
+      updateDisconnectButtonState();
+    }
+
+    function updateUsersPaging(paging) {
+      const limit = readInt(paging && paging.limit, state.usersLimit);
+      state.usersLimit = limit;
+      if (String(dom.usersLimit.value) !== String(limit)) {
+        dom.usersLimit.value = String(limit);
+      }
+
+      const cursor = paging && paging.cursor !== null && paging.cursor !== undefined
+        ? String(paging.cursor)
+        : null;
+      state.usersCursor = cursor;
+      state.usersNextCursor = paging && paging.next_cursor !== null && paging.next_cursor !== undefined
+        ? String(paging.next_cursor)
+        : null;
+      state.usersTotal = readInt(paging && paging.total, 0);
+
+      let pageNo = 1;
+      if (cursor !== null) {
+        const offset = Number(cursor);
+        if (Number.isFinite(offset) && offset >= 0 && limit > 0) {
+          pageNo = Math.floor(offset / limit) + 1;
+        }
+      }
+      state.usersPage = pageNo;
+      const totalText = state.usersTotal > 0 ? (' / total ' + fmtNum(state.usersTotal)) : '';
+      dom.usersPage.textContent = 'page ' + pageNo + totalText;
+      dom.usersNext.disabled = !state.usersNextCursor;
+    }
+
+    function setActionsMessage(message, isError) {
+      if (!message) {
+        dom.actionsError.innerHTML = '';
+        return;
+      }
+      if (isError) {
+        dom.actionsError.innerHTML = asError(message);
+      } else {
+        dom.actionsError.innerHTML = '<div class="muted">' + safeText(message) + '</div>';
+      }
+    }
+
+    async function refreshUsers() {
+      let path = '/api/v1/users?limit=' + encodeURIComponent(String(state.usersLimit));
+      if (state.usersCursor) {
+        path += '&cursor=' + encodeURIComponent(state.usersCursor);
+      }
+      const res = await apiGet(path);
+      if (!res.ok) {
+        applyAuthError('Users', res);
+        setChip(dom.usersChip, 'degraded', 'warn');
+        dom.usersError.innerHTML = asError('Users: ' + res.code + ' - ' + res.message);
+        renderUsers([]);
+        dom.usersNext.disabled = true;
+        return false;
+      }
+
+      const data = res.data || {};
+      renderUsers(data.items || []);
+      updateUsersPaging(data.paging || {});
+      setChip(dom.usersChip, 'ok', 'ok');
+      dom.usersError.innerHTML = '';
+      return true;
+    }
+
+    async function disconnectSelectedUsers() {
+      if (!isAdminRole()) {
+        setActionsMessage('Current role cannot disconnect users.', true);
+        return;
+      }
+      const targets = Array.from(state.selectedUsers.values());
+      if (targets.length === 0) {
+        return;
+      }
+
+      const reason = (dom.disconnectReason.value || '').trim();
+      const confirmed = window.confirm('Disconnect ' + targets.length + ' selected user(s)?');
+      if (!confirmed) {
+        return;
+      }
+
+      const params = new URLSearchParams();
+      params.set('client_ids', targets.join(','));
+      if (reason) {
+        params.set('reason', reason);
+      }
+      const res = await apiRequest('POST', '/api/v1/users/disconnect?' + params.toString());
+      if (!res.ok) {
+        applyAuthError('Disconnect', res);
+        setActionsMessage('Disconnect failed: ' + res.code + ' - ' + res.message, true);
+        return;
+      }
+
+      state.selectedUsers.clear();
+      dom.usersSelectAll.checked = false;
+      updateDisconnectButtonState();
+      setActionsMessage('Disconnect command submitted for ' + targets.length + ' user(s).', false);
+      await refreshUsers();
+    }
+
+    async function sendAnnouncement() {
+      if (!isOperatorRole()) {
+        setActionsMessage('Current role cannot send announcements.', true);
+        return;
+      }
+
+      const text = (dom.announceText.value || '').trim();
+      if (!text) {
+        setActionsMessage('Announcement text is required.', true);
+        return;
+      }
+
+      const priority = dom.announcePriority.value || 'info';
+      const params = new URLSearchParams();
+      params.set('text', text);
+      params.set('priority', priority);
+      const res = await apiRequest('POST', '/api/v1/announcements?' + params.toString());
+      if (!res.ok) {
+        applyAuthError('Announcement', res);
+        setActionsMessage('Announcement failed: ' + res.code + ' - ' + res.message, true);
+        return;
+      }
+
+      dom.announceText.value = '';
+      setActionsMessage('Announcement command submitted.', false);
+    }
+
+    async function applyRuntimeSetting() {
+      if (!isAdminRole()) {
+        setActionsMessage('Only admin role can change runtime settings.', true);
+        return;
+      }
+
+      const key = dom.settingKey.value || '';
+      const value = (dom.settingValue.value || '').trim();
+      if (!key || !value) {
+        setActionsMessage('Setting key and value are required.', true);
+        return;
+      }
+
+      const confirmed = window.confirm('Apply runtime setting ' + key + '=' + value + '?');
+      if (!confirmed) {
+        return;
+      }
+
+      const params = new URLSearchParams();
+      params.set('key', key);
+      params.set('value', value);
+      const res = await apiRequest('PATCH', '/api/v1/settings?' + params.toString());
+      if (!res.ok) {
+        applyAuthError('Runtime setting', res);
+        setActionsMessage('Setting update failed: ' + res.code + ' - ' + res.message, true);
+        return;
+      }
+
+      setActionsMessage('Runtime setting command submitted: ' + key + '=' + value, false);
+    }
+
+    async function applyModeration(op) {
+      if (!isAdminRole()) {
+        setActionsMessage('Only admin role can perform moderation.', true);
+        return;
+      }
+
+      const targetsRaw = (dom.modTargets.value || '').trim();
+      if (!targetsRaw) {
+        setActionsMessage('Moderation target is required.', true);
+        return;
+      }
+
+      const params = new URLSearchParams();
+      if (targetsRaw.includes(',')) {
+        params.set('client_ids', targetsRaw);
+      } else {
+        params.set('client_id', targetsRaw);
+      }
+
+      const durationRaw = (dom.modDuration.value || '').trim();
+      if (durationRaw) {
+        params.set('duration_sec', durationRaw);
+      }
+
+      const reason = (dom.modReason.value || '').trim();
+      if (reason) {
+        params.set('reason', reason);
+      }
+
+      const endpoint = '/api/v1/users/' + encodeURIComponent(op);
+      const res = await apiRequest('POST', endpoint + '?' + params.toString());
+      if (!res.ok) {
+        applyAuthError('Moderation', res);
+        setActionsMessage('Moderation failed: ' + res.code + ' - ' + res.message, true);
+        return;
+      }
+
+      setActionsMessage('Moderation command submitted: ' + op, false);
+      await refreshUsers();
+    }
+
+    function renderWorker(data) {
+      const cards = [
+        ['Pending', fmtNum(data.pending)],
+        ['Flush OK', fmtNum(data.flush_ok_total)],
+        ['Flush Fail', fmtNum(data.flush_fail_total)],
+        ['DLQ', fmtNum(data.flush_dlq_total)],
+        ['Ack Fail', fmtNum(data.ack_fail_total)],
+        ['Reclaim Err', fmtNum(data.reclaim_error_total)],
+      ];
+      dom.workerCards.innerHTML = cards
+        .map((c) => '<div class="kpi"><div class="label">' + c[0] + '</div><div class="value">' + c[1] + '</div></div>')
+        .join('');
+      setChip(dom.workerChip, 'available', 'ok');
+      dom.workerError.innerHTML = '';
+    }
+
+    function renderMetricsLinks(data) {
+      const links = [];
+      if (data && data.grafana && data.grafana.base_url) {
+        links.push('<a class="link" href="' + data.grafana.base_url + '" target="_blank" rel="noreferrer">Grafana</a>');
+      }
+      if (data && data.prometheus && data.prometheus.base_url) {
+        links.push('<a class="link" href="' + data.prometheus.base_url + '" target="_blank" rel="noreferrer">Prometheus</a>');
+      }
+      dom.metricsLinks.innerHTML = links.join('');
+      dom.linksError.innerHTML = links.length ? '' : asError('No metrics links are configured.');
+    }
+
+    async function refreshOverview() {
+      const res = await apiGet('/api/v1/overview');
+      if (!res.ok) {
+        dom.overviewError.innerHTML = asError('Overview: ' + res.code + ' - ' + res.message);
+        dom.auditTrend.innerHTML = '<div class="muted">Audit trend unavailable.</div>';
+        applyAuthError('Overview', res);
+        setChip(dom.overallChip, 'Degraded', 'warn');
+        return false;
+      }
+      renderOverview(res.data || {});
+      return true;
+    }
+
+    async function refreshInstances() {
+      let path = '/api/v1/instances?limit=' + encodeURIComponent(String(state.instancesLimit));
+      if (state.instancesCursor) {
+        path += '&cursor=' + encodeURIComponent(state.instancesCursor);
+      }
+      const res = await apiGet(path);
+      if (!res.ok) {
+        applyAuthError('Instances', res);
+        setChip(dom.instancesChip, 'degraded', 'warn');
+        dom.instancesError.innerHTML = asError('Instances: ' + res.code + ' - ' + res.message);
+        renderInstances([]);
+        dom.instancesNext.disabled = true;
+        return false;
+      }
+      const data = res.data || {};
+      renderInstances(data.items || []);
+      updateInstancesPaging(data.paging || {});
+
+      if (state.selectedInstanceId) {
+        await loadInstanceDetail(state.selectedInstanceId);
+      }
+
+      setChip(dom.instancesChip, 'ok', 'ok');
+      dom.instancesError.innerHTML = '';
+      return true;
+    }
+
+    async function refreshWorker() {
+      const res = await apiGet('/api/v1/worker/write-behind');
+      if (!res.ok) {
+        applyAuthError('Worker', res);
+        setChip(dom.workerChip, 'degraded', 'warn');
+        dom.workerError.innerHTML = asError('Worker: ' + res.code + ' - ' + res.message);
+        dom.workerCards.innerHTML = '';
+        return false;
+      }
+      renderWorker(res.data || {});
+      return true;
+    }
+
+    async function refreshLinks() {
+      const res = await apiGet('/api/v1/metrics/links');
+      if (!res.ok) {
+        applyAuthError('Links', res);
+        dom.linksError.innerHTML = asError('Links: ' + res.code + ' - ' + res.message);
+        dom.metricsLinks.innerHTML = '';
+        return false;
+      }
+      renderMetricsLinks(res.data || {});
+      return true;
+    }
+
+    async function lookupSession(clientId) {
+      dom.sessionResult.innerHTML = '<div class="muted">Loading...</div>';
+      const res = await apiGet('/api/v1/sessions/' + encodeURIComponent(clientId));
+      if (!res.ok) {
+        applyAuthError('Session lookup', res);
+        dom.sessionResult.innerHTML = asError('Session lookup: ' + res.code + ' - ' + res.message);
+        return false;
+      }
+      const data = res.data || {};
+      const backend = data.backend || null;
+      const backendText = backend
+        ? ('<div class="status-item"><span>Backend</span><span class="mono">' + backend.instance_id + ' (' + backend.host + ':' + backend.port + ')</span></div>' +
+           '<div class="status-item"><span>Ready</span><span class="pill ' + (backend.ready ? 'ok' : 'err') + '">' + (backend.ready ? 'ready' : 'not-ready') + '</span></div>' +
+           '<div class="status-item"><span>Active Sessions</span><span>' + fmtNum(backend.active_sessions) + '</span></div>')
+        : '<div class="status-item"><span>Backend</span><span class="pill warn">not mapped</span></div>';
+      dom.sessionResult.innerHTML =
+        '<div class="status-list">' +
+          '<div class="status-item"><span>Client</span><span class="mono">' + (data.client_id || '-') + '</span></div>' +
+          '<div class="status-item"><span>Session Key</span><span class="mono">' + ((data.source && data.source.session_key) || '-') + '</span></div>' +
+          backendText +
+        '</div>';
+      return true;
+    }
+
+    async function jumpToInstance(instanceId) {
+      const ok = await loadInstanceDetail(instanceId);
+      if (ok) {
+        scrollToSection('section-instances');
+      }
+      return ok;
+    }
+
+    async function jumpToSession(clientId) {
+      dom.sessionInput.value = clientId;
+      const ok = await lookupSession(clientId);
+      if (ok) {
+        scrollToSection('section-session');
+      }
+      return ok;
+    }
+
+    async function handleQuickJumpSubmit(event) {
+      event.preventDefault();
+      const token = (dom.quickJumpInput.value || '').trim();
+      if (!token) {
+        return;
+      }
+
+      const mode = dom.quickJumpKind.value || 'auto';
+      let ok = false;
+
+      if (mode === 'instance') {
+        ok = await jumpToInstance(token);
+      } else if (mode === 'session') {
+        ok = await jumpToSession(token);
+      } else {
+        const preferInstance = !!state.instancesById[token];
+        if (preferInstance) {
+          ok = await jumpToInstance(token);
+          if (!ok) {
+            ok = await jumpToSession(token);
+          }
+        } else {
+          ok = await jumpToSession(token);
+          if (!ok) {
+            ok = await jumpToInstance(token);
+          }
+        }
+      }
+
+      if (!ok) {
+        dom.footerMeta.textContent = 'Quick jump failed: no matching instance/session for ' + token;
+      }
+    }
+
+    async function refreshAll() {
+      if (state.inFlight) return;
+      state.inFlight = true;
+      const authOk = await refreshAuthContext();
+      const results = await Promise.all([refreshOverview(), refreshInstances(), refreshUsers(), refreshWorker()]);
+      await refreshLinks();
+      const ok = authOk && results[0] && results[1] && results[2] && results[3];
+      setChip(dom.overallChip, ok ? 'Healthy' : 'Degraded', ok ? 'ok' : 'warn');
+      const now = new Date();
+      dom.lastUpdated.textContent = now.toLocaleTimeString();
+      dom.footerMeta.textContent = 'Last refresh: ' + now.toISOString() + ' | auth=' + state.authMode;
+      state.inFlight = false;
+    }
+
+    function restartTimer() {
+      if (state.timer) {
+        clearInterval(state.timer);
+        state.timer = null;
+      }
+      if (dom.autoRefresh.checked) {
+        state.timer = setInterval(refreshAll, state.refreshMs);
+      }
+    }
+
+    dom.refreshNow.addEventListener('click', () => { refreshAll(); });
+    dom.autoRefresh.addEventListener('change', restartTimer);
+    dom.refreshInterval.addEventListener('change', (e) => {
+      const v = Number(e.target.value);
+      state.refreshMs = Number.isFinite(v) && v > 0 ? v : 5000;
+      restartTimer();
+    });
+    dom.quickJumpForm.addEventListener('submit', handleQuickJumpSubmit);
+    for (const navButton of dom.navButtons) {
+      navButton.addEventListener('click', () => {
+        const target = navButton.getAttribute('data-nav-target');
+        if (!target) {
+          return;
+        }
+        scrollToSection(target);
+      });
+    }
+    dom.sessionForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const clientId = (dom.sessionInput.value || '').trim();
+      if (!clientId) {
+        return;
+      }
+      lookupSession(clientId);
+    });
+
+    dom.instancesBody.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-instance-id]');
+      if (!btn) {
+        return;
+      }
+      const instanceId = btn.getAttribute('data-instance-id');
+      if (!instanceId) {
+        return;
+      }
+      loadInstanceDetail(instanceId);
+    });
+
+    dom.instancesLimit.addEventListener('change', () => {
+      state.instancesLimit = readInt(dom.instancesLimit.value, 100);
+      state.instancesCursor = null;
+      state.instancesNextCursor = null;
+      refreshAll();
+    });
+    dom.instancesSort.addEventListener('change', () => {
+      state.instancesSort = dom.instancesSort.value || 'load';
+      renderInstances(state.instancesItems);
+    });
+    dom.instancesFilter.addEventListener('input', () => {
+      state.instancesFilter = (dom.instancesFilter.value || '').trim().toLowerCase();
+      renderInstances(state.instancesItems);
+    });
+
+    dom.instancesNext.addEventListener('click', () => {
+      if (!state.instancesNextCursor) {
+        return;
+      }
+      state.instancesCursor = state.instancesNextCursor;
+      refreshAll();
+    });
+
+    dom.instancesReset.addEventListener('click', () => {
+      state.instancesCursor = null;
+      state.instancesNextCursor = null;
+      refreshAll();
+    });
+
+    dom.usersRefresh.addEventListener('click', () => {
+      refreshUsers();
+    });
+
+    dom.usersLimit.addEventListener('change', () => {
+      state.usersLimit = readInt(dom.usersLimit.value, 100);
+      state.usersCursor = null;
+      state.usersNextCursor = null;
+      refreshUsers();
+    });
+
+    dom.usersFilter.addEventListener('input', () => {
+      state.usersFilter = (dom.usersFilter.value || '').trim().toLowerCase();
+      renderUsers(state.usersItems);
+    });
+
+    dom.usersNext.addEventListener('click', () => {
+      if (!state.usersNextCursor) {
+        return;
+      }
+      state.usersCursor = state.usersNextCursor;
+      refreshUsers();
+    });
+
+    dom.usersReset.addEventListener('click', () => {
+      state.usersCursor = null;
+      state.usersNextCursor = null;
+      refreshUsers();
+    });
+
+    dom.usersSelectAll.addEventListener('change', () => {
+      const checked = !!dom.usersSelectAll.checked;
+      const rows = dom.usersBody.querySelectorAll('[data-user-id]');
+      for (const row of rows) {
+        const clientId = row.getAttribute('data-user-id');
+        if (!clientId) {
+          continue;
+        }
+        if (checked) {
+          state.selectedUsers.add(clientId);
+        } else {
+          state.selectedUsers.delete(clientId);
+        }
+      }
+      renderUsers(state.usersItems);
+    });
+
+    dom.usersBody.addEventListener('change', (e) => {
+      const checkbox = e.target.closest('[data-user-id]');
+      if (!checkbox) {
+        return;
+      }
+      const clientId = checkbox.getAttribute('data-user-id');
+      if (!clientId) {
+        return;
+      }
+      if (checkbox.checked) {
+        state.selectedUsers.add(clientId);
+      } else {
+        state.selectedUsers.delete(clientId);
+      }
+      renderUsers(state.usersItems);
+    });
+
+    dom.disconnectSelected.addEventListener('click', () => {
+      disconnectSelectedUsers();
+    });
+
+    dom.announceSend.addEventListener('click', () => {
+      sendAnnouncement();
+    });
+
+    dom.settingApply.addEventListener('click', () => {
+      applyRuntimeSetting();
+    });
+
+    dom.modMute.addEventListener('click', () => {
+      applyModeration('mute');
+    });
+    dom.modUnmute.addEventListener('click', () => {
+      applyModeration('unmute');
+    });
+    dom.modBan.addEventListener('click', () => {
+      applyModeration('ban');
+    });
+    dom.modUnban.addEventListener('click', () => {
+      applyModeration('unban');
+    });
+    dom.modKick.addEventListener('click', () => {
+      applyModeration('kick');
+    });
+
+    updateAccessUi();
+
+    refreshAll();
+    restartTimer();
+  </script>
+</body>
+</html>

@@ -1,10 +1,9 @@
 #include "server/core/net/session.hpp"
+#include "server/core/net/connection_runtime_state.hpp"
 #include "server/core/net/dispatcher.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/config/options.hpp"
-#include "server/core/state/shared_state.hpp"
 #include "server/core/protocol/protocol_flags.hpp"
-#include "server/core/protocol/system_opcodes.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/memory/memory_pool.hpp"
 #include "server/core/runtime_metrics.hpp"
@@ -14,6 +13,12 @@
 #include <chrono>
 using boost::system::error_code;
 
+/**
+ * @brief Session의 패킷 IO/타임아웃/heartbeat 구현입니다.
+ *
+ * 단일 세션에서 발생한 오류를 해당 연결 안에 격리하고,
+ * strand 기반 직렬화로 read/write 경합을 피하면서 안정적인 상태 전이를 보장합니다.
+ */
 namespace server::core {
 
 // Session은 단일 TCP 연결을 비동기적으로 관리하는 핵심 객체입니다.
@@ -23,7 +28,7 @@ Session::Session(asio::ip::tcp::socket socket,
                  Dispatcher& dispatcher,
                  BufferManager& buffer_manager,
                  std::shared_ptr<const SessionOptions> options,
-                 std::shared_ptr<SharedState> state)
+                 std::shared_ptr<net::ConnectionRuntimeState> state)
     : socket_(std::move(socket))
     , strand_(socket_.get_executor())
     , dispatcher_(dispatcher)
@@ -31,6 +36,7 @@ Session::Session(asio::ip::tcp::socket socket,
     , options_(std::move(options))
     , state_(std::move(state))
     , read_timer_(socket_.get_executor())
+    , write_timer_(socket_.get_executor())
     , heartbeat_timer_(socket_.get_executor()) {
     if (state_) state_->connection_count.fetch_add(1);
     if (state_) session_id_ = state_->next_session_id.fetch_add(1);
@@ -56,24 +62,43 @@ void Session::start() {
 }
 
 void Session::stop() {
-    if (stopped_) return;
-    stopped_ = true;
-    error_code ec;
-    socket_.shutdown(asio::ip::tcp::socket::shutdown_both, ec);
-    socket_.close(ec);
-    read_timer_.cancel();
-    heartbeat_timer_.cancel();
-    if (state_) state_->connection_count.fetch_sub(1);
-    runtime_metrics::record_session_stop();
-    log::info("Session closed: " + std::to_string(reinterpret_cast<std::uintptr_t>(this)));
-    if (on_close_) {
-        try { on_close_(shared_from_this()); } catch (...) {}
+    bool expected = false;
+    if (!stopped_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return;
     }
+
+    auto self = shared_from_this();
+    asio::dispatch(strand_, [this, self]() {
+        if (socket_.is_open()) {
+            try {
+                socket_.shutdown(asio::ip::tcp::socket::shutdown_both);
+            } catch (...) {
+            }
+            try {
+                socket_.close();
+            } catch (...) {
+            }
+        }
+        (void)read_timer_.cancel();
+        (void)write_timer_.cancel();
+        (void)heartbeat_timer_.cancel();
+        if (state_) {
+            state_->connection_count.fetch_sub(1);
+        }
+        runtime_metrics::record_session_stop();
+        log::info("Session closed: " + std::to_string(reinterpret_cast<std::uintptr_t>(this)));
+        if (on_close_) {
+            try {
+                on_close_(self);
+            } catch (...) {
+            }
+        }
+    });
 }
 
 void Session::async_send(BufferManager::PooledBuffer data, size_t packet_size) {
     asio::dispatch(strand_, [self = shared_from_this(), data = std::move(data), packet_size]() mutable {
-        if (self->stopped_) return;
+        if (self->stopped_.load(std::memory_order_acquire)) return;
         if (self->options_ && self->options_->send_queue_max > 0 && self->queued_bytes_ + packet_size > self->options_->send_queue_max) {
             runtime_metrics::record_send_queue_drop();
             log::warn("Send queue limit exceeded; stopping session");
@@ -224,11 +249,13 @@ void Session::do_read_body(std::size_t body_len) {
 
 void Session::do_write() {
     if (send_queue_.empty()) {
+        (void)write_timer_.cancel();
         return;
     }
     auto self = shared_from_this();
     auto& front_pair = send_queue_.front();
     const auto packet_size = front_pair.second;
+    arm_write_timeout();
     asio::async_write(socket_, asio::buffer(front_pair.first.get(), packet_size),
         asio::bind_executor(strand_, [this, self, packet_size](const error_code& ec, std::size_t /*n*/) {
             if (ec) {
@@ -236,6 +263,7 @@ void Session::do_write() {
                 stop();
                 return;
             }
+            (void)write_timer_.cancel();
             if (self->queued_bytes_ >= packet_size) {
                 self->queued_bytes_ -= packet_size;
             } else {
@@ -298,10 +326,10 @@ void Session::arm_read_timeout() {
     auto self = shared_from_this();
     asio::dispatch(strand_, [this, self]() {
         // 읽기 타이머를 초기화한 뒤 다시 설정한다.
-        read_timer_.cancel();
+        (void)read_timer_.cancel();
         read_timer_.expires_after(std::chrono::milliseconds(options_->read_timeout_ms));
         read_timer_.async_wait(asio::bind_executor(strand_, [this, self](const error_code& ec) {
-            if (ec || stopped_) return; // 타이머가 취소되었거나 세션이 종료된 경우 무시한다.
+            if (ec || stopped_.load(std::memory_order_acquire)) return; // 타이머가 취소되었거나 세션이 종료된 경우 무시한다.
             runtime_metrics::record_session_timeout();
             if (options_ && options_->heartbeat_interval_ms > 0) {
                 runtime_metrics::record_heartbeat_timeout();
@@ -312,15 +340,33 @@ void Session::arm_read_timeout() {
     });
 }
 
+void Session::arm_write_timeout() {
+    if (!options_ || options_->write_timeout_ms == 0) {
+        return;
+    }
+
+    auto self = shared_from_this();
+    (void)write_timer_.cancel();
+    write_timer_.expires_after(std::chrono::milliseconds(options_->write_timeout_ms));
+    write_timer_.async_wait(asio::bind_executor(strand_, [this, self](const error_code& ec) {
+        if (ec || stopped_.load(std::memory_order_acquire)) {
+            return;
+        }
+        runtime_metrics::record_session_write_timeout();
+        log::warn("write timeout");
+        stop();
+    }));
+}
+
 void Session::arm_heartbeat() {
     if (!options_ || options_->heartbeat_interval_ms == 0) return;
     auto self = shared_from_this();
     asio::dispatch(strand_, [this, self]() {
         // heartbeat 주기를 유지하기 위해 타이머를 다시 설정한다.
-        heartbeat_timer_.cancel();
+        (void)heartbeat_timer_.cancel();
         heartbeat_timer_.expires_after(std::chrono::milliseconds(options_->heartbeat_interval_ms));
         heartbeat_timer_.async_wait(asio::bind_executor(strand_, [this, self](const error_code& ec) {
-            if (ec || stopped_) return; // 타이머가 취소되었거나 세션이 이미 종료된 경우 무시한다.
+            if (ec || stopped_.load(std::memory_order_acquire)) return; // 타이머가 취소되었거나 세션이 이미 종료된 경우 무시한다.
             
             // PING 메시지 전송 (MSG_PING = 0x0002)
             // 페이로드는 비워둔다.

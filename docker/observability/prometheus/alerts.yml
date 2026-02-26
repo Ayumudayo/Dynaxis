@@ -1,0 +1,42 @@
+groups:
+  - name: gateway-udp-quality
+    rules:
+      - alert: GatewayUdpBindAbuseSpike
+        expr: sum(rate(gateway_udp_bind_rate_limit_reject_total[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+          service: gateway
+        annotations:
+          summary: "Gateway UDP bind rate-limit rejects are rising"
+          description: "UDP bind rejections by rate-limit exceeded 1/s for 10m. Check source distribution and bind guard thresholds."
+
+      - alert: GatewayUdpEstimatedLossHigh
+        expr: sum(rate(gateway_udp_loss_estimated_total[5m])) / clamp_min(sum(rate(gateway_udp_forward_total[5m])), 1) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          service: gateway
+        annotations:
+          summary: "Gateway UDP estimated loss ratio is high"
+          description: "Estimated UDP packet loss ratio is above 5% for 10m. Check network quality and transport fallback strategy."
+
+      - alert: GatewayUdpReplayDropSpike
+        expr: sum(rate(gateway_udp_replay_drop_total[5m])) > 2
+        for: 10m
+        labels:
+          severity: warning
+          service: gateway
+        annotations:
+          summary: "Gateway UDP replay/reorder drops are elevated"
+          description: "Replay/reorder UDP packet drops exceeded 2/s for 10m. Validate client sequencing and potential abuse."
+
+      - alert: GatewayUdpJitterHigh
+        expr: max_over_time(gateway_udp_jitter_ms_last[10m]) > 150
+        for: 10m
+        labels:
+          severity: warning
+          service: gateway
+        annotations:
+          summary: "Gateway UDP jitter remains high"
+          description: "Observed UDP jitter exceeded 150ms for 10m. Investigate network path or force TCP fallback."

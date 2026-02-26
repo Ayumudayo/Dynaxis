@@ -1,4 +1,4 @@
-# Redis Strategy: Cache, Sessions, Fanout
+# 인메모리 캐시(Redis) 전략: 캐시, 세션, 팬아웃
 
 목표: PostgreSQL을 SoR로 유지하면서 Redis를 세션/프레즌스/브로드캐스트/레이트리밋 캐시로 사용해 대기시간을 줄이고 백오프 전략을 단순화한다. Redis 장애 시에는 Postgres 경로로 폴백해도 무방하도록 write-through/write-behind 구성을 병행한다.
 
@@ -39,7 +39,7 @@
 ## 운영/환경 변수
 | 변수 | 설명 |
 | --- | --- |
-| `REDIS_URI` | `redis://user:pass@host:6379/db` 형식. 미지정 시 Redis 기능 비활성화 |
+| `REDIS_URI` | `tcp://host:6379` (redis-plus-plus URI). 미지정 시 Redis 기능 비활성화 |
 | `REDIS_POOL_MAX` | 클라이언트 풀 최대 연결 수 |
 | `REDIS_CHANNEL_PREFIX` | Pub/Sub prefix. 예: `knights:` |
 | `REDIS_USE_STREAMS`, `REDIS_STREAM_MAXLEN` | Streams 사용 여부와 maxlen(approx) |

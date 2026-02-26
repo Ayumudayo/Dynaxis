@@ -4,6 +4,12 @@
 
 #include "server/storage/redis/client.hpp"
 
+/**
+ * @brief SessionDirectory의 L1 캐시 + Redis(L2) 매핑 구현입니다.
+ *
+ * 재접속 라우팅 연속성을 유지하면서도 조회 지연을 줄이기 위해,
+ * 로컬 캐시를 우선 조회하고 Redis 원본을 뒤에서 동기화합니다.
+ */
 namespace gateway {
 
 SessionDirectory::SessionDirectory(std::shared_ptr<server::storage::redis::IRedisClient> redis_client,

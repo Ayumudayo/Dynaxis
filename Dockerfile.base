@@ -14,8 +14,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 # System Build Tools and Runtime Dependencies
 # ==============================================================================
 RUN apt-get update && apt-get install -y \
+    --no-install-recommends \
     # Build essentials
     build-essential \
+    cmake \
+    ninja-build \
     git \
     curl \
     zip \
@@ -24,21 +27,14 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     linux-libc-dev \
     ca-certificates \
-    gpg \
     wget \
-    bison \
-    flex \
     python3 \
-    python3-dev \
     # C++ libraries (system packages)
     libboost-dev \
     libboost-system-dev \
     protobuf-compiler \
     libprotobuf-dev \
-    libgrpc++-dev \
-    protobuf-compiler-grpc \
     libpq-dev \
-    libgtest-dev \
     nlohmann-json3-dev \
     libhiredis-dev \
     liblz4-dev \
@@ -49,18 +45,8 @@ RUN apt-get update && apt-get install -y \
     && rm -f /usr/lib/libpqxx*
 
 # Environment configuration
-ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH
-ENV VCPKG_DISABLE_METRICS=1
+ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
 ENV CMAKE_MAKE_PROGRAM=/usr/bin/ninja
-
-# ==============================================================================
-# Build Tool: CMake 3.27
-# ==============================================================================
-# Ubuntu 24.04 ships CMake 3.22, we need 3.27 for better C++20 support
-RUN wget -q -O cmake.sh https://github.com/Kitware/CMake/releases/download/v3.27.7/cmake-3.27.7-linux-x86_64.sh && \
-    chmod +x cmake.sh && \
-    ./cmake.sh --skip-license --prefix=/usr/local && \
-    rm cmake.sh
 
 # ==============================================================================
 # Source Build: libpqxx 7.9.0 (C++20 ABI Compatibility)
@@ -96,46 +82,6 @@ RUN git clone --depth 1 https://github.com/sewenew/redis-plus-plus.git && \
     ldconfig
 
 # ==============================================================================
-# Build Tool: Ninja
-# ==============================================================================
-RUN apt-get update && \
-    apt-get install -y ninja-build && \
-    rm -rf /var/lib/apt/lists/*
-
-# ==============================================================================
-# vcpkg Setup (for ftxui and other dev dependencies)
-# ==============================================================================
-# Note: vcpkg is unreliable on Linux Docker (network issues), but kept for
-# potential Windows container builds or future improvements.
-ENV VCPKG_ROOT=/opt/vcpkg
-ENV VCPKG_FORCE_SYSTEM_BINARIES=1
-ENV VCPKG_MAX_DOWNLOAD_ATTEMPTS=10
-ENV VCPKG_MAX_CONCURRENCY=8
-
-RUN git clone https://github.com/microsoft/vcpkg.git $VCPKG_ROOT && \
-    cd $VCPKG_ROOT && \
-    git checkout 2025.10.17 && \
-    touch vcpkg.disable-metrics && \
-    ./bootstrap-vcpkg.sh
-
-# ==============================================================================
 # Application Workspace
 # ==============================================================================
 WORKDIR /app
-
-# Copy dependency manifests
-COPY vcpkg.json .
-COPY CMakePresets.json .
-
-# Install vcpkg dependencies (ftxui for devclient, etc.)
-# This may fail on some Linux systems due to network issues - that's expected.
-# Server components don't require vcpkg dependencies.
-RUN $VCPKG_ROOT/vcpkg install --triplet x64-linux --disable-metrics || \
-    echo "⚠ vcpkg install failed (expected on Linux Docker)" && \
-    rm -rf $VCPKG_ROOT/buildtrees $VCPKG_ROOT/downloads
-
-# ==============================================================================
-# Final Cleanup
-# ==============================================================================
-# Remove vcpkg build artifacts to reduce image size
-RUN rm -rf $VCPKG_ROOT/buildtrees

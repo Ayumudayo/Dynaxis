@@ -2,6 +2,12 @@
 
 #include <cstdint>
 
+/**
+ * @brief 프로토콜 프레임/기능 협상에 사용하는 비트 플래그 정의입니다.
+ *
+ * 프레임 헤더 flags와 HELLO capability를 분리해,
+ * 전송 상태(압축/암호화)와 기능 지원 여부를 명확히 구분합니다.
+ */
 namespace server::core::protocol {
 
 // flags 비트 정의(SEQ/utc_ts_ms32 는 항상 포함되므로 별도 비트 없음)
@@ -20,4 +26,3 @@ enum : std::uint16_t {
 };
 
 } // namespace server::core::protocol
-

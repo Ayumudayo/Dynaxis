@@ -28,6 +28,9 @@ using server::core::storage::Message;
 using server::core::storage::Membership;
 using server::core::storage::Session;
 
+/**
+ * @brief DbWorkerPool의 커밋/롤백/실패 메트릭 반영 동작을 검증합니다.
+ */
 namespace {
 
 struct NullUserRepository final : IUserRepository {

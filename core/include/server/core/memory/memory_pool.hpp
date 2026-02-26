@@ -17,6 +17,15 @@ namespace server::core {
  */
 class MemoryPool {
 public:
+    /**
+     * @brief 고정 블록 메모리 풀을 생성합니다.
+     * @param blockSize 블록당 바이트 크기
+     * @param blockCount 블록 개수
+     *
+     * 계약:
+     * - `blockSize == 0` 또는 `blockCount == 0`이면 비활성 풀로 생성됩니다.
+     * - 비활성 풀의 `Acquire()`는 항상 `nullptr`를 반환합니다.
+     */
     MemoryPool(size_t blockSize, size_t blockCount);
     ~MemoryPool();
 
@@ -24,11 +33,28 @@ public:
     MemoryPool(const MemoryPool&) = delete;
     MemoryPool& operator=(const MemoryPool&) = delete;
 
+    /**
+     * @brief 블록 1개를 할당합니다.
+     * @return 성공 시 블록 포인터, 풀이 비활성/고갈 상태면 `nullptr`
+     */
     void* Acquire();
+
+    /**
+     * @brief 블록을 풀로 반환합니다.
+     * @param ptr `Acquire()`로 획득한 블록 포인터
+     *
+     * 계약:
+     * - `nullptr`는 무시됩니다.
+     * - 풀 소유 범위를 벗어난 포인터/블록 경계가 아닌 포인터는 무시됩니다.
+     */
     void Release(void* ptr);
+
+    size_t block_size() const noexcept { return blockSize_; }
+    size_t capacity() const noexcept { return blockCount_; }
 
 private:
     size_t blockSize_;
+    size_t blockCount_{0};
     std::vector<std::byte> memoryChunk_;
     std::stack<void*> freeList_;
     std::mutex mutex_;

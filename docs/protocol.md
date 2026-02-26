@@ -20,15 +20,20 @@
 - bit1: ENCRYPTED(TLS 외 경량 암호화 사용 시) (core/include/server/core/protocol/protocol_flags.hpp:10)
 - bit2~15: 예약(SEQ/TS는 고정 헤더 포함이므로 플래그 불요) (core/include/server/core/protocol/protocol_flags.hpp:11)
 
-## 예약 메시지 ID
-- 소스 오브 트루스: `protocol/opcodes.json` (빌드 시 `protocol.hpp` 자동 생성) (protocol/opcodes.json:4)
-- `0x0001` MSG_HELLO: 버전/서버 정보 안내(서버→클라). (protocol/opcodes.json:4, core/include/server/core/protocol/opcodes.hpp:6)
-- `0x0002` MSG_PING / `0x0003` MSG_PONG: heartbeat. (protocol/opcodes.json:5, core/include/server/core/protocol/opcodes.hpp:7)
-- `0x0004` MSG_ERR: 에러 응답(코드/메시지 포함). (protocol/opcodes.json:7, core/include/server/core/protocol/opcodes.hpp:9)
-- `0x0010` MSG_LOGIN_REQ / `0x0011` MSG_LOGIN_RES: 인증(샘플). (protocol/opcodes.json:8, core/include/server/core/protocol/opcodes.hpp:10)
-- `0x0100` MSG_CHAT_SEND / `0x0101` MSG_CHAT_BROADCAST: 채팅(샘플). (protocol/opcodes.json:10, core/include/server/core/protocol/opcodes.hpp:12)
-- `0x0200` MSG_STATE_SNAPSHOT: 상태 스냅샷(방 목록+현재 방 유저) (protocol/opcodes.json:14, core/include/server/core/protocol/opcodes.hpp:16)
-- `0x0201` MSG_ROOM_USERS: 특정 방 유저 목록 응답 (protocol/opcodes.json:15, core/include/server/core/protocol/opcodes.hpp:17)
+## 메시지 ID(opcodes)
+
+- 소스 오브 트루스(JSON)
+  - system(core): `core/protocol/system_opcodes.json`
+  - game(server): `server/protocol/game_opcodes.json`
+- 생성 헤더(C++)
+  - system(core): `core/include/server/core/protocol/system_opcodes.hpp`
+  - game(server): `server/include/server/protocol/game_opcodes.hpp`
+- 생성기
+  - C++ 헤더 생성: `tools/gen_opcodes.py` (CMake custom command로 빌드 시 자동 실행; Python3 필요)
+  - 문서/검증: `tools/gen_opcode_docs.py` → `docs/protocol/opcodes.md` (system/game 전체 16-bit 공간 중복 검증 포함)
+
+Sapphire처럼 도메인별로 보기 좋게 관리하기 위해 JSON에 `groups[]`(범위)와 opcode별 `group`/`dir(c2s|s2c)`를 둔다.
+실제 목록은 `docs/protocol/opcodes.md`를 참고한다.
 
 ## 길이 제한/보안
 - `length` 상한: 기본 32KB(설정 가능). 초과 시 세션 종료. (core/src/net/session.cpp:147)

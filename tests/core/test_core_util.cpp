@@ -3,6 +3,9 @@
 #include <string>
 #include <memory>
 
+/**
+ * @brief ServiceRegistry 등록/조회/타입 안전성 동작을 검증합니다.
+ */
 using namespace server::core::util::services;
 
 // 테스트용 서비스 구조체

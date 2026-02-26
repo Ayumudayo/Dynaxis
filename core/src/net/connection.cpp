@@ -1,12 +1,22 @@
 #include "server/core/net/connection.hpp"
 
+#include <algorithm>
 #include <utility>
 
+/**
+ * @brief Connection 기본 템플릿 메서드(on_connect/on_read/on_write) 구현입니다.
+ *
+ * strand 직렬화를 통해 송수신 큐 동시 접근을 방지하고,
+ * 파생 클래스는 프로토콜별 동작만 오버라이드하도록 책임을 분리합니다.
+ */
 namespace server::core::net {
 
-Connection::Connection(std::shared_ptr<Hive> hive)
+Connection::Connection(std::shared_ptr<Hive> hive,
+                       std::size_t send_queue_max_bytes)
     : hive_(std::move(hive))
-    , socket_(hive_->context()) {}
+    , socket_(hive_->context())
+    , strand_(socket_.get_executor())
+    , send_queue_max_bytes_(send_queue_max_bytes) {}
 
 Connection::~Connection() {
     stop();
@@ -20,10 +30,17 @@ void Connection::start() {
     if (stopped_.load(std::memory_order_relaxed)) {
         return;
     }
-    // 템플릿 메서드 패턴을 따르므로 파생 클래스에서 on_connect/on_read 등을 오버라이드하여
-    // 구체적인 동작(예: 패킷 파싱, 로깅)을 구현합니다.
-    on_connect();
-    read_loop();
+
+    auto self = shared_from_this();
+    boost::asio::dispatch(strand_, [self]() {
+        if (self->is_stopped()) {
+            return;
+        }
+        // 템플릿 메서드 패턴을 따르므로 파생 클래스에서 on_connect/on_read 등을 오버라이드하여
+        // 구체적인 동작(예: 패킷 파싱, 로깅)을 구현합니다.
+        self->on_connect();
+        self->read_loop();
+    });
 }
 
 void Connection::stop() {
@@ -34,9 +51,28 @@ void Connection::stop() {
         return;
     }
 
-    boost::system::error_code ec;
-    socket_.close(ec);
+    std::shared_ptr<Connection> self;
+    try {
+        self = shared_from_this();
+    } catch (...) {
+        finalize_stop();
+        return;
+    }
+
+    boost::asio::dispatch(strand_, [self]() {
+        self->finalize_stop();
+    });
+}
+
+void Connection::finalize_stop() {
+    if (socket_.is_open()) {
+        boost::system::error_code ec;
+        [[maybe_unused]] const auto shutdown_result = socket_.shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
+        [[maybe_unused]] const auto close_result = socket_.close(ec);
+    }
+
     write_queue_.clear();
+    queued_bytes_ = 0;
     on_disconnect();
 }
 
@@ -44,15 +80,30 @@ bool Connection::is_stopped() const {
     return stopped_.load(std::memory_order_relaxed);
 }
 
-void Connection::async_send(const std::vector<std::uint8_t>& data) {
+void Connection::async_send(std::vector<std::uint8_t> data) {
     if (is_stopped()) {
         return;
     }
 
     // asio::post를 사용하여 I/O 스레드(strand)로 작업을 넘깁니다.
     // 이는 멀티스레드 환경에서 write_queue_에 대한 동시 접근을 막아줍니다.
-    boost::asio::post(io(), [self = shared_from_this(), payload = data]() mutable {
+    boost::asio::post(strand_, [self = shared_from_this(), payload = std::move(data)]() mutable {
+        if (self->is_stopped()) {
+            return;
+        }
+
+        const auto payload_size = payload.size();
+        if (self->send_queue_max_bytes_ > 0) {
+            const auto remaining = self->send_queue_max_bytes_ - std::min(self->send_queue_max_bytes_, self->queued_bytes_);
+            if (payload_size > remaining) {
+                self->on_error(boost::asio::error::make_error_code(boost::asio::error::no_buffer_space));
+                self->stop();
+                return;
+            }
+        }
+
         const bool idle = self->write_queue_.empty();
+        self->queued_bytes_ += payload_size;
         self->write_queue_.push_back(std::move(payload));
         if (idle) {
             // 기존 write 작업이 없을 때만 do_write를 시작해 순서를 보장합니다.
@@ -77,9 +128,9 @@ void Connection::read_loop() {
     auto self = shared_from_this();
     // 비동기 읽기를 시작합니다. 데이터가 들어오면 handle_read가 호출됩니다.
     socket_.async_read_some(boost::asio::buffer(read_buffer_),
-        [self](const boost::system::error_code& ec, std::size_t bytes_transferred) {
+        boost::asio::bind_executor(self->strand_, [self](const boost::system::error_code& ec, std::size_t bytes_transferred) {
             self->handle_read(ec, bytes_transferred);
-        });
+        }));
 }
 
 void Connection::handle_read(const boost::system::error_code& ec, std::size_t bytes_transferred) {
@@ -109,6 +160,13 @@ void Connection::handle_write(const boost::system::error_code& ec, std::size_t b
 
     on_write(bytes_transferred);
 
+    const auto written = write_queue_.front().size();
+    if (queued_bytes_ >= written) {
+        queued_bytes_ -= written;
+    } else {
+        queued_bytes_ = 0;
+    }
+
     write_queue_.pop_front();
     if (!write_queue_.empty()) {
         // 큐가 비워질 때까지 한 번에 하나의 async_write만 유지해 backpressure를 단순화합니다.
@@ -121,9 +179,9 @@ void Connection::do_write() {
     auto self = shared_from_this();
     boost::asio::async_write(socket_,
         boost::asio::buffer(write_queue_.front()),
-        [self](const boost::system::error_code& ec, std::size_t bytes_transferred) {
+        boost::asio::bind_executor(self->strand_, [self](const boost::system::error_code& ec, std::size_t bytes_transferred) {
             self->handle_write(ec, bytes_transferred);
-        });
+        }));
 }
 
 } // namespace server::core::net

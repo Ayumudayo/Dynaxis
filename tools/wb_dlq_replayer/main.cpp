@@ -18,6 +18,12 @@
 using server::core::log::info;
 using json = nlohmann::json;
 
+/**
+ * @brief DLQ 스트림 재처리 도구 구현입니다.
+ *
+ * DLQ 이벤트를 재삽입하고 실패 시 재시도/Dead stream 격리를 수행해,
+ * write-behind 장애 복구를 운영자가 통제 가능한 절차로 유지합니다.
+ */
 namespace {
 
 // -----------------------------------------------------------------------------
@@ -81,6 +87,11 @@ class WbDlqReplayer {
 public:
     explicit WbDlqReplayer(ReplayerConfig config) : config_(std::move(config)) {}
 
+    /**
+     * @brief DLQ 리플레이 루프를 실행합니다.
+     * @param run_once true면 배치를 한 번만 처리하고 종료
+     * @return 종료 코드(0 정상)
+     */
     int Run(bool run_once) {
         if (config_.db_uri.empty()) {
             std::cerr << "DLQ: DB_URI not set" << std::endl;

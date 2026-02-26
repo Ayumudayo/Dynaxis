@@ -14,6 +14,12 @@
 #include <condition_variable>
 #include <queue>
 
+/**
+ * @brief 비동기 로그 버퍼/출력 파이프라인 구현입니다.
+ *
+ * 요청 처리 스레드는 로그를 큐에 넣고 즉시 복귀하고,
+ * 백그라운드 워커가 실제 출력과 버퍼 관리를 담당해 경로 지연을 낮춥니다.
+ */
 namespace server::core::log {
 
 namespace {
@@ -34,10 +40,11 @@ class AsyncLogger {
 public:
     // 로그 메시지를 큐에 넣고 워커 스레드를 깨웁니다.
     // 이 함수는 메인 로직 스레드에서 호출되므로 최대한 빨리 리턴해야 합니다.
-    void push(const std::string& msg) {
+    // 값 전달을 받아 호출자가 rvalue를 넘기면 큐 삽입 시 move 경로를 그대로 활용합니다.
+    void push(std::string msg) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            queue_.push(msg);
+            queue_.push(std::move(msg));
         }
         cv_.notify_one();
     }

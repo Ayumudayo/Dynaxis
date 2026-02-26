@@ -1,0 +1,7 @@
+# Core API governance ownership
+/core/include/server/core/ @Ayumudayo
+/docs/core-api/ @Ayumudayo
+/docs/core-api-boundary.md @Ayumudayo
+/tools/check_core_api_contracts.py @Ayumudayo
+/tests/core/public_api_smoke.cpp @Ayumudayo
+/.github/workflows/ci.yml @Ayumudayo

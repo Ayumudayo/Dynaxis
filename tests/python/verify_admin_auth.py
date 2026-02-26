@@ -1,0 +1,188 @@
+import json
+import socket
+import subprocess
+import time
+import urllib.error
+import urllib.request
+
+
+IMAGE = "knights-admin:local"
+TOKEN = "ci-admin-token"
+
+
+def pick_free_port() -> int:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return int(port)
+
+
+def wait_ready(base_url: str, timeout_sec: float = 30.0) -> None:
+    deadline = time.time() + timeout_sec
+    last_error = "unknown"
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f"{base_url}/healthz", timeout=5) as response:
+                if response.status == 200:
+                    return
+                last_error = f"status={response.status}"
+        except Exception as exc:
+            last_error = str(exc)
+        time.sleep(0.5)
+    raise RuntimeError(f"admin auth test container not ready: {last_error}")
+
+
+def request_with_payload(url: str, headers=None):
+    req = urllib.request.Request(url, headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            status = response.status
+            content_type = response.getheader("Content-Type", "")
+            body = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        content_type = exc.headers.get("Content-Type", "")
+        body = exc.read().decode("utf-8", errors="replace")
+
+    payload = None
+    if body and "application/json" in content_type:
+        payload = json.loads(body)
+    return status, content_type, payload, body
+
+
+def expect_error(base_url: str, path: str, expected_status: int, expected_code: str, headers=None) -> None:
+    status, content_type, payload, _ = request_with_payload(f"{base_url}{path}", headers=headers)
+    if status != expected_status:
+        raise RuntimeError(f"{path} expected {expected_status}, got {status}")
+    if "application/json" not in content_type:
+        raise RuntimeError(f"{path} expected json error response")
+    error = (payload or {}).get("error", {})
+    if error.get("code") != expected_code:
+        raise RuntimeError(f"{path} expected error code {expected_code}")
+
+
+def main() -> int:
+    container_name = f"admin-auth-test-{int(time.time())}"
+    host_port = pick_free_port()
+    base_url = f"http://127.0.0.1:{host_port}"
+
+    run_cmd = [
+        "docker", "run", "-d",
+        "--name", container_name,
+        "-p", f"{host_port}:39200",
+        "-e", "METRICS_PORT=39200",
+        "-e", "ADMIN_AUTH_MODE=header_or_bearer",
+        "-e", "ADMIN_AUTH_USER_HEADER=X-Admin-User",
+        "-e", "ADMIN_AUTH_ROLE_HEADER=X-Admin-Role",
+        "-e", f"ADMIN_BEARER_TOKEN={TOKEN}",
+        "-e", "ADMIN_BEARER_ACTOR=ci-bearer",
+        "-e", "ADMIN_BEARER_ROLE=viewer",
+        IMAGE,
+        "admin",
+    ]
+
+    started = False
+    try:
+        subprocess.check_call(run_cmd)
+        started = True
+
+        wait_ready(base_url)
+
+        expect_error(base_url, "/admin", 401, "UNAUTHORIZED")
+        expect_error(base_url, "/api/v1/overview", 401, "UNAUTHORIZED")
+        expect_error(
+            base_url,
+            "/api/v1/overview",
+            403,
+            "FORBIDDEN",
+            headers={"X-Admin-User": "ops", "X-Admin-Role": "guest"},
+        )
+
+        status, content_type, payload, _ = request_with_payload(
+            f"{base_url}/api/v1/overview",
+            headers={"X-Admin-User": "ops", "X-Admin-Role": "viewer"},
+        )
+        if status != 200:
+            raise RuntimeError(f"header auth request expected 200, got {status}")
+        if "application/json" not in content_type:
+            raise RuntimeError("header auth request expected json content-type")
+        if (payload or {}).get("data", {}).get("service") != "admin_app":
+            raise RuntimeError("header auth request returned unexpected payload")
+
+        status, _, payload, _ = request_with_payload(
+            f"{base_url}/api/v1/auth/context",
+            headers={"X-Admin-User": "ops", "X-Admin-Role": "viewer"},
+        )
+        if status != 200:
+            raise RuntimeError(f"header auth context expected 200, got {status}")
+        auth_data = (payload or {}).get("data", {})
+        if auth_data.get("actor") != "ops" or auth_data.get("role") != "viewer":
+            raise RuntimeError("header auth context mismatch")
+        if auth_data.get("mode") != "header_or_bearer":
+            raise RuntimeError("header auth context mode mismatch")
+
+        status, _, payload, _ = request_with_payload(
+            f"{base_url}/api/v1/overview",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        if status != 200:
+            raise RuntimeError(f"bearer auth request expected 200, got {status}")
+        if (payload or {}).get("data", {}).get("service") != "admin_app":
+            raise RuntimeError("bearer auth request returned unexpected payload")
+
+        status, _, payload, _ = request_with_payload(
+            f"{base_url}/api/v1/auth/context",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        if status != 200:
+            raise RuntimeError(f"bearer auth context expected 200, got {status}")
+        auth_data = (payload or {}).get("data", {})
+        if auth_data.get("actor") != "ci-bearer" or auth_data.get("role") != "viewer":
+            raise RuntimeError("bearer auth context mismatch")
+        if auth_data.get("mode") != "header_or_bearer":
+            raise RuntimeError("bearer auth context mode mismatch")
+
+        expect_error(
+            base_url,
+            "/api/v1/overview",
+            401,
+            "UNAUTHORIZED",
+            headers={"Authorization": "Bearer wrong-token"},
+        )
+
+        expect_error(
+            base_url,
+            "/api/v1/overview",
+            403,
+            "FORBIDDEN",
+            headers={
+                "X-Admin-User": "ops",
+                "X-Admin-Role": "guest",
+                "Authorization": f"Bearer {TOKEN}",
+            },
+        )
+
+        status, content_type, _, body = request_with_payload(
+            f"{base_url}/admin",
+            headers={"X-Admin-User": "ops", "X-Admin-Role": "viewer"},
+        )
+        if status != 200:
+            raise RuntimeError(f"authorized /admin expected 200, got {status}")
+        if "text/html" not in content_type:
+            raise RuntimeError("authorized /admin expected html content-type")
+        if "Knights Admin Console" not in body:
+            raise RuntimeError("authorized /admin missing expected UI marker")
+
+        print("PASS: admin auth mode smoke test")
+        return 0
+    except Exception as exc:
+        print(f"FAIL: {exc}")
+        return 1
+    finally:
+        if started:
+            subprocess.run(["docker", "rm", "-f", container_name], check=False)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -7,19 +7,30 @@
 #include <server/core/storage/unit_of_work.hpp>
 #include <server/storage/redis/client.hpp>
 #include <server/core/config/options.hpp>
-#include <server/core/state/shared_state.hpp>
+#include <server/core/net/connection_runtime_state.hpp>
+#include <server/core/protocol/protocol_errors.hpp>
+#include <server/core/protocol/packet.hpp>
+#include <server/protocol/game_opcodes.hpp>
 #include "wire.pb.h"
 #include <boost/asio.hpp>
 #include <thread>
 #include <chrono>
 #include <vector>
+#include <array>
+#include <optional>
+#include <cstdlib>
 #include <iostream>
 
 using namespace server::app::chat;
 using namespace server::core;
 using namespace server::core::storage;
 using namespace server::storage::redis;
+namespace game_proto = server::protocol;
+namespace core_proto = server::core::protocol;
 
+/**
+ * @brief ChatService 주요 경로(로그인/입장/채팅/리프레시) 통합 동작을 검증합니다.
+ */
 // --- Helper Functions (Copied from frame.hpp to bypass include issues) ---
 inline void write_be16(std::uint16_t v, std::uint8_t* out) {
     out[0] = static_cast<std::uint8_t>((v >> 8) & 0xFF);
@@ -113,6 +124,8 @@ class MockRedisClient : public IRedisClient {
 public:
     bool sadd_called = false;
     bool publish_called = false;
+    std::string last_publish_channel;
+    std::string last_publish_message;
     
     // IRedisClient Interface Implementation
     bool health_check() override { return true; }
@@ -125,10 +138,19 @@ public:
     
     bool srem(const std::string&, const std::string&) override { return true; }
     bool smembers(const std::string&, std::vector<std::string>&) override { return true; }
+    bool scard(const std::string&, std::size_t& out) override { out = 0; return true; }
+    bool scard_many(const std::vector<std::string>& keys, std::vector<std::size_t>& out) override {
+        out.assign(keys.size(), 0);
+        return true;
+    }
     
     bool del(const std::string& key) override { return true; }
     
     std::optional<std::string> get(const std::string&) override { return std::nullopt; }
+    bool mget(const std::vector<std::string>& keys, std::vector<std::optional<std::string>>& out) override {
+        out.assign(keys.size(), std::nullopt);
+        return true;
+    }
     
     bool set_if_not_exists(const std::string&, const std::string&, unsigned int) override { return true; }
     bool set_if_equals(const std::string&, const std::string&, const std::string&, unsigned int) override { return true; }
@@ -142,6 +164,8 @@ public:
     
     bool publish(const std::string& channel, const std::string& message) override {
         publish_called = true;
+        last_publish_channel = channel;
+        last_publish_message = message;
         return true;
     }
     
@@ -153,6 +177,18 @@ public:
     bool xreadgroup(const std::string&, const std::string&, const std::string&, long long, std::size_t, std::vector<StreamEntry>&) override { return true; }
     bool xack(const std::string&, const std::string&, const std::string&) override { return true; }
     bool xpending(const std::string&, const std::string&, long long&) override { return true; }
+    bool xautoclaim(const std::string&,
+                    const std::string&,
+                    const std::string&,
+                    long long,
+                    const std::string& start,
+                    std::size_t,
+                    StreamAutoClaimResult& out) override {
+        out.next_start_id = start;
+        out.entries.clear();
+        out.deleted_ids.clear();
+        return true;
+    }
 };
 
 // --- Test Fixture ---
@@ -168,8 +204,8 @@ protected:
     Dispatcher dispatcher_;
     BufferManager buffer_manager_{1024, 10};
     std::shared_ptr<SessionOptions> session_options_;
-    std::shared_ptr<SharedState> shared_state_;
-    std::shared_ptr<server::core::Session> session_;
+    std::shared_ptr<server::core::net::ConnectionRuntimeState> shared_state_;
+    std::shared_ptr<server::core::net::Session> session_;
 
     boost::asio::ip::tcp::acceptor acceptor_;
     boost::asio::ip::tcp::socket peer_socket_;
@@ -180,7 +216,7 @@ protected:
         chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
 
         session_options_ = std::make_shared<SessionOptions>();
-        shared_state_ = std::make_shared<SharedState>();
+        shared_state_ = std::make_shared<server::core::net::ConnectionRuntimeState>();
         
         // 실제 소켓 연결 수립 (Loopback)
         boost::asio::ip::tcp::endpoint ep(boost::asio::ip::make_address("127.0.0.1"), 0);
@@ -192,7 +228,7 @@ protected:
         socket.connect(acceptor_.local_endpoint());
         acceptor_.accept(peer_socket_); 
         
-        session_ = std::make_shared<server::core::Session>(
+        session_ = std::make_shared<server::core::net::Session>(
             std::move(socket), dispatcher_, buffer_manager_, session_options_, shared_state_
         );
         session_->start(); 
@@ -256,6 +292,94 @@ protected:
         }
         return false;
     }
+
+    void LoginAs(const std::string& user, const std::string& token = "test_token") {
+        std::vector<uint8_t> login_payload;
+        write_lp_utf8(login_payload, user);
+        write_lp_utf8(login_payload, token);
+        chat_service_->on_login(*session_, login_payload);
+        ProcessJobs();
+        FlushSessionIO();
+    }
+
+    void JoinRoom(const std::string& room, const std::string& password = "") {
+        std::vector<uint8_t> join_payload;
+        write_lp_utf8(join_payload, room);
+        write_lp_utf8(join_payload, password);
+        chat_service_->on_join(*session_, join_payload);
+        ProcessJobs();
+        FlushSessionIO();
+    }
+
+    void SendChat(const std::string& room, const std::string& text) {
+        std::vector<uint8_t> payload;
+        write_lp_utf8(payload, room);
+        write_lp_utf8(payload, text);
+        chat_service_->on_chat_send(*session_, payload);
+        ProcessJobs();
+        FlushSessionIO();
+    }
+
+    bool WaitForPacket(std::uint16_t& msg_id, std::vector<std::uint8_t>& payload, int timeout_ms = 300) {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+        boost::system::error_code ec;
+        std::size_t available = 0;
+
+        while (std::chrono::steady_clock::now() < deadline) {
+            FlushSessionIO();
+            available = peer_socket_.available(ec);
+            if (!ec && available >= core_proto::k_header_bytes) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        if (ec || available < core_proto::k_header_bytes) {
+            return false;
+        }
+
+        std::array<std::uint8_t, core_proto::k_header_bytes> header_buf{};
+        boost::asio::read(peer_socket_, boost::asio::buffer(header_buf), ec);
+        if (ec) {
+            return false;
+        }
+
+        core_proto::PacketHeader header{};
+        core_proto::decode_header(header_buf.data(), header);
+        msg_id = header.msg_id;
+
+        payload.assign(header.length, 0);
+        if (header.length > 0) {
+            boost::asio::read(peer_socket_, boost::asio::buffer(payload), ec);
+            if (ec) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    bool WaitForBroadcastText(const std::string& expected_substring, int timeout_ms = 500) {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+        while (std::chrono::steady_clock::now() < deadline) {
+            std::uint16_t msg_id = 0;
+            std::vector<std::uint8_t> payload;
+            if (!WaitForPacket(msg_id, payload, 60)) {
+                continue;
+            }
+            if (msg_id != game_proto::MSG_CHAT_BROADCAST) {
+                continue;
+            }
+            server::wire::v1::ChatBroadcast pb;
+            if (!pb.ParseFromArray(payload.data(), static_cast<int>(payload.size()))) {
+                continue;
+            }
+            if (pb.text().find(expected_substring) != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    }
 };
 
 // 로그인 핸들러 테스트
@@ -273,6 +397,38 @@ TEST_F(ChatServiceTest, Login) {
     
     // 검증: Redis에 로비 유저 추가되었는지 (Spy 확인)
     EXPECT_TRUE(redis_->sadd_called) << "User should be added to Redis set";
+}
+
+TEST_F(ChatServiceTest, DispatcherBlocksProtectedOpcodeBeforeLogin) {
+    dispatcher_.register_handler(
+        game_proto::MSG_CHAT_SEND,
+        [this](server::core::Session& s, std::span<const std::uint8_t> payload) {
+            chat_service_->on_chat_send(s, payload);
+        },
+        server::protocol::opcode_policy(game_proto::MSG_CHAT_SEND));
+
+    std::vector<std::uint8_t> payload;
+    write_lp_utf8(payload, "lobby");
+    write_lp_utf8(payload, "hello-before-login");
+
+    EXPECT_TRUE(dispatcher_.dispatch(game_proto::MSG_CHAT_SEND, *session_, payload));
+    FlushSessionIO();
+
+    std::uint16_t msg_id = 0;
+    std::vector<std::uint8_t> body;
+    bool found_err = false;
+    for (int i = 0; i < 4; ++i) {
+        ASSERT_TRUE(WaitForPacket(msg_id, body));
+        if (msg_id == core_proto::MSG_ERR) {
+            found_err = true;
+            break;
+        }
+    }
+
+    ASSERT_TRUE(found_err);
+    ASSERT_GE(body.size(), 2u);
+    const std::uint16_t code = static_cast<std::uint16_t>((static_cast<std::uint16_t>(body[0]) << 8) | body[1]);
+    EXPECT_EQ(code, core_proto::errc::FORBIDDEN);
 }
 
 // 방 입장 테스트
@@ -384,6 +540,58 @@ TEST_F(ChatServiceTest, Whisper) {
     EXPECT_TRUE(WaitForData()) << "Whisper response should be received by peer";
 }
 
+TEST_F(ChatServiceTest, WhisperRoutesViaRedisWhenRecipientIsRemote) {
+    const char* old_pubsub_env = std::getenv("USE_REDIS_PUBSUB");
+    const bool had_old_pubsub = (old_pubsub_env != nullptr);
+    const std::string old_pubsub = had_old_pubsub ? std::string(old_pubsub_env) : std::string();
+#if defined(_WIN32)
+    _putenv_s("USE_REDIS_PUBSUB", "1");
+#else
+    setenv("USE_REDIS_PUBSUB", "1", 1);
+#endif
+
+    // ChatService는 생성 시점에 USE_REDIS_PUBSUB를 읽으므로,
+    // 테스트에서 env를 변경한 뒤 인스턴스를 재생성해 설정을 반영한다.
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    // 1. 로그인
+    std::vector<uint8_t> login_payload;
+    write_lp_utf8(login_payload, "test_user");
+    write_lp_utf8(login_payload, "test_token");
+    chat_service_->on_login(*session_, login_payload);
+    ProcessJobs();
+    FlushSessionIO();
+    WaitForData();
+
+    // 2. 로컬에 없는 대상에게 귓속말
+    std::vector<uint8_t> whisper_payload;
+    write_lp_utf8(whisper_payload, "ghost_user");
+    write_lp_utf8(whisper_payload, "Hello remote");
+    chat_service_->on_whisper(*session_, whisper_payload);
+    ProcessJobs();
+    FlushSessionIO();
+
+    EXPECT_TRUE(redis_->publish_called) << "Whisper should be routed via Redis publish";
+    EXPECT_EQ(redis_->last_publish_channel, "fanout:whisper");
+    EXPECT_TRUE(redis_->last_publish_message.rfind("gw=", 0) == 0);
+    EXPECT_NE(redis_->last_publish_message.find('\n'), std::string::npos);
+    EXPECT_TRUE(WaitForData()) << "Sender should receive whisper ack/echo";
+
+#if defined(_WIN32)
+    if (had_old_pubsub) {
+        _putenv_s("USE_REDIS_PUBSUB", old_pubsub.c_str());
+    } else {
+        _putenv_s("USE_REDIS_PUBSUB", "");
+    }
+#else
+    if (had_old_pubsub) {
+        setenv("USE_REDIS_PUBSUB", old_pubsub.c_str(), 1);
+    } else {
+        unsetenv("USE_REDIS_PUBSUB");
+    }
+#endif
+}
+
 // 방 유저 목록 요청 테스트
 TEST_F(ChatServiceTest, RoomUsers) {
     // 1. 로그인 & 입장
@@ -477,6 +685,85 @@ TEST_F(ChatServiceTest, Refresh) {
     // NOTE: on_refresh_request 구현에 따라 응답이 없을 수도 있음(단순 갱신).
     // 여기서는 실행에 문제가 없는지 확인.
     SUCCEED();
+}
+
+TEST_F(ChatServiceTest, BlacklistCommandsRoundTrip) {
+    LoginAs("test_user");
+    WaitForData();
+
+    SendChat("lobby", "/blacklist add blocked_user");
+    EXPECT_TRUE(WaitForBroadcastText("blacklist add: blocked_user"));
+
+    SendChat("lobby", "/blacklist list");
+    EXPECT_TRUE(WaitForBroadcastText("blacklist: blocked_user"));
+
+    SendChat("lobby", "/blacklist remove blocked_user");
+    EXPECT_TRUE(WaitForBroadcastText("blacklist remove: blocked_user"));
+}
+
+TEST_F(ChatServiceTest, AdminModerationCommandsDeniedForNonAdmin) {
+    LoginAs("regular_user");
+    WaitForData();
+
+    SendChat("lobby", "/mute target_user 30");
+    EXPECT_TRUE(WaitForBroadcastText("mute denied: admin only"));
+
+    SendChat("lobby", "/gkick target_user");
+    EXPECT_TRUE(WaitForBroadcastText("global kick denied: admin only"));
+}
+
+TEST_F(ChatServiceTest, AdminModerationCommandsAllowedForAdmin) {
+    const char* old_admin_env = std::getenv("CHAT_ADMIN_USERS");
+    const bool had_old_admin_env = (old_admin_env != nullptr);
+    const std::string old_admin_value = had_old_admin_env ? std::string(old_admin_env) : std::string();
+
+#if defined(_WIN32)
+    _putenv_s("CHAT_ADMIN_USERS", "admin_user");
+#else
+    setenv("CHAT_ADMIN_USERS", "admin_user", 1);
+#endif
+
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    LoginAs("admin_user");
+    WaitForData();
+
+    SendChat("lobby", "/mute target_user 30");
+    EXPECT_TRUE(WaitForBroadcastText("mute applied: user=target_user"));
+
+    SendChat("lobby", "/unmute target_user");
+    EXPECT_TRUE(WaitForBroadcastText("unmute applied: user=target_user"));
+
+    SendChat("lobby", "/ban target_user 60");
+    EXPECT_TRUE(WaitForBroadcastText("ban applied: user=target_user"));
+
+    SendChat("lobby", "/unban target_user");
+    EXPECT_TRUE(WaitForBroadcastText("unban applied: user=target_user"));
+
+#if defined(_WIN32)
+    if (had_old_admin_env) {
+        _putenv_s("CHAT_ADMIN_USERS", old_admin_value.c_str());
+    } else {
+        _putenv_s("CHAT_ADMIN_USERS", "");
+    }
+#else
+    if (had_old_admin_env) {
+        setenv("CHAT_ADMIN_USERS", old_admin_value.c_str(), 1);
+    } else {
+        unsetenv("CHAT_ADMIN_USERS");
+    }
+#endif
+}
+
+TEST_F(ChatServiceTest, RoomOwnerCanRemoveOwnRoom) {
+    LoginAs("owner_user");
+    WaitForData();
+
+    JoinRoom("owner_room");
+    WaitForData();
+
+    SendChat("owner_room", "/room remove");
+    EXPECT_TRUE(WaitForBroadcastText("room removed: owner_room"));
 }
 
 // 세션 종료 테스트

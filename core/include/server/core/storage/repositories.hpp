@@ -13,50 +13,55 @@ namespace server::core::storage {
 // 데이터베이스나 저장소에서 가져온 데이터를 담는 구조체들입니다.
 // ==============================================================================
 
+/** @brief 사용자 엔터티 스냅샷입니다. */
 struct User {
-    std::string id;                 // UUID (text format)
-    std::string name;               // 고유 닉네임
-    std::int64_t created_at_ms{};   // 생성 시간 (UTC epoch milliseconds)
+    std::string id;               ///< 사용자 UUID(text)
+    std::string name;             ///< 고유 닉네임
+    std::int64_t created_at_ms{}; ///< 생성 시각(UTC epoch ms)
 };
 
+/** @brief 채팅방 엔터티 스냅샷입니다. */
 struct Room {
-    std::string id;                 // UUID (text format)
-    std::string name;               // 방 이름 (고유)
-    bool        is_public{true};    // 공개 방 여부
-    bool        is_active{true};    // 활성 상태 여부
-    std::optional<std::int64_t> closed_at_ms; // 방 종료 시간 (NULL 가능)
-    std::int64_t created_at_ms{};
+    std::string id;                          ///< 방 UUID(text)
+    std::string name;                        ///< 방 이름(고유)
+    bool        is_public{true};             ///< 공개 방 여부
+    bool        is_active{true};             ///< 활성 상태 여부
+    std::optional<std::int64_t> closed_at_ms; ///< 방 종료 시각(NULL 가능)
+    std::int64_t created_at_ms{};            ///< 생성 시각(UTC epoch ms)
 };
 
+/** @brief 메시지 엔터티 스냅샷입니다. */
 struct Message {
-    std::uint64_t id{};                 // 메시지 고유 ID (Sequence/Auto Increment)
-    std::string   room_id;              // 방 ID (UUID)
-    std::string   room_name;            // 방 이름 (조회 성능을 위해 중복 저장 - Denormalization)
-    std::optional<std::string> user_id;   // 보낸 유저 ID (NULL이면 시스템 메시지 등)
-    std::optional<std::string> user_name; // 보낸 유저 이름 (JOIN 결과)
-    std::string   content;              // 메시지 내용
-    std::int64_t  created_at_ms{};      // 생성 시간
+    std::uint64_t id{};                    ///< 메시지 고유 ID(Sequence/Auto Increment)
+    std::string   room_id;                 ///< 방 ID(UUID)
+    std::string   room_name;               ///< 방 이름(조회 성능용 중복 저장)
+    std::optional<std::string> user_id;    ///< 발신 유저 ID(NULL이면 시스템 메시지)
+    std::optional<std::string> user_name;  ///< 발신 유저 이름
+    std::string   content;                 ///< 메시지 본문
+    std::int64_t  created_at_ms{};         ///< 생성 시각(UTC epoch ms)
 };
 
+/** @brief 방 멤버십 엔터티 스냅샷입니다. */
 struct Membership {
-    std::string user_id;                      // 유저 ID
-    std::string room_id;                      // 방 ID
-    std::string role;                         // 역할 (예: "member", "admin")
-    std::int64_t joined_at_ms{};              // 참여 시간
-    std::optional<std::uint64_t> last_seen_msg_id; // 마지막으로 읽은 메시지 ID (읽음 처리용)
-    std::optional<std::int64_t> left_at_ms;   // 나간 시간 (NULL이면 현재 참여 중)
-    bool is_member{true};                     // 현재 멤버인지 여부 (편의상 필드)
+    std::string user_id;                         ///< 유저 ID
+    std::string room_id;                         ///< 방 ID
+    std::string role;                            ///< 역할(예: `member`, `admin`)
+    std::int64_t joined_at_ms{};                 ///< 입장 시각(UTC epoch ms)
+    std::optional<std::uint64_t> last_seen_msg_id; ///< 마지막 읽은 메시지 ID
+    std::optional<std::int64_t> left_at_ms;      ///< 퇴장 시각(NULL이면 현재 참여 중)
+    bool is_member{true};                        ///< 현재 멤버 여부(편의 필드)
 };
 
+/** @brief 인증 세션 엔터티 스냅샷입니다. */
 struct Session {
-    std::string id;                          // 세션 ID (UUID)
-    std::string user_id;                     // 유저 ID
-    std::string token_hash;                  // 보안을 위해 해시된 인증 토큰
-    std::optional<std::string> client_ip;    // 클라이언트 IP 주소
-    std::optional<std::string> user_agent;   // 클라이언트 정보 (브라우저/앱 버전 등)
-    std::int64_t created_at_ms{};            // 세션 생성 시간
-    std::int64_t expires_at_ms{};            // 세션 만료 시간
-    std::optional<std::int64_t> revoked_at_ms; // 강제 로그아웃 시간 (NULL이면 유효)
+    std::string id;                             ///< 세션 ID(UUID)
+    std::string user_id;                        ///< 유저 ID
+    std::string token_hash;                     ///< 해시된 인증 토큰
+    std::optional<std::string> client_ip;       ///< 클라이언트 IP 주소
+    std::optional<std::string> user_agent;      ///< 클라이언트 정보(앱/브라우저)
+    std::int64_t created_at_ms{};               ///< 세션 생성 시각(UTC epoch ms)
+    std::int64_t expires_at_ms{};               ///< 세션 만료 시각(UTC epoch ms)
+    std::optional<std::int64_t> revoked_at_ms;  ///< 강제 만료 시각(NULL이면 유효)
 };
 
 // ==============================================================================

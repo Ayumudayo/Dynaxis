@@ -65,6 +65,9 @@
 ## 9. 참고 문서
 - 서버 구조: `docs/server-architecture.md`
 - Gateway & Load Balancer 운영: `docs/ops/gateway-and-lb.md`
+- 운영 관리 콘솔 설계: `docs/ops/admin-console.md`
+- 운영 관리 API 계약: `docs/ops/admin-api-contract.md`
+- 운영 관리 GUI IA: `docs/ops/admin-gui-wireframe.md`
 - Core 설계 메모: `docs/core-design.md`
 - Redis 전략: `docs/db/redis-strategy.md`
 - Write-behind: `docs/db/write-behind.md`

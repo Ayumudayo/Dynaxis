@@ -1,4 +1,4 @@
-# PostgreSQL Migrations
+# 데이터베이스 마이그레이션(PostgreSQL)
 
 본 디렉터리는 Knights 서버의 기본 스키마를 구성하는 SQL 마이그레이션을 담습니다.
 

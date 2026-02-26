@@ -1,0 +1,531 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "README.md"
+      - "docs/**"
+      - "**/*.md"
+  pull_request:
+    paths-ignore:
+      - "README.md"
+      - "docs/**"
+      - "**/*.md"
+  merge_group:
+    types:
+      - checks_requested
+
+env:
+  PYTHONIOENCODING: utf-8
+
+# 동일 ref의 이전 실행을 취소합니다.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-api-consumer-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      VCPKG_FEATURE_FLAGS: manifests,binarycaching
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.cache/vcpkg/archives,readwrite
+      VCPKG_DOWNLOADS: ${{ github.workspace }}/.cache/vcpkg/downloads
+      VCPKG_INSTALLED_DIR: ${{ github.workspace }}/build-windows/vcpkg_installed
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Cache vcpkg artifacts (Windows)
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/vcpkg/archives
+            .cache/vcpkg/downloads
+            vcpkg_installed
+            build-windows/vcpkg_installed
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'CMakePresets.json', 'scripts/setup_vcpkg.ps1', 'cmake/knights_vcpkg_toolchain.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json') }}-
+            ${{ runner.os }}-vcpkg-
+
+      - name: Ensure vcpkg cache directories (Windows)
+        shell: pwsh
+        run: |
+          $buildInstalled = "${{ github.workspace }}/build-windows/vcpkg_installed"
+          $rootInstalled = "${{ github.workspace }}/vcpkg_installed"
+          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/vcpkg/archives" | Out-Null
+          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/vcpkg/downloads" | Out-Null
+          New-Item -ItemType Directory -Force -Path $buildInstalled | Out-Null
+          if (-not (Test-Path $rootInstalled)) {
+            New-Item -ItemType Junction -Path $rootInstalled -Target $buildInstalled | Out-Null
+          }
+
+      - name: Enable MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Check Core API Boundary Contract
+        shell: pwsh
+        run: |
+          python tools/check_core_api_contracts.py --check-boundary
+
+      - name: Check Core API Boundary Fixtures
+        shell: pwsh
+        run: |
+          python tools/check_core_api_contracts.py --check-boundary-fixtures
+
+      - name: Check Core Stable Governance Fixtures
+        shell: pwsh
+        run: |
+          python tools/check_core_api_contracts.py --check-stable-governance-fixtures
+
+      - name: Check Core API Docs Freshness (PR)
+        if: github.event_name == 'pull_request'
+        shell: pwsh
+        run: |
+          python tools/check_core_api_contracts.py --check-doc-freshness --base-sha "${{ github.event.pull_request.base.sha }}" --head-sha "${{ github.sha }}"
+
+      - name: Check Core API PR Governance (PR)
+        if: github.event_name == 'pull_request'
+        shell: pwsh
+        run: |
+          python tools/check_core_api_contracts.py --check-pr-governance --base-sha "${{ github.event.pull_request.base.sha }}" --head-sha "${{ github.sha }}" --event-path "${{ github.event_path }}"
+
+      - name: Check Core Stable Header Governance (PR)
+        if: github.event_name == 'pull_request'
+        shell: pwsh
+        run: |
+          python tools/check_core_api_contracts.py --check-stable-change-governance --base-sha "${{ github.event.pull_request.base.sha }}" --head-sha "${{ github.sha }}"
+
+      - name: Build Core Public API Smoke Target (Debug)
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug -Target core_public_api_smoke
+
+      - name: Build Core Public API Header Compile Target (Debug)
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug -Target core_public_api_headers_compile
+
+      - name: Build Core Public API Stable Header Scenarios Target (Debug)
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug -Target core_public_api_stable_header_scenarios
+
+      - name: Run Core Public API Consumer Tests
+        shell: pwsh
+        run: |
+          ctest --preset windows-test -R "CorePublicApi|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure
+
+  core-api-consumer-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker Info
+        run: |
+          docker version
+          docker compose version
+
+      - name: Build Base Image (knights-base) with cache
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.base
+          tags: knights-base:latest
+          load: true
+          cache-from: type=gha,scope=knights-base-${{ runner.os }}
+          cache-to: type=gha,mode=max,scope=knights-base-${{ runner.os }}
+          provenance: false
+
+      - name: Verify Local Base Image
+        run: |
+          docker image inspect knights-base:latest > /dev/null
+
+      - name: Run Core API Contract Checks and Linux Consumer Tests
+        run: |
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/app" \
+            -w /app \
+            knights-base:latest \
+            bash -lc "set -e; apt-get update && apt-get install -y ninja-build; \
+            python3 tools/check_core_api_contracts.py --check-boundary; \
+            python3 tools/check_core_api_contracts.py --check-boundary-fixtures; \
+            python3 tools/check_core_api_contracts.py --check-stable-governance-fixtures; \
+            cmake --preset linux -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=ON; \
+            cmake --build --preset linux-debug --target core_public_api_smoke core_public_api_headers_compile core_public_api_stable_header_scenarios --parallel; \
+            ctest --preset linux-test -R 'CorePublicApi|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures' --output-on-failure"
+
+  windows-fast-tests:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      VCPKG_FEATURE_FLAGS: manifests,binarycaching
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.cache/vcpkg/archives,readwrite
+      VCPKG_DOWNLOADS: ${{ github.workspace }}/.cache/vcpkg/downloads
+      VCPKG_INSTALLED_DIR: ${{ github.workspace }}/build-windows/vcpkg_installed
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Cache vcpkg artifacts (Windows)
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/vcpkg/archives
+            .cache/vcpkg/downloads
+            vcpkg_installed
+            build-windows/vcpkg_installed
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'CMakePresets.json', 'scripts/setup_vcpkg.ps1', 'cmake/knights_vcpkg_toolchain.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json') }}-
+            ${{ runner.os }}-vcpkg-
+
+      - name: Ensure vcpkg cache directories (Windows)
+        shell: pwsh
+        run: |
+          $buildInstalled = "${{ github.workspace }}/build-windows/vcpkg_installed"
+          $rootInstalled = "${{ github.workspace }}/vcpkg_installed"
+          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/vcpkg/archives" | Out-Null
+          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/vcpkg/downloads" | Out-Null
+          New-Item -ItemType Directory -Force -Path $buildInstalled | Out-Null
+          if (-not (Test-Path $rootInstalled)) {
+            New-Item -ItemType Junction -Path $rootInstalled -Target $buildInstalled | Out-Null
+          }
+
+      - name: Enable MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Validate Opcode Specs
+        shell: pwsh
+        run: |
+          python tools/gen_opcode_docs.py --check
+
+      - name: Validate Generated Opcode Headers
+        shell: pwsh
+        run: |
+          python tools/gen_opcodes.py core/protocol/system_opcodes.json core/include/server/core/protocol/system_opcodes.hpp
+          python tools/gen_opcodes.py server/protocol/game_opcodes.json server/include/server/protocol/game_opcodes.hpp
+          git diff --exit-code -- core/include/server/core/protocol/system_opcodes.hpp server/include/server/protocol/game_opcodes.hpp
+
+      - name: Validate Doxygen Coverage
+        shell: pwsh
+        run: |
+          python tools/check_doxygen_coverage.py
+
+      - name: Run Doxygen Tool Unit Tests
+        shell: pwsh
+        run: |
+          python tests/python/test_check_doxygen_coverage.py
+
+      - name: Validate Wire Codec Specs
+        shell: pwsh
+        run: |
+          python tools/gen_wire_codec.py protocol/wire_map.json core/include/server/wire/codec.hpp
+          git diff --exit-code -- core/include/server/wire/codec.hpp
+
+      - name: Build Fast Test Target (Debug)
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug -Target core_general_tests
+
+      - name: Run Fast Policy/Transport Tests
+        shell: pwsh
+        run: |
+          ctest --preset windows-test -R "DispatcherTest|OpcodePolicyTest|UdpBindAbuseGuardTest|UdpSequencedMetricsTest" --output-on-failure
+
+  windows-slow-tests:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    needs: windows-fast-tests
+    env:
+      VCPKG_FEATURE_FLAGS: manifests,binarycaching
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.cache/vcpkg/archives,readwrite
+      VCPKG_DOWNLOADS: ${{ github.workspace }}/.cache/vcpkg/downloads
+      VCPKG_INSTALLED_DIR: ${{ github.workspace }}/build-windows/vcpkg_installed
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Cache vcpkg artifacts (Windows)
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/vcpkg/archives
+            .cache/vcpkg/downloads
+            vcpkg_installed
+            build-windows/vcpkg_installed
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'CMakePresets.json', 'scripts/setup_vcpkg.ps1', 'cmake/knights_vcpkg_toolchain.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json') }}-
+            ${{ runner.os }}-vcpkg-
+
+      - name: Ensure vcpkg cache directories (Windows)
+        shell: pwsh
+        run: |
+          $buildInstalled = "${{ github.workspace }}/build-windows/vcpkg_installed"
+          $rootInstalled = "${{ github.workspace }}/vcpkg_installed"
+          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/vcpkg/archives" | Out-Null
+          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/vcpkg/downloads" | Out-Null
+          New-Item -ItemType Directory -Force -Path $buildInstalled | Out-Null
+          if (-not (Test-Path $rootInstalled)) {
+            New-Item -ItemType Junction -Path $rootInstalled -Target $buildInstalled | Out-Null
+          }
+
+      - name: Enable MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build (Debug)
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug
+
+      - name: Run Slow Unit Tests (ctest)
+        shell: pwsh
+        run: |
+          ctest --preset windows-test -E "DispatcherTest|OpcodePolicyTest|UdpBindAbuseGuardTest|UdpSequencedMetricsTest" --output-on-failure
+
+  linux-docker-stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate Opcode Specs
+        run: |
+          python3 tools/gen_opcode_docs.py --check
+
+      - name: Validate Generated Opcode Headers
+        run: |
+          python3 tools/gen_opcodes.py core/protocol/system_opcodes.json core/include/server/core/protocol/system_opcodes.hpp
+          python3 tools/gen_opcodes.py server/protocol/game_opcodes.json server/include/server/protocol/game_opcodes.hpp
+          git diff --exit-code -- core/include/server/core/protocol/system_opcodes.hpp server/include/server/protocol/game_opcodes.hpp
+
+      - name: Validate Doxygen Coverage
+        run: |
+          python3 tools/check_doxygen_coverage.py
+
+      - name: Run Doxygen Tool Unit Tests
+        run: |
+          python3 tests/python/test_check_doxygen_coverage.py
+
+      - name: Docker Info
+        run: |
+          docker version
+          docker compose version
+
+      - name: Build Base Image (knights-base) with cache
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.base
+          tags: knights-base:latest
+          load: true
+          cache-from: type=gha,scope=knights-base-${{ runner.os }}
+          cache-to: type=gha,mode=max,scope=knights-base-${{ runner.os }}
+          provenance: false
+
+      - name: Verify Local Base Image
+        run: |
+          docker image inspect knights-base:latest > /dev/null
+
+      - name: Build gateway_app with UDP ingress OFF
+        run: |
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/app" \
+            -w /app \
+            knights-base:latest \
+            bash -lc "set -e; apt-get update && apt-get install -y ninja-build; cmake --preset linux -DKNIGHTS_ENABLE_GATEWAY_UDP_INGRESS=OFF -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=OFF; cmake --build --preset linux-debug --target gateway_app --parallel"
+
+      - name: ASan/UBSan Build (server_app)
+        run: |
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/app" \
+            -w /app \
+            knights-base:latest \
+            bash -lc "apt-get update && apt-get install -y ninja-build && cmake --preset linux-asan -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=OFF && cmake --build --preset linux-asan --target server_app --parallel"
+
+      - name: Start Stack (Detached)
+        shell: pwsh
+        env:
+          DOCKER_BUILDKIT: "0"
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/deploy_docker.ps1 -Action up -Detached -Build
+
+      - name: Wait For HAProxy
+        run: |
+          python3 - <<'PY'
+          import socket, time
+          host, port = '127.0.0.1', 6000
+          deadline = time.time() + 60
+          last_err = None
+          while time.time() < deadline:
+              try:
+                  with socket.create_connection((host, port), timeout=1.0):
+                      print('HAProxy is ready')
+                      raise SystemExit(0)
+              except Exception as e:
+                  last_err = e
+                  time.sleep(1)
+          raise SystemExit(f'HAProxy not ready: {last_err}')
+          PY
+
+      - name: Verify Health/Ready Endpoints
+        run: |
+          python3 - <<'PY'
+          import time
+          import urllib.request
+
+          bases = [
+              'http://127.0.0.1:36001',
+              'http://127.0.0.1:36002',
+              'http://127.0.0.1:39091',
+              'http://127.0.0.1:39092',
+              'http://127.0.0.1:39093',
+              'http://127.0.0.1:39200',
+          ]
+          paths = ['/healthz', '/readyz']
+
+          def fetch(url):
+              with urllib.request.urlopen(url, timeout=5) as r:
+                  return r.status, r.read().decode('utf-8', errors='replace')
+
+          pending = {(b, p) for b in bases for p in paths}
+          deadline = time.time() + 30
+          last_err = None
+          while time.time() < deadline and pending:
+              for b, p in list(pending):
+                  try:
+                      st, txt = fetch(b + p)
+                      if st == 200:
+                          pending.remove((b, p))
+                      else:
+                          last_err = f'{b}{p} -> {st} {txt[:120]}'
+                  except Exception as e:
+                      last_err = f'{b}{p} -> {e}'
+              if pending:
+                  time.sleep(0.5)
+
+          if pending:
+              raise SystemExit(f'health/ready not OK for: {sorted(pending)} (last={last_err})')
+
+          print('health/ready endpoints OK')
+          PY
+
+      - name: Smoke Test (PONG)
+        run: |
+          python3 tests/python/verify_pong.py
+
+      - name: Smoke Test (Load Balancing)
+        run: |
+          python3 tests/python/test_load_balancing.py
+
+      - name: Smoke Test (Cross-Instance Whisper)
+        run: |
+          python3 tests/python/verify_whisper_cross_instance.py
+
+      - name: Smoke Test (Admin API/UI)
+        run: |
+          python3 tests/python/verify_admin_api.py
+
+      - name: Smoke Test (Admin Auth Mode)
+        run: |
+          python3 tests/python/verify_admin_auth.py
+
+      - name: Smoke Test (Admin Control-Plane E2E)
+        run: |
+          python3 tests/python/verify_admin_control_plane_e2e.py
+
+      - name: Verify Plugin Metrics
+        run: |
+          python3 - <<'PY'
+          import urllib.request
+
+          def fetch(url):
+              with urllib.request.urlopen(url, timeout=5) as r:
+                  return r.read().decode('utf-8', errors='replace')
+
+          urls = [
+              'http://127.0.0.1:39091/metrics',
+              'http://127.0.0.1:39092/metrics',
+          ]
+          for url in urls:
+              txt = fetch(url)
+              if 'chat_hook_plugins_enabled' not in txt:
+                  raise SystemExit(f'missing chat_hook_plugins_enabled in {url}')
+              if 'chat_hook_plugin_info' not in txt:
+                  raise SystemExit(f'missing chat_hook_plugin_info in {url}')
+          print('plugin metrics present')
+          PY
+
+      - name: Hot Reload Plugin (v2) And Verify Metrics
+        run: |
+          export MSYS2_ARG_CONV_EXCL='*'
+          docker exec knights-stack-server-1-1 sh -lc "set -e; touch /app/plugins/10_chat_hook_sample_LOCK; cp /app/plugins/staging/10_chat_hook_sample_v2.so /app/plugins/10_chat_hook_sample.so; rm -f /app/plugins/10_chat_hook_sample_LOCK"
+          docker exec knights-stack-server-2-1 sh -lc "set -e; touch /app/plugins/10_chat_hook_sample_LOCK; cp /app/plugins/staging/10_chat_hook_sample_v2.so /app/plugins/10_chat_hook_sample.so; rm -f /app/plugins/10_chat_hook_sample_LOCK"
+
+          python3 - <<'PY'
+          import time, urllib.request
+
+          def fetch(url):
+              with urllib.request.urlopen(url, timeout=5) as r:
+                  return r.read().decode('utf-8', errors='replace')
+
+          urls = ['http://127.0.0.1:39091/metrics', 'http://127.0.0.1:39092/metrics']
+          deadline = time.time() + 30
+          while time.time() < deadline:
+              ok = True
+              for url in urls:
+                  txt = fetch(url)
+                  if 'file="10_chat_hook_sample.so"' not in txt:
+                      ok = False
+                      break
+                  if 'version="v2"' not in txt:
+                      ok = False
+                      break
+              if ok:
+                  print('hot reload reflected in metrics')
+                  raise SystemExit(0)
+              time.sleep(0.5)
+          raise SystemExit('hot reload did not reflect in metrics within timeout')
+          PY
+
+      - name: Dump Stack Logs (On Failure)
+        if: failure()
+        run: |
+          docker compose --project-name knights-stack --project-directory docker/stack -f docker/stack/docker-compose.yml ps
+          docker compose --project-name knights-stack --project-directory docker/stack -f docker/stack/docker-compose.yml logs --no-color --tail 200
+
+      - name: Stop Stack
+        if: always()
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/deploy_docker.ps1 -Action down

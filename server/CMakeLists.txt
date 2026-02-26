@@ -2,9 +2,12 @@ add_executable(server_app
     src/main.cpp
     src/app/bootstrap.cpp
     src/app/config.cpp
+    src/app/core_internal_adapter.cpp
     src/app/metrics_server.cpp
     src/app/router.cpp
     src/chat/chat_service_core.cpp
+    src/chat/chat_hook_plugin_manager.cpp
+    src/chat/chat_hook_plugin_chain.cpp
     src/chat/handlers_login.cpp
     src/chat/session_events.cpp
     src/chat/handlers_join.cpp
@@ -14,6 +17,8 @@ add_executable(server_app
 )
 target_include_directories(server_app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(server_app PRIVATE server_core wire_proto server_storage_pg server_storage_redis server_state)
+# dlopen/dlsym (Linux)
+target_link_libraries(server_app PRIVATE ${CMAKE_DL_LIBS})
 # protobuf 생성 헤더 경로 추가
 target_include_directories(server_app PRIVATE ${CMAKE_BINARY_DIR}/proto)
 
@@ -97,3 +102,5 @@ add_library(server_state STATIC
 )
 target_include_directories(server_state PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(server_state PUBLIC server_core server_storage_redis)
+
+add_subdirectory(plugins)

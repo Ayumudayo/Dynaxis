@@ -6,6 +6,12 @@
 #include "server/core/runtime_metrics.hpp"
 #include "server/core/util/log.hpp"
 
+/**
+ * @brief DbWorkerPool의 워커 루프/커밋/롤백 처리 구현입니다.
+ *
+ * DB 예외를 작업 단위로 격리해 전체 워커 중단을 방지하고,
+ * 큐 깊이/실패율 메트릭을 함께 기록해 병목 원인을 추적할 수 있게 합니다.
+ */
 namespace server::core::storage {
 
 namespace {
@@ -17,11 +23,15 @@ std::size_t normalize_worker_count(std::size_t count) {
 }
 } // namespace
 
-DbWorkerPool::DbWorkerPool(std::shared_ptr<IConnectionPool> pool)
-    : pool_(std::move(pool)) {
+DbWorkerPool::DbWorkerPool(std::shared_ptr<IConnectionPool> pool, std::size_t queue_capacity)
+    : pool_(std::move(pool))
+    , queue_(queue_capacity)
+    , queue_capacity_(queue_capacity) {
     if (!pool_) {
         throw std::invalid_argument("DbWorkerPool requires a valid connection pool");
     }
+
+    runtime_metrics::register_db_job_queue_capacity(queue_capacity_);
 }
 
 DbWorkerPool::~DbWorkerPool() {
@@ -71,7 +81,12 @@ void DbWorkerPool::submit(Task task, bool auto_commit) {
     if (!running_) {
         throw std::runtime_error("DbWorkerPool is not running");
     }
+    const auto wait_begin = std::chrono::steady_clock::now();
     queue_.push(Job{std::move(task), auto_commit});
+    const auto waited = std::chrono::steady_clock::now() - wait_begin;
+    if (queue_capacity_ > 0) {
+        runtime_metrics::record_db_job_queue_push_wait(waited);
+    }
     runtime_metrics::record_db_job_queue_depth(queue_.size());
 }
 

@@ -1,0 +1,346 @@
+x-knights-server: &knights-server
+  image: knights-server:local
+  pull_policy: never
+
+x-knights-server-build: &knights-server-build
+  <<: *knights-server
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+    target: server-runtime
+
+x-knights-gateway: &knights-gateway
+  image: knights-gateway:local
+  pull_policy: never
+
+x-knights-gateway-build: &knights-gateway-build
+  <<: *knights-gateway
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+    target: gateway-runtime
+
+x-knights-worker: &knights-worker
+  image: knights-worker:local
+  pull_policy: never
+
+x-knights-worker-build: &knights-worker-build
+  <<: *knights-worker
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+    target: worker-runtime
+
+x-knights-admin: &knights-admin
+  image: knights-admin:local
+  pull_policy: never
+
+x-knights-admin-build: &knights-admin-build
+  <<: *knights-admin
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+    target: admin-runtime
+
+x-knights-migrator: &knights-migrator
+  image: knights-migrator:local
+  pull_policy: never
+
+x-knights-migrator-build: &knights-migrator-build
+  <<: *knights-migrator
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+    target: migrator-runtime
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-knights}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-knights_db}
+    ports:
+      - "${POSTGRES_HOST_PORT:-35432}:5432"
+    volumes:
+      - knights_stack_postgres_data:/var/lib/postgresql/data
+    networks:
+      - knights-stack
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-knights} -d ${POSTGRES_DB:-knights_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_HOST_PORT:-36379}:6379"
+    volumes:
+      - knights_stack_redis_data:/data
+    networks:
+      - knights-stack
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrator:
+    <<: *knights-migrator-build
+    command: ["migrate"]
+    environment:
+      DB_URI: postgresql://${POSTGRES_USER:-knights}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-knights_db}
+      MIGRATIONS_DIR: /app/migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - knights-stack
+
+  server-1:
+    <<: *knights-server-build
+    command: ["server"]
+    environment:
+      PORT: "5000"
+      DB_URI: postgresql://${POSTGRES_USER:-knights}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-knights_db}
+      REDIS_URI: tcp://redis:6379
+      USE_REDIS_PUBSUB: "1"
+      REDIS_CHANNEL_PREFIX: "knights:"
+      WRITE_BEHIND_ENABLED: "1"
+      REDIS_STREAM_KEY: "session_events"
+      SERVER_INSTANCE_ID: "server-1"
+      SERVER_ADVERTISE_HOST: "server-1"
+      SERVER_ADVERTISE_PORT: "5000"
+      SERVER_REGISTRY_PREFIX: "gateway/instances/"
+      SERVER_REGISTRY_TTL: "30"
+      SERVER_HEARTBEAT_INTERVAL: "5"
+      GATEWAY_ID: "server-1"
+      METRICS_PORT: "9090"
+      RECENT_HISTORY_LIMIT: "20"
+      CHAT_HOOK_PLUGINS_DIR: "/app/plugins"
+      CHAT_HOOK_CACHE_DIR: "/tmp/chat_hook_cache"
+      CHAT_HOOK_RELOAD_INTERVAL_MS: "500"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    networks:
+      - knights-stack
+    ports:
+      - "${SERVER1_HOST_PORT:-30001}:5000"
+      - "${SERVER1_METRICS_HOST_PORT:-39091}:9090"
+
+  server-2:
+    <<: *knights-server
+    command: ["server"]
+    environment:
+      PORT: "5000"
+      DB_URI: postgresql://${POSTGRES_USER:-knights}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-knights_db}
+      REDIS_URI: tcp://redis:6379
+      USE_REDIS_PUBSUB: "1"
+      REDIS_CHANNEL_PREFIX: "knights:"
+      WRITE_BEHIND_ENABLED: "1"
+      REDIS_STREAM_KEY: "session_events"
+      SERVER_INSTANCE_ID: "server-2"
+      SERVER_ADVERTISE_HOST: "server-2"
+      SERVER_ADVERTISE_PORT: "5000"
+      SERVER_REGISTRY_PREFIX: "gateway/instances/"
+      SERVER_REGISTRY_TTL: "30"
+      SERVER_HEARTBEAT_INTERVAL: "5"
+      GATEWAY_ID: "server-2"
+      METRICS_PORT: "9090"
+      RECENT_HISTORY_LIMIT: "20"
+      CHAT_HOOK_PLUGINS_DIR: "/app/plugins"
+      CHAT_HOOK_CACHE_DIR: "/tmp/chat_hook_cache"
+      CHAT_HOOK_RELOAD_INTERVAL_MS: "500"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    networks:
+      - knights-stack
+    ports:
+      - "${SERVER2_HOST_PORT:-30002}:5000"
+      - "${SERVER2_METRICS_HOST_PORT:-39092}:9090"
+
+  wb_worker:
+    <<: *knights-worker-build
+    command: ["worker"]
+    environment:
+      DB_URI: postgresql://${POSTGRES_USER:-knights}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-knights_db}
+      REDIS_URI: tcp://redis:6379
+      REDIS_STREAM_KEY: "session_events"
+      WB_GROUP: "wb_group"
+      WB_CONSUMER: "worker-1"
+      METRICS_PORT: "9090"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    networks:
+      - knights-stack
+    ports:
+      - "${WB_WORKER_METRICS_HOST_PORT:-39093}:9090"
+
+  admin-app:
+    <<: *knights-admin-build
+    command: ["admin"]
+    environment:
+      REDIS_URI: tcp://redis:6379
+      REDIS_CHANNEL_PREFIX: "knights:"
+      SERVER_REGISTRY_PREFIX: "gateway/instances/"
+      SERVER_REGISTRY_TTL: "30"
+      GATEWAY_SESSION_PREFIX: "gateway/session/"
+      WB_WORKER_METRICS_URL: "http://wb_worker:9090/metrics"
+      METRICS_PORT: "39200"
+      ADMIN_POLL_INTERVAL_MS: "1000"
+      GRAFANA_BASE_URL: "http://127.0.0.1:${GRAFANA_HOST_PORT:-33000}"
+      PROMETHEUS_BASE_URL: "http://127.0.0.1:${PROMETHEUS_HOST_PORT:-39090}"
+    depends_on:
+      redis:
+        condition: service_healthy
+      wb_worker:
+        condition: service_started
+      migrator:
+        condition: service_completed_successfully
+    networks:
+      - knights-stack
+    ports:
+      - "${ADMIN_APP_HOST_PORT:-39200}:39200"
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "exec 3<>/dev/tcp/127.0.0.1/39200 && printf 'GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && IFS= read -r line <&3 && [[ \"$$line\" == *\" 200 \"* ]]"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  gateway-1:
+    <<: *knights-gateway-build
+    command: ["gateway"]
+    environment:
+      GATEWAY_LISTEN: "0.0.0.0:6000"
+      GATEWAY_UDP_LISTEN: "${GATEWAY1_UDP_LISTEN:-}"
+      GATEWAY_UDP_BIND_SECRET: "${GATEWAY_UDP_BIND_SECRET:-}"
+      GATEWAY_UDP_BIND_TTL_MS: "${GATEWAY_UDP_BIND_TTL_MS:-5000}"
+      GATEWAY_UDP_BIND_FAIL_WINDOW_MS: "${GATEWAY_UDP_BIND_FAIL_WINDOW_MS:-10000}"
+      GATEWAY_UDP_BIND_FAIL_LIMIT: "${GATEWAY_UDP_BIND_FAIL_LIMIT:-5}"
+      GATEWAY_UDP_BIND_BLOCK_MS: "${GATEWAY_UDP_BIND_BLOCK_MS:-60000}"
+      GATEWAY_ID: "gw1"
+      REDIS_URI: "tcp://redis:6379"
+      SERVER_REGISTRY_PREFIX: "gateway/instances/"
+      SERVER_REGISTRY_TTL: "30"
+      ALLOW_ANONYMOUS: "1"
+      METRICS_PORT: "6001"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - knights-stack
+    ports:
+      - "${GATEWAY1_METRICS_HOST_PORT:-36001}:6001"
+
+  gateway-2:
+    <<: *knights-gateway
+    command: ["gateway"]
+    environment:
+      GATEWAY_LISTEN: "0.0.0.0:6000"
+      GATEWAY_UDP_LISTEN: "${GATEWAY2_UDP_LISTEN:-}"
+      GATEWAY_UDP_BIND_SECRET: "${GATEWAY_UDP_BIND_SECRET:-}"
+      GATEWAY_UDP_BIND_TTL_MS: "${GATEWAY_UDP_BIND_TTL_MS:-5000}"
+      GATEWAY_UDP_BIND_FAIL_WINDOW_MS: "${GATEWAY_UDP_BIND_FAIL_WINDOW_MS:-10000}"
+      GATEWAY_UDP_BIND_FAIL_LIMIT: "${GATEWAY_UDP_BIND_FAIL_LIMIT:-5}"
+      GATEWAY_UDP_BIND_BLOCK_MS: "${GATEWAY_UDP_BIND_BLOCK_MS:-60000}"
+      GATEWAY_ID: "gw2"
+      REDIS_URI: "tcp://redis:6379"
+      SERVER_REGISTRY_PREFIX: "gateway/instances/"
+      SERVER_REGISTRY_TTL: "30"
+      ALLOW_ANONYMOUS: "1"
+      METRICS_PORT: "6001"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - knights-stack
+    ports:
+      - "${GATEWAY2_METRICS_HOST_PORT:-36002}:6001"
+
+  haproxy:
+    image: haproxy:2.9-alpine
+    depends_on:
+      - gateway-1
+      - gateway-2
+    ports:
+      - "${HAPROXY_HOST_PORT:-6000}:6000"
+      - "${HAPROXY_STATS_HOST_PORT:-8404}:8404"
+    volumes:
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - knights-stack
+
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: ["observability"]
+    volumes:
+      - ../observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports:
+      - "${PROMETHEUS_HOST_PORT:-39090}:9090"
+    networks:
+      - knights-stack
+
+  grafana:
+    image: grafana/grafana:latest
+    profiles: ["observability"]
+    ports:
+      - "${GRAFANA_HOST_PORT:-33000}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - knights-stack
+
+  redis_exporter:
+    image: oliver006/redis_exporter:latest
+    profiles: ["observability"]
+    command:
+      - "--redis.addr=redis://redis:6379"
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "${REDIS_EXPORTER_HOST_PORT:-39121}:9121"
+    networks:
+      - knights-stack
+
+  postgres_exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    profiles: ["observability"]
+    environment:
+      - DATA_SOURCE_NAME=postgresql://${POSTGRES_USER:-knights}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-knights_db}?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${POSTGRES_EXPORTER_HOST_PORT:-39187}:9187"
+    networks:
+      - knights-stack
+
+volumes:
+  knights_stack_postgres_data:
+  knights_stack_redis_data:
+
+networks:
+  knights-stack:
+    driver: bridge

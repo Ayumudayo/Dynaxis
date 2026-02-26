@@ -133,12 +133,7 @@ fabric.properties
 .idea/caches/build_file_checksums.ser
 
 ### VisualStudioCode ###
-.vscode/*
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
-!.vscode/*.code-snippets
+.vscode/
 
 # Local History for Visual Studio Code
 .history/
@@ -436,6 +431,7 @@ FakesAssemblies/
 # Node.js Tools for Visual Studio
 .ntvs_analysis.dat
 node_modules/
+bun.lock
 
 # Visual Studio 6 build log
 *.plg
@@ -557,9 +553,15 @@ log.txt
 # Env
 .env
 
-# AGENTS
-AGENTS.md
-Sapphire/
+# OpenCode (local config)
+.opencode/
+opencode.json
 
 # Documentation
 *_deep_dive.md
+
+# External references
+external-refs/
+
+# Internal docs
+tasks/

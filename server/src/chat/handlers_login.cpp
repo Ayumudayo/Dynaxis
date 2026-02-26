@@ -1,4 +1,5 @@
 #include "server/chat/chat_service.hpp"
+#include "server/core/protocol/opcode_policy.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/protocol/game_opcodes.hpp"
 #include "server/core/util/log.hpp"
@@ -6,8 +7,8 @@
 #include "wire.pb.h"
 // 저장소 연동 헤더
 #include "server/core/storage/connection_pool.hpp"
-#include "server/core/storage/repositories.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <optional>
 #include "server/storage/redis/client.hpp"
@@ -17,6 +18,12 @@ namespace proto = server::core::protocol;
 namespace game_proto = server::protocol;
 namespace corelog = server::core::log;
 
+/**
+ * @brief 로그인 핸들러 구현입니다.
+ *
+ * 사용자 식별/중복 검증/기본 로비 입장/감사 이벤트를 한 경로로 묶어,
+ * 인증 직후 세션 상태와 영속 상태가 동일하게 맞춰지도록 보장합니다.
+ */
 namespace server::app::chat {
 
 // -----------------------------------------------------------------------------
@@ -43,7 +50,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
     // 로그인은 DB/Redis 작업과 write-behind 이벤트가 함께 수행되므로 job_queue로 넘긴다.
     // I/O 바운드 작업이 많으므로 비동기 처리가 필수적입니다.
     // 메인 I/O 스레드가 블로킹되면 전체 서버의 반응성이 떨어지기 때문입니다.
-    job_queue_.Push([this, session_sp, user, token]() {
+    if (!job_queue_.TryPush([this, session_sp, user, token]() {
         const std::string session_id_str = get_or_create_session_uuid(*session_sp);
         std::string tracked_user_uuid;
         std::string lobby_room_id;
@@ -54,6 +61,46 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         bool guest_mode = (user.empty() || user == "guest");
         std::string new_user = ensure_unique_or_error(*session_sp, user);
         if (new_user.empty()) return; // 중복 등으로 실패 시 종료
+        const std::string hwid_hash = hash_hwid_token(token);
+
+        const auto now = std::chrono::steady_clock::now();
+        std::string deny_reason;
+        {
+            std::lock_guard<std::mutex> lk(state_.mu);
+
+            if (auto it = state_.banned_users.find(new_user); it != state_.banned_users.end()) {
+                if (it->second.expires_at <= now) {
+                    state_.banned_users.erase(it);
+                } else {
+                    deny_reason = it->second.reason.empty() ? "temporarily banned" : it->second.reason;
+                }
+            }
+
+            if (deny_reason.empty() && !login_ip.empty()) {
+                if (auto it = state_.banned_ips.find(login_ip); it != state_.banned_ips.end()) {
+                    if (it->second <= now) {
+                        state_.banned_ips.erase(it);
+                    } else {
+                        deny_reason = "temporarily banned (ip)";
+                    }
+                }
+            }
+
+            if (deny_reason.empty() && !hwid_hash.empty()) {
+                if (auto it = state_.banned_hwid_hashes.find(hwid_hash); it != state_.banned_hwid_hashes.end()) {
+                    if (it->second <= now) {
+                        state_.banned_hwid_hashes.erase(it);
+                    } else {
+                        deny_reason = "temporarily banned (device)";
+                    }
+                }
+            }
+        }
+
+        if (!deny_reason.empty()) {
+            session_sp->send_error(proto::errc::FORBIDDEN, deny_reason);
+            return;
+        }
 
         {
             std::lock_guard<std::mutex> lk(state_.mu);
@@ -72,6 +119,14 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 state_.guest.insert(session_sp.get());
             } else {
                 state_.guest.erase(session_sp.get());
+            }
+            state_.session_ip[session_sp.get()] = login_ip;
+            state_.session_hwid_hash[session_sp.get()] = hwid_hash;
+            if (!login_ip.empty()) {
+                state_.user_last_ip[new_user] = login_ip;
+            }
+            if (!hwid_hash.empty()) {
+                state_.user_last_hwid_hash[new_user] = hwid_hash;
             }
             // 기본적으로 로비에 입장시킵니다.
             std::string room = "lobby";
@@ -164,8 +219,11 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         pb.set_effective_user(new_user);
         pb.set_session_id(session_sp->session_id());
         pb.set_message("ok");
+        pb.set_is_admin(admin_users_.count(new_user) > 0);
         std::string bytes; pb.SerializeToString(&bytes);
         std::vector<std::uint8_t> res(bytes.begin(), bytes.end());
+
+        session_sp->set_session_status(server::core::protocol::SessionStatus::kAuthenticated);
         session_sp->async_send(game_proto::MSG_LOGIN_RES, res, 0);
 
         // presence:user:{uid} 키의 TTL을 주기적으로 갱신해 온라인 리스트를 유지한다.
@@ -207,7 +265,10 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         }
         // 로그인 과정도 stream에 남겨 이후 감사/재처리 파이프라인과 동기화한다.
         emit_write_behind_event("session_login", session_id_str, uid_opt, lobby_id_opt, std::move(wb_fields));
-    });
+    })) {
+        session_sp->send_error(proto::errc::SERVER_BUSY, "server busy");
+        corelog::warn("on_login dropped: job queue full");
+    }
 }
 
 } // namespace server::app::chat

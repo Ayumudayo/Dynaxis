@@ -1,15 +1,20 @@
 #include "server/core/memory/memory_pool.hpp"
 #include "server/core/runtime_metrics.hpp"
 
-#include <stdexcept>
-
+/**
+ * @brief 고정 블록 메모리 풀/버퍼 매니저 구현입니다.
+ *
+ * 잦은 new/delete를 줄여 단편화와 할당 지연을 완화하고,
+ * 풀 고갈 시 실패를 명시적으로 반환해 메모리 상한을 제어합니다.
+ */
 namespace server::core {
 
 // --- MemoryPool 구현 ---
 
 MemoryPool::MemoryPool(size_t blockSize, size_t blockCount)
-    : blockSize_(blockSize) {
+    : blockSize_(blockSize), blockCount_(blockCount) {
     if (blockSize == 0 || blockCount == 0) {
+        blockCount_ = 0;
         runtime_metrics::register_memory_pool_capacity(0);
         return;
     }
@@ -20,7 +25,7 @@ MemoryPool::MemoryPool(size_t blockSize, size_t blockCount)
     for (size_t i = 0; i < blockCount; ++i) {
         freeList_.push(memoryChunk_.data() + i * blockSize);
     }
-    runtime_metrics::register_memory_pool_capacity(freeList_.size());
+    runtime_metrics::register_memory_pool_capacity(blockCount_);
 }
 
 MemoryPool::~MemoryPool() {}
@@ -41,8 +46,29 @@ void* MemoryPool::Acquire() {
 
 void MemoryPool::Release(void* ptr) {
     if (ptr == nullptr) return;
+
     std::lock_guard<std::mutex> lock(mutex_);
-    // 안전 검사를 추가하려면 포인터가 우리 pool 에 속하는지 확인할 수 있습니다.
+
+    if (memoryChunk_.empty() || blockSize_ == 0 || blockCount_ == 0) {
+        return;
+    }
+
+    auto* begin = memoryChunk_.data();
+    auto* end = begin + memoryChunk_.size();
+    auto* byte_ptr = static_cast<std::byte*>(ptr);
+    if (byte_ptr < begin || byte_ptr >= end) {
+        return;
+    }
+
+    const auto offset = static_cast<std::size_t>(byte_ptr - begin);
+    if ((offset % blockSize_) != 0) {
+        return;
+    }
+
+    if (freeList_.size() >= blockCount_) {
+        return;
+    }
+
     freeList_.push(ptr);
     runtime_metrics::record_memory_pool_release();
 }
