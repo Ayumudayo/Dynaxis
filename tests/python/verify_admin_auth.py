@@ -33,8 +33,8 @@ def wait_ready(base_url: str, timeout_sec: float = 30.0) -> None:
     raise RuntimeError(f"admin auth test container not ready: {last_error}")
 
 
-def request_with_payload(url: str, headers=None):
-    req = urllib.request.Request(url, headers=headers or {})
+def request_with_payload(url: str, headers=None, method: str = "GET"):
+    req = urllib.request.Request(url, headers=headers or {}, method=method)
     try:
         with urllib.request.urlopen(req, timeout=5) as response:
             status = response.status
@@ -51,8 +51,19 @@ def request_with_payload(url: str, headers=None):
     return status, content_type, payload, body
 
 
-def expect_error(base_url: str, path: str, expected_status: int, expected_code: str, headers=None) -> None:
-    status, content_type, payload, _ = request_with_payload(f"{base_url}{path}", headers=headers)
+def expect_error(
+    base_url: str,
+    path: str,
+    expected_status: int,
+    expected_code: str,
+    headers=None,
+    method: str = "GET",
+) -> None:
+    status, content_type, payload, _ = request_with_payload(
+        f"{base_url}{path}",
+        headers=headers,
+        method=method,
+    )
     if status != expected_status:
         raise RuntimeError(f"{path} expected {expected_status}, got {status}")
     if "application/json" not in content_type:
@@ -60,6 +71,19 @@ def expect_error(base_url: str, path: str, expected_status: int, expected_code: 
     error = (payload or {}).get("error", {})
     if error.get("code") != expected_code:
         raise RuntimeError(f"{path} expected error code {expected_code}")
+
+
+def expect_not_forbidden(base_url: str, path: str, headers=None, method: str = "GET") -> int:
+    status, _, payload, body = request_with_payload(
+        f"{base_url}{path}",
+        headers=headers,
+        method=method,
+    )
+    if status == 403:
+        raise RuntimeError(f"{method} {path} should not be forbidden")
+    if (payload or {}).get("error", {}).get("code") == "FORBIDDEN":
+        raise RuntimeError(f"{method} {path} returned FORBIDDEN unexpectedly: {body}")
+    return status
 
 
 def main() -> int:
@@ -142,6 +166,148 @@ def main() -> int:
             raise RuntimeError("bearer auth context mismatch")
         if auth_data.get("mode") != "header_or_bearer":
             raise RuntimeError("bearer auth context mode mismatch")
+
+        viewer_headers = {"X-Admin-User": "viewer-user", "X-Admin-Role": "viewer"}
+        operator_headers = {"X-Admin-User": "operator-user", "X-Admin-Role": "operator"}
+        admin_headers = {"X-Admin-User": "admin-user", "X-Admin-Role": "admin"}
+
+        expected_caps = [
+            (
+                viewer_headers,
+                {
+                    "disconnect": False,
+                    "announce": False,
+                    "settings": False,
+                    "moderation": False,
+                },
+            ),
+            (
+                operator_headers,
+                {
+                    "disconnect": False,
+                    "announce": True,
+                    "settings": False,
+                    "moderation": False,
+                },
+            ),
+            (
+                admin_headers,
+                {
+                    "disconnect": True,
+                    "announce": True,
+                    "settings": True,
+                    "moderation": True,
+                },
+            ),
+        ]
+
+        for headers, expected in expected_caps:
+            status, _, payload, _ = request_with_payload(
+                f"{base_url}/api/v1/auth/context",
+                headers=headers,
+            )
+            if status != 200:
+                raise RuntimeError(f"auth context role matrix expected 200, got {status}")
+            capabilities = (payload or {}).get("data", {}).get("capabilities", {})
+            for key, expected_value in expected.items():
+                if capabilities.get(key) is not expected_value:
+                    raise RuntimeError(
+                        f"capability mismatch for role={headers['X-Admin-Role']} key={key}: expected {expected_value}, got {capabilities.get(key)}"
+                    )
+
+        disconnect_path = "/api/v1/users/disconnect?client_id=role-matrix-user&reason=auth-check"
+        announce_path = "/api/v1/announcements?text=role-matrix-announcement&priority=info"
+        settings_path = "/api/v1/settings?key=recent_history_limit&value=35"
+        moderation_path = "/api/v1/users/mute?client_id=role-matrix-user&duration_sec=30&reason=auth-check"
+
+        expect_error(
+            base_url,
+            disconnect_path,
+            403,
+            "FORBIDDEN",
+            headers=viewer_headers,
+            method="POST",
+        )
+        expect_error(
+            base_url,
+            announce_path,
+            403,
+            "FORBIDDEN",
+            headers=viewer_headers,
+            method="POST",
+        )
+        expect_error(
+            base_url,
+            settings_path,
+            403,
+            "FORBIDDEN",
+            headers=viewer_headers,
+            method="PATCH",
+        )
+        expect_error(
+            base_url,
+            moderation_path,
+            403,
+            "FORBIDDEN",
+            headers=viewer_headers,
+            method="POST",
+        )
+
+        expect_error(
+            base_url,
+            disconnect_path,
+            403,
+            "FORBIDDEN",
+            headers=operator_headers,
+            method="POST",
+        )
+        expect_error(
+            base_url,
+            settings_path,
+            403,
+            "FORBIDDEN",
+            headers=operator_headers,
+            method="PATCH",
+        )
+        expect_error(
+            base_url,
+            moderation_path,
+            403,
+            "FORBIDDEN",
+            headers=operator_headers,
+            method="POST",
+        )
+        expect_not_forbidden(
+            base_url,
+            announce_path,
+            headers=operator_headers,
+            method="POST",
+        )
+
+        expect_not_forbidden(
+            base_url,
+            disconnect_path,
+            headers=admin_headers,
+            method="POST",
+        )
+        expect_not_forbidden(
+            base_url,
+            announce_path,
+            headers=admin_headers,
+            method="POST",
+        )
+        expect_not_forbidden(
+            base_url,
+            settings_path,
+            headers=admin_headers,
+            method="PATCH",
+        )
+        expect_not_forbidden(
+            base_url,
+            moderation_path,
+            headers=admin_headers,
+            method="POST",
+        )
 
         expect_error(
             base_url,

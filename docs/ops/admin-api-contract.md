@@ -276,7 +276,7 @@
 
 권한:
 
-- `operator`, `admin`
+- `admin`
 
 ### 6.9 POST /api/v1/announcements
 
@@ -334,7 +334,7 @@
 | GET /api/v1/instances/{instance_id} | 허용 | 허용 | 허용 |
 | GET /api/v1/users | 허용 | 허용 | 허용 |
 | GET /api/v1/sessions/{client_id} | 허용 | 허용 | 허용 |
-| POST /api/v1/users/disconnect | 거부 | 허용 | 허용 |
+| POST /api/v1/users/disconnect | 거부 | 거부 | 허용 |
 | POST /api/v1/announcements | 거부 | 허용 | 허용 |
 | PATCH /api/v1/settings | 거부 | 거부 | 허용 |
 | GET /api/v1/worker/write-behind | 허용 | 허용 | 허용 |

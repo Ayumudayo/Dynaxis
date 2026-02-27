@@ -300,6 +300,12 @@ bool has_min_role(std::string_view actual, std::string_view required) {
     return role_rank(actual) >= role_rank(required);
 }
 
+// Admin API role matrix single source of truth.
+constexpr std::string_view kRoleRequiredDisconnect = "admin";
+constexpr std::string_view kRoleRequiredAnnouncement = "operator";
+constexpr std::string_view kRoleRequiredSettings = "admin";
+constexpr std::string_view kRoleRequiredModeration = "admin";
+
 std::string url_decode(std::string_view raw) {
     std::string out;
     out.reserve(raw.size());
@@ -1490,7 +1496,7 @@ private:
         }
 
         if (is_disconnect) {
-            if (auto forbidden = require_role("admin")) {
+            if (auto forbidden = require_role(kRoleRequiredDisconnect)) {
                 return finalize(std::move(*forbidden));
             }
             disconnect_requests_total_.fetch_add(1, std::memory_order_relaxed);
@@ -1498,7 +1504,7 @@ private:
         }
 
         if (is_announce) {
-            if (auto forbidden = require_role("operator")) {
+            if (auto forbidden = require_role(kRoleRequiredAnnouncement)) {
                 return finalize(std::move(*forbidden));
             }
             announce_requests_total_.fetch_add(1, std::memory_order_relaxed);
@@ -1506,7 +1512,7 @@ private:
         }
 
         if (is_settings) {
-            if (auto forbidden = require_role("admin")) {
+            if (auto forbidden = require_role(kRoleRequiredSettings)) {
                 return finalize(std::move(*forbidden));
             }
             settings_requests_total_.fetch_add(1, std::memory_order_relaxed);
@@ -1514,7 +1520,7 @@ private:
         }
 
         if (is_user_moderation) {
-            if (auto forbidden = require_role("admin")) {
+            if (auto forbidden = require_role(kRoleRequiredModeration)) {
                 return finalize(std::move(*forbidden));
             }
             moderation_requests_total_.fetch_add(1, std::memory_order_relaxed);
@@ -1559,10 +1565,10 @@ private:
         data << "\"role\":\"" << json_escape(auth_role_header_name_) << "\"";
         data << "},";
         data << "\"capabilities\":{";
-        data << "\"disconnect\":" << bool_json(has_min_role(auth.role, "admin")) << ",";
-        data << "\"announce\":" << bool_json(has_min_role(auth.role, "operator")) << ",";
-        data << "\"settings\":" << bool_json(has_min_role(auth.role, "admin")) << ",";
-        data << "\"moderation\":" << bool_json(has_min_role(auth.role, "admin"));
+        data << "\"disconnect\":" << bool_json(has_min_role(auth.role, kRoleRequiredDisconnect)) << ",";
+        data << "\"announce\":" << bool_json(has_min_role(auth.role, kRoleRequiredAnnouncement)) << ",";
+        data << "\"settings\":" << bool_json(has_min_role(auth.role, kRoleRequiredSettings)) << ",";
+        data << "\"moderation\":" << bool_json(has_min_role(auth.role, kRoleRequiredModeration));
         data << "}";
         data << "}";
         return json_ok(request_id, data.str());

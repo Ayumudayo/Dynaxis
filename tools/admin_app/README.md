@@ -118,7 +118,7 @@ pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build -Observability
 권한:
 
 - `viewer`: 조회 전용(read-only)
-- `operator`: 연결 종료/공지(disconnect/announcement) 가능
+- `operator`: 공지(announcement) 가능
 - `admin`: 런타임 설정(runtime settings) + moderation 포함 전체 가능
 
 ## 감사 로그

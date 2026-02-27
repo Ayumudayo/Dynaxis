@@ -184,7 +184,7 @@ Operator Browser
 - 확장: OIDC(SSO) 연동
 - RBAC 최소 3단계
   - `viewer` (MVP 기본)
-  - `operator` (disconnect/announcement)
+  - `operator` (announcement)
   - `admin` (정책/권한 관리)
 
 ### 7.2 감사(Audit)
