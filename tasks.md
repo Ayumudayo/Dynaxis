@@ -393,14 +393,14 @@
 
 작업:
 
-- [ ] drain 모드(신규 연결 차단 + 인플라이트 종료 대기 + 타임아웃 강제 종료) 상태머신을 도입한다.
-- [ ] drain 진행률 메트릭(남은 연결 수, drain elapsed, forced close count)을 추가한다.
-- [ ] 서버/워커 종료 절차에 drain 단계와 타임아웃 정책을 명시한다.
+- [x] drain 모드(신규 연결 차단 + 인플라이트 종료 대기 + 타임아웃 강제 종료) 상태머신을 도입한다.
+- [x] drain 진행률 메트릭(남은 연결 수, drain elapsed, forced close count)을 추가한다.
+- [x] 서버/워커 종료 절차에 drain 단계와 타임아웃 정책을 명시한다.
 
 검증:
 
-- [ ] SIGTERM 시 새 연결은 즉시 거절되고, 기존 연결은 drain timeout 내 정상 종료된다.
-- [ ] drain timeout 초과 연결만 강제 종료되며 카운터로 집계된다.
+- [x] SIGTERM 시 새 연결은 즉시 거절되고, 기존 연결은 drain timeout 내 정상 종료된다.
+- [x] drain timeout 초과 연결만 강제 종료되며 카운터로 집계된다.
 
 ### P1-5. 전송 보안 운영화(TLS1.3/mTLS/인증서 관측) 실행 항목 명시
 
@@ -655,3 +655,23 @@
   - `build-windows/tests/Debug/server_general_tests.exe --gtest_color=no`: 19/19 통과.
   - `python tests/python/verify_admin_auth.py`: 통과 (`PASS: admin auth mode smoke test`).
   - `python tests/python/verify_admin_read_only.py`: 통과 (`PASS: admin read-only mode smoke test`).
+
+### 진행 기록 (추가 갭 P1-4)
+
+- 상태: 완료
+- 코드 변경:
+  - `server/include/server/app/config.hpp`, `server/src/app/config.cpp`: graceful drain 설정 키 `SERVER_DRAIN_TIMEOUT_MS`, `SERVER_DRAIN_POLL_MS` 추가.
+  - `server/src/app/bootstrap.cpp`: shutdown 단계에 drain 대기 단계 추가(acceptor stop -> drain wait -> io stop), timeout 초과 시 남은 연결 수를 강제 종료 카운터로 누적.
+  - `server/src/app/metrics_server.cpp`: `chat_shutdown_drain_*` 메트릭(remaining/elapsed/timeout/forced-close/completed) 노출.
+  - `docker/stack/docker-compose.yml`: `server-1`, `server-2`에 drain 관련 환경변수 pass-through 추가.
+- 문서 동기화:
+  - `server/README.md`: graceful drain 종료 순서와 운영 메트릭 명시.
+  - `tools/wb_worker/README.md`: worker shutdown drain 정책/관측 포인트 명시.
+  - `docs/db/write-behind.md`: server/worker 종료 시 drain + timeout 정책 추가.
+  - `docs/configuration.md`: `SERVER_DRAIN_TIMEOUT_MS`, `SERVER_DRAIN_POLL_MS` 구성 키 문서화.
+  - `docs/ops/observability.md`: `chat_shutdown_drain_*` 메트릭 목록 반영.
+- 검증 결과:
+  - `lsp_diagnostics`: P1-4 변경 C++ 파일 에러 없음.
+  - `pwsh scripts/build.ps1 -Config Debug -Target server_app`: 성공.
+  - `pwsh scripts/build.ps1 -Config Debug -Target server_general_tests`: 성공.
+  - `build-windows/tests/Debug/server_general_tests.exe --gtest_color=no`: 19/19 통과.

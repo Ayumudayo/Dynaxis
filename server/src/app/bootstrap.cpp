@@ -69,6 +69,12 @@ std::atomic<std::uint64_t> g_admin_command_verify_future_total{0};
 std::atomic<std::uint64_t> g_admin_command_verify_missing_field_total{0};
 std::atomic<std::uint64_t> g_admin_command_verify_invalid_issued_at_total{0};
 std::atomic<std::uint64_t> g_admin_command_verify_secret_not_configured_total{0};
+std::atomic<std::uint64_t> g_shutdown_drain_completed_total{0};
+std::atomic<std::uint64_t> g_shutdown_drain_timeout_total{0};
+std::atomic<std::uint64_t> g_shutdown_drain_forced_close_total{0};
+std::atomic<std::uint64_t> g_shutdown_drain_remaining_connections{0};
+std::atomic<long long> g_shutdown_drain_elapsed_ms{0};
+std::atomic<long long> g_shutdown_drain_timeout_ms{0};
 
 namespace {
 
@@ -176,6 +182,15 @@ int run_server(int argc, char** argv) {
             app_host.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kFailed);
             return 1;
         }
+
+        g_shutdown_drain_completed_total.store(0, std::memory_order_relaxed);
+        g_shutdown_drain_timeout_total.store(0, std::memory_order_relaxed);
+        g_shutdown_drain_forced_close_total.store(0, std::memory_order_relaxed);
+        g_shutdown_drain_remaining_connections.store(0, std::memory_order_relaxed);
+        g_shutdown_drain_elapsed_ms.store(0, std::memory_order_relaxed);
+        g_shutdown_drain_timeout_ms.store(
+            static_cast<long long>(config.shutdown_drain_timeout_ms),
+            std::memory_order_relaxed);
 
         // Readiness: DB is required; Redis is required when configured.
         app_host.declare_dependency("db");
@@ -680,6 +695,39 @@ int run_server(int argc, char** argv) {
         // 12. 종료 시그널 대기
         app_host.add_shutdown_step("stop workers", [&]() { workers.Stop(); });
         app_host.add_shutdown_step("stop io_context", [&]() { io.stop(); });
+        app_host.add_shutdown_step("drain active sessions", [&]() {
+            const std::uint64_t timeout_ms = config.shutdown_drain_timeout_ms;
+            const std::uint64_t poll_ms = std::max<std::uint64_t>(1, config.shutdown_drain_poll_ms);
+
+            g_shutdown_drain_timeout_ms.store(static_cast<long long>(timeout_ms), std::memory_order_relaxed);
+
+            const auto started_at = std::chrono::steady_clock::now();
+            for (;;) {
+                const std::uint64_t remaining = core_internal::connection_count(state);
+                g_shutdown_drain_remaining_connections.store(remaining, std::memory_order_relaxed);
+
+                const auto now = std::chrono::steady_clock::now();
+                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - started_at).count();
+                g_shutdown_drain_elapsed_ms.store(elapsed, std::memory_order_relaxed);
+
+                if (remaining == 0) {
+                    g_shutdown_drain_completed_total.fetch_add(1, std::memory_order_relaxed);
+                    corelog::info("Shutdown drain completed within timeout");
+                    break;
+                }
+
+                if (elapsed >= static_cast<long long>(timeout_ms)) {
+                    g_shutdown_drain_timeout_total.fetch_add(1, std::memory_order_relaxed);
+                    g_shutdown_drain_forced_close_total.fetch_add(remaining, std::memory_order_relaxed);
+                    corelog::warn(
+                        "Shutdown drain timeout reached; forcing close of remaining connections="
+                        + std::to_string(remaining));
+                    break;
+                }
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
+            }
+        });
         app_host.add_shutdown_step("stop acceptor", [&]() { acceptor->stop(); });
         app_host.add_shutdown_step("stop db worker pool", [&]() {
             core_internal::stop_db_worker_pool(db_workers);

@@ -74,6 +74,9 @@ pwsh scripts/smoke_metrics.ps1
   - `chat_admin_command_verify_replay_total`, `chat_admin_command_verify_signature_mismatch_total` (counters)
   - `chat_admin_command_verify_expired_total`, `chat_admin_command_verify_future_total` (counters)
   - `chat_admin_command_verify_missing_field_total`, `chat_admin_command_verify_invalid_issued_at_total`, `chat_admin_command_verify_secret_not_configured_total` (counters)
+- shutdown drain:
+  - `chat_shutdown_drain_completed_total`, `chat_shutdown_drain_timeout_total`, `chat_shutdown_drain_forced_close_total` (counters)
+  - `chat_shutdown_drain_remaining_connections`, `chat_shutdown_drain_elapsed_ms`, `chat_shutdown_drain_timeout_ms` (gauges)
 - opcode별(hex): `chat_dispatch_opcode_total{opcode="0x0000"}`
 - opcode별(이름): `chat_dispatch_opcode_named_total{opcode="0x0000",name="MSG_*"}`
 - Chat hook 플러그인(실험):

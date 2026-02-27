@@ -19,6 +19,13 @@ tools/wb_worker/
 8. 개별 엔트리 처리 실패 시 DLQ로 이동(옵션) 후 ACK 정책(`WB_ACK_ON_ERROR`)에 따라 PEL 적체를 방지한다.
 9. stream entry에 `trace_id`/`correlation_id`가 포함되면 DB insert span 로그에도 같은 상관키를 연결한다.
 
+## 종료(Drain) 정책
+
+- `wb_worker`는 SIGINT/SIGTERM 수신 시 `stop_requested`를 확인해 메인 루프를 빠져나간다.
+- 종료 시점에는 신규 `XREADGROUP` 수집을 중단하고, 이미 버퍼에 적재된 이벤트는 마지막 flush 주기(`WB_BATCH_DELAY_MS`) 내에서 먼저 소진한다.
+- DB 장애가 지속되면 `WB_DB_RECONNECT_BASE_MS`~`WB_DB_RECONNECT_MAX_MS` 지수 백오프 정책을 유지하며 readiness는 `false` 상태를 유지한다.
+- 운영에서 drain 지연/적체는 `wb_pending`, `wb_flush_total`, `wb_db_reconnect_backoff_ms_last`로 확인한다.
+
 ## 환경 변수
 
 ### 필수

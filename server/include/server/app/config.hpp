@@ -45,6 +45,10 @@ struct ServerConfig {
     bool use_redis_pubsub = true;
     std::string gateway_id = "gw-default";
 
+    // Graceful drain (P1-4)
+    std::uint64_t shutdown_drain_timeout_ms = 15'000;
+    std::uint64_t shutdown_drain_poll_ms = 100;
+
     // Admin command integrity (P1-7)
     std::string admin_command_signing_secret;
     std::uint64_t admin_command_ttl_ms = 60'000;

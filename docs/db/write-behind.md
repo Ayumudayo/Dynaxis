@@ -50,6 +50,11 @@
 - 서버 재시작: 미커밋 이벤트는 Streams에 남아 재처리 대상이 됨
 - Redis 장애: 폴백으로 동기 기록(write-through) 전환 또는 기능 축소(설정 플래그)
 
+### 종료/Drain 정책
+- `server_app`: shutdown 시 readiness를 내리고 acceptor를 먼저 중지해 신규 연결을 차단한다. 이후 기존 연결을 drain 하며 `SERVER_DRAIN_TIMEOUT_MS` 내에 정리되지 않으면 남은 연결은 강제 종료 경로로 전환한다.
+- `wb_worker`: shutdown 시 신규 `XREADGROUP` 수집을 중단하고, 버퍼에 이미 적재된 배치는 마지막 flush로 소진한다. DB 비가용 구간에서는 `WB_DB_RECONNECT_BASE_MS`~`WB_DB_RECONNECT_MAX_MS` 지수 백오프를 유지한다.
+- 운영 검증: server는 `chat_shutdown_drain_*`, worker는 `wb_pending`, `wb_flush_*`, `wb_db_reconnect_backoff_ms_last`를 함께 확인한다.
+
 ## 데이터 모델(예)
 - `session_events`(append-only) — 이벤트소싱/감사 목적
   - `id bigserial`, `event_id text unique`, `type text`, `ts timestamptz`, `user_id uuid`, `session_id uuid`, `room_id uuid`, `payload jsonb`

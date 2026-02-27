@@ -40,6 +40,12 @@ extern std::atomic<std::uint64_t> g_admin_command_verify_future_total;
 extern std::atomic<std::uint64_t> g_admin_command_verify_missing_field_total;
 extern std::atomic<std::uint64_t> g_admin_command_verify_invalid_issued_at_total;
 extern std::atomic<std::uint64_t> g_admin_command_verify_secret_not_configured_total;
+extern std::atomic<std::uint64_t> g_shutdown_drain_completed_total;
+extern std::atomic<std::uint64_t> g_shutdown_drain_timeout_total;
+extern std::atomic<std::uint64_t> g_shutdown_drain_forced_close_total;
+extern std::atomic<std::uint64_t> g_shutdown_drain_remaining_connections;
+extern std::atomic<long long> g_shutdown_drain_elapsed_ms;
+extern std::atomic<long long> g_shutdown_drain_timeout_ms;
 
 namespace {
 
@@ -105,6 +111,14 @@ std::string render_metrics() {
     append_counter(
         "chat_admin_command_verify_secret_not_configured_total",
         g_admin_command_verify_secret_not_configured_total.load());
+    append_counter("chat_shutdown_drain_completed_total", g_shutdown_drain_completed_total.load());
+    append_counter("chat_shutdown_drain_timeout_total", g_shutdown_drain_timeout_total.load());
+    append_counter("chat_shutdown_drain_forced_close_total", g_shutdown_drain_forced_close_total.load());
+    append_gauge(
+        "chat_shutdown_drain_remaining_connections",
+        static_cast<long double>(g_shutdown_drain_remaining_connections.load()));
+    append_gauge("chat_shutdown_drain_elapsed_ms", static_cast<long double>(g_shutdown_drain_elapsed_ms.load()));
+    append_gauge("chat_shutdown_drain_timeout_ms", static_cast<long double>(g_shutdown_drain_timeout_ms.load()));
 
     append_counter("chat_accept_total", snap.accept_total);
     append_counter("chat_session_started_total", snap.session_started_total);

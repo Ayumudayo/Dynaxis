@@ -101,6 +101,18 @@ bool ServerConfig::load(int argc, char** argv) {
     if (const char* val = std::getenv("REDIS_CHANNEL_PREFIX"); val && *val) redis_channel_prefix = val;
     if (const char* val = std::getenv("USE_REDIS_PUBSUB"); val && *val) use_redis_pubsub = (std::strcmp(val, "0") != 0);
     if (const char* val = std::getenv("GATEWAY_ID"); val && *val) gateway_id = val;
+    if (const char* val = std::getenv("SERVER_DRAIN_TIMEOUT_MS"); val && *val) {
+        auto parsed = std::strtoull(val, nullptr, 10);
+        if (parsed > 0 && parsed <= 600'000) {
+            shutdown_drain_timeout_ms = parsed;
+        }
+    }
+    if (const char* val = std::getenv("SERVER_DRAIN_POLL_MS"); val && *val) {
+        auto parsed = std::strtoull(val, nullptr, 10);
+        if (parsed > 0 && parsed <= 5'000) {
+            shutdown_drain_poll_ms = parsed;
+        }
+    }
     if (const char* val = std::getenv("ADMIN_COMMAND_SIGNING_SECRET"); val && *val) {
         admin_command_signing_secret = val;
     }
