@@ -85,9 +85,17 @@ pwsh scripts/smoke_metrics.ps1
   - `gateway_backend_connect_timeout_total` (counter)
   - `gateway_backend_write_error_total` (counter)
   - `gateway_backend_send_queue_overflow_total` (counter)
+  - `gateway_backend_circuit_open_total`, `gateway_backend_circuit_reject_total` (counters)
+  - `gateway_backend_connect_retry_total`, `gateway_backend_retry_budget_exhausted_total` (counters)
+  - `gateway_backend_circuit_open` (gauge)
 - 백엔드(Backend) 가드레일 설정:
   - `gateway_backend_connect_timeout_ms` (gauge)
   - `gateway_backend_send_queue_max_bytes` (gauge)
+  - `gateway_backend_circuit_fail_threshold`, `gateway_backend_circuit_open_ms` (gauges)
+  - `gateway_backend_connect_retry_budget_per_min`, `gateway_backend_connect_retry_backoff_ms`, `gateway_backend_connect_retry_backoff_max_ms` (gauges)
+- ingress load shedding:
+  - `gateway_ingress_reject_not_ready_total`, `gateway_ingress_reject_rate_limit_total`, `gateway_ingress_reject_session_limit_total`, `gateway_ingress_reject_circuit_open_total` (counters)
+  - `gateway_ingress_tokens_per_sec`, `gateway_ingress_burst_tokens`, `gateway_ingress_max_active_sessions`, `gateway_ingress_tokens_available` (gauges)
 - UDP 수신/바인드(ingress/bind) 가드레일:
   - `gateway_udp_enabled` (gauge)
   - `gateway_udp_packets_total`, `gateway_udp_receive_error_total` (counters)
@@ -103,9 +111,11 @@ pwsh scripts/smoke_metrics.ps1
 - DB 재연결 설정/백오프:
   - `wb_db_reconnect_base_ms`, `wb_db_reconnect_max_ms` (gauges)
   - `wb_db_reconnect_backoff_ms_last` (gauge)
+  - `wb_retry_max`, `wb_retry_backoff_ms`, `wb_flush_retry_delay_ms_last` (gauges)
 - DB 가용성/드롭 신호:
   - `wb_db_unavailable_total` (counter)
   - `wb_error_drop_total` (counter)
+  - `wb_flush_retry_attempt_total`, `wb_flush_retry_exhausted_total` (counters)
 - 플러시(Flush): `wb_flush_total`, `wb_flush_ok_total`, `wb_flush_fail_total`, `wb_flush_dlq_total` (counters)
 - 배치/지연: `wb_flush_batch_size_last` (gauge), `wb_flush_commit_ms_last` (gauge)
 
@@ -140,10 +150,13 @@ max_over_time(wb_pending[5m])
 - redis/postgres exporter down: `docker/stack/docker-compose.yml`의 `observability` profile이 올라왔는지 확인한다.
 - chat 상세 로그가 기대보다 적음: 최신 서버 경로에서는 고빈도 로그(`CHAT_SEND` 본문, whisper 상태, publish 카운트)가 노이즈 절감을 위해 `debug` 또는 샘플링으로 조정되어 기본 `info`에서 보이지 않을 수 있다.
 
-## 6. 경보 규칙 (Gateway UDP)
+## 6. 경보 규칙 (Gateway UDP + Resilience)
 
 - Prometheus rule 파일(file): `docker/observability/prometheus/alerts.yml`
 - 기본 경보:
+  - `GatewayBackendCircuitOpen`: backend circuit open 지속
+  - `GatewayIngressRateLimited`: ingress rate-limit reject 급증
+  - `WbFlushRetryExhausted`: wb_worker flush retry budget 소진
   - `GatewayUdpBindAbuseSpike`: bind rate-limit reject 급증
   - `GatewayUdpEstimatedLossHigh`: 추정 loss ratio > 5%
   - `GatewayUdpReplayDropSpike`: replay/reorder drop 급증

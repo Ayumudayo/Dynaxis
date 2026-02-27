@@ -54,6 +54,15 @@ constexpr const char* kEnvServerRegistryPrefix = "SERVER_REGISTRY_PREFIX";
 constexpr const char* kEnvServerRegistryTtl = "SERVER_REGISTRY_TTL";
 constexpr const char* kEnvGatewayBackendConnectTimeoutMs = "GATEWAY_BACKEND_CONNECT_TIMEOUT_MS";
 constexpr const char* kEnvGatewayBackendSendQueueMaxBytes = "GATEWAY_BACKEND_SEND_QUEUE_MAX_BYTES";
+constexpr const char* kEnvGatewayBackendCircuitEnabled = "GATEWAY_BACKEND_CIRCUIT_BREAKER_ENABLED";
+constexpr const char* kEnvGatewayBackendCircuitFailThreshold = "GATEWAY_BACKEND_CIRCUIT_FAIL_THRESHOLD";
+constexpr const char* kEnvGatewayBackendCircuitOpenMs = "GATEWAY_BACKEND_CIRCUIT_OPEN_MS";
+constexpr const char* kEnvGatewayBackendRetryBudgetPerMin = "GATEWAY_BACKEND_CONNECT_RETRY_BUDGET_PER_MIN";
+constexpr const char* kEnvGatewayBackendRetryBackoffMs = "GATEWAY_BACKEND_CONNECT_RETRY_BACKOFF_MS";
+constexpr const char* kEnvGatewayBackendRetryBackoffMaxMs = "GATEWAY_BACKEND_CONNECT_RETRY_BACKOFF_MAX_MS";
+constexpr const char* kEnvGatewayIngressTokensPerSec = "GATEWAY_INGRESS_TOKENS_PER_SEC";
+constexpr const char* kEnvGatewayIngressBurstTokens = "GATEWAY_INGRESS_BURST_TOKENS";
+constexpr const char* kEnvGatewayIngressMaxActiveSessions = "GATEWAY_INGRESS_MAX_ACTIVE_SESSIONS";
 constexpr const char* kEnvAllowAnonymous = "ALLOW_ANONYMOUS";
 constexpr const char* kEnvGatewayUdpListen = "GATEWAY_UDP_LISTEN";
 constexpr const char* kEnvGatewayUdpBindSecret = "GATEWAY_UDP_BIND_SECRET";
@@ -67,6 +76,15 @@ constexpr const char* kDefaultRedisUri = "tcp://127.0.0.1:6379";
 constexpr const char* kDefaultServerRegistryPrefix = "gateway/instances/";
 constexpr std::uint32_t kDefaultBackendConnectTimeoutMs = 5000;
 constexpr std::size_t kDefaultBackendSendQueueMaxBytes = 256 * 1024;
+constexpr bool kDefaultBackendCircuitEnabled = true;
+constexpr std::uint32_t kDefaultBackendCircuitFailThreshold = 5;
+constexpr std::uint32_t kDefaultBackendCircuitOpenMs = 10000;
+constexpr std::uint32_t kDefaultBackendRetryBudgetPerMin = 120;
+constexpr std::uint32_t kDefaultBackendRetryBackoffMs = 200;
+constexpr std::uint32_t kDefaultBackendRetryBackoffMaxMs = 2000;
+constexpr std::uint32_t kDefaultIngressTokensPerSec = 200;
+constexpr std::uint32_t kDefaultIngressBurstTokens = 400;
+constexpr std::size_t kDefaultIngressMaxActiveSessions = 50000;
 constexpr std::uint32_t kDefaultUdpBindTtlMs = 5000;
 constexpr std::uint32_t kDefaultUdpBindFailWindowMs = 10000;
 constexpr std::uint32_t kDefaultUdpBindFailLimit = 5;
@@ -82,6 +100,25 @@ std::uint64_t unix_time_ms() {
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch());
     return static_cast<std::uint64_t>(now.count());
+}
+
+std::uint64_t steady_time_ms() {
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch());
+    return static_cast<std::uint64_t>(now.count());
+}
+
+bool parse_env_bool(const char* key, bool fallback) {
+    if (const char* value = std::getenv(key); value && *value) {
+        const auto text = std::string_view(value);
+        if (text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON") {
+            return true;
+        }
+        if (text == "0" || text == "false" || text == "FALSE" || text == "off" || text == "OFF") {
+            return false;
+        }
+    }
+    return fallback;
 }
 
 void write_be64(std::uint64_t value, std::vector<std::uint8_t>& out) {
@@ -252,6 +289,7 @@ GatewayApp::BackendConnection::BackendConnection(GatewayApp& app,
     , connection_(std::move(connection))
     , socket_(app.io_)
     , connect_timer_(app.io_)
+    , retry_timer_(app.io_)
     , send_queue_max_bytes_(send_queue_max_bytes > 0 ? send_queue_max_bytes : kDefaultBackendSendQueueMaxBytes)
     , connect_timeout_(connect_timeout > std::chrono::milliseconds{0}
                            ? connect_timeout
@@ -264,10 +302,17 @@ GatewayApp::BackendConnection::~BackendConnection() {
 
 void GatewayApp::BackendConnection::connect(const std::string& host, std::uint16_t port) {
     if (closed_.load(std::memory_order_relaxed)) return;
+
+    connect_host_ = host;
+    connect_port_ = port;
+    retry_attempt_ = 0;
+
     do_connect(host, port);
 }
 
 void GatewayApp::BackendConnection::do_connect(const std::string& host, std::uint16_t port) {
+    close_socket_for_retry();
+
     auto self = shared_from_this();
     auto resolver = std::make_shared<boost::asio::ip::tcp::resolver>(app_.io_);
     
@@ -279,7 +324,11 @@ void GatewayApp::BackendConnection::do_connect(const std::string& host, std::uin
 
             if (ec) {
                 app_.record_backend_resolve_fail();
-                server::core::log::error("BackendConnection resolve failed: " + ec.message());
+                app_.record_backend_connect_failure_event();
+                server::core::log::warn("BackendConnection resolve failed: " + ec.message());
+                if (schedule_connect_retry("resolve failed")) {
+                    return;
+                }
                 if (auto conn = connection_.lock()) {
                     conn->handle_backend_close("resolve failed");
                 } else {
@@ -306,7 +355,11 @@ void GatewayApp::BackendConnection::do_connect(const std::string& host, std::uin
 
                     if (ec) {
                         app_.record_backend_connect_fail();
-                        server::core::log::error("BackendConnection connect failed: " + ec.message());
+                        app_.record_backend_connect_failure_event();
+                        server::core::log::warn("BackendConnection connect failed: " + ec.message());
+                        if (schedule_connect_retry("connect failed")) {
+                            return;
+                        }
                         if (auto conn = connection_.lock()) {
                             conn->handle_backend_close("connect failed");
                         } else {
@@ -318,10 +371,14 @@ void GatewayApp::BackendConnection::do_connect(const std::string& host, std::uin
                     {
                         std::lock_guard<std::mutex> lock(send_mutex_);
                         connected_ = true;
+                        retry_attempt_ = 0;
                         if (!write_queue_.empty()) {
                             do_write();
                         }
                     }
+
+                    (void)retry_timer_.cancel();
+                    app_.record_backend_connect_success_event();
 
                     // Backend TCP 연결이 성공했으므로 sticky binding을 갱신한다.
                     // connect 성공 후에만 바인딩해야, 연결 실패로 인한 zombie mapping을 피할 수 있다.
@@ -331,25 +388,7 @@ void GatewayApp::BackendConnection::do_connect(const std::string& host, std::uin
         });
 }
 
-void GatewayApp::BackendConnection::on_connect_timeout() {
-    bool expected = false;
-    if (!closed_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-        return;
-    }
-
-    app_.record_backend_connect_timeout();
-    server::core::log::warn(
-        "BackendConnection connect timeout after " + std::to_string(connect_timeout_.count()) + "ms"
-    );
-
-    {
-        std::lock_guard<std::mutex> lock(send_mutex_);
-        write_queue_.clear();
-        queued_bytes_ = 0;
-        connected_ = false;
-        write_in_progress_ = false;
-    }
-
+void GatewayApp::BackendConnection::close_socket_for_retry() {
     boost::system::error_code ignored;
     if (socket_.is_open()) {
         socket_.cancel(ignored);
@@ -357,8 +396,64 @@ void GatewayApp::BackendConnection::on_connect_timeout() {
         socket_.close(ignored);
     }
 
+    std::lock_guard<std::mutex> lock(send_mutex_);
+    connected_ = false;
+    write_in_progress_ = false;
+}
+
+bool GatewayApp::BackendConnection::schedule_connect_retry(const char* reason) {
+    if (!app_.consume_backend_retry_budget()) {
+        app_.record_backend_retry_budget_exhausted();
+        server::core::log::warn("BackendConnection retry budget exhausted: session=" + session_id_ + " reason=" + reason);
+        return false;
+    }
+
+    ++retry_attempt_;
+    app_.record_backend_retry_scheduled();
+    const auto delay = app_.backend_retry_delay(retry_attempt_);
+    close_socket_for_retry();
+
+    server::core::log::warn(
+        "BackendConnection scheduling retry: session=" + session_id_
+        + " attempt=" + std::to_string(retry_attempt_)
+        + " delay_ms=" + std::to_string(delay.count())
+        + " reason=" + reason
+    );
+
+    auto self = shared_from_this();
+    retry_timer_.expires_after(delay);
+    retry_timer_.async_wait([self, this](const boost::system::error_code& ec) {
+        if (ec == boost::asio::error::operation_aborted) {
+            return;
+        }
+        if (closed_.load(std::memory_order_relaxed)) {
+            return;
+        }
+        do_connect(connect_host_, connect_port_);
+    });
+
+    return true;
+}
+
+void GatewayApp::BackendConnection::on_connect_timeout() {
+    if (closed_.load(std::memory_order_relaxed)) {
+        return;
+    }
+
+    app_.record_backend_connect_timeout();
+    app_.record_backend_connect_failure_event();
+    server::core::log::warn(
+        "BackendConnection connect timeout after " + std::to_string(connect_timeout_.count()) + "ms"
+    );
+
+    if (schedule_connect_retry("connect timeout")) {
+        return;
+    }
+
     if (auto conn = connection_.lock()) {
         conn->handle_backend_close("connect timeout");
+    } else {
+        close();
     }
 }
 
@@ -509,6 +604,7 @@ void GatewayApp::BackendConnection::close() {
     if (!closed_.compare_exchange_strong(expected, true)) return;
 
     (void)connect_timer_.cancel();
+    (void)retry_timer_.cancel();
 
     {
         std::lock_guard<std::mutex> lock(send_mutex_);
@@ -601,6 +697,69 @@ GatewayApp::GatewayApp()
 
         stream << "# TYPE gateway_backend_send_queue_max_bytes gauge\n";
         stream << "gateway_backend_send_queue_max_bytes " << backend_send_queue_max_bytes_ << "\n";
+
+        stream << "# TYPE gateway_backend_circuit_open_total counter\n";
+        stream << "gateway_backend_circuit_open_total "
+               << backend_circuit_open_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE gateway_backend_circuit_reject_total counter\n";
+        stream << "gateway_backend_circuit_reject_total "
+               << backend_circuit_reject_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE gateway_backend_connect_retry_total counter\n";
+        stream << "gateway_backend_connect_retry_total "
+               << backend_connect_retry_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE gateway_backend_retry_budget_exhausted_total counter\n";
+        stream << "gateway_backend_retry_budget_exhausted_total "
+               << backend_retry_budget_exhausted_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE gateway_backend_circuit_open gauge\n";
+        stream << "gateway_backend_circuit_open "
+               << (backend_circuit_breaker_.is_open(steady_time_ms()) ? 1 : 0) << "\n";
+
+        stream << "# TYPE gateway_backend_circuit_fail_threshold gauge\n";
+        stream << "gateway_backend_circuit_fail_threshold " << backend_circuit_fail_threshold_ << "\n";
+
+        stream << "# TYPE gateway_backend_circuit_open_ms gauge\n";
+        stream << "gateway_backend_circuit_open_ms " << backend_circuit_open_ms_ << "\n";
+
+        stream << "# TYPE gateway_backend_connect_retry_budget_per_min gauge\n";
+        stream << "gateway_backend_connect_retry_budget_per_min " << backend_connect_retry_budget_per_min_ << "\n";
+
+        stream << "# TYPE gateway_backend_connect_retry_backoff_ms gauge\n";
+        stream << "gateway_backend_connect_retry_backoff_ms " << backend_connect_retry_backoff_ms_ << "\n";
+
+        stream << "# TYPE gateway_backend_connect_retry_backoff_max_ms gauge\n";
+        stream << "gateway_backend_connect_retry_backoff_max_ms " << backend_connect_retry_backoff_max_ms_ << "\n";
+
+        stream << "# TYPE gateway_ingress_reject_not_ready_total counter\n";
+        stream << "gateway_ingress_reject_not_ready_total "
+               << ingress_reject_not_ready_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE gateway_ingress_reject_rate_limit_total counter\n";
+        stream << "gateway_ingress_reject_rate_limit_total "
+               << ingress_reject_rate_limit_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE gateway_ingress_reject_session_limit_total counter\n";
+        stream << "gateway_ingress_reject_session_limit_total "
+               << ingress_reject_session_limit_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE gateway_ingress_reject_circuit_open_total counter\n";
+        stream << "gateway_ingress_reject_circuit_open_total "
+               << ingress_reject_circuit_open_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE gateway_ingress_tokens_per_sec gauge\n";
+        stream << "gateway_ingress_tokens_per_sec " << ingress_tokens_per_sec_ << "\n";
+
+        stream << "# TYPE gateway_ingress_burst_tokens gauge\n";
+        stream << "gateway_ingress_burst_tokens " << ingress_burst_tokens_ << "\n";
+
+        stream << "# TYPE gateway_ingress_max_active_sessions gauge\n";
+        stream << "gateway_ingress_max_active_sessions " << ingress_max_active_sessions_ << "\n";
+
+        stream << "# TYPE gateway_ingress_tokens_available gauge\n";
+        stream << "gateway_ingress_tokens_available " << ingress_token_bucket_.available(steady_time_ms()) << "\n";
 
         stream << "# TYPE gateway_udp_enabled gauge\n";
         stream << "gateway_udp_enabled " << (udp_enabled_.load(std::memory_order_relaxed) ? 1 : 0) << "\n";
@@ -752,6 +911,85 @@ void GatewayApp::stop() {
     io_.stop();
 }
 
+GatewayApp::IngressAdmission GatewayApp::admit_ingress_connection() {
+    if (!app_host_.ready() || !app_host_.healthy() || app_host_.stop_requested()) {
+        (void)ingress_reject_not_ready_total_.fetch_add(1, std::memory_order_relaxed);
+        return IngressAdmission::kRejectNotReady;
+    }
+
+    const auto now_ms = steady_time_ms();
+    if (backend_circuit_breaker_.is_open(now_ms)) {
+        (void)ingress_reject_circuit_open_total_.fetch_add(1, std::memory_order_relaxed);
+        return IngressAdmission::kRejectCircuitOpen;
+    }
+
+    if (ingress_max_active_sessions_ > 0) {
+        std::size_t session_count = 0;
+        {
+            std::lock_guard<std::mutex> lock(session_mutex_);
+            session_count = sessions_.size();
+        }
+        if (session_count >= ingress_max_active_sessions_) {
+            (void)ingress_reject_session_limit_total_.fetch_add(1, std::memory_order_relaxed);
+            return IngressAdmission::kRejectSessionLimit;
+        }
+    }
+
+    if (!ingress_token_bucket_.consume(now_ms)) {
+        (void)ingress_reject_rate_limit_total_.fetch_add(1, std::memory_order_relaxed);
+        return IngressAdmission::kRejectRateLimited;
+    }
+
+    return IngressAdmission::kAccept;
+}
+
+const char* GatewayApp::ingress_admission_name(IngressAdmission admission) noexcept {
+    switch (admission) {
+        case IngressAdmission::kAccept:
+            return "accept";
+        case IngressAdmission::kRejectNotReady:
+            return "not_ready";
+        case IngressAdmission::kRejectRateLimited:
+            return "rate_limited";
+        case IngressAdmission::kRejectSessionLimit:
+            return "session_limit";
+        case IngressAdmission::kRejectCircuitOpen:
+            return "circuit_open";
+    }
+    return "unknown";
+}
+
+bool GatewayApp::backend_circuit_allows_connect() {
+    if (backend_circuit_breaker_.allow(steady_time_ms())) {
+        return true;
+    }
+
+    (void)backend_circuit_reject_total_.fetch_add(1, std::memory_order_relaxed);
+    return false;
+}
+
+void GatewayApp::record_backend_connect_success_event() {
+    backend_circuit_breaker_.record_success();
+}
+
+void GatewayApp::record_backend_connect_failure_event() {
+    if (backend_circuit_breaker_.record_failure(steady_time_ms())) {
+        (void)backend_circuit_open_total_.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+bool GatewayApp::consume_backend_retry_budget() {
+    return backend_retry_budget_.consume(steady_time_ms());
+}
+
+std::chrono::milliseconds GatewayApp::backend_retry_delay(std::uint32_t attempt) const {
+    const auto capped_attempt = std::min<std::uint32_t>(attempt, 8);
+    const auto factor = 1ull << (capped_attempt == 0 ? 0 : (capped_attempt - 1));
+    const auto base_delay = static_cast<std::uint64_t>(backend_connect_retry_backoff_ms_) * factor;
+    const auto bounded_delay = std::min<std::uint64_t>(base_delay, backend_connect_retry_backoff_max_ms_);
+    return std::chrono::milliseconds{bounded_delay};
+}
+
 void GatewayApp::start_infrastructure_probe() {
     if (infra_probe_thread_.joinable()) {
         return;
@@ -805,6 +1043,11 @@ void GatewayApp::stop_infrastructure_probe() {
 
 GatewayApp::BackendConnectionPtr GatewayApp::create_backend_connection(const std::string& client_id,
                                                                  std::weak_ptr<GatewayConnection> connection) {
+    if (!backend_circuit_allows_connect()) {
+        server::core::log::warn("GatewayApp backend circuit open: rejecting new backend connect attempt");
+        return nullptr;
+    }
+
     auto selected = select_best_server(client_id);
     if (!selected) {
         server::core::log::error("GatewayApp: No available backend server found");
@@ -1189,6 +1432,92 @@ void GatewayApp::configure_gateway() {
         "GatewayApp invalid GATEWAY_BACKEND_SEND_QUEUE_MAX_BYTES; using default"
     );
 
+    backend_circuit_breaker_enabled_ = parse_env_bool(
+        kEnvGatewayBackendCircuitEnabled,
+        kDefaultBackendCircuitEnabled
+    );
+
+    backend_circuit_fail_threshold_ = parse_env_u32_bounded(
+        kEnvGatewayBackendCircuitFailThreshold,
+        kDefaultBackendCircuitFailThreshold,
+        1,
+        100,
+        "GatewayApp invalid GATEWAY_BACKEND_CIRCUIT_FAIL_THRESHOLD; using default"
+    );
+
+    backend_circuit_open_ms_ = parse_env_u32_bounded(
+        kEnvGatewayBackendCircuitOpenMs,
+        kDefaultBackendCircuitOpenMs,
+        100,
+        300000,
+        "GatewayApp invalid GATEWAY_BACKEND_CIRCUIT_OPEN_MS; using default"
+    );
+
+    backend_connect_retry_budget_per_min_ = parse_env_u32_bounded(
+        kEnvGatewayBackendRetryBudgetPerMin,
+        kDefaultBackendRetryBudgetPerMin,
+        0,
+        60000,
+        "GatewayApp invalid GATEWAY_BACKEND_CONNECT_RETRY_BUDGET_PER_MIN; using default"
+    );
+
+    backend_connect_retry_backoff_ms_ = parse_env_u32_bounded(
+        kEnvGatewayBackendRetryBackoffMs,
+        kDefaultBackendRetryBackoffMs,
+        10,
+        60000,
+        "GatewayApp invalid GATEWAY_BACKEND_CONNECT_RETRY_BACKOFF_MS; using default"
+    );
+
+    backend_connect_retry_backoff_max_ms_ = parse_env_u32_bounded(
+        kEnvGatewayBackendRetryBackoffMaxMs,
+        kDefaultBackendRetryBackoffMaxMs,
+        10,
+        300000,
+        "GatewayApp invalid GATEWAY_BACKEND_CONNECT_RETRY_BACKOFF_MAX_MS; using default"
+    );
+    if (backend_connect_retry_backoff_max_ms_ < backend_connect_retry_backoff_ms_) {
+        backend_connect_retry_backoff_max_ms_ = backend_connect_retry_backoff_ms_;
+    }
+
+    ingress_tokens_per_sec_ = parse_env_u32_bounded(
+        kEnvGatewayIngressTokensPerSec,
+        kDefaultIngressTokensPerSec,
+        1,
+        100000,
+        "GatewayApp invalid GATEWAY_INGRESS_TOKENS_PER_SEC; using default"
+    );
+
+    ingress_burst_tokens_ = parse_env_u32_bounded(
+        kEnvGatewayIngressBurstTokens,
+        kDefaultIngressBurstTokens,
+        1,
+        200000,
+        "GatewayApp invalid GATEWAY_INGRESS_BURST_TOKENS; using default"
+    );
+    if (ingress_burst_tokens_ < ingress_tokens_per_sec_) {
+        ingress_burst_tokens_ = ingress_tokens_per_sec_;
+    }
+
+    ingress_max_active_sessions_ = parse_env_size_bounded(
+        kEnvGatewayIngressMaxActiveSessions,
+        kDefaultIngressMaxActiveSessions,
+        1,
+        500000,
+        "GatewayApp invalid GATEWAY_INGRESS_MAX_ACTIVE_SESSIONS; using default"
+    );
+
+    ingress_token_bucket_.configure(
+        static_cast<double>(ingress_tokens_per_sec_),
+        static_cast<double>(ingress_burst_tokens_)
+    );
+    backend_retry_budget_.configure(backend_connect_retry_budget_per_min_, 60000);
+    backend_circuit_breaker_.configure(
+        backend_circuit_breaker_enabled_,
+        backend_circuit_fail_threshold_,
+        backend_circuit_open_ms_
+    );
+
     if (const char* udp_listen_env = std::getenv(kEnvGatewayUdpListen); udp_listen_env && *udp_listen_env) {
         const auto [udp_host, udp_port] = parse_listen(std::string_view(udp_listen_env), 0);
         udp_listen_host_ = udp_host;
@@ -1255,6 +1584,15 @@ void GatewayApp::configure_gateway() {
         + " udp_ingress_feature=" + std::string(kGatewayUdpIngressBuildEnabled ? "on" : "off")
         + " backend_connect_timeout_ms=" + std::to_string(backend_connect_timeout_ms_)
         + " backend_send_queue_max_bytes=" + std::to_string(backend_send_queue_max_bytes_)
+        + " backend_circuit_enabled=" + std::string(backend_circuit_breaker_enabled_ ? "1" : "0")
+        + " backend_circuit_fail_threshold=" + std::to_string(backend_circuit_fail_threshold_)
+        + " backend_circuit_open_ms=" + std::to_string(backend_circuit_open_ms_)
+        + " backend_connect_retry_budget_per_min=" + std::to_string(backend_connect_retry_budget_per_min_)
+        + " backend_connect_retry_backoff_ms=" + std::to_string(backend_connect_retry_backoff_ms_)
+        + " backend_connect_retry_backoff_max_ms=" + std::to_string(backend_connect_retry_backoff_max_ms_)
+        + " ingress_tokens_per_sec=" + std::to_string(ingress_tokens_per_sec_)
+        + " ingress_burst_tokens=" + std::to_string(ingress_burst_tokens_)
+        + " ingress_max_active_sessions=" + std::to_string(ingress_max_active_sessions_)
         + " allow_anonymous=" + std::string(allow_anonymous_ ? "1" : "0"));
 }
 

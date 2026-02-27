@@ -1,4 +1,36 @@
 groups:
+  - name: gateway-resilience
+    rules:
+      - alert: GatewayBackendCircuitOpen
+        expr: max_over_time(gateway_backend_circuit_open[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: gateway
+        annotations:
+          summary: "Gateway backend circuit breaker is open"
+          description: "Backend circuit stayed open for 5m. Check downstream server_app availability and gateway retry budget usage."
+
+      - alert: GatewayIngressRateLimited
+        expr: sum(rate(gateway_ingress_reject_rate_limit_total[5m])) > 5
+        for: 10m
+        labels:
+          severity: warning
+          service: gateway
+        annotations:
+          summary: "Gateway ingress rate-limit rejects are elevated"
+          description: "Ingress token bucket is rejecting more than 5 connections/sec for 10m. Revisit ingress thresholds or scale gateway replicas."
+
+      - alert: WbFlushRetryExhausted
+        expr: increase(wb_flush_retry_exhausted_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: write_behind
+        annotations:
+          summary: "wb_worker flush retry budget exhausted"
+          description: "wb_worker exhausted flush retry budget in the last 10m. Check DB availability and WB_RETRY_* settings."
+
   - name: gateway-udp-quality
     rules:
       - alert: GatewayUdpBindAbuseSpike

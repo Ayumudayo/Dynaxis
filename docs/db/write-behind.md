@@ -68,6 +68,7 @@
 - wb_worker
   - `WB_GROUP`, `WB_CONSUMER`
   - `WB_BATCH_MAX_EVENTS`, `WB_BATCH_MAX_BYTES`, `WB_BATCH_DELAY_MS`
+  - `WB_RETRY_MAX`, `WB_RETRY_BACKOFF_MS`(flush 재시도 예산/백오프)
   - `WB_DLQ_STREAM=session_events_dlq`(옵션)
   - `WB_DLQ_ON_ERROR=1`(에러 시 DLQ로 포워드; 0이면 비활성)
   - `WB_ACK_ON_ERROR=1`(에러 시에도 ACK; 0이면 PEL에 남겨 재시도 유도)
@@ -122,6 +123,7 @@
 - 배치 파라미터 적용: `WB_BATCH_MAX_EVENTS`, `WB_BATCH_MAX_BYTES`, `WB_BATCH_DELAY_MS`
 - 멱등성: `event_id`(Streams ID) 고유 제약으로 중복 삽입 무해
 - 배치 커밋: 1 배치 = 1 트랜잭션 + 엔트리별 savepoint(subtransaction)로 부분 실패 격리
+- flush 재시도 예산: `WB_RETRY_MAX`/`WB_RETRY_BACKOFF_MS` 범위 내에서 즉시 재시도 후, 예산 소진 시 PEL reclaim 경로로 이관
 - ACK: commit 성공 후 ACK(At-least-once). 처리 실패는 DLQ 포워드(옵션) 후 ACK 정책으로 정리한다.
 - PEL reclaim: `WB_RECLAIM_*`가 활성화되면 주기적으로 `XAUTOCLAIM`으로 pending을 회수한다.
 - 메트릭: `METRICS_PORT`를 설정하면 `/metrics`에 다음을 노출한다.

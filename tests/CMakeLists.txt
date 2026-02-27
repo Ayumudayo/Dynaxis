@@ -69,6 +69,7 @@ if (BUILD_GTEST_TESTS)
         core/test_core_metrics.cpp
         core/test_core_paths.cpp
         core/test_core_net.cpp
+        core/test_gateway_resilience_controls.cpp
         core/test_udp_bind_abuse_guard.cpp
         core/test_udp_sequenced_metrics.cpp
         core/test_security_compression.cpp

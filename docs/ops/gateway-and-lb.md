@@ -31,6 +31,15 @@ Client --TCP--> HAProxy --TCP--> Gateway --TCP--> server_app
 | `METRICS_PORT` | `/metrics` 포트 | `6001` |
 | `GATEWAY_BACKEND_CONNECT_TIMEOUT_MS` | backend connect timeout(ms) | `5000` |
 | `GATEWAY_BACKEND_SEND_QUEUE_MAX_BYTES` | backend 전송 대기 큐 상한 바이트 | `262144` |
+| `GATEWAY_BACKEND_CIRCUIT_BREAKER_ENABLED` | backend circuit breaker 활성화(1/0) | `1` |
+| `GATEWAY_BACKEND_CIRCUIT_FAIL_THRESHOLD` | circuit open 연속 실패 임계치 | `5` |
+| `GATEWAY_BACKEND_CIRCUIT_OPEN_MS` | circuit open 유지 시간(ms) | `10000` |
+| `GATEWAY_BACKEND_CONNECT_RETRY_BUDGET_PER_MIN` | backend connect 재시도 예산(분당) | `120` |
+| `GATEWAY_BACKEND_CONNECT_RETRY_BACKOFF_MS` | backend connect 재시도 백오프 시작(ms) | `200` |
+| `GATEWAY_BACKEND_CONNECT_RETRY_BACKOFF_MAX_MS` | backend connect 재시도 백오프 상한(ms) | `2000` |
+| `GATEWAY_INGRESS_TOKENS_PER_SEC` | ingress token bucket 초당 토큰 | `200` |
+| `GATEWAY_INGRESS_BURST_TOKENS` | ingress token bucket burst | `400` |
+| `GATEWAY_INGRESS_MAX_ACTIVE_SESSIONS` | 동시 backend 세션 상한 | `50000` |
 | `ALLOW_ANONYMOUS`, `AUTH_PROVIDER` | 인증 정책 | `1`, 빈 값 |
 
 ### 2.3 운영 팁
@@ -87,6 +96,10 @@ listen stats
 ## 5. 모니터링
 - Gateway 로그: 인증 실패, backend 선택/연결 실패, Pub/Sub lag, send queue overflow
 - Gateway metrics: `gateway_backend_resolve_fail_total`, `gateway_backend_connect_fail_total`, `gateway_backend_connect_timeout_total`, `gateway_backend_write_error_total`, `gateway_backend_send_queue_overflow_total`
+- 회복탄력성/과부하 제어 지표:
+  - `gateway_backend_circuit_open_total`, `gateway_backend_circuit_reject_total`, `gateway_backend_circuit_open`
+  - `gateway_backend_connect_retry_total`, `gateway_backend_retry_budget_exhausted_total`
+  - `gateway_ingress_reject_not_ready_total`, `gateway_ingress_reject_rate_limit_total`, `gateway_ingress_reject_session_limit_total`, `gateway_ingress_reject_circuit_open_total`
 - HAProxy 로그/통계: 프런트/백엔드 에러율, 다운된 Gateway 백엔드 수
 
 ## 6. 장애 시나리오 대응 요약

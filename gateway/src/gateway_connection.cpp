@@ -47,6 +47,16 @@ void GatewayConnection::handle_backend_close(const std::string& reason) {
 }
 
 void GatewayConnection::on_connect() {
+    const auto admission = app_.admit_ingress_connection();
+    if (admission != GatewayApp::IngressAdmission::kAccept) {
+        server::core::log::warn(
+            "GatewayConnection rejected by ingress admission: reason="
+            + std::string(GatewayApp::ingress_admission_name(admission))
+        );
+        stop();
+        return;
+    }
+
     app_.record_connection_accept();
 
     try {

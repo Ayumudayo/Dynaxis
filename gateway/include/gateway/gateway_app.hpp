@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -20,6 +21,7 @@
 #include <boost/asio/steady_timer.hpp>
 
 #include "gateway/auth/authenticator.hpp"
+#include "gateway/resilience_controls.hpp"
 #include "gateway/udp_bind_abuse_guard.hpp"
 #include "gateway/udp_sequenced_metrics.hpp"
 #include "server/core/app/app_host.hpp"
@@ -41,6 +43,14 @@ class GatewayConnection;
  */
 class GatewayApp {
 public:
+    enum class IngressAdmission {
+        kAccept = 0,
+        kRejectNotReady,
+        kRejectRateLimited,
+        kRejectSessionLimit,
+        kRejectCircuitOpen,
+    };
+
     /** @brief backend 선택 결과입니다. */
     struct SelectedBackend {
         server::state::InstanceRecord record;
@@ -128,8 +138,13 @@ public:
         std::weak_ptr<GatewayConnection> connection_;
         boost::asio::ip::tcp::socket socket_;
         boost::asio::steady_timer connect_timer_;
+        boost::asio::steady_timer retry_timer_;
         std::array<std::uint8_t, 8192> buffer_;
         std::atomic<bool> closed_{false};
+
+        std::string connect_host_;
+        std::uint16_t connect_port_{0};
+        std::uint32_t retry_attempt_{0};
         
         std::mutex send_mutex_;
         std::deque<std::vector<std::uint8_t>> write_queue_;
@@ -138,6 +153,9 @@ public:
         std::chrono::milliseconds connect_timeout_{5000};
         bool connected_{false};
         bool write_in_progress_{false};
+
+        bool schedule_connect_retry(const char* reason);
+        void close_socket_for_retry();
     };
     using BackendConnectionPtr = std::shared_ptr<BackendConnection>;
 
@@ -175,6 +193,24 @@ public:
 
     void record_backend_send_queue_overflow() {
         (void)backend_send_queue_overflow_total_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    IngressAdmission admit_ingress_connection();
+    static const char* ingress_admission_name(IngressAdmission admission) noexcept;
+
+    bool backend_circuit_allows_connect();
+    void record_backend_connect_success_event();
+    void record_backend_connect_failure_event();
+
+    bool consume_backend_retry_budget();
+    std::chrono::milliseconds backend_retry_delay(std::uint32_t attempt) const;
+
+    void record_backend_retry_scheduled() {
+        (void)backend_connect_retry_total_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void record_backend_retry_budget_exhausted() {
+        (void)backend_retry_budget_exhausted_total_.fetch_add(1, std::memory_order_relaxed);
     }
 
     /**
@@ -287,11 +323,35 @@ public:
     std::atomic<std::uint64_t> backend_connect_timeout_total_{0};
     std::atomic<std::uint64_t> backend_write_error_total_{0};
     std::atomic<std::uint64_t> backend_send_queue_overflow_total_{0};
+    std::atomic<std::uint64_t> backend_circuit_open_total_{0};
+    std::atomic<std::uint64_t> backend_circuit_reject_total_{0};
+    std::atomic<std::uint64_t> backend_connect_retry_total_{0};
+    std::atomic<std::uint64_t> backend_retry_budget_exhausted_total_{0};
+
+    std::atomic<std::uint64_t> ingress_reject_not_ready_total_{0};
+    std::atomic<std::uint64_t> ingress_reject_rate_limit_total_{0};
+    std::atomic<std::uint64_t> ingress_reject_session_limit_total_{0};
+    std::atomic<std::uint64_t> ingress_reject_circuit_open_total_{0};
 
     std::string boot_id_;
     std::uint16_t metrics_port_{6001};
     std::uint32_t backend_connect_timeout_ms_{5000};
     std::size_t backend_send_queue_max_bytes_{256 * 1024};
+    std::uint32_t backend_connect_retry_budget_per_min_{120};
+    std::uint32_t backend_connect_retry_backoff_ms_{200};
+    std::uint32_t backend_connect_retry_backoff_max_ms_{2000};
+    bool backend_circuit_breaker_enabled_{true};
+    std::uint32_t backend_circuit_fail_threshold_{5};
+    std::uint32_t backend_circuit_open_ms_{10000};
+
+    std::uint32_t ingress_tokens_per_sec_{200};
+    std::uint32_t ingress_burst_tokens_{400};
+    std::size_t ingress_max_active_sessions_{50000};
+
+    gateway::TokenBucket ingress_token_bucket_{};
+    gateway::RetryBudget backend_retry_budget_{};
+    gateway::CircuitBreaker backend_circuit_breaker_{};
+
     std::string udp_listen_host_;
     std::uint16_t udp_listen_port_{0};
     std::string udp_bind_secret_;

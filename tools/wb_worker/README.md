@@ -64,6 +64,12 @@ tools/wb_worker/
 | `WB_DB_RECONNECT_BASE_MS` | DB 재연결 지수 백오프 시작값(ms) | `500` |
 | `WB_DB_RECONNECT_MAX_MS` | DB 재연결 지수 백오프 상한(ms) | `30000` |
 
+### Flush 재시도 예산
+| 이름 | 설명 | 기본값 |
+| --- | --- | --- |
+| `WB_RETRY_MAX` | flush 트랜잭션 즉시 재시도 최대 횟수 | `5` |
+| `WB_RETRY_BACKOFF_MS` | flush 재시도 선형 백오프 시작값(ms) | `250` |
+
 `WB_RECLAIM_MIN_IDLE_MS`가 너무 작으면 아직 처리 중인 메시지를 회수해서 중복 처리가 발생할 수 있다.
 
 ### 메트릭
@@ -75,6 +81,7 @@ tools/wb_worker/
 - backlog/reclaim: `wb_pending`, `wb_reclaim_*`
 - flush/ack: `wb_flush_*`, `wb_ack_*`
 - db/backoff/drop: `wb_db_unavailable_total`, `wb_db_reconnect_backoff_ms_last`, `wb_error_drop_total`
+- retry budget: `wb_retry_max`, `wb_retry_backoff_ms`, `wb_flush_retry_attempt_total`, `wb_flush_retry_exhausted_total`, `wb_flush_retry_delay_ms_last`
 
 `.env`는 개발 편의용 예시 파일이며, 애플리케이션이 자동으로 로드하지 않는다.
 로컬에서는 쉘/스크립트에서 `.env`를 로드한 뒤 실행하거나, OS 환경 변수로 직접 주입해야 한다.
