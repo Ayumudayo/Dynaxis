@@ -3,6 +3,8 @@
 #include <server/core/metrics/metrics.hpp>
 #include <server/core/metrics/http_server.hpp>
 #include <server/core/runtime_metrics.hpp>
+#include <server/core/trace/context.hpp>
+#include <server/core/util/log.hpp>
 
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -11,11 +13,13 @@
 
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <optional>
 #include <stdexcept>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
 
 /**
  * @brief 메트릭 API/no-op 동작과 Metrics HTTP 라우트 동작을 검증합니다.
@@ -23,6 +27,14 @@
 using namespace server::core::metrics;
 
 namespace {
+
+void set_env_value(const char* key, const char* value) {
+#if defined(_WIN32)
+    _putenv_s(key, value);
+#else
+    setenv(key, value, 1);
+#endif
+}
 
 unsigned short reserve_free_port() {
     boost::asio::io_context io;
@@ -59,6 +71,19 @@ std::string request_http(unsigned short port, const std::string& raw_request) {
     }
 
     return response;
+}
+
+std::string request_http_with_retry(unsigned short port, const std::string& raw_request) {
+    std::runtime_error last_error("connect failed");
+    for (int i = 0; i < 30; ++i) {
+        try {
+            return request_http(port, raw_request);
+        } catch (const std::runtime_error& ex) {
+            last_error = std::runtime_error(ex);
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    }
+    throw last_error;
 }
 
 std::optional<std::string> metric_line_value(const std::string& body, const std::string& metric_name) {
@@ -165,6 +190,45 @@ TEST(RuntimeMetricsTest, DispatchProcessingPlaceCountersIncrement) {
               before.dispatch_processing_place_exception_total[1] + 1);
 }
 
+TEST(RuntimeMetricsTest, ExtendedRuntimeCountersAreSnapshotted) {
+    const auto before = server::core::runtime_metrics::snapshot();
+
+    server::core::runtime_metrics::record_exception_recoverable();
+    server::core::runtime_metrics::record_exception_fatal();
+    server::core::runtime_metrics::record_exception_ignored();
+    server::core::runtime_metrics::record_log_async_queue_drop();
+    server::core::runtime_metrics::record_http_bad_request();
+    server::core::runtime_metrics::record_runtime_setting_reload_attempt();
+
+    const auto after = server::core::runtime_metrics::snapshot();
+
+    EXPECT_EQ(after.exception_recoverable_total, before.exception_recoverable_total + 1);
+    EXPECT_EQ(after.exception_fatal_total, before.exception_fatal_total + 1);
+    EXPECT_EQ(after.exception_ignored_total, before.exception_ignored_total + 1);
+    EXPECT_EQ(after.log_async_queue_drop_total, before.log_async_queue_drop_total + 1);
+    EXPECT_EQ(after.http_bad_request_total, before.http_bad_request_total + 1);
+    EXPECT_EQ(after.runtime_setting_reload_attempt_total, before.runtime_setting_reload_attempt_total + 1);
+}
+
+TEST(MetricsTest, RuntimeCoreMetricsIncludeExtendedSignals) {
+    server::core::runtime_metrics::record_exception_recoverable();
+    server::core::runtime_metrics::record_log_async_queue_drop();
+    server::core::runtime_metrics::record_log_async_flush_latency(std::chrono::microseconds(100));
+    server::core::runtime_metrics::record_http_auth_reject();
+    server::core::runtime_metrics::record_runtime_setting_reload_attempt();
+    server::core::runtime_metrics::record_runtime_setting_reload_success();
+
+    std::ostringstream out;
+    append_runtime_core_metrics(out);
+    const std::string text = out.str();
+
+    EXPECT_NE(text.find("core_runtime_exception_recoverable_total"), std::string::npos);
+    EXPECT_NE(text.find("core_runtime_log_async_queue_drop_total"), std::string::npos);
+    EXPECT_NE(text.find("core_runtime_log_async_flush_total"), std::string::npos);
+    EXPECT_NE(text.find("core_runtime_http_auth_reject_total"), std::string::npos);
+    EXPECT_NE(text.find("core_runtime_setting_reload_success_total"), std::string::npos);
+}
+
 TEST(MetricsHttpServerTest, BuiltInRoutesRejectNonGetMethods) {
     const auto port = reserve_free_port();
     MetricsHttpServer server(
@@ -235,4 +299,191 @@ TEST(MetricsHttpServerTest, MetricsEndpointIncludesCommonAndApiMetrics) {
     EXPECT_NE(response.find("knights_build_info"), std::string::npos);
     EXPECT_NE(response.find("core_runtime_session_started_total"), std::string::npos);
     EXPECT_NE(response.find("metrics_smoke_total{component=\"core\"} 2"), std::string::npos);
+}
+
+TEST(MetricsHttpServerTest, CustomRouteCanReadRequestBody) {
+    const auto port = reserve_free_port();
+    MetricsHttpServer server(
+        port,
+        []() { return std::string("test_metric 1\n"); },
+        {},
+        {},
+        {},
+        {},
+        {},
+        [](const MetricsHttpServer::HttpRequest& request)
+            -> std::optional<MetricsHttpServer::RouteResponse> {
+            if (request.target != "/custom") {
+                return std::nullopt;
+            }
+            return MetricsHttpServer::RouteResponse{
+                "200 OK",
+                "text/plain; charset=utf-8",
+                request.body.empty() ? std::string("(empty)") : request.body,
+            };
+        });
+    server.start();
+
+    std::string response;
+    std::runtime_error last_error("connect failed");
+    for (int i = 0; i < 30; ++i) {
+        try {
+            response = request_http(
+                port,
+                "POST /custom HTTP/1.1\r\nHost: localhost\r\nContent-Length: 11\r\n\r\nhello world");
+            break;
+        } catch (const std::runtime_error& ex) {
+            last_error = std::runtime_error(ex);
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    }
+
+    server.stop();
+
+    if (response.empty()) {
+        throw last_error;
+    }
+    EXPECT_NE(response.find("HTTP/1.1 200 OK"), std::string::npos);
+    EXPECT_NE(response.find("hello world"), std::string::npos);
+}
+
+TEST(MetricsHttpServerTest, RejectsUnauthorizedWhenTokenConfigured) {
+    set_env_value("METRICS_HTTP_AUTH_TOKEN", "metrics-secret-token");
+    set_env_value("METRICS_HTTP_ALLOWLIST", "");
+
+    const auto port = reserve_free_port();
+    MetricsHttpServer server(
+        port,
+        []() { return std::string("test_metric 1\n"); }
+    );
+    server.start();
+
+    const std::string unauthorized = request_http_with_retry(
+        port,
+        "GET /metrics HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    EXPECT_NE(unauthorized.find("HTTP/1.1 401 Unauthorized"), std::string::npos);
+    EXPECT_NE(unauthorized.find("WWW-Authenticate: Bearer"), std::string::npos);
+
+    const std::string authorized = request_http_with_retry(
+        port,
+        "GET /metrics HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer metrics-secret-token\r\n\r\n");
+    EXPECT_NE(authorized.find("HTTP/1.1 200 OK"), std::string::npos);
+
+    server.stop();
+    set_env_value("METRICS_HTTP_AUTH_TOKEN", "");
+}
+
+TEST(MetricsHttpServerTest, RejectsRequestOutsideAllowlist) {
+    set_env_value("METRICS_HTTP_AUTH_TOKEN", "");
+    set_env_value("METRICS_HTTP_ALLOWLIST", "192.0.2.10");
+
+    const auto port = reserve_free_port();
+    MetricsHttpServer server(
+        port,
+        []() { return std::string("test_metric 1\n"); }
+    );
+    server.start();
+
+    const std::string forbidden = request_http_with_retry(
+        port,
+        "GET /metrics HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    EXPECT_NE(forbidden.find("HTTP/1.1 403 Forbidden"), std::string::npos);
+
+    server.stop();
+    set_env_value("METRICS_HTTP_ALLOWLIST", "");
+}
+
+TEST(MetricsHttpServerTest, RejectsBodyLargerThanConfiguredLimit) {
+    set_env_value("METRICS_HTTP_MAX_BODY_BYTES", "4");
+    set_env_value("METRICS_HTTP_AUTH_TOKEN", "");
+    set_env_value("METRICS_HTTP_ALLOWLIST", "");
+
+    const auto port = reserve_free_port();
+    MetricsHttpServer server(
+        port,
+        []() { return std::string("test_metric 1\n"); },
+        {},
+        {},
+        {},
+        {},
+        {},
+        [](const MetricsHttpServer::HttpRequest& request)
+            -> std::optional<MetricsHttpServer::RouteResponse> {
+            if (request.target != "/custom") {
+                return std::nullopt;
+            }
+            return MetricsHttpServer::RouteResponse{
+                "200 OK",
+                "text/plain; charset=utf-8",
+                request.body,
+            };
+        });
+    server.start();
+
+    const std::string response = request_http_with_retry(
+        port,
+        "POST /custom HTTP/1.1\r\nHost: localhost\r\nContent-Length: 11\r\n\r\nhello world");
+    EXPECT_NE(response.find("HTTP/1.1 413 Payload Too Large"), std::string::npos);
+
+    server.stop();
+    set_env_value("METRICS_HTTP_MAX_BODY_BYTES", "65536");
+}
+
+TEST(LogSchemaMetricsTest, JsonSchemaMetricsExposeParseAndFillSignals) {
+    reset_for_tests();
+
+    set_env_value("LOG_FORMAT", "json");
+    set_env_value("KNIGHTS_TRACING_ENABLED", "1");
+    set_env_value("KNIGHTS_TRACING_SAMPLE_PERCENT", "100");
+    server::core::trace::reset_for_tests();
+
+    server::core::log::set_level(server::core::log::level::debug);
+    server::core::log::set_buffer_capacity(64);
+
+    const auto before = server::core::runtime_metrics::snapshot();
+
+    const std::string trace_id = server::core::trace::make_trace_id();
+    const std::string correlation_id = "log-schema-correlation";
+    server::core::trace::ScopedContext scope(trace_id, correlation_id, true);
+    ASSERT_TRUE(scope.active());
+
+    server::core::log::info("component=metrics_test error_code=E_SCHEMA token=secret-value log-schema-metric-marker");
+
+    const std::vector<std::string> lines = server::core::log::recent(64);
+    bool found_marker = false;
+    for (const auto& line : lines) {
+        if (line.find("log-schema-metric-marker") == std::string::npos) {
+            continue;
+        }
+        found_marker = true;
+        ASSERT_FALSE(line.empty());
+        EXPECT_EQ(line.front(), '{');
+        EXPECT_EQ(line.back(), '}');
+        EXPECT_NE(line.find("\"component\":\"metrics_test\""), std::string::npos);
+        EXPECT_NE(line.find("\"trace_id\":\"" + trace_id + "\""), std::string::npos);
+        EXPECT_NE(line.find("\"correlation_id\":\"" + correlation_id + "\""), std::string::npos);
+        EXPECT_NE(line.find("\"error_code\":\"E_SCHEMA\""), std::string::npos);
+        EXPECT_NE(line.find("token=***"), std::string::npos);
+        EXPECT_EQ(line.find("secret-value"), std::string::npos);
+        break;
+    }
+    EXPECT_TRUE(found_marker);
+
+    std::ostringstream out;
+    append_prometheus_metrics(out);
+    const std::string text = out.str();
+
+    EXPECT_NE(text.find("core_log_schema_records_total{format=\"json\"} 1"), std::string::npos);
+    EXPECT_NE(text.find("core_log_schema_parse_success_total{format=\"json\"} 1"), std::string::npos);
+    EXPECT_NE(text.find("core_log_schema_field_total{field=\"trace_id\",format=\"json\"} 1"), std::string::npos);
+    EXPECT_NE(text.find("core_log_schema_field_filled_total{field=\"trace_id\",format=\"json\"} 1"), std::string::npos);
+    EXPECT_NE(text.find("core_log_schema_field_total{field=\"error_code\",format=\"json\"} 1"), std::string::npos);
+    EXPECT_NE(text.find("core_log_schema_field_filled_total{field=\"error_code\",format=\"json\"} 1"), std::string::npos);
+
+    const auto after = server::core::runtime_metrics::snapshot();
+    EXPECT_GE(after.log_masked_fields_total, before.log_masked_fields_total + 1);
+
+    set_env_value("LOG_FORMAT", "text");
+    set_env_value("KNIGHTS_TRACING_ENABLED", "0");
+    server::core::trace::reset_for_tests();
 }

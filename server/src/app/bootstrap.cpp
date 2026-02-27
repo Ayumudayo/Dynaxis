@@ -340,9 +340,11 @@ int run_server(int argc, char** argv) {
                         }
                         app_host.set_dependency_ok("redis", ok);
                     } catch (const std::exception& ex) {
-                        corelog::error(std::string("Periodic Redis health check exception: ") + ex.what());
+                        core::runtime_metrics::record_exception_recoverable();
+                        corelog::error(std::string("component=server_bootstrap error_code=REDIS_HEALTH_CHECK periodic Redis health check exception: ") + ex.what());
                     } catch (...) {
-                        corelog::error("Periodic Redis health check unknown exception");
+                        core::runtime_metrics::record_exception_ignored();
+                        corelog::error("component=server_bootstrap error_code=REDIS_HEALTH_CHECK periodic Redis health check unknown exception");
                     }
                 });
             }, std::chrono::seconds(60));
@@ -371,7 +373,8 @@ int run_server(int argc, char** argv) {
                     corelog::warn("Failed to register server instance in registry");
                 }
             } catch (const std::exception& ex) {
-                corelog::warn(std::string("Failed to initialise server registry backend: ") + ex.what());
+                core::runtime_metrics::record_exception_recoverable();
+                corelog::warn(std::string("component=server_bootstrap error_code=REGISTRY_INIT_FAILED failed to initialise server registry backend: ") + ex.what());
             }
 
             // 레지스트리 하트비트 스케줄링
@@ -421,7 +424,8 @@ int run_server(int argc, char** argv) {
         for (unsigned int i = 0; i < num_io_threads; ++i) {
             io_threads.emplace_back([&io]() { 
                 try { io.run(); } catch (const std::exception& e) {
-                    corelog::error(std::string("I/O thread exception: ") + e.what());
+                    core::runtime_metrics::record_exception_recoverable();
+                    corelog::error(std::string("component=server_bootstrap error_code=IO_THREAD_EXCEPTION I/O thread exception: ") + e.what());
                 }
             });
         }
@@ -663,6 +667,10 @@ int run_server(int argc, char** argv) {
                             try {
                                 duration_sec = static_cast<std::uint32_t>(std::stoul(duration_it->second));
                             } catch (...) {
+                                core::runtime_metrics::record_exception_ignored();
+                                corelog::warn(
+                                    "component=server_bootstrap error_code=INVALID_DURATION admin moderation duration parse failed duration_sec="
+                                    + duration_it->second);
                                 duration_sec = 0;
                             }
                         }
@@ -736,6 +744,7 @@ int run_server(int argc, char** argv) {
             try {
                 if (scheduler_timer) scheduler_timer->cancel();
             } catch (...) {
+                core::runtime_metrics::record_exception_ignored();
             }
         });
         app_host.add_shutdown_step("shutdown scheduler", [&]() { scheduler.shutdown(); });
@@ -743,11 +752,11 @@ int run_server(int argc, char** argv) {
             if (metrics_server) metrics_server->stop();
         });
         app_host.add_shutdown_step("stop redis pubsub", [&]() {
-            try { if (redis) redis->stop_psubscribe(); } catch (...) {}
+            try { if (redis) redis->stop_psubscribe(); } catch (...) { core::runtime_metrics::record_exception_ignored(); }
         });
         app_host.add_shutdown_step("deregister instance", [&]() {
             if (registry_registered && registry_backend) {
-                try { registry_backend->remove(registry_record.instance_id); } catch (...) {}
+                try { registry_backend->remove(registry_record.instance_id); } catch (...) { core::runtime_metrics::record_exception_ignored(); }
                 registry_registered = false;
             }
         });
@@ -763,10 +772,10 @@ int run_server(int argc, char** argv) {
 
         // 정리 작업
         if (registry_registered && registry_backend) {
-            try { registry_backend->remove(registry_record.instance_id); } catch (...) {}
+            try { registry_backend->remove(registry_record.instance_id); } catch (...) { core::runtime_metrics::record_exception_ignored(); }
         }
         if (metrics_server) metrics_server->stop();
-        try { scheduler_timer->cancel(); } catch (...) {}
+        try { scheduler_timer->cancel(); } catch (...) { core::runtime_metrics::record_exception_ignored(); }
         scheduler.shutdown();
         core_internal::stop_db_worker_pool(db_workers);
         services::clear();
@@ -774,7 +783,8 @@ int run_server(int argc, char** argv) {
         return 0;
 
     } catch (const std::exception& ex) {
-        corelog::error(std::string("server_app exception: ") + ex.what());
+        core::runtime_metrics::record_exception_fatal();
+        corelog::error(std::string("component=server_bootstrap error_code=SERVER_FATAL server_app exception: ") + ex.what());
         app_host.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kFailed);
         services::clear();
         return 1;

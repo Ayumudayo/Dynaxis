@@ -138,6 +138,9 @@ std::string render_metrics() {
     append_counter("chat_dispatch_total", snap.dispatch_total);
     append_counter("chat_dispatch_unknown_total", snap.dispatch_unknown_total);
     append_counter("chat_dispatch_exception_total", snap.dispatch_exception_total);
+    append_counter("chat_exception_recoverable_total", snap.exception_recoverable_total);
+    append_counter("chat_exception_fatal_total", snap.exception_fatal_total);
+    append_counter("chat_exception_ignored_total", snap.exception_ignored_total);
 
     stream << "# TYPE chat_dispatch_processing_place_calls_total counter\n";
     stream << "chat_dispatch_processing_place_calls_total{place=\"inline\"} "
@@ -207,6 +210,28 @@ std::string render_metrics() {
     append_gauge("chat_memory_pool_capacity", static_cast<long double>(snap.memory_pool_capacity));
     append_gauge("chat_memory_pool_in_use", static_cast<long double>(snap.memory_pool_in_use));
     append_gauge("chat_memory_pool_in_use_peak", static_cast<long double>(snap.memory_pool_in_use_peak));
+    append_gauge("chat_log_async_queue_depth", static_cast<long double>(snap.log_async_queue_depth));
+    append_gauge("chat_log_async_queue_capacity", static_cast<long double>(snap.log_async_queue_capacity));
+    append_counter("chat_log_async_queue_drop_total", snap.log_async_queue_drop_total);
+    append_counter("chat_log_async_flush_total", snap.log_async_flush_total);
+    append_counter("chat_log_async_flush_latency_sum_ns", snap.log_async_flush_latency_sum_ns);
+    append_counter("chat_log_masked_fields_total", snap.log_masked_fields_total);
+    append_gauge("chat_log_async_flush_latency_max_ms", static_cast<long double>(snap.log_async_flush_latency_max_ns) / 1'000'000.0L);
+    append_gauge("chat_http_active_connections", static_cast<long double>(snap.http_active_connections));
+    append_counter("chat_http_connection_limit_reject_total", snap.http_connection_limit_reject_total);
+    append_counter("chat_http_auth_reject_total", snap.http_auth_reject_total);
+    append_counter("chat_http_header_timeout_total", snap.http_header_timeout_total);
+    append_counter("chat_http_body_timeout_total", snap.http_body_timeout_total);
+    append_counter("chat_http_header_oversize_total", snap.http_header_oversize_total);
+    append_counter("chat_http_body_oversize_total", snap.http_body_oversize_total);
+    append_counter("chat_http_bad_request_total", snap.http_bad_request_total);
+    append_counter("chat_runtime_setting_reload_attempt_total", snap.runtime_setting_reload_attempt_total);
+    append_counter("chat_runtime_setting_reload_success_total", snap.runtime_setting_reload_success_total);
+    append_counter("chat_runtime_setting_reload_failure_total", snap.runtime_setting_reload_failure_total);
+    append_counter("chat_runtime_setting_reload_latency_sum_ns", snap.runtime_setting_reload_latency_sum_ns);
+    append_gauge(
+        "chat_runtime_setting_reload_latency_max_ms",
+        static_cast<long double>(snap.runtime_setting_reload_latency_max_ns) / 1'000'000.0L);
 
     if (!snap.opcode_counts.empty()) {
         stream << "# TYPE chat_dispatch_opcode_total counter\n";

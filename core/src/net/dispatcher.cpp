@@ -77,6 +77,7 @@ void send_error_noexcept(Session& session, std::uint16_t code, const char* messa
     try {
         session.send_error(code, message);
     } catch (...) {
+        server::core::runtime_metrics::record_exception_ignored();
     }
 }
 
@@ -84,6 +85,7 @@ std::shared_ptr<Session> shared_session_or_null(Session& session) {
     try {
         return session.shared_from_this();
     } catch (...) {
+        server::core::runtime_metrics::record_exception_ignored();
         return nullptr;
     }
 }
@@ -98,15 +100,17 @@ void run_handler_with_guard(const Dispatcher::handler_t& handler,
     } catch (const std::exception& ex) {
         server::core::runtime_metrics::record_dispatch_exception();
         server::core::runtime_metrics::record_dispatch_processing_place_exception(place_index);
+        server::core::runtime_metrics::record_exception_recoverable();
         server::core::log::error(
-            std::string("handler exception for msg=") + std::to_string(msg_id) +
+            std::string("component=dispatcher error_code=INTERNAL_ERROR handler exception for msg=") + std::to_string(msg_id) +
             " place=" + std::to_string(place_index) + ": " + ex.what());
         send_error_noexcept(session, server::core::protocol::errc::INTERNAL_ERROR, "internal error");
     } catch (...) {
         server::core::runtime_metrics::record_dispatch_exception();
         server::core::runtime_metrics::record_dispatch_processing_place_exception(place_index);
+        server::core::runtime_metrics::record_exception_ignored();
         server::core::log::error(
-            std::string("handler unknown exception for msg=") + std::to_string(msg_id) +
+            std::string("component=dispatcher error_code=INTERNAL_ERROR handler unknown exception for msg=") + std::to_string(msg_id) +
             " place=" + std::to_string(place_index));
         send_error_noexcept(session, server::core::protocol::errc::INTERNAL_ERROR, "internal error");
     }
@@ -136,6 +140,7 @@ bool Dispatcher::dispatch(std::uint16_t msg_id,
         try {
             s.send_error(server::core::protocol::errc::FORBIDDEN, "forbidden");
         } catch (...) {
+            server::core::runtime_metrics::record_exception_ignored();
         }
         return true;
     }
@@ -144,6 +149,7 @@ bool Dispatcher::dispatch(std::uint16_t msg_id,
         try {
             s.send_error(server::core::protocol::errc::FORBIDDEN, "forbidden");
         } catch (...) {
+            server::core::runtime_metrics::record_exception_ignored();
         }
         return true;
     }
@@ -152,7 +158,7 @@ bool Dispatcher::dispatch(std::uint16_t msg_id,
     const auto place_index = processing_place_index(place);
     if (place_index >= runtime_metrics::kDispatchProcessingPlaceCount) {
         server::core::log::error(
-            std::string("unsupported processing_place for msg=") + std::to_string(msg_id));
+            std::string("component=dispatcher error_code=INTERNAL_ERROR unsupported processing_place for msg=") + std::to_string(msg_id));
         send_error_noexcept(s, server::core::protocol::errc::INTERNAL_ERROR, "unsupported processing place");
         return true;
     }
@@ -168,7 +174,7 @@ bool Dispatcher::dispatch(std::uint16_t msg_id,
     if (!session) {
         runtime_metrics::record_dispatch_processing_place_reject(place_index);
         server::core::log::warn(
-            std::string("processing_place rejected: missing shared session for msg=") +
+            std::string("component=dispatcher error_code=SERVER_BUSY processing_place rejected: missing shared session for msg=") +
             std::to_string(msg_id) + " place=" + processing_place_name(place));
         send_error_noexcept(s, server::core::protocol::errc::SERVER_BUSY, "dispatch context unavailable");
         return true;
@@ -203,7 +209,7 @@ bool Dispatcher::dispatch(std::uint16_t msg_id,
     if (!job_queue) {
         runtime_metrics::record_dispatch_processing_place_reject(place_index);
         server::core::log::warn(
-            std::string("processing_place rejected: worker queue unavailable for msg=") +
+            std::string("component=dispatcher error_code=SERVER_BUSY processing_place rejected: worker queue unavailable for msg=") +
             std::to_string(msg_id));
         send_error_noexcept(s, server::core::protocol::errc::SERVER_BUSY, "worker queue unavailable");
         return true;

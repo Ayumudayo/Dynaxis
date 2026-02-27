@@ -448,11 +448,80 @@ void append_runtime_core_metrics(std::ostream& out) {
     out << "# TYPE core_runtime_dispatch_exception_total counter\n";
     out << "core_runtime_dispatch_exception_total " << snap.dispatch_exception_total << "\n";
 
+    out << "# TYPE core_runtime_exception_recoverable_total counter\n";
+    out << "core_runtime_exception_recoverable_total " << snap.exception_recoverable_total << "\n";
+
+    out << "# TYPE core_runtime_exception_fatal_total counter\n";
+    out << "core_runtime_exception_fatal_total " << snap.exception_fatal_total << "\n";
+
+    out << "# TYPE core_runtime_exception_ignored_total counter\n";
+    out << "core_runtime_exception_ignored_total " << snap.exception_ignored_total << "\n";
+
     out << "# TYPE core_runtime_send_queue_drop_total counter\n";
     out << "core_runtime_send_queue_drop_total " << snap.send_queue_drop_total << "\n";
 
     out << "# TYPE core_runtime_packet_error_total counter\n";
     out << "core_runtime_packet_error_total " << snap.packet_error_total << "\n";
+
+    out << "# TYPE core_runtime_log_async_queue_depth gauge\n";
+    out << "core_runtime_log_async_queue_depth " << snap.log_async_queue_depth << "\n";
+
+    out << "# TYPE core_runtime_log_async_queue_capacity gauge\n";
+    out << "core_runtime_log_async_queue_capacity " << snap.log_async_queue_capacity << "\n";
+
+    out << "# TYPE core_runtime_log_async_queue_drop_total counter\n";
+    out << "core_runtime_log_async_queue_drop_total " << snap.log_async_queue_drop_total << "\n";
+
+    out << "# TYPE core_runtime_log_async_flush_total counter\n";
+    out << "core_runtime_log_async_flush_total " << snap.log_async_flush_total << "\n";
+
+    out << "# TYPE core_runtime_log_async_flush_latency_sum_ns counter\n";
+    out << "core_runtime_log_async_flush_latency_sum_ns " << snap.log_async_flush_latency_sum_ns << "\n";
+
+    out << "# TYPE core_runtime_log_async_flush_latency_max_ns gauge\n";
+    out << "core_runtime_log_async_flush_latency_max_ns " << snap.log_async_flush_latency_max_ns << "\n";
+
+    out << "# TYPE core_runtime_log_masked_fields_total counter\n";
+    out << "core_runtime_log_masked_fields_total " << snap.log_masked_fields_total << "\n";
+
+    out << "# TYPE core_runtime_http_active_connections gauge\n";
+    out << "core_runtime_http_active_connections " << snap.http_active_connections << "\n";
+
+    out << "# TYPE core_runtime_http_connection_limit_reject_total counter\n";
+    out << "core_runtime_http_connection_limit_reject_total " << snap.http_connection_limit_reject_total << "\n";
+
+    out << "# TYPE core_runtime_http_auth_reject_total counter\n";
+    out << "core_runtime_http_auth_reject_total " << snap.http_auth_reject_total << "\n";
+
+    out << "# TYPE core_runtime_http_header_timeout_total counter\n";
+    out << "core_runtime_http_header_timeout_total " << snap.http_header_timeout_total << "\n";
+
+    out << "# TYPE core_runtime_http_body_timeout_total counter\n";
+    out << "core_runtime_http_body_timeout_total " << snap.http_body_timeout_total << "\n";
+
+    out << "# TYPE core_runtime_http_header_oversize_total counter\n";
+    out << "core_runtime_http_header_oversize_total " << snap.http_header_oversize_total << "\n";
+
+    out << "# TYPE core_runtime_http_body_oversize_total counter\n";
+    out << "core_runtime_http_body_oversize_total " << snap.http_body_oversize_total << "\n";
+
+    out << "# TYPE core_runtime_http_bad_request_total counter\n";
+    out << "core_runtime_http_bad_request_total " << snap.http_bad_request_total << "\n";
+
+    out << "# TYPE core_runtime_setting_reload_attempt_total counter\n";
+    out << "core_runtime_setting_reload_attempt_total " << snap.runtime_setting_reload_attempt_total << "\n";
+
+    out << "# TYPE core_runtime_setting_reload_success_total counter\n";
+    out << "core_runtime_setting_reload_success_total " << snap.runtime_setting_reload_success_total << "\n";
+
+    out << "# TYPE core_runtime_setting_reload_failure_total counter\n";
+    out << "core_runtime_setting_reload_failure_total " << snap.runtime_setting_reload_failure_total << "\n";
+
+    out << "# TYPE core_runtime_setting_reload_latency_sum_ns counter\n";
+    out << "core_runtime_setting_reload_latency_sum_ns " << snap.runtime_setting_reload_latency_sum_ns << "\n";
+
+    out << "# TYPE core_runtime_setting_reload_latency_max_ns gauge\n";
+    out << "core_runtime_setting_reload_latency_max_ns " << snap.runtime_setting_reload_latency_max_ns << "\n";
 }
 
 void reset_for_tests() {

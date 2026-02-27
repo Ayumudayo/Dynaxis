@@ -67,6 +67,9 @@ struct Snapshot {
     std::array<std::uint64_t, kDispatchProcessingPlaceCount> dispatch_processing_place_calls_total{};
     std::array<std::uint64_t, kDispatchProcessingPlaceCount> dispatch_processing_place_reject_total{};
     std::array<std::uint64_t, kDispatchProcessingPlaceCount> dispatch_processing_place_exception_total{};
+    std::uint64_t exception_recoverable_total{0};
+    std::uint64_t exception_fatal_total{0};
+    std::uint64_t exception_ignored_total{0};
     std::uint64_t job_queue_depth{0};
     std::uint64_t job_queue_depth_peak{0};
     std::uint64_t job_queue_capacity{0};
@@ -86,6 +89,26 @@ struct Snapshot {
     std::uint64_t memory_pool_capacity{0};
     std::uint64_t memory_pool_in_use{0};
     std::uint64_t memory_pool_in_use_peak{0};
+    std::uint64_t log_async_queue_depth{0};
+    std::uint64_t log_async_queue_capacity{0};
+    std::uint64_t log_async_queue_drop_total{0};
+    std::uint64_t log_async_flush_total{0};
+    std::uint64_t log_async_flush_latency_sum_ns{0};
+    std::uint64_t log_async_flush_latency_max_ns{0};
+    std::uint64_t log_masked_fields_total{0};
+    std::uint64_t http_active_connections{0};
+    std::uint64_t http_connection_limit_reject_total{0};
+    std::uint64_t http_auth_reject_total{0};
+    std::uint64_t http_header_timeout_total{0};
+    std::uint64_t http_body_timeout_total{0};
+    std::uint64_t http_header_oversize_total{0};
+    std::uint64_t http_body_oversize_total{0};
+    std::uint64_t http_bad_request_total{0};
+    std::uint64_t runtime_setting_reload_attempt_total{0};
+    std::uint64_t runtime_setting_reload_success_total{0};
+    std::uint64_t runtime_setting_reload_failure_total{0};
+    std::uint64_t runtime_setting_reload_latency_sum_ns{0};
+    std::uint64_t runtime_setting_reload_latency_max_ns{0};
     std::vector<std::pair<std::uint16_t, std::uint64_t>> opcode_counts;
 };
 
@@ -116,6 +139,12 @@ void record_dispatch_processing_place_call(std::size_t place_index);
 void record_dispatch_processing_place_reject(std::size_t place_index);
 /** @brief processing_place별 디스패치 예외 건수를 기록합니다. */
 void record_dispatch_processing_place_exception(std::size_t place_index);
+/** @brief 복구 가능한 경계 예외를 기록합니다. */
+void record_exception_recoverable();
+/** @brief 치명 경계 예외를 기록합니다. */
+void record_exception_fatal();
+/** @brief 무시 가능한 경계 예외를 기록합니다. */
+void record_exception_ignored();
 /** @brief 읽기 타임아웃 종료 건수를 기록합니다. */
 void record_session_timeout();
 /** @brief 쓰기 타임아웃 종료 건수를 기록합니다. */
@@ -189,6 +218,43 @@ void register_memory_pool_capacity(std::size_t capacity);
 void record_memory_pool_acquire();
 /** @brief 메모리 풀 사용량 감소를 기록합니다. */
 void record_memory_pool_release();
+
+/** @brief 비동기 로그 큐 현재 깊이를 기록합니다. */
+void record_log_async_queue_depth(std::size_t depth);
+/** @brief 비동기 로그 큐 용량을 등록합니다. */
+void register_log_async_queue_capacity(std::size_t capacity);
+/** @brief 비동기 로그 큐 드롭 건수를 기록합니다. */
+void record_log_async_queue_drop();
+/** @brief 비동기 로그 flush 지연을 기록합니다. */
+void record_log_async_flush_latency(std::chrono::nanoseconds elapsed);
+/** @brief 로그 마스킹 필드 증가분을 기록합니다. */
+void record_log_masked_fields(std::uint64_t count = 1);
+
+/** @brief HTTP active connection 현재값을 기록합니다. */
+void set_http_active_connections(std::size_t active);
+/** @brief HTTP conn-limit 거절 건수를 기록합니다. */
+void record_http_connection_limit_reject();
+/** @brief HTTP auth 거절 건수를 기록합니다. */
+void record_http_auth_reject();
+/** @brief HTTP header read timeout 건수를 기록합니다. */
+void record_http_header_timeout();
+/** @brief HTTP body read timeout 건수를 기록합니다. */
+void record_http_body_timeout();
+/** @brief HTTP header oversize 거절 건수를 기록합니다. */
+void record_http_header_oversize();
+/** @brief HTTP body oversize 거절 건수를 기록합니다. */
+void record_http_body_oversize();
+/** @brief HTTP bad request 거절 건수를 기록합니다. */
+void record_http_bad_request();
+
+/** @brief 런타임 설정 리로드 시도 건수를 기록합니다. */
+void record_runtime_setting_reload_attempt();
+/** @brief 런타임 설정 리로드 성공 건수를 기록합니다. */
+void record_runtime_setting_reload_success();
+/** @brief 런타임 설정 리로드 실패 건수를 기록합니다. */
+void record_runtime_setting_reload_failure();
+/** @brief 런타임 설정 리로드 지연을 기록합니다. */
+void record_runtime_setting_reload_latency(std::chrono::nanoseconds elapsed);
 
 /**
  * @brief 현재 런타임 카운터 스냅샷을 반환합니다.

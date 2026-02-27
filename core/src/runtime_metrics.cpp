@@ -41,6 +41,9 @@ struct RuntimeCounters {
     std::array<std::atomic<std::uint64_t>, kDispatchProcessingPlaceCount> dispatch_processing_place_calls_total{};
     std::array<std::atomic<std::uint64_t>, kDispatchProcessingPlaceCount> dispatch_processing_place_reject_total{};
     std::array<std::atomic<std::uint64_t>, kDispatchProcessingPlaceCount> dispatch_processing_place_exception_total{};
+    std::atomic<std::uint64_t> exception_recoverable_total{0};
+    std::atomic<std::uint64_t> exception_fatal_total{0};
+    std::atomic<std::uint64_t> exception_ignored_total{0};
     std::atomic<std::uint64_t> job_queue_depth{0};
     std::atomic<std::uint64_t> job_queue_depth_peak{0};
     std::atomic<std::uint64_t> job_queue_capacity{0};
@@ -51,6 +54,26 @@ struct RuntimeCounters {
     std::atomic<std::uint64_t> memory_pool_capacity{0};
     std::atomic<std::uint64_t> memory_pool_in_use{0};
     std::atomic<std::uint64_t> memory_pool_in_use_peak{0};
+    std::atomic<std::uint64_t> log_async_queue_depth{0};
+    std::atomic<std::uint64_t> log_async_queue_capacity{0};
+    std::atomic<std::uint64_t> log_async_queue_drop_total{0};
+    std::atomic<std::uint64_t> log_async_flush_total{0};
+    std::atomic<std::uint64_t> log_async_flush_latency_sum_ns{0};
+    std::atomic<std::uint64_t> log_async_flush_latency_max_ns{0};
+    std::atomic<std::uint64_t> log_masked_fields_total{0};
+    std::atomic<std::uint64_t> http_active_connections{0};
+    std::atomic<std::uint64_t> http_connection_limit_reject_total{0};
+    std::atomic<std::uint64_t> http_auth_reject_total{0};
+    std::atomic<std::uint64_t> http_header_timeout_total{0};
+    std::atomic<std::uint64_t> http_body_timeout_total{0};
+    std::atomic<std::uint64_t> http_header_oversize_total{0};
+    std::atomic<std::uint64_t> http_body_oversize_total{0};
+    std::atomic<std::uint64_t> http_bad_request_total{0};
+    std::atomic<std::uint64_t> runtime_setting_reload_attempt_total{0};
+    std::atomic<std::uint64_t> runtime_setting_reload_success_total{0};
+    std::atomic<std::uint64_t> runtime_setting_reload_failure_total{0};
+    std::atomic<std::uint64_t> runtime_setting_reload_latency_sum_ns{0};
+    std::atomic<std::uint64_t> runtime_setting_reload_latency_max_ns{0};
     std::atomic<std::uint64_t> db_job_queue_depth{0};
     std::atomic<std::uint64_t> db_job_queue_depth_peak{0};
     std::atomic<std::uint64_t> db_job_queue_capacity{0};
@@ -173,6 +196,18 @@ void record_dispatch_processing_place_exception(std::size_t place_index) {
         .fetch_add(1, std::memory_order_relaxed);
 }
 
+void record_exception_recoverable() {
+    counters().exception_recoverable_total.fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_exception_fatal() {
+    counters().exception_fatal_total.fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_exception_ignored() {
+    counters().exception_ignored_total.fetch_add(1, std::memory_order_relaxed);
+}
+
 void record_job_queue_depth(std::size_t depth) {
     counters().job_queue_depth.store(static_cast<std::uint64_t>(depth), std::memory_order_relaxed);
     auto& peak_ref = counters().job_queue_depth_peak;
@@ -280,6 +315,97 @@ void record_memory_pool_release() {
     counters().memory_pool_in_use.fetch_sub(1, std::memory_order_relaxed);
 }
 
+void record_log_async_queue_depth(std::size_t depth) {
+    counters().log_async_queue_depth.store(static_cast<std::uint64_t>(depth), std::memory_order_relaxed);
+}
+
+void register_log_async_queue_capacity(std::size_t capacity) {
+    counters().log_async_queue_capacity.store(static_cast<std::uint64_t>(capacity), std::memory_order_relaxed);
+}
+
+void record_log_async_queue_drop() {
+    counters().log_async_queue_drop_total.fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_log_async_flush_latency(std::chrono::nanoseconds elapsed) {
+    const auto ns = static_cast<std::uint64_t>(elapsed.count() <= 0 ? 0 : elapsed.count());
+    if (ns == 0) {
+        return;
+    }
+    counters().log_async_flush_total.fetch_add(1, std::memory_order_relaxed);
+    counters().log_async_flush_latency_sum_ns.fetch_add(ns, std::memory_order_relaxed);
+
+    auto& max_ref = counters().log_async_flush_latency_max_ns;
+    std::uint64_t current_max = max_ref.load(std::memory_order_relaxed);
+    while (current_max < ns && !max_ref.compare_exchange_weak(current_max, ns, std::memory_order_relaxed)) {
+        // retry
+    }
+}
+
+void record_log_masked_fields(std::uint64_t count) {
+    if (count == 0) {
+        return;
+    }
+    counters().log_masked_fields_total.fetch_add(count, std::memory_order_relaxed);
+}
+
+void set_http_active_connections(std::size_t active) {
+    counters().http_active_connections.store(static_cast<std::uint64_t>(active), std::memory_order_relaxed);
+}
+
+void record_http_connection_limit_reject() {
+    counters().http_connection_limit_reject_total.fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_http_auth_reject() {
+    counters().http_auth_reject_total.fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_http_header_timeout() {
+    counters().http_header_timeout_total.fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_http_body_timeout() {
+    counters().http_body_timeout_total.fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_http_header_oversize() {
+    counters().http_header_oversize_total.fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_http_body_oversize() {
+    counters().http_body_oversize_total.fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_http_bad_request() {
+    counters().http_bad_request_total.fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_runtime_setting_reload_attempt() {
+    counters().runtime_setting_reload_attempt_total.fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_runtime_setting_reload_success() {
+    counters().runtime_setting_reload_success_total.fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_runtime_setting_reload_failure() {
+    counters().runtime_setting_reload_failure_total.fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_runtime_setting_reload_latency(std::chrono::nanoseconds elapsed) {
+    const auto ns = static_cast<std::uint64_t>(elapsed.count() <= 0 ? 0 : elapsed.count());
+    if (ns == 0) {
+        return;
+    }
+    counters().runtime_setting_reload_latency_sum_ns.fetch_add(ns, std::memory_order_relaxed);
+    auto& max_ref = counters().runtime_setting_reload_latency_max_ns;
+    std::uint64_t current_max = max_ref.load(std::memory_order_relaxed);
+    while (current_max < ns && !max_ref.compare_exchange_weak(current_max, ns, std::memory_order_relaxed)) {
+        // retry
+    }
+}
+
 Snapshot snapshot() {
     Snapshot snap{};
     auto& c = counters();
@@ -314,6 +440,9 @@ Snapshot snapshot() {
         snap.dispatch_processing_place_exception_total[i]
             = c.dispatch_processing_place_exception_total[i].load(std::memory_order_relaxed);
     }
+    snap.exception_recoverable_total = c.exception_recoverable_total.load(std::memory_order_relaxed);
+    snap.exception_fatal_total = c.exception_fatal_total.load(std::memory_order_relaxed);
+    snap.exception_ignored_total = c.exception_ignored_total.load(std::memory_order_relaxed);
     snap.job_queue_depth = c.job_queue_depth.load(std::memory_order_relaxed);
     snap.job_queue_depth_peak = c.job_queue_depth_peak.load(std::memory_order_relaxed);
     snap.job_queue_capacity = c.job_queue_capacity.load(std::memory_order_relaxed);
@@ -333,6 +462,26 @@ Snapshot snapshot() {
     snap.memory_pool_capacity = c.memory_pool_capacity.load(std::memory_order_relaxed);
     snap.memory_pool_in_use = c.memory_pool_in_use.load(std::memory_order_relaxed);
     snap.memory_pool_in_use_peak = c.memory_pool_in_use_peak.load(std::memory_order_relaxed);
+    snap.log_async_queue_depth = c.log_async_queue_depth.load(std::memory_order_relaxed);
+    snap.log_async_queue_capacity = c.log_async_queue_capacity.load(std::memory_order_relaxed);
+    snap.log_async_queue_drop_total = c.log_async_queue_drop_total.load(std::memory_order_relaxed);
+    snap.log_async_flush_total = c.log_async_flush_total.load(std::memory_order_relaxed);
+    snap.log_async_flush_latency_sum_ns = c.log_async_flush_latency_sum_ns.load(std::memory_order_relaxed);
+    snap.log_async_flush_latency_max_ns = c.log_async_flush_latency_max_ns.load(std::memory_order_relaxed);
+    snap.log_masked_fields_total = c.log_masked_fields_total.load(std::memory_order_relaxed);
+    snap.http_active_connections = c.http_active_connections.load(std::memory_order_relaxed);
+    snap.http_connection_limit_reject_total = c.http_connection_limit_reject_total.load(std::memory_order_relaxed);
+    snap.http_auth_reject_total = c.http_auth_reject_total.load(std::memory_order_relaxed);
+    snap.http_header_timeout_total = c.http_header_timeout_total.load(std::memory_order_relaxed);
+    snap.http_body_timeout_total = c.http_body_timeout_total.load(std::memory_order_relaxed);
+    snap.http_header_oversize_total = c.http_header_oversize_total.load(std::memory_order_relaxed);
+    snap.http_body_oversize_total = c.http_body_oversize_total.load(std::memory_order_relaxed);
+    snap.http_bad_request_total = c.http_bad_request_total.load(std::memory_order_relaxed);
+    snap.runtime_setting_reload_attempt_total = c.runtime_setting_reload_attempt_total.load(std::memory_order_relaxed);
+    snap.runtime_setting_reload_success_total = c.runtime_setting_reload_success_total.load(std::memory_order_relaxed);
+    snap.runtime_setting_reload_failure_total = c.runtime_setting_reload_failure_total.load(std::memory_order_relaxed);
+    snap.runtime_setting_reload_latency_sum_ns = c.runtime_setting_reload_latency_sum_ns.load(std::memory_order_relaxed);
+    snap.runtime_setting_reload_latency_max_ns = c.runtime_setting_reload_latency_max_ns.load(std::memory_order_relaxed);
 
     for (std::size_t i = 0; i < c.opcode_counters.size(); ++i) {
         auto value = c.opcode_counters[i].load(std::memory_order_relaxed);

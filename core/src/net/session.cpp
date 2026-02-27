@@ -50,6 +50,7 @@ std::string Session::remote_ip() const {
         auto ep = socket_.remote_endpoint();
         return ep.address().to_string();
     } catch (...) {
+        runtime_metrics::record_exception_ignored();
         return std::string();
     }
 }
@@ -75,10 +76,12 @@ void Session::stop() {
             try {
                 socket_.shutdown(asio::ip::tcp::socket::shutdown_both);
             } catch (...) {
+                runtime_metrics::record_exception_ignored();
             }
             try {
                 socket_.close();
             } catch (...) {
+                runtime_metrics::record_exception_ignored();
             }
         }
         (void)read_timer_.cancel();
@@ -93,6 +96,7 @@ void Session::stop() {
             try {
                 on_close_(self);
             } catch (...) {
+                runtime_metrics::record_exception_recoverable();
             }
         }
     });
@@ -107,6 +111,7 @@ bool Session::post_serialized(std::function<void()> fn) {
     try {
         self = shared_from_this();
     } catch (...) {
+        runtime_metrics::record_exception_ignored();
         return false;
     }
 
