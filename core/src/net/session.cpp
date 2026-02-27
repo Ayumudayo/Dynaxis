@@ -5,6 +5,7 @@
 #include "server/core/config/options.hpp"
 #include "server/core/protocol/protocol_flags.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
+#include "server/core/protocol/version.hpp"
 #include "server/core/memory/memory_pool.hpp"
 #include "server/core/runtime_metrics.hpp"
 
@@ -94,6 +95,27 @@ void Session::stop() {
             }
         }
     });
+}
+
+bool Session::post_serialized(std::function<void()> fn) {
+    if (!fn) {
+        return false;
+    }
+
+    std::shared_ptr<Session> self;
+    try {
+        self = shared_from_this();
+    } catch (...) {
+        return false;
+    }
+
+    asio::post(strand_, [self, fn = std::move(fn)]() mutable {
+        if (self->stopped_.load(std::memory_order_acquire)) {
+            return;
+        }
+        fn();
+    });
+    return true;
 }
 
 void Session::async_send(BufferManager::PooledBuffer data, size_t packet_size) {
@@ -283,8 +305,8 @@ void Session::send_hello() {
     // epoch_high32(4바이트): 64비트 Timestamp 구성을 위한 상위 32비트 (Epoch)
     std::vector<std::uint8_t> payload_vec;
     payload_vec.resize(12);
-    server::core::protocol::write_be16(1, payload_vec.data()); // proto_major
-    server::core::protocol::write_be16(1, payload_vec.data() + 2); // proto_minor
+    server::core::protocol::write_be16(server::core::protocol::kProtocolVersionMajor, payload_vec.data()); // proto_major
+    server::core::protocol::write_be16(server::core::protocol::kProtocolVersionMinor, payload_vec.data() + 2); // proto_minor
     
     std::uint16_t caps = static_cast<std::uint16_t>(server::core::protocol::CAP_COMPRESS_SUPP | server::core::protocol::CAP_SENDER_SID);
     server::core::protocol::write_be16(caps, payload_vec.data() + 4);

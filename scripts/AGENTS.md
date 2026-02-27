@@ -6,6 +6,7 @@ Canonical entry points for building and running the stack.
 - `scripts/build.ps1`: CMake preset configure/build; `-Target <name>` builds a single target.
 - `scripts/configure_windows_ninja.ps1`: configures `windows-ninja` preset (for clangd/`compile_commands.json`).
 - `scripts/check_observability.ps1`: sanity-check Prometheus targets (and Grafana health).
+- `scripts/smoke_metrics.ps1`: verify service-level `/metrics` payload contracts (gateway/server/wb_worker).
 - `scripts/deploy_docker.ps1`: manage `docker/stack` compose (`up/down/restart/build/logs/ps/clean/config`) with optional `-EnvFile` override.
 - `scripts/run_full_stack_observability.ps1`: wrapper for `deploy_docker.ps1 -Observability`.
 - `scripts/smoke_wb.ps1`: end-to-end smoke test for the write-behind pipeline (expects the Docker stack up).

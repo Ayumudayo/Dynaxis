@@ -4,6 +4,7 @@
 #include "server/core/protocol/system_opcodes.hpp"
 #include "server/protocol/game_opcodes.hpp"
 #include "server/core/protocol/protocol_flags.hpp"
+#include "server/core/protocol/version.hpp"
 #include "server/wire/codec.hpp"
 #include "wire.pb.h"
 
@@ -429,6 +430,12 @@ void NetClient::send_login(const std::string& user, const std::string& token) {
     std::vector<std::uint8_t> p;
     proto::write_lp_utf8(p, user);
     proto::write_lp_utf8(p, token);
+
+    const auto version_offset = p.size();
+    p.resize(version_offset + 4);
+    proto::write_be16(proto::kProtocolVersionMajor, p.data() + version_offset);
+    proto::write_be16(proto::kProtocolVersionMinor, p.data() + version_offset + 2);
+
     enqueue_packet(game_proto::MSG_LOGIN_REQ, 0, std::move(p));
 }
 

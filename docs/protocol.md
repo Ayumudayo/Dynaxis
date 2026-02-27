@@ -3,16 +3,16 @@
 ## 목표
 - 간단하고 견고한 바이너리 프로토콜로 시작해 확장이 쉽도록 한다.
 - 외부(클라이언트↔Gateway)와 내부(서비스 간) 프로토콜을 분리한다.
-- 단일 소스: 패킷 헤더/프레이밍의 표준 구현은 `core/include/server/core/protocol/frame.hpp`로 제공하며, 코어를 사용하는 모든 프로그램은 이를 공유한다. (core/include/server/core/protocol/frame.hpp:13)
+- 단일 소스: 패킷 헤더/프레이밍의 표준 구현은 `core/include/server/core/protocol/packet.hpp`로 제공하며, 코어를 사용하는 모든 프로그램은 이를 공유한다. (`core/include/server/core/protocol/packet.hpp`)
 
 ## 패킷 형식
 - Endianness: big-endian(네트워크 바이트 오더).
-- Header 14바이트(고정, v1.1): (core/include/server/core/protocol/frame.hpp:14)
-  - `uint16 length`: 본문(payload) 길이 (core/include/server/core/protocol/frame.hpp:17)
-  - `uint16 msg_id`: 메시지 식별자 (core/include/server/core/protocol/frame.hpp:18)
+- Header 14바이트(고정, v1.1): (`core/include/server/core/protocol/packet.hpp`)
+  - `uint16 length`: 본문(payload) 길이 (`core/include/server/core/protocol/packet.hpp`)
+  - `uint16 msg_id`: 메시지 식별자 (`core/include/server/core/protocol/packet.hpp`)
   - `uint16 flags`: 옵션 비트(압축/암호화 등) (core/include/server/core/protocol/protocol_flags.hpp:8)
-  - `uint32 seq`: 발신 측 시퀀스(단조 증가, wrap 허용) (core/include/server/core/protocol/frame.hpp:20)
-  - `uint32 utc_ts_ms32`: 발신 시점 UTC epoch ms 하위 32비트 (core/include/server/core/protocol/frame.hpp:21)
+  - `uint32 seq`: 발신 측 시퀀스(단조 증가, wrap 허용) (`core/include/server/core/protocol/packet.hpp`)
+  - `uint32 utc_ts_ms32`: 발신 시점 UTC epoch ms 하위 32비트 (`core/include/server/core/protocol/packet.hpp`)
 - Body: `length` 바이트.
 
 ### Flags 비트 정의(초안)
@@ -41,7 +41,7 @@ Sapphire처럼 도메인별로 보기 좋게 관리하기 위해 JSON에 `groups
 - 암호화: 모든 상용 배포는 TLS(Load Balancer ↔ Gateway, Gateway ↔ Server) 종단을 필수로 사용한다. 개발·테스트 환경에서만 ChaCha20-Poly1305 기반 경량 암호 혹은 XOR 샘플을 허용하며, 이때도 `HELLO.capabilities`에서 `CAP_PLAINTEXT_ACCEPTED`를 교환해야 한다.
 
 ## 시퀀스/재전송
-- `seq`와 `utc_ts_ms32`는 항상 고정 헤더에 포함된다. (core/include/server/core/protocol/frame.hpp:20)
+- `seq`와 `utc_ts_ms32`는 항상 고정 헤더에 포함된다. (`core/include/server/core/protocol/packet.hpp`)
 - 현재는 재전송/ACK 등의 신뢰 레이어를 구현하지 않으며, `seq`는 클라이언트/서버 측 추적/디버깅/순서 확인 용도로만 사용한다. (core/src/net/session.cpp:48)
 
 ## 예시 인코딩
@@ -86,23 +86,27 @@ Sapphire처럼 도메인별로 보기 좋게 관리하기 위해 JSON에 `groups
 
 ---
 
-## 클라이언트 핸드셰이크 (core/src/net/session.cpp:223)
+## 클라이언트 핸드셰이크 (`core/src/net/session.cpp`)
 - 흐름: Client가 TCP 연결을 맺으면 서버가 `MSG_HELLO`를 먼저 보내고, 클라이언트는 capabilities를 확인한 뒤 `MSG_LOGIN_REQ` 또는 `MSG_STATE_SNAPSHOT_REQ`를 전송한다.
-- `MSG_HELLO` payload (v1.1):
-  - `uint16 proto_major`, `uint16 proto_minor`: 지원하는 프로토콜 버전. 불일치 시 `MSG_ERR(UNSUPPORTED_VERSION)` 반환.
+- `MSG_HELLO` payload (v1.1, 12 bytes):
+  - `uint16 proto_major`, `uint16 proto_minor`: 서버가 지원하는 프로토콜 버전(`core/include/server/core/protocol/version.hpp`).
   - `uint16 capabilities`: 비트 플래그. `CAP_COMPRESS_SUPP`, `CAP_SENDER_SID`, `CAP_ROOM_DELTA` 등을 정의한다.
   - `uint16 heartbeat_interval_x10ms`: 서버가 요구하는 heartbeat 주기를 10ms 단위로 표현.
   - `uint32 epoch_high32`: 서버 시각(ms)의 상위 32비트로, 클라이언트가 `utc_ts_ms32` wrap을 보정하는 데 사용한다.
-  - `u16 flags`: 추후 확장을 위한 reserved 필드(0으로 채움).
+- `MSG_LOGIN_REQ` payload는 기존 `user/token` 뒤에 선택적으로 `uint16 client_proto_major`, `uint16 client_proto_minor`를 붙일 수 있다.
+  - 버전 판정 규칙: `major`는 반드시 일치, `minor`는 서버 버전 이하만 허용.
+  - 불일치 시 서버는 `MSG_ERR(UNSUPPORTED_VERSION)`를 반환한다.
+  - 버전 필드가 없는 기존 클라이언트는 서버 기본 버전으로 간주해 허용한다.
 - 클라이언트는 HELLO 수신 후 `MSG_PING`/`MSG_LOGIN_REQ`를 보내기 전까지 heartbeat 타이머를 설정해야 한다.
 
 ### MSG_ERR 코드 예약 (core/include/server/core/protocol/protocol_errors.hpp:11)
 - 0x0007: INVALID_PAYLOAD
+- 0x0009: UNSUPPORTED_VERSION
 - 0x0100: NAME_TAKEN(닉네임 중복)
 - 필요 시 확장: MALFORMED_FRAME, FORBIDDEN, RATE_LIMITED, INTERNAL_ERROR 등은 도입 시 코드 예약 후 사용
 
-## 문자열/인코딩 규칙(중요) (core/include/server/core/protocol/frame.hpp:75)
-- 모든 문자열은 UTF-8로 인코딩한다(서버/클라 모두). (core/include/server/core/protocol/frame.hpp:75)
+## 문자열/인코딩 규칙(중요) (`core/include/server/core/protocol/packet.hpp`)
+- 모든 문자열은 UTF-8로 인코딩한다(서버/클라 모두). (`core/include/server/core/protocol/packet.hpp`)
 - 문자열 필드는 길이-접두(prefix) 방식 사용을 권장: `uint16 len` + `len` 바이트(UTF-8). 널 종료는 사용하지 않는다.
 
 ## 메시지 payload 스키마(발췌)

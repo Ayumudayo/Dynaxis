@@ -38,6 +38,9 @@ struct RuntimeCounters {
     std::atomic<std::uint64_t> dispatch_latency_last_ns{0};
     std::atomic<std::uint64_t> dispatch_latency_max_ns{0};
     std::array<std::atomic<std::uint64_t>, kDispatchLatencyBucketUpperBoundsNs.size()> dispatch_latency_bucket_counts{};
+    std::array<std::atomic<std::uint64_t>, kDispatchProcessingPlaceCount> dispatch_processing_place_calls_total{};
+    std::array<std::atomic<std::uint64_t>, kDispatchProcessingPlaceCount> dispatch_processing_place_reject_total{};
+    std::array<std::atomic<std::uint64_t>, kDispatchProcessingPlaceCount> dispatch_processing_place_exception_total{};
     std::atomic<std::uint64_t> job_queue_depth{0};
     std::atomic<std::uint64_t> job_queue_depth_peak{0};
     std::atomic<std::uint64_t> job_queue_capacity{0};
@@ -64,6 +67,10 @@ struct RuntimeCounters {
 RuntimeCounters& counters() {
     static RuntimeCounters c;
     return c;
+}
+
+std::size_t normalize_dispatch_place_index(std::size_t place_index) {
+    return place_index < kDispatchProcessingPlaceCount ? place_index : (kDispatchProcessingPlaceCount - 1);
 }
 
 } // namespace
@@ -149,6 +156,21 @@ void record_dispatch_attempt(bool handler_found, std::chrono::nanoseconds elapse
 
 void record_dispatch_exception() {
     counters().dispatch_exception_total.fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_dispatch_processing_place_call(std::size_t place_index) {
+    counters().dispatch_processing_place_calls_total[normalize_dispatch_place_index(place_index)]
+        .fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_dispatch_processing_place_reject(std::size_t place_index) {
+    counters().dispatch_processing_place_reject_total[normalize_dispatch_place_index(place_index)]
+        .fetch_add(1, std::memory_order_relaxed);
+}
+
+void record_dispatch_processing_place_exception(std::size_t place_index) {
+    counters().dispatch_processing_place_exception_total[normalize_dispatch_place_index(place_index)]
+        .fetch_add(1, std::memory_order_relaxed);
 }
 
 void record_job_queue_depth(std::size_t depth) {
@@ -283,6 +305,14 @@ Snapshot snapshot() {
     snap.dispatch_latency_max_ns = c.dispatch_latency_max_ns.load(std::memory_order_relaxed);
     for (std::size_t i = 0; i < snap.dispatch_latency_bucket_counts.size(); ++i) {
         snap.dispatch_latency_bucket_counts[i] = c.dispatch_latency_bucket_counts[i].load(std::memory_order_relaxed);
+    }
+    for (std::size_t i = 0; i < snap.dispatch_processing_place_calls_total.size(); ++i) {
+        snap.dispatch_processing_place_calls_total[i]
+            = c.dispatch_processing_place_calls_total[i].load(std::memory_order_relaxed);
+        snap.dispatch_processing_place_reject_total[i]
+            = c.dispatch_processing_place_reject_total[i].load(std::memory_order_relaxed);
+        snap.dispatch_processing_place_exception_total[i]
+            = c.dispatch_processing_place_exception_total[i].load(std::memory_order_relaxed);
     }
     snap.job_queue_depth = c.job_queue_depth.load(std::memory_order_relaxed);
     snap.job_queue_depth_peak = c.job_queue_depth_peak.load(std::memory_order_relaxed);

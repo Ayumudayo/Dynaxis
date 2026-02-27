@@ -31,6 +31,9 @@ pwsh scripts/run_full_stack_observability.ps1
 ```powershell
 # (옵션) 빠른 기본 점검
 pwsh scripts/check_observability.ps1
+
+# (옵션) 서비스별 /metrics payload 스모크 점검
+pwsh scripts/smoke_metrics.ps1
 ```
 
 2) 트래픽 주입
@@ -46,8 +49,17 @@ pwsh scripts/check_observability.ps1
 
 ## 3. 메트릭 목록 (현재)
 
-### 서버 앱(server_app)
+### 공통(core)
 - 빌드(Build): `knights_build_info{git_hash=...,git_describe=...,build_time_utc=...} 1`
+- 런타임 핵심(core runtime):
+  - `core_runtime_accept_total` (counter)
+  - `core_runtime_session_started_total` (counter)
+  - `core_runtime_session_stopped_total` (counter)
+  - `core_runtime_session_active` (gauge)
+  - `core_runtime_dispatch_total`, `core_runtime_dispatch_unknown_total`, `core_runtime_dispatch_exception_total` (counters)
+  - `core_runtime_send_queue_drop_total`, `core_runtime_packet_error_total` (counters)
+
+### 서버 앱(server_app)
 - 세션: `chat_session_active` (gauge), `chat_session_started_total`, `chat_session_stopped_total`
 - 세션 타임아웃: `chat_session_timeout_total`, `chat_session_write_timeout_total` (counters)
 - 프레임: `chat_frame_total`, `chat_frame_error_total`, `chat_frame_payload_*`
@@ -65,7 +77,6 @@ pwsh scripts/check_observability.ps1
   - `chat_hook_plugin_reload_attempt_total{file="..."}` / `chat_hook_plugin_reload_success_total{file="..."}` / `chat_hook_plugin_reload_failure_total{file="..."}` (counters)
 
 ### 게이트웨이 앱(gateway_app)
-- 빌드(Build): `knights_build_info{...} 1`
 - `gateway_sessions_active` (gauge)
 - `gateway_connections_total` (counter)
 - 백엔드(Backend) 신뢰성:
@@ -88,7 +99,6 @@ pwsh scripts/check_observability.ps1
   - `gateway_udp_bind_ttl_ms`, `gateway_udp_bind_fail_window_ms`, `gateway_udp_bind_fail_limit`, `gateway_udp_bind_block_ms` (gauges)
 
 ### 워커(wb_worker)
-- 빌드(Build): `knights_build_info{...} 1`
 - 백로그: `wb_pending` (gauge)
 - DB 재연결 설정/백오프:
   - `wb_db_reconnect_base_ms`, `wb_db_reconnect_max_ms` (gauges)

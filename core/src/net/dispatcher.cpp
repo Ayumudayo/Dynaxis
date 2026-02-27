@@ -1,11 +1,15 @@
 #include "server/core/net/dispatcher.hpp"
 
+#include "server/core/concurrent/job_queue.hpp"
 #include "server/core/net/session.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/runtime_metrics.hpp"
 #include "server/core/util/log.hpp"
+#include "server/core/util/service_registry.hpp"
 
 #include <exception>
+#include <memory>
+#include <vector>
 
 /**
  * @brief Dispatcher 핸들러 등록/실행 구현입니다.
@@ -16,6 +20,12 @@
 namespace server::core {
 
 namespace {
+
+namespace services = server::core::util::services;
+
+constexpr std::size_t kDispatchPlaceInlineIndex = 0;
+constexpr std::size_t kDispatchPlaceWorkerIndex = 1;
+constexpr std::size_t kDispatchPlaceRoomStrandIndex = 2;
 
 bool satisfies_required_state(
     server::core::protocol::SessionStatus required,
@@ -35,6 +45,71 @@ bool satisfies_required_state(
         return current == SessionStatus::kAdmin;
     }
     return false;
+}
+
+std::size_t processing_place_index(server::core::protocol::ProcessingPlace place) {
+    using server::core::protocol::ProcessingPlace;
+    switch (place) {
+    case ProcessingPlace::kInline:
+        return kDispatchPlaceInlineIndex;
+    case ProcessingPlace::kWorker:
+        return kDispatchPlaceWorkerIndex;
+    case ProcessingPlace::kRoomStrand:
+        return kDispatchPlaceRoomStrandIndex;
+    }
+    return server::core::runtime_metrics::kDispatchProcessingPlaceCount;
+}
+
+const char* processing_place_name(server::core::protocol::ProcessingPlace place) {
+    using server::core::protocol::ProcessingPlace;
+    switch (place) {
+    case ProcessingPlace::kInline:
+        return "inline";
+    case ProcessingPlace::kWorker:
+        return "worker";
+    case ProcessingPlace::kRoomStrand:
+        return "room_strand";
+    }
+    return "unknown";
+}
+
+void send_error_noexcept(Session& session, std::uint16_t code, const char* message) {
+    try {
+        session.send_error(code, message);
+    } catch (...) {
+    }
+}
+
+std::shared_ptr<Session> shared_session_or_null(Session& session) {
+    try {
+        return session.shared_from_this();
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void run_handler_with_guard(const Dispatcher::handler_t& handler,
+                            Session& session,
+                            std::span<const std::uint8_t> payload,
+                            std::uint16_t msg_id,
+                            std::size_t place_index) {
+    try {
+        handler(session, payload);
+    } catch (const std::exception& ex) {
+        server::core::runtime_metrics::record_dispatch_exception();
+        server::core::runtime_metrics::record_dispatch_processing_place_exception(place_index);
+        server::core::log::error(
+            std::string("handler exception for msg=") + std::to_string(msg_id) +
+            " place=" + std::to_string(place_index) + ": " + ex.what());
+        send_error_noexcept(session, server::core::protocol::errc::INTERNAL_ERROR, "internal error");
+    } catch (...) {
+        server::core::runtime_metrics::record_dispatch_exception();
+        server::core::runtime_metrics::record_dispatch_processing_place_exception(place_index);
+        server::core::log::error(
+            std::string("handler unknown exception for msg=") + std::to_string(msg_id) +
+            " place=" + std::to_string(place_index));
+        send_error_noexcept(session, server::core::protocol::errc::INTERNAL_ERROR, "internal error");
+    }
 }
 
 } // namespace
@@ -73,32 +148,78 @@ bool Dispatcher::dispatch(std::uint16_t msg_id,
         return true;
     }
 
-    switch (entry.policy.processing_place) {
-    case server::core::protocol::ProcessingPlace::kInline:
-    case server::core::protocol::ProcessingPlace::kWorker:
-    case server::core::protocol::ProcessingPlace::kRoomStrand:
-        break;
+    const auto place = entry.policy.processing_place;
+    const auto place_index = processing_place_index(place);
+    if (place_index >= runtime_metrics::kDispatchProcessingPlaceCount) {
+        server::core::log::error(
+            std::string("unsupported processing_place for msg=") + std::to_string(msg_id));
+        send_error_noexcept(s, server::core::protocol::errc::INTERNAL_ERROR, "unsupported processing place");
+        return true;
     }
 
-    try {
-        // 핸들러 실행 중 발생하는 예외는 세션 단위 오류로 처리합니다.
-        // 즉, 특정 클라이언트의 요청 처리 중 오류가 발생해도 서버 전체가 죽지 않도록 방어합니다.
-        entry.handler(s, payload);
-    } catch (const std::exception& ex) {
-        runtime_metrics::record_dispatch_exception();
-        server::core::log::error(std::string("handler exception for msg=") + std::to_string(msg_id) + ": " + ex.what());
-        // 클라이언트에게 내부 오류임을 알립니다.
-        try {
-            s.send_error(server::core::protocol::errc::INTERNAL_ERROR, "internal error");
-        } catch (...) {
+    runtime_metrics::record_dispatch_processing_place_call(place_index);
+
+    if (place == server::core::protocol::ProcessingPlace::kInline) {
+        run_handler_with_guard(entry.handler, s, payload, msg_id, place_index);
+        return true;
+    }
+
+    auto session = shared_session_or_null(s);
+    if (!session) {
+        runtime_metrics::record_dispatch_processing_place_reject(place_index);
+        server::core::log::warn(
+            std::string("processing_place rejected: missing shared session for msg=") +
+            std::to_string(msg_id) + " place=" + processing_place_name(place));
+        send_error_noexcept(s, server::core::protocol::errc::SERVER_BUSY, "dispatch context unavailable");
+        return true;
+    }
+
+    auto handler = entry.handler;
+    std::vector<std::uint8_t> payload_copy(payload.begin(), payload.end());
+
+    auto invoke_on_session = [handler = std::move(handler),
+                              session,
+                              payload_copy = std::move(payload_copy),
+                              msg_id,
+                              place_index]() mutable {
+        run_handler_with_guard(
+            handler,
+            *session,
+            std::span<const std::uint8_t>(payload_copy.data(), payload_copy.size()),
+            msg_id,
+            place_index);
+    };
+
+    if (place == server::core::protocol::ProcessingPlace::kRoomStrand) {
+        const bool accepted = session->post_serialized(std::move(invoke_on_session));
+        if (!accepted) {
+            runtime_metrics::record_dispatch_processing_place_reject(place_index);
+            send_error_noexcept(s, server::core::protocol::errc::SERVER_BUSY, "dispatch context unavailable");
         }
-    } catch (...) {
-        runtime_metrics::record_dispatch_exception();
-        server::core::log::error(std::string("handler unknown exception for msg=") + std::to_string(msg_id));
-        try {
-            s.send_error(server::core::protocol::errc::INTERNAL_ERROR, "internal error");
-        } catch (...) {
+        return true;
+    }
+
+    auto job_queue = services::get<server::core::JobQueue>();
+    if (!job_queue) {
+        runtime_metrics::record_dispatch_processing_place_reject(place_index);
+        server::core::log::warn(
+            std::string("processing_place rejected: worker queue unavailable for msg=") +
+            std::to_string(msg_id));
+        send_error_noexcept(s, server::core::protocol::errc::SERVER_BUSY, "worker queue unavailable");
+        return true;
+    }
+
+    const bool queued = job_queue->TryPush([session, task = std::move(invoke_on_session), place_index]() mutable {
+        const bool accepted = session->post_serialized(std::move(task));
+        if (!accepted) {
+            runtime_metrics::record_dispatch_processing_place_reject(place_index);
+            send_error_noexcept(*session, server::core::protocol::errc::SERVER_BUSY, "dispatch context unavailable");
         }
+    });
+
+    if (!queued) {
+        runtime_metrics::record_dispatch_processing_place_reject(place_index);
+        send_error_noexcept(s, server::core::protocol::errc::SERVER_BUSY, "worker queue full");
     }
     return true;
 }

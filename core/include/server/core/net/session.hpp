@@ -56,6 +56,13 @@ public:
     void stop();
 
     /**
+     * @brief 세션 strand에서 콜백을 직렬 실행으로 예약합니다.
+     * @param fn 실행할 콜백
+     * @return 예약 성공 시 true, 세션이 shared ownership 상태가 아니면 false
+     */
+    bool post_serialized(std::function<void()> fn);
+
+    /**
      * @brief 세션 종료 직전에 1회 호출할 콜백을 등록합니다.
      * @param cb 종료 콜백
      */

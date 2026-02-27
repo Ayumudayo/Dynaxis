@@ -9,6 +9,9 @@
 
 namespace server::core::runtime_metrics {
 
+/** @brief dispatch processing_place 계열 메트릭 배열 길이입니다. */
+inline constexpr std::size_t kDispatchProcessingPlaceCount = 3;
+
 /**
  * @brief 디스패치 지연시간 히스토그램 버킷 상한(ns) 목록입니다.
  *
@@ -61,6 +64,9 @@ struct Snapshot {
     std::uint64_t dispatch_latency_last_ns{0};
     std::uint64_t dispatch_latency_max_ns{0};
     std::array<std::uint64_t, kDispatchLatencyBucketUpperBoundsNs.size()> dispatch_latency_bucket_counts{};
+    std::array<std::uint64_t, kDispatchProcessingPlaceCount> dispatch_processing_place_calls_total{};
+    std::array<std::uint64_t, kDispatchProcessingPlaceCount> dispatch_processing_place_reject_total{};
+    std::array<std::uint64_t, kDispatchProcessingPlaceCount> dispatch_processing_place_exception_total{};
     std::uint64_t job_queue_depth{0};
     std::uint64_t job_queue_depth_peak{0};
     std::uint64_t job_queue_capacity{0};
@@ -103,6 +109,13 @@ void record_dispatch_attempt(bool handler_found, std::chrono::nanoseconds elapse
 
 /** @brief 디스패치 중 예외 발생 건수를 기록합니다. */
 void record_dispatch_exception();
+
+/** @brief processing_place별 디스패치 시도 건수를 기록합니다. */
+void record_dispatch_processing_place_call(std::size_t place_index);
+/** @brief processing_place별 디스패치 거절 건수를 기록합니다. */
+void record_dispatch_processing_place_reject(std::size_t place_index);
+/** @brief processing_place별 디스패치 예외 건수를 기록합니다. */
+void record_dispatch_processing_place_exception(std::size_t place_index);
 /** @brief 읽기 타임아웃 종료 건수를 기록합니다. */
 void record_session_timeout();
 /** @brief 쓰기 타임아웃 종료 건수를 기록합니다. */

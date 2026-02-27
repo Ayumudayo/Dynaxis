@@ -1,6 +1,7 @@
 #pragma once
 
 #include <initializer_list>
+#include <ostream>
 #include <string>
 #include <utility>
 
@@ -46,34 +47,53 @@ public:
 /**
  * @brief 이름으로 카운터를 조회합니다.
  * @param name 메트릭 이름
- * @return 구현체가 없으면 no-op 카운터를 반환
+ * @return 해당 이름의 카운터 객체 레퍼런스
  *
  * 계약:
  * - 동일 name 요청은 동일 객체 레퍼런스를 반환합니다.
- * - 백엔드 미연결 상태에서도 호출은 예외 없이 동작합니다.
+ * - 내부 registry 백엔드에 즉시 반영되며 호출은 예외 없이 동작합니다.
  */
 Counter& get_counter(const std::string& name);
 
 /**
  * @brief 이름으로 게이지를 조회합니다.
  * @param name 메트릭 이름
- * @return 구현체가 없으면 no-op 게이지를 반환
+ * @return 해당 이름의 게이지 객체 레퍼런스
  *
  * 계약:
  * - 동일 name 요청은 동일 객체 레퍼런스를 반환합니다.
- * - 백엔드 미연결 상태에서도 호출은 예외 없이 동작합니다.
+ * - 내부 registry 백엔드에 즉시 반영되며 호출은 예외 없이 동작합니다.
  */
 Gauge& get_gauge(const std::string& name);
 
 /**
  * @brief 이름으로 히스토그램을 조회합니다.
  * @param name 메트릭 이름
- * @return 구현체가 없으면 no-op 히스토그램을 반환
+ * @return 해당 이름의 히스토그램 객체 레퍼런스
  *
  * 계약:
  * - 동일 name 요청은 동일 객체 레퍼런스를 반환합니다.
- * - 백엔드 미연결 상태에서도 호출은 예외 없이 동작합니다.
+ * - 내부 registry 백엔드에 즉시 반영되며 호출은 예외 없이 동작합니다.
  */
 Histogram& get_histogram(const std::string& name);
+
+/**
+ * @brief 등록된 공용 metrics backend 값을 Prometheus text 형식으로 출력합니다.
+ *
+ * 출력은 `# TYPE` + 샘플 라인으로 구성되며, Counter/Gauge/Histogram 모두 포함됩니다.
+ */
+void append_prometheus_metrics(std::ostream& out);
+
+/**
+ * @brief core 런타임 핵심 카운터 스냅샷을 공통 메트릭 이름으로 출력합니다.
+ *
+ * 서비스별 구현 차이와 무관하게 최소 공통 관측 지표를 보장하기 위한 헬퍼입니다.
+ */
+void append_runtime_core_metrics(std::ostream& out);
+
+/**
+ * @brief 테스트용으로 공용 metrics backend 내부 상태를 초기화합니다.
+ */
+void reset_for_tests();
 
 } // namespace server::core::metrics

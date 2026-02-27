@@ -15,6 +15,16 @@
 - Wire codec과 dispatcher는 opcode 라우팅을 표준화해 신규 메시지를 추가할 때 서비스 코드가 최소화된다.
 - Gateway와 Server가 같은 기반을 공유하므로, 연결 처리/백프레셔 정책을 한 곳에서 조정할 수 있다.
 
+#### Dispatcher `processing_place` 실행 정책
+- `kInline`: 현재 dispatch 호출 경로에서 핸들러를 즉시 실행한다.
+- `kWorker`: `JobQueue`에 작업을 enqueue한 뒤, 세션 직렬 실행 컨텍스트에서 핸들러를 실행한다.
+- `kRoomStrand`: 세션 직렬 실행 컨텍스트로 post하여 비동기 실행한다.
+- 미지원 `processing_place` 값은 `MSG_ERR(INTERNAL_ERROR)`로 거절한다.
+- 운영 관측은 아래 메트릭으로 노출한다.
+  - `chat_dispatch_processing_place_calls_total{place=...}`
+  - `chat_dispatch_processing_place_reject_total{place=...}`
+  - `chat_dispatch_processing_place_exception_total{place=...}`
+
 ### 2.2 동시성(`core::concurrent`)
 - `TaskScheduler`는 health-check, presence cleanup, metrics flush 등 반복 작업을 예약한다.
 - `ThreadManager`, `JobQueue`는 백그라운드 워커와 DbWorkerPool을 안정적으로 관리한다.
@@ -32,8 +42,8 @@
 
 ### 2.5 설정/관측성
 - 과거에는 `.env` 로딩 유틸을 두었으나, 현재 `server_app`/`gateway_app`은 실행 환경에서 주입된 환경 변수를 사용한다.
-- `metrics` 서브시스템은 Counter/Gauge/Histogram을 정의하고, `server_app`·`gateway_app`이 `/metrics` HTTP 엔드포인트를 노출한다.
-- Gateway/Server 모두 동일 metrics 등록 경로를 사용하므로, Prometheus exporter를 공통으로 재사용한다.
+- `metrics` 서브시스템은 Counter/Gauge/Histogram registry 백엔드를 제공하며, `append_prometheus_metrics()`로 공용 메트릭을 `/metrics`에 합성할 수 있다.
+- `append_runtime_core_metrics()`는 서비스별 구현과 무관하게 build info와 함께 공통 런타임 핵심 카운터를 노출하도록 강제한다.
 - `AppHost`는 공통 lifecycle phase(`init -> bootstrapping -> running -> stopping -> stopped|failed`)를 관리하고,
   `knights_lifecycle_phase`, `knights_lifecycle_phase_code` 메트릭으로 현재 단계를 노출한다.
 

@@ -32,6 +32,7 @@
 #include "server/core/protocol/system_opcodes.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/metrics/build_info.hpp"
+#include "server/core/metrics/metrics.hpp"
 #include "server/protocol/game_opcodes.hpp"
 #include "server/storage/redis/client.hpp"
 #include "server/state/instance_registry.hpp"
@@ -564,6 +565,8 @@ GatewayApp::GatewayApp()
 
         // Build metadata (git hash/describe + build time)
         server::core::metrics::append_build_info(stream);
+        server::core::metrics::append_runtime_core_metrics(stream);
+        server::core::metrics::append_prometheus_metrics(stream);
 
         stream << "# TYPE gateway_sessions_active gauge\n";
         {

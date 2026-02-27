@@ -3,6 +3,7 @@
 #include "server/chat/chat_service.hpp"
 #include "server/core/app/app_host.hpp"
 #include "server/core/metrics/build_info.hpp"
+#include "server/core/metrics/metrics.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
 #include "server/core/runtime_metrics.hpp"
 #include "server/core/util/log.hpp"
@@ -66,6 +67,8 @@ std::string render_metrics() {
 
     // Build metadata (git hash/describe + build time)
     server::core::metrics::append_build_info(stream);
+    server::core::metrics::append_runtime_core_metrics(stream);
+    server::core::metrics::append_prometheus_metrics(stream);
 
     auto append_counter = [&](const char* name, std::uint64_t value) {
         stream << "# TYPE " << name << " counter\n" << name << ' ' << value << '\n';
@@ -97,6 +100,30 @@ std::string render_metrics() {
     append_counter("chat_dispatch_total", snap.dispatch_total);
     append_counter("chat_dispatch_unknown_total", snap.dispatch_unknown_total);
     append_counter("chat_dispatch_exception_total", snap.dispatch_exception_total);
+
+    stream << "# TYPE chat_dispatch_processing_place_calls_total counter\n";
+    stream << "chat_dispatch_processing_place_calls_total{place=\"inline\"} "
+           << snap.dispatch_processing_place_calls_total[0] << "\n";
+    stream << "chat_dispatch_processing_place_calls_total{place=\"worker\"} "
+           << snap.dispatch_processing_place_calls_total[1] << "\n";
+    stream << "chat_dispatch_processing_place_calls_total{place=\"room_strand\"} "
+           << snap.dispatch_processing_place_calls_total[2] << "\n";
+
+    stream << "# TYPE chat_dispatch_processing_place_reject_total counter\n";
+    stream << "chat_dispatch_processing_place_reject_total{place=\"inline\"} "
+           << snap.dispatch_processing_place_reject_total[0] << "\n";
+    stream << "chat_dispatch_processing_place_reject_total{place=\"worker\"} "
+           << snap.dispatch_processing_place_reject_total[1] << "\n";
+    stream << "chat_dispatch_processing_place_reject_total{place=\"room_strand\"} "
+           << snap.dispatch_processing_place_reject_total[2] << "\n";
+
+    stream << "# TYPE chat_dispatch_processing_place_exception_total counter\n";
+    stream << "chat_dispatch_processing_place_exception_total{place=\"inline\"} "
+           << snap.dispatch_processing_place_exception_total[0] << "\n";
+    stream << "chat_dispatch_processing_place_exception_total{place=\"worker\"} "
+           << snap.dispatch_processing_place_exception_total[1] << "\n";
+    stream << "chat_dispatch_processing_place_exception_total{place=\"room_strand\"} "
+           << snap.dispatch_processing_place_exception_total[2] << "\n";
 
     auto last_ms = static_cast<long double>(snap.dispatch_latency_last_ns) / 1'000'000.0L;
     auto max_ms = static_cast<long double>(snap.dispatch_latency_max_ns) / 1'000'000.0L;

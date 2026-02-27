@@ -1,6 +1,7 @@
 #include "server/chat/chat_service.hpp"
 #include "server/core/protocol/opcode_policy.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
+#include "server/core/protocol/version.hpp"
 #include "server/protocol/game_opcodes.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/concurrent/job_queue.hpp"
@@ -44,6 +45,27 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
     if (!proto::read_lp_utf8(sp, user) || !proto::read_lp_utf8(sp, token)) {
         s.send_error(proto::errc::INVALID_PAYLOAD, "bad login payload");
         return;
+    }
+
+    std::uint16_t client_proto_major = proto::kProtocolVersionMajor;
+    std::uint16_t client_proto_minor = proto::kProtocolVersionMinor;
+    if (!sp.empty()) {
+        // LOGIN_REQ 뒤에 선택적으로 client protocol version(major/minor)을 붙인다.
+        if (sp.size() < 4) {
+            s.send_error(proto::errc::INVALID_PAYLOAD, "bad login payload");
+            return;
+        }
+        client_proto_major = proto::read_be16(sp.data());
+        client_proto_minor = proto::read_be16(sp.data() + 2);
+        sp = sp.subspan(4);
+        if (!sp.empty()) {
+            s.send_error(proto::errc::INVALID_PAYLOAD, "bad login payload");
+            return;
+        }
+        if (!proto::is_protocol_version_compatible(client_proto_major, client_proto_minor)) {
+            s.send_error(proto::errc::UNSUPPORTED_VERSION, "unsupported version");
+            return;
+        }
     }
 
     auto session_sp = s.shared_from_this();

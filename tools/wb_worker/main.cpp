@@ -17,6 +17,7 @@
 #include "server/core/util/log.hpp"
 #include "server/core/app/app_host.hpp"
 #include "server/core/metrics/build_info.hpp"
+#include "server/core/metrics/metrics.hpp"
 #include <pqxx/pqxx>
 #include <nlohmann/json.hpp>
 
@@ -662,6 +663,8 @@ private:
 
         // Build metadata (git hash/describe + build time)
         server::core::metrics::append_build_info(stream);
+        server::core::metrics::append_runtime_core_metrics(stream);
+        server::core::metrics::append_prometheus_metrics(stream);
 
         stream << "# TYPE wb_batch_max_events gauge\n";
         stream << "wb_batch_max_events " << config_.batch_max_events << "\n";
