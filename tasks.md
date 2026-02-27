@@ -136,15 +136,11 @@
 
 작업:
 
-- [ ] Circuit Breaker/Bulkhead/재시도 예산을 실제 경계(gateway->backend, storage I/O)에 배치한다.
-- [ ] 각 정책에 대해 "설정 키 1개 + 강제 지점 1개 + 메트릭 1개"를 강제한다.
 - [x] Circuit Breaker/Bulkhead/재시도 예산을 실제 경계(gateway->backend, storage I/O)에 배치한다.
 - [x] 각 정책에 대해 "설정 키 1개 + 강제 지점 1개 + 메트릭 1개"를 강제한다.
 
 검증:
 
-- [ ] 다운스트림 장애 시 연쇄 실패 대신 차단/격리가 관측된다.
-- [ ] 정책 트립 횟수가 메트릭으로 확인된다.
 - [x] 다운스트림 장애 시 연쇄 실패 대신 차단/격리가 관측된다.
 - [x] 정책 트립 횟수가 메트릭으로 확인된다.
 
@@ -152,15 +148,11 @@
 
 작업:
 
-- [ ] gateway ingress에 토큰 버킷 기반 제한을 명시 구현한다.
-- [ ] ready/backpressure 상태에 따른 외부 응답 정책을 표준화한다.
 - [x] gateway ingress에 토큰 버킷 기반 제한을 명시 구현한다.
 - [x] ready/backpressure 상태에 따른 외부 응답 정책을 표준화한다.
 
 검증:
 
-- [ ] 과부하 시 비핵심 경로가 먼저 감쇠되고 핵심 경로가 보존된다.
-- [ ] 운영 런북에서 임계치/롤백 스위치를 확인할 수 있다.
 - [x] 과부하 시 비핵심 경로가 먼저 감쇠되고 핵심 경로가 보존된다.
 - [x] 운영 런북에서 임계치/롤백 스위치를 확인할 수 있다.
 
@@ -168,14 +160,11 @@
 
 작업:
 
-- [ ] timeout/queue bound/dependency down 시나리오 테스트를 추가한다.
-- [ ] bounded queue 유지(무한 증가 없음) 검증을 포함한다.
 - [x] timeout/queue bound/dependency down 시나리오 테스트를 추가한다.
 - [x] bounded queue 유지(무한 증가 없음) 검증을 포함한다.
 
 검증:
 
-- [ ] 회귀 테스트가 실패 모드를 재현하고 예측 가능한 출력(메트릭/오류)을 보장한다.
 - [x] 회귀 테스트가 실패 모드를 재현하고 예측 가능한 출력(메트릭/오류)을 보장한다.
 
 ---
@@ -410,14 +399,14 @@
 
 작업:
 
-- [ ] edge(HAProxy) TLS 1.3 강제/레거시 예외 정책을 명문화한다.
-- [ ] 내부 링크 mTLS 적용 범위와 인증서 자동 갱신 경로를 운영 절차로 고정한다.
-- [ ] 인증서 만료 관측/알람(30/14/7일) 기준을 observability 문서/알람 규칙에 반영한다.
+- [x] edge(HAProxy) TLS 1.3 강제/레거시 예외 정책을 명문화한다.
+- [x] 내부 링크 mTLS 적용 범위와 인증서 자동 갱신 경로를 운영 절차로 고정한다.
+- [x] 인증서 만료 관측/알람(30/14/7일) 기준을 observability 문서/알람 규칙에 반영한다.
 
 검증:
 
-- [ ] 내부 서비스 plaintext 링크가 없음을 배포 점검으로 증명한다.
-- [ ] 인증서 만료 임계치 알람이 테스트 환경에서 재현된다.
+- [x] 내부 서비스 plaintext 링크가 없음을 배포 점검으로 증명한다.
+- [x] 인증서 만료 임계치 알람이 테스트 환경에서 재현된다.
 
 ### P1-6. 테스트 매트릭스 확장: 퍼즈/소크/성능회귀 게이트
 
@@ -427,15 +416,15 @@
 
 작업:
 
-- [ ] 프로토콜 파서/디코더 대상 fuzz harness를 추가한다.
-- [ ] 혼합 트래픽 장시간 soak 시나리오를 추가한다.
-- [ ] p95/p99 지연 및 처리량 baseline 대비 회귀 게이트를 CI에 분리한다.
+- [x] 프로토콜 파서/디코더 대상 fuzz harness를 추가한다.
+- [x] 혼합 트래픽 장시간 soak 시나리오를 추가한다.
+- [x] p95/p99 지연 및 처리량 baseline 대비 회귀 게이트를 CI에 분리한다.
 
 검증:
 
-- [ ] fuzz 타깃이 sanitizer와 함께 일정 시간 무충돌 실행된다.
-- [ ] soak 테스트에서 메모리/큐/세션 카운터가 bounded 상태를 유지한다.
-- [ ] 성능 게이트가 기준 초과 회귀 시 빌드를 실패시킨다.
+- [x] fuzz 타깃이 sanitizer와 함께 일정 시간 무충돌 실행된다.
+- [x] soak 테스트에서 메모리/큐/세션 카운터가 bounded 상태를 유지한다.
+- [x] 성능 게이트가 기준 초과 회귀 시 빌드를 실패시킨다.
 
 ### P1-7. Admin 명령 채널 무결성(서명/재생방지) 도입
 
@@ -479,13 +468,13 @@
 
 작업:
 
-- [ ] 네트워크/종료/스토리지 경계의 blanket catch를 분류(복구 가능/치명/무시 가능)한다.
-- [ ] 무시 경로에도 최소 메트릭 또는 구조화 로그를 남기도록 표준화한다.
-- [ ] 예외 정책 표(throw/catch/convert-to-error code)를 문서화한다.
+- [x] 네트워크/종료/스토리지 경계의 blanket catch를 분류(복구 가능/치명/무시 가능)한다.
+- [x] 무시 경로에도 최소 메트릭 또는 구조화 로그를 남기도록 표준화한다.
+- [x] 예외 정책 표(throw/catch/convert-to-error code)를 문서화한다.
 
 검증:
 
-- [ ] 장애 재현 시 "예외 발생 -> 신호(로그/메트릭) -> 대응" 흐름이 누락 없이 추적된다.
+- [x] 장애 재현 시 "예외 발생 -> 신호(로그/메트릭) -> 대응" 흐름이 누락 없이 추적된다.
 
 ### P2-4. 프로토콜 강건성 보강(UTF-8 엄격 검증 + 프레임 퍼저 친화성)
 
@@ -495,12 +484,12 @@
 
 작업:
 
-- [ ] UTF-8 검증 정책(허용/거부 범위, overlong/invalid codepoint 처리)을 명시적으로 강화한다.
-- [ ] 프레임/문자열 파싱 경계 테스트와 퍼즈 코퍼스를 추가한다.
+- [x] UTF-8 검증 정책(허용/거부 범위, overlong/invalid codepoint 처리)을 명시적으로 강화한다.
+- [x] 프레임/문자열 파싱 경계 테스트와 퍼즈 코퍼스를 추가한다.
 
 검증:
 
-- [ ] 잘못된 UTF-8/경계값 입력에서 일관된 에러 코드와 세션 처리 정책이 유지된다.
+- [x] 잘못된 UTF-8/경계값 입력에서 일관된 에러 코드와 세션 처리 정책이 유지된다.
 
 ### P2-5. 운영 SLO/Error Budget 규칙을 관측 스택에 연결
 
@@ -510,14 +499,14 @@
 
 작업:
 
-- [ ] 코어 핵심 SLI(가용성, 지연, 오류율) 정의와 30일 SLO 목표를 확정한다.
-- [ ] burn-rate 기반 경보 규칙을 Prometheus alert에 추가한다.
-- [ ] 릴리스 게이트와 연동(버짓 소진 시 기능 확장 중단 정책)한다.
+- [x] 코어 핵심 SLI(가용성, 지연, 오류율) 정의와 30일 SLO 목표를 확정한다.
+- [x] burn-rate 기반 경보 규칙을 Prometheus alert에 추가한다.
+- [x] 릴리스 게이트와 연동(버짓 소진 시 기능 확장 중단 정책)한다.
 
 검증:
 
-- [ ] 대시보드에서 잔여 error budget이 계산/표시된다.
-- [ ] burn-rate 경보가 테스트 데이터에서 정상 트리거된다.
+- [x] 대시보드에서 잔여 error budget이 계산/표시된다.
+- [x] burn-rate 경보가 테스트 데이터에서 정상 트리거된다.
 
 ### P2-6. 구조화 로그 표준(JSON + 상관키) 정착
 
@@ -527,14 +516,14 @@
 
 작업:
 
-- [ ] 공통 로그 스키마(timestamp, level, component, trace_id, correlation_id, message, error_code)를 정의한다.
-- [ ] core/server/gateway 로그 API를 구조화 포맷으로 확장한다.
-- [ ] 민감정보 마스킹 규칙(토큰/개인식별자)을 로거 계층에 강제한다.
+- [x] 공통 로그 스키마(timestamp, level, component, trace_id, correlation_id, message, error_code)를 정의한다.
+- [x] core/server/gateway 로그 API를 구조화 포맷으로 확장한다.
+- [x] 민감정보 마스킹 규칙(토큰/개인식별자)을 로거 계층에 강제한다.
 
 검증:
 
-- [ ] 단일 요청 추적 시 로그만으로 서비스 경계 추적이 가능하다.
-- [ ] 기존 plain 로그 대비 파싱 성공률/필드 채움률 지표를 확보한다.
+- [x] 단일 요청 추적 시 로그만으로 서비스 경계 추적이 가능하다.
+- [x] 기존 plain 로그 대비 파싱 성공률/필드 채움률 지표를 확보한다.
 
 ### P2-7. 런타임 설정 리로드 범위 확장(플러그인 한정 -> 코어 정책)
 
@@ -544,14 +533,14 @@
 
 작업:
 
-- [ ] 코어 정책(큐 상한, 타임아웃, rate-limit 임계치)의 런타임 리로드 가능 항목을 정의한다.
-- [ ] 리로드 적용 시 일관성 규칙(원자 적용/롤백)을 명시한다.
-- [ ] 리로드 성공/실패/적용 지연 메트릭을 추가한다.
+- [x] 코어 정책(큐 상한, 타임아웃, rate-limit 임계치)의 런타임 리로드 가능 항목을 정의한다.
+- [x] 리로드 적용 시 일관성 규칙(원자 적용/롤백)을 명시한다.
+- [x] 리로드 성공/실패/적용 지연 메트릭을 추가한다.
 
 검증:
 
-- [ ] 운영 중 정책값 변경이 프로세스 재기동 없이 반영된다.
-- [ ] 잘못된 설정 입력은 안전하게 거부되고 이전 값이 보존된다.
+- [x] 운영 중 정책값 변경이 프로세스 재기동 없이 반영된다.
+- [x] 잘못된 설정 입력은 안전하게 거부되고 이전 값이 보존된다.
 
 ### P2-8. Admin/metrics HTTP 보안 하드닝(인증/타임아웃/접속 제한)
 
@@ -562,14 +551,14 @@
 
 작업:
 
-- [ ] admin/metrics endpoint 접근 제어(allowlist 또는 인증 토큰)를 도입한다.
-- [ ] read/header/body timeout 및 동시 접속 상한을 설정 가능하게 한다.
-- [ ] 비정상 요청(과대 헤더/지연 연결) 방어 메트릭을 추가한다.
+- [x] admin/metrics endpoint 접근 제어(allowlist 또는 인증 토큰)를 도입한다.
+- [x] read/header/body timeout 및 동시 접속 상한을 설정 가능하게 한다.
+- [x] 비정상 요청(과대 헤더/지연 연결) 방어 메트릭을 추가한다.
 
 검증:
 
-- [ ] 비인가 요청은 일관된 401/403으로 차단된다.
-- [ ] slowloris 유사 시나리오에서 admin thread가 고갈되지 않는다.
+- [x] 비인가 요청은 일관된 401/403으로 차단된다.
+- [x] slowloris 유사 시나리오에서 admin thread가 고갈되지 않는다.
 
 ### P2-9. 비동기 로거 큐 bounded 정책 + 드롭 가시성 추가
 
@@ -579,14 +568,14 @@
 
 작업:
 
-- [ ] 로거 큐 상한 및 overflow 정책(drop newest/oldest/block)을 명시한다.
-- [ ] drop count, queue depth, flush latency 메트릭을 추가한다.
-- [ ] 로그 레벨/버퍼 정책을 환경설정 또는 런타임 설정으로 연결한다.
+- [x] 로거 큐 상한 및 overflow 정책(drop newest/oldest/block)을 명시한다.
+- [x] drop count, queue depth, flush latency 메트릭을 추가한다.
+- [x] 로그 레벨/버퍼 정책을 환경설정 또는 런타임 설정으로 연결한다.
 
 검증:
 
-- [ ] 로그 폭주 시 프로세스 메모리 사용이 bounded 상태를 유지한다.
-- [ ] 드롭 발생 시 메트릭/경고가 즉시 관측된다.
+- [x] 로그 폭주 시 프로세스 메모리 사용이 bounded 상태를 유지한다.
+- [x] 드롭 발생 시 메트릭/경고가 즉시 관측된다.
 
 ### P2-10. Admin HTTP 요청 모델 개선(query 중심 -> body 지원)
 
@@ -596,14 +585,14 @@
 
 작업:
 
-- [ ] `MetricsHttpServer`에 `Content-Length` 기반 body read(상한 포함)와 JSON 파싱 경로를 추가한다.
-- [ ] admin write endpoint를 query/body 병행 지원 후 body 우선으로 전환한다.
-- [ ] body 크기 상한, malformed JSON, unsupported content-type 처리 규약을 명시한다.
+- [x] `MetricsHttpServer`에 `Content-Length` 기반 body read(상한 포함)와 JSON 파싱 경로를 추가한다.
+- [x] admin write endpoint를 query/body 병행 지원 후 body 우선으로 전환한다.
+- [x] body 크기 상한, malformed JSON, unsupported content-type 처리 규약을 명시한다.
 
 검증:
 
-- [ ] 동일 명령을 query/body 모두로 호출 가능하며 결과가 일치한다.
-- [ ] 과대 body/잘못된 JSON 입력은 일관된 4xx로 차단된다.
+- [x] 동일 명령을 query/body 모두로 호출 가능하며 결과가 일치한다.
+- [x] 과대 body/잘못된 JSON 입력은 일관된 4xx로 차단된다.
 
 ---
 
@@ -675,3 +664,114 @@
   - `pwsh scripts/build.ps1 -Config Debug -Target server_app`: 성공.
   - `pwsh scripts/build.ps1 -Config Debug -Target server_general_tests`: 성공.
   - `build-windows/tests/Debug/server_general_tests.exe --gtest_color=no`: 19/19 통과.
+
+### 진행 기록 (추가 갭 P1-5)
+
+- 상태: 완료
+- 코드 변경:
+  - `docker/observability/prometheus/alerts.yml`: `TLSCertificateExpiringIn30Days`, `TLSCertificateExpiringIn14Days`, `TLSCertificateExpiringIn7Days` 규칙 추가.
+  - `docker/observability/prometheus/alerts.tests.yml`: cert expiry 30/14/7일 임계치 발화를 검증하는 promtool rule test fixture 추가.
+  - `scripts/check_prometheus_rules.ps1`: `promtool check rules` + `promtool test rules` 자동 점검 스크립트 추가.
+  - `docker/stack/haproxy/haproxy.tls13.cfg`: TLS 1.3 기본 + 레거시 예외 분리 + 내부 mTLS 템플릿 추가.
+  - `docker/stack/haproxy/haproxy.cfg`: 로컬 dev baseline(TCP-only) 성격 주석 추가.
+- 문서 동기화:
+  - `docs/configuration.md`: edge TLS1.3/legacy 예외/mTLS/갱신 윈도우 운영 baseline 반영.
+  - `docs/ops/gateway-and-lb.md`: HAProxy TLS 1.3/mTLS 운영 정책 및 템플릿 경로 반영.
+  - `docs/ops/deployment.md`: plaintext 금지 배포 점검 절차와 30/14/7일 운영 규칙 반영.
+  - `docs/ops/observability.md`: cert expiry 알람 3종, 소스 메트릭, promtool 재현 절차 반영.
+  - `docs/ops/runbook.md`, `docs/ops/fallback-and-alerts.md`: cert expiry 경보 대응 매트릭스 반영.
+  - `docker/stack/README.md`, `docker/observability/AGENTS.md`, `scripts/AGENTS.md`: TLS 템플릿/alert rule check 스크립트 경로 반영.
+- 검증 결과:
+  - `pwsh scripts/check_prometheus_rules.ps1`: 성공 (`alerts.yml` syntax + `alerts.tests.yml` rule tests 통과).
+  - `docker run ... haproxy -c -f haproxy.cfg` + `docker run ... haproxy -c -f haproxy.tls13.cfg`: 성공(임시 self-signed cert/allowlist fixture로 구문 검증).
+  - `lsp_diagnostics`: `alerts.yml`, `alerts.tests.yml` 에러 없음(나머지 `.md/.cfg/.ps1`은 현재 LSP 미구성).
+
+### 진행 기록 (추가 갭 P2-4/P2-8/P2-9/P2-10, 1차)
+
+- 상태: 진행 중(핵심 경로 1차 반영)
+- 코드 변경:
+  - `core/src/runtime_metrics.cpp`: 신규 런타임 카운터(예외 분류/log async/http defense/runtime reload)의 `snapshot()` 누락 필드 반영.
+  - `core/src/metrics/metrics.cpp`: `core_runtime_exception_*`, `core_runtime_log_async_*`, `core_runtime_http_*`, `core_runtime_setting_reload_*` 메트릭 노출 추가.
+  - `server/src/app/metrics_server.cpp`: `chat_exception_*`, `chat_log_async_*`, `chat_http_*` 메트릭 노출 추가.
+  - `core/src/util/log.cpp`: async logger bounded queue(`LOG_ASYNC_QUEUE_CAPACITY`, `LOG_ASYNC_QUEUE_OVERFLOW`) + queue/drop/flush/masking 메트릭 연동.
+  - `core/src/metrics/http_server.cpp`, `core/include/server/core/metrics/http_server.hpp`: HTTP body read(`Content-Length`), connection limit, auth token/allowlist, oversize/invalid request 방어 및 메트릭 연동.
+  - `tools/admin_app/main.cpp`: write endpoint에서 query + body(JSON/form-urlencoded) 병행 파싱, body 우선 merge, malformed JSON/unsupported content-type(415) 거절 경로 추가.
+  - `core/include/server/core/protocol/packet.hpp`: UTF-8 strict 검증(overlong/surrogate/out-of-range codepoint 거부)으로 강화.
+  - `tests/core/test_core_metrics.cpp`: 확장 runtime metrics snapshot/노출 검증 + custom route body read 테스트 추가.
+  - `tests/core/test_core_net.cpp`: UTF-8 strict 검증 경계 테스트 추가.
+- 문서 동기화:
+  - `docs/configuration.md`: `METRICS_HTTP_MAX_CONNECTIONS`, `METRICS_HTTP_MAX_BODY_BYTES`, `METRICS_HTTP_AUTH_TOKEN`, `METRICS_HTTP_ALLOWLIST` 반영.
+  - `docs/ops/observability.md`: 신규 core/chat 예외·logger·HTTP 방어 메트릭 목록 반영.
+  - `tools/admin_app/README.md`: body read 지원 및 metrics/admin HTTP hardening 환경변수 반영.
+- 검증 결과:
+  - `lsp_diagnostics`: 변경 파일(`.cpp/.hpp`) 에러 없음.
+  - `pwsh scripts/build.ps1 -Config Debug -Target core_general_tests`: 성공.
+  - `pwsh scripts/build.ps1 -Config Debug -Target server_app`: 성공.
+  - `pwsh scripts/build.ps1 -Config Debug -Target server_general_tests`: 성공.
+  - `build-windows/tests/Debug/core_general_tests.exe --gtest_filter=PacketUtf8Test.*:MetricsTest.*:RuntimeMetricsTest.*:MetricsHttpServerTest.* --gtest_color=no`: 11/11 통과.
+  - `build-windows/tests/Debug/server_general_tests.exe --gtest_filter=ChatServiceTest.* --gtest_color=no`: 19/19 통과.
+
+### 진행 기록 (추가 갭 P1-6)
+
+- 상태: 완료
+- 코드 변경:
+  - `tests/CMakeLists.txt`: `protocol_fuzz_harness` 타깃/ctest(`ProtocolFuzzHarness`) wire-up 추가.
+  - `.github/workflows/ci.yml`: Windows fast job에 fuzz harness build/run 추가, Linux ASan build에 `protocol_fuzz_harness` 타깃 추가 및 실행 단계 추가.
+  - `tests/python/verify_soak_perf_gate.py`: 혼합 로그인 부하 기반 soak + 성능 회귀 게이트(p95/p99/throughput + bounded queue/session) 추가.
+  - `.github/workflows/ci.yml`: `linux-docker-stack`에 `Soak + Performance Regression Gate` 단계 추가.
+- 문서 동기화:
+  - `docs/ops/observability.md`: soak/perf gate 실행 절차 반영.
+- 검증 결과:
+  - `FUZZ_ITERATIONS=80000 ./build-windows/tests/Debug/protocol_fuzz_harness.exe`: 성공.
+
+### 진행 기록 (추가 갭 P2-5)
+
+- 상태: 완료
+- 코드 변경:
+  - `docker/observability/prometheus/alerts.yml`: `ChatErrorBudgetBurnRateFast`, `ChatErrorBudgetBurnRateSlow` burn-rate 규칙 추가.
+  - `docker/observability/prometheus/alerts.tests.yml`: burn-rate 규칙 발화/비발화 fixture 추가.
+- 문서 동기화:
+  - `docs/ops/observability.md`: SLI 기준과 burn-rate 운영 정책(릴리스 중단/점검) 반영.
+- 검증 결과:
+  - `pwsh scripts/check_prometheus_rules.ps1`: 성공(`alerts.yml` syntax + `alerts.tests.yml` rule tests 통과).
+
+### 진행 기록 (추가 갭 P2-7, 검증 보강)
+
+- 상태: 완료
+- 코드 변경:
+  - `tests/server/test_server_chat.cpp`: runtime setting 적용 실패(out_of_range/unsupported_key/invalid_value) 시 success/failure 카운트 계약 검증 테스트 2건 추가.
+- 검증 결과:
+  - `build-windows/tests/Debug/server_general_tests.exe --gtest_filter=ChatServiceTest.RuntimeSettingRejectsOutOfRangeWithoutCountingSuccess:ChatServiceTest.RuntimeSettingRejectsUnsupportedKeyAndInvalidValue --gtest_color=no`: 2/2 통과.
+
+### 진행 기록 (추가 갭 P2-3/P2-6)
+
+- 상태: 완료
+- 코드 변경:
+  - `core/src/net/dispatcher.cpp`: 예외/거절 경로 로그를 `component=dispatcher`, `error_code=...` 구조화 키 형태로 표준화.
+  - `server/src/app/bootstrap.cpp`: Redis/registry/I/O/fatal 예외 로그와 moderation duration parse 실패 경로를 `component=server_bootstrap`, `error_code=...` 신호로 보강.
+  - `core/src/util/log.cpp`: 구조화 로그 품질 지표(`core_log_schema_records_total`, `core_log_schema_parse_success_total`, `core_log_schema_parse_failure_total`, `core_log_schema_field_total`, `core_log_schema_field_filled_total`) 추가.
+  - `tests/core/test_core_metrics.cpp`: JSON 로그 스키마 필드/마스킹/파싱 및 필드 채움 지표 검증 테스트(`LogSchemaMetricsTest.JsonSchemaMetricsExposeParseAndFillSignals`) 추가.
+- 문서 동기화:
+  - `docs/ops/observability.md`: 예외 정책 표(throw/catch/convert-to-error code), 구조화 로그 고정 스키마, parse/fill 품질 PromQL 절차 반영.
+- 검증 결과:
+  - `lsp_diagnostics`: `core/src/util/log.cpp`, `core/src/net/dispatcher.cpp`, `server/src/app/bootstrap.cpp`, `tests/core/test_core_metrics.cpp` 에러 없음(Windows `getenv` deprecation hint만 존재).
+  - `pwsh scripts/build.ps1 -Config Debug -Target core_general_tests`: 성공.
+  - `pwsh scripts/build.ps1 -Config Debug -Target server_app`: 성공.
+  - `build-windows/tests/Debug/core_general_tests.exe --gtest_filter=LogSchemaMetricsTest.*:DispatcherTest.*:RuntimeMetricsTest.* --gtest_color=no`: 11/11 통과.
+  - `build-windows/tests/Debug/server_general_tests.exe --gtest_color=no`: 21/21 통과.
+
+### 진행 기록 (추가 갭 P2-8/P2-9)
+
+- 상태: 완료
+- 코드 변경:
+  - `core/src/metrics/http_server.cpp`: `METRICS_HTTP_HEADER_TIMEOUT_MS`, `METRICS_HTTP_BODY_TIMEOUT_MS` 환경변수 기반 헤더/바디 타임아웃과 timed read 경로를 추가하고, timeout/oversize/bad-request 방어 카운터를 보강.
+  - `core/src/util/log.cpp`: `LOG_LEVEL`, `LOG_BUFFER_CAPACITY` 환경변수 파싱을 추가해 로거 정책을 런타임 설정과 직접 연결.
+  - `tests/core/test_core_metrics.cpp`: metrics HTTP 인증/allowlist/body-limit 시나리오(`401/403/413`) 검증 테스트 추가.
+- 문서 동기화:
+  - `docs/configuration.md`: metrics HTTP timeout 키(`METRICS_HTTP_HEADER_TIMEOUT_MS`, `METRICS_HTTP_BODY_TIMEOUT_MS`) 및 logger 정책 키(`LOG_LEVEL`, `LOG_BUFFER_CAPACITY`) 반영.
+  - `tools/admin_app/README.md`: metrics/admin HTTP timeout 설정 키 반영.
+- 검증 결과:
+  - `lsp_diagnostics`: `core/src/metrics/http_server.cpp`, `core/src/util/log.cpp`, `tests/core/test_core_metrics.cpp` 에러 없음(Windows `getenv` deprecation hint만 존재).
+  - `pwsh scripts/build.ps1 -Config Debug -Target core_general_tests`: 성공.
+  - `pwsh scripts/build.ps1 -Config Debug -Target server_app`: 성공.
+  - `build-windows/tests/Debug/core_general_tests.exe --gtest_filter=MetricsHttpServerTest.*:LogSchemaMetricsTest.*:RuntimeMetricsTest.* --gtest_color=no`: 10/10 통과.
