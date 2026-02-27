@@ -462,14 +462,14 @@
 
 작업:
 
-- [ ] `ADMIN_READ_ONLY` 환경변수를 추가하고 write endpoint 진입 전 일괄 차단한다.
-- [ ] read-only 상태에서 쓰기 요청은 일관된 에러 코드(`FORBIDDEN` 또는 `READ_ONLY`)로 반환한다.
-- [ ] `/api/v1/auth/context` capability 및 `/metrics`의 `admin_read_only_mode`를 실제 상태와 연동한다.
+- [x] `ADMIN_READ_ONLY` 환경변수를 추가하고 write endpoint 진입 전 일괄 차단한다.
+- [x] read-only 상태에서 쓰기 요청은 일관된 에러 코드(`FORBIDDEN` 또는 `READ_ONLY`)로 반환한다.
+- [x] `/api/v1/auth/context` capability 및 `/metrics`의 `admin_read_only_mode`를 실제 상태와 연동한다.
 
 검증:
 
-- [ ] `ADMIN_READ_ONLY=1`에서 disconnect/announce/settings/moderation이 모두 차단된다.
-- [ ] `ADMIN_READ_ONLY=0`으로 복구 시 기존 권한 매트릭스대로 동작한다.
+- [x] `ADMIN_READ_ONLY=1`에서 disconnect/announce/settings/moderation이 모두 차단된다.
+- [x] `ADMIN_READ_ONLY=0`으로 복구 시 기존 권한 매트릭스대로 동작한다.
 
 ### P2-3. 예외 처리 가시성 강화(침묵 catch 축소)
 
@@ -604,3 +604,24 @@
 
 - [ ] 동일 명령을 query/body 모두로 호출 가능하며 결과가 일치한다.
 - [ ] 과대 body/잘못된 JSON 입력은 일관된 4xx로 차단된다.
+
+---
+
+### 진행 기록 (추가 갭 P1-8)
+
+- 상태: 완료
+- 코드 변경:
+  - `tools/admin_app/main.cpp`: `ADMIN_READ_ONLY` 환경변수 파싱 추가, write endpoint(disconnect/announce/settings/moderation) 진입 전 공통 read-only 차단(`403` + `READ_ONLY`) 적용.
+  - `tools/admin_app/main.cpp`: `/api/v1/auth/context` 응답에 `read_only` 필드 추가, read-only 모드에서는 write capability를 모두 `false`로 강제.
+  - `tools/admin_app/main.cpp`: `/metrics`의 `admin_read_only_mode`를 실제 런타임 상태와 연동.
+  - `tests/python/verify_admin_read_only.py`: `ADMIN_READ_ONLY=1/0` 양쪽 시나리오 smoke/계약 검증 스크립트 추가.
+- 문서 동기화:
+  - `tools/admin_app/README.md`: `ADMIN_READ_ONLY` 환경변수, read-only 동작/응답 계약 반영.
+  - `docs/ops/admin-api-contract.md`: read-only 우선 차단 규칙(`READ_ONLY`) 및 auth context/권한 매트릭스 override 반영.
+  - `docs/ops/admin-console.md`: 운영 kill-switch를 `ADMIN_READ_ONLY=1` 실체 경로로 명시.
+- 검증 결과:
+  - `pwsh scripts/build.ps1 -Config Debug -Target admin_app`: 성공.
+  - `docker build -f Dockerfile --target admin-runtime -t knights-admin:local .`: 성공.
+  - `python tests/python/verify_admin_auth.py`: 통과 (`PASS: admin auth mode smoke test`).
+  - `python tests/python/verify_admin_read_only.py`: 통과 (`PASS: admin read-only mode smoke test`).
+  - `lsp_diagnostics`: `tools/admin_app/main.cpp` 에러 없음(기존 `getenv` deprecation hint만 존재).

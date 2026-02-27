@@ -206,7 +206,7 @@ MVP는 write 액션까지 포함하므로 감사 로그를 필수로 남긴다.
 1. 서버측 write 액션은 role-gated + channel allowlist 적용
 2. 쿼리 제한: pagination, timeout, max cardinality
 3. Redis key 조회는 범위 제한(prefix 고정) + 과도한 SCAN 금지
-4. 장애 시 admin_app를 즉시 차단 가능한 kill-switch 준비
+4. 장애 시 `ADMIN_READ_ONLY=1`로 write endpoint를 즉시 차단하는 kill-switch 운영
 
 ## 9. 단계별 실행 계획
 

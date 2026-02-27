@@ -40,6 +40,7 @@
 | `GRAFANA_BASE_URL` | Grafana 기본 URL 링크 | `http://127.0.0.1:33000` |
 | `PROMETHEUS_BASE_URL` | Prometheus 기본 URL 링크 | `http://127.0.0.1:39090` |
 | `ADMIN_AUTH_MODE` | 인증 모드 (`off`, `header`, `bearer`, `header_or_bearer`) | `off` |
+| `ADMIN_READ_ONLY` | write endpoint 킬스위치(`1`이면 write 요청 차단) | `0` |
 | `ADMIN_OFF_ROLE` | `ADMIN_AUTH_MODE=off`일 때 적용할 역할(role) (`viewer/operator/admin`) | `admin` |
 | `ADMIN_AUTH_USER_HEADER` | header 인증 시 사용자 헤더(header) 이름 | `X-Admin-User` |
 | `ADMIN_AUTH_ROLE_HEADER` | header 인증 시 역할 헤더(header) 이름 | `X-Admin-Role` |
@@ -93,6 +94,9 @@ pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build -Observability
 ## 쓰기 액션 (2단계)
 
 `admin_app`은 아래 쓰기 엔드포인트를 제공한다. 현재 `MetricsHttpServer` 제약으로 body 대신 query 파라미터(parameter)를 사용한다.
+
+`ADMIN_READ_ONLY=1`이면 아래 write 엔드포인트는 역할과 무관하게 `403` + `READ_ONLY`로 거부된다.
+`/api/v1/auth/context`의 `data.read_only`는 `true`가 되고, write capability(`disconnect/announce/settings/moderation`)는 모두 `false`로 내려간다.
 
 - `POST /api/v1/users/disconnect`
   - `client_id` 또는 `client_ids`(쉼표 구분)

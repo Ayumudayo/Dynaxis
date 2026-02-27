@@ -300,6 +300,32 @@ bool has_min_role(std::string_view actual, std::string_view required) {
     return role_rank(actual) >= role_rank(required);
 }
 
+bool read_env_bool(const char* key, bool fallback) {
+    if (const char* v = std::getenv(key); v && *v) {
+        std::string value(v);
+        std::size_t begin = 0;
+        while (begin < value.size() && std::isspace(static_cast<unsigned char>(value[begin])) != 0) {
+            ++begin;
+        }
+        std::size_t end = value.size();
+        while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
+            --end;
+        }
+        value = value.substr(begin, end - begin);
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        if (value == "1" || value == "true" || value == "yes" || value == "on") {
+            return true;
+        }
+        if (value == "0" || value == "false" || value == "no" || value == "off") {
+            return false;
+        }
+        corelog::warn(std::string("admin_app invalid ") + key + "; using fallback");
+    }
+    return fallback;
+}
+
 // Admin API role matrix single source of truth.
 constexpr std::string_view kRoleRequiredDisconnect = "admin";
 constexpr std::string_view kRoleRequiredAnnouncement = "operator";
@@ -875,6 +901,7 @@ private:
 
         grafana_base_url_ = read_env_string("GRAFANA_BASE_URL", "http://127.0.0.1:33000");
         prometheus_base_url_ = read_env_string("PROMETHEUS_BASE_URL", "http://127.0.0.1:39090");
+        admin_read_only_ = read_env_bool("ADMIN_READ_ONLY", false);
 
         auth_mode_raw_ = read_env_string("ADMIN_AUTH_MODE", "off");
         auth_mode_ = parse_auth_mode(auth_mode_raw_);
@@ -898,6 +925,10 @@ private:
         if ((auth_mode_ == AdminAuthMode::kBearer || auth_mode_ == AdminAuthMode::kHeaderOrBearer)
             && auth_bearer_token_.empty()) {
             corelog::warn("admin_app bearer auth mode selected but ADMIN_BEARER_TOKEN is empty");
+        }
+
+        if (admin_read_only_) {
+            corelog::warn("admin_app write endpoints are disabled by ADMIN_READ_ONLY=1");
         }
     }
 
@@ -1290,7 +1321,7 @@ private:
         stream << "admin_worker_metrics_available " << (worker_available_.load(std::memory_order_relaxed) ? 1 : 0) << "\n";
 
         stream << "# TYPE admin_read_only_mode gauge\n";
-        stream << "admin_read_only_mode 0\n";
+        stream << "admin_read_only_mode " << (admin_read_only_ ? 1 : 0) << "\n";
 
         stream << app_host_.dependency_metrics_text();
         return stream.str();
@@ -1429,6 +1460,15 @@ private:
                 "moderation endpoints require POST"));
         }
 
+        if (is_write_endpoint && admin_read_only_) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "403 Forbidden",
+                "READ_ONLY",
+                "write endpoints are disabled by ADMIN_READ_ONLY"));
+        }
+
         QueryOptions query_options;
         if (!is_write_endpoint) {
             const QueryParseResult query = parse_common_query_options(split.query);
@@ -1564,11 +1604,18 @@ private:
         data << "\"user\":\"" << json_escape(auth_user_header_name_) << "\",";
         data << "\"role\":\"" << json_escape(auth_role_header_name_) << "\"";
         data << "},";
+        data << "\"read_only\":" << bool_json(admin_read_only_) << ",";
+
+        const bool allow_disconnect = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredDisconnect);
+        const bool allow_announce = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredAnnouncement);
+        const bool allow_settings = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredSettings);
+        const bool allow_moderation = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredModeration);
+
         data << "\"capabilities\":{";
-        data << "\"disconnect\":" << bool_json(has_min_role(auth.role, kRoleRequiredDisconnect)) << ",";
-        data << "\"announce\":" << bool_json(has_min_role(auth.role, kRoleRequiredAnnouncement)) << ",";
-        data << "\"settings\":" << bool_json(has_min_role(auth.role, kRoleRequiredSettings)) << ",";
-        data << "\"moderation\":" << bool_json(has_min_role(auth.role, kRoleRequiredModeration));
+        data << "\"disconnect\":" << bool_json(allow_disconnect) << ",";
+        data << "\"announce\":" << bool_json(allow_announce) << ",";
+        data << "\"settings\":" << bool_json(allow_settings) << ",";
+        data << "\"moderation\":" << bool_json(allow_moderation);
         data << "}";
         data << "}";
         return json_ok(request_id, data.str());
@@ -1599,6 +1646,7 @@ private:
         data << "\"healthy\":" << bool_json(app_host_.healthy()) << ",";
         data << "\"ready\":" << bool_json(app_host_.ready()) << ",";
         data << "\"stop_requested\":" << bool_json(app_host_.stop_requested()) << ",";
+        data << "\"read_only\":" << bool_json(admin_read_only_) << ",";
         data << "\"services\":{";
         data << "\"redis\":{";
         data << "\"configured\":" << bool_json(!redis_uri_.empty()) << ",";
@@ -2658,6 +2706,7 @@ const auto* setting_rule = server::config::find_runtime_setting_rule(key);
     std::string grafana_base_url_;
     std::string prometheus_base_url_;
     std::string admin_ui_html_;
+    bool admin_read_only_{false};
 
     AdminAuthMode auth_mode_{AdminAuthMode::kOff};
     std::string auth_mode_raw_;

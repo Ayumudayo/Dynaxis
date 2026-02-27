@@ -277,6 +277,7 @@
 권한:
 
 - `admin`
+- `ADMIN_READ_ONLY=1`이면 role과 무관하게 `403 Forbidden` + `READ_ONLY`로 차단
 
 ### 6.9 POST /api/v1/announcements
 
@@ -296,6 +297,7 @@
 권한:
 
 - `operator`, `admin`
+- `ADMIN_READ_ONLY=1`이면 role과 무관하게 `403 Forbidden` + `READ_ONLY`로 차단
 
 ### 6.10 PATCH /api/v1/settings
 
@@ -323,6 +325,7 @@
 권한:
 
 - `admin`
+- `ADMIN_READ_ONLY=1`이면 role과 무관하게 `403 Forbidden` + `READ_ONLY`로 차단
 
 ## 7. 권한 매트릭스
 
@@ -339,6 +342,12 @@
 | PATCH /api/v1/settings | 거부 | 거부 | 허용 |
 | GET /api/v1/worker/write-behind | 허용 | 허용 | 허용 |
 | GET /api/v1/metrics/links | 허용 | 허용 | 허용 |
+
+읽기 전용 킬스위치:
+
+- `ADMIN_READ_ONLY=1`일 때 write endpoint(`disconnect`, `announcements`, `settings`, `moderation`)는 권한 매트릭스보다 우선해 일괄 거부된다.
+- 거부 응답은 `403` + `READ_ONLY` 오류 코드를 사용한다.
+- `GET /api/v1/auth/context`는 `data.read_only=true`를 반환하고, write capability를 모두 `false`로 내린다.
 
 ## 8. 감사 로그 계약
 
