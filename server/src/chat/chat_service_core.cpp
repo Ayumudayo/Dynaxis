@@ -3,6 +3,7 @@
 #include "server/config/runtime_settings.hpp"
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
+#include "server/core/trace/context.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/util/service_registry.hpp"
 #include "server/core/concurrent/task_scheduler.hpp"
@@ -447,6 +448,14 @@ void ChatService::emit_write_behind_event(const std::string& type,
     if (!gateway_id_.empty()) {
         fields.emplace_back("gateway_id", gateway_id_);
     }
+
+    if (const auto trace_id = server::core::trace::current_trace_id(); !trace_id.empty()) {
+        fields.emplace_back("trace_id", trace_id);
+    }
+    if (const auto correlation_id = server::core::trace::current_correlation_id(); !correlation_id.empty()) {
+        fields.emplace_back("correlation_id", correlation_id);
+    }
+
     for (auto& kv : extra_fields) {
         if (!kv.first.empty() && !kv.second.empty()) {
             fields.emplace_back(std::move(kv));
@@ -455,7 +464,17 @@ void ChatService::emit_write_behind_event(const std::string& type,
     // XADD 명령을 사용하여 스트림에 추가합니다.
     // PUBLISH(Pub/Sub)와 달리 스트림은 데이터가 영구적으로 저장되며(설정에 따라),
     // 컨슈머 그룹을 통해 안정적인 처리가 가능합니다. (At-least-once Delivery)
-    if (!redis_->xadd(write_behind_.stream_key, fields, nullptr, write_behind_.maxlen, write_behind_.approximate)) {
+    if (server::core::trace::current_sampled()) {
+        corelog::debug("span_start component=server span=redis_xadd");
+    }
+
+    const bool xadd_ok = redis_->xadd(write_behind_.stream_key, fields, nullptr, write_behind_.maxlen, write_behind_.approximate);
+
+    if (server::core::trace::current_sampled()) {
+        corelog::debug(std::string("span_end component=server span=redis_xadd success=") + (xadd_ok ? "true" : "false"));
+    }
+
+    if (!xadd_ok) {
         corelog::warn(std::string("write-behind XADD failed: type=") + type);
     }
 }

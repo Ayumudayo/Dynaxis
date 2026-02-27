@@ -15,6 +15,7 @@
 
 #include "server/storage/redis/client.hpp"
 #include "server/core/util/log.hpp"
+#include "server/core/trace/context.hpp"
 #include "server/core/app/app_host.hpp"
 #include "server/core/metrics/build_info.hpp"
 #include "server/core/metrics/metrics.hpp"
@@ -608,6 +609,8 @@ private:
         std::optional<std::string> user_id;
         std::optional<std::string> session_id;
         std::optional<std::string> room_id;
+        std::string trace_id;
+        std::string correlation_id;
 
         // JSON Payload 생성 (nlohmann/json 사용)
         json j = json::object();
@@ -617,6 +620,8 @@ private:
             else if (f.first == "user_id") user_id = f.second;
             else if (f.first == "session_id") session_id = f.second;
             else if (f.first == "room_id") room_id = f.second;
+            else if (f.first == "trace_id") trace_id = f.second;
+            else if (f.first == "correlation_id") correlation_id = f.second;
 
             j[f.first] = f.second;
         }
@@ -635,10 +640,19 @@ private:
         long long ts_v = 0;
         try { ts_v = std::stoll(ts_ms); } catch (...) { ts_v = 0; }
 
+        server::core::trace::ScopedContext trace_scope(trace_id, correlation_id, !trace_id.empty());
+        if (trace_scope.active()) {
+            server::core::log::debug("span_start component=wb_worker span=db_insert");
+        }
+
         // DB Insert
         const std::string payload = j.dump();
         tx.exec_prepared("wb_insert_session_event",
                          e.id, type, ts_v, uid_v, sid_v, rid_v, payload);
+
+        if (trace_scope.active()) {
+            server::core::log::debug("span_end component=wb_worker span=db_insert success=true");
+        }
     }
 
     bool SendToDlq(const server::storage::redis::IRedisClient::StreamEntry& e, const char* error_msg) {

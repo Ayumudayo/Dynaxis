@@ -27,7 +27,7 @@
 - 타입 예시:
   - `session_login`, `session_logout`, `presence_heartbeat`, `room_join`, `room_leave`, `message_ack`, `typing_start/stop`
 - 공통 필드:
-  - `event_id`(Redis XADD ID), `type`, `ts_ms`(epoch ms), `user_id?`, `session_id`, `room_id?`, `gateway_id?`
+  - `event_id`(Redis XADD ID), `type`, `ts_ms`(epoch ms), `user_id?`, `session_id`, `room_id?`, `gateway_id?`, `trace_id?`, `correlation_id?`
   - `payload`는 원본 Stream field들을 그대로 포함한 `jsonb`로 적재한다(값은 문자열).
   - 세션 식별자(session_id)는 서버 측에서 세션별 UUID v4를 생성하여 사용한다(내부 숫자 세션 식별자와 분리됨)
 - 멱등성 키: `event_id`(Redis XADD ID)를 RDB에 unique로 저장하고 `ON CONFLICT DO NOTHING`으로 중복 삽입을 무해화한다.
@@ -77,6 +77,7 @@
 - 공통
   - `DB_URI`, `REDIS_URI`
   - `METRICS_PORT`(설정 시 `/metrics` 노출; server_app / wb_worker 공용)
+  - `KNIGHTS_TRACING_ENABLED`, `KNIGHTS_TRACING_SAMPLE_PERCENT`(설정 시 stream->DB 경로 상관키 추적)
 
 ## 스트림(Streams) 운영 키/그룹/필드 정리
 - 생산 키: `session_events`(=`REDIS_STREAM_KEY`)
@@ -84,7 +85,7 @@
 - 그룹: `wb_group`(예시, 설정 키 `WB_GROUP`로 주입)
 - 컨슈머: 워커 인스턴스 식별자(예: `host-1:pid`), 설정 키 `WB_CONSUMER`
 - 필드 집합(권장 최소):
-  - `type`(예: `session_login` 등), `ts_ms`, `user_id`, `session_id`, `room_id?`, `gateway_id?`
+  - `type`(예: `session_login` 등), `ts_ms`, `user_id`, `session_id`, `room_id?`, `gateway_id?`, `trace_id?`, `correlation_id?`
   - 멱등 보강 시: `idempotency_key` 포함 고려
 - 기타 운영 키:
   - `WRITE_BEHIND_ENABLED`: 기능 토글
@@ -131,6 +132,7 @@
   - reclaim: `wb_reclaim_*`
   - ack: `wb_ack_*`
   - db/backoff/drop: `wb_db_unavailable_total`, `wb_db_reconnect_backoff_ms_last`, `wb_error_drop_total`
+ - tracing: stream field의 `trace_id`/`correlation_id`가 존재하면 wb_worker DB insert span 로그에 동일 상관키를 연결한다.
 
 ## 모니터링
 - 레이턴시 p50/p95, 배치 크기, 커밋율, 실패율, 재시도/펜딩 길이, DLQ 길이

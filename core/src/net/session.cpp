@@ -8,6 +8,7 @@
 #include "server/core/protocol/version.hpp"
 #include "server/core/memory/memory_pool.hpp"
 #include "server/core/runtime_metrics.hpp"
+#include "server/core/trace/context.hpp"
 
 #include <cstring>
 #include <algorithm>
@@ -215,11 +216,38 @@ void Session::do_read_body(std::size_t body_len) {
         // payload가 비어 있으면 빈 span을 그대로 전달한다.
         runtime_metrics::record_packet_payload(0);
         runtime_metrics::record_packet_ok();
+
+        const std::uint64_t trace_seed = (static_cast<std::uint64_t>(session_id_) << 32)
+                                       ^ (static_cast<std::uint64_t>(header_.seq) << 8)
+                                       ^ static_cast<std::uint64_t>(header_.msg_id);
+        const bool sampled = trace::should_sample(trace_seed);
+        trace::ScopedContext trace_scope(
+            sampled ? trace::make_trace_id() : std::string{},
+            sampled ? trace::make_correlation_id(session_id_, header_.msg_id, header_.seq) : std::string{},
+            sampled
+        );
+
+        if (trace_scope.active()) {
+            log::debug("span_start component=session span=ingress");
+            log::debug("span_start component=dispatcher span=dispatch");
+        }
+
         auto start = std::chrono::steady_clock::now();
         bool handled = dispatcher_.dispatch(header_.msg_id, *this, std::span<const std::uint8_t>{});
         runtime_metrics::record_dispatch_opcode(header_.msg_id);
         auto elapsed = std::chrono::steady_clock::now() - start;
         runtime_metrics::record_dispatch_attempt(handled, elapsed);
+
+        if (trace_scope.active()) {
+            const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+            log::debug(
+                "span_end component=dispatcher span=dispatch duration_us="
+                + std::to_string(elapsed_us)
+                + " handled=" + (handled ? std::string("true") : std::string("false"))
+            );
+            log::debug("span_end component=session span=ingress");
+        }
+
         if (!handled) {
             send_error(server::core::protocol::errc::UNKNOWN_MSG_ID, "unknown msg");
         }
@@ -257,11 +285,38 @@ void Session::do_read_body(std::size_t body_len) {
             arm_read_timeout();
             runtime_metrics::record_packet_payload(header_.length);
             runtime_metrics::record_packet_ok();
+
+            const std::uint64_t trace_seed = (static_cast<std::uint64_t>(session_id_) << 32)
+                                           ^ (static_cast<std::uint64_t>(header_.seq) << 8)
+                                           ^ static_cast<std::uint64_t>(header_.msg_id);
+            const bool sampled = trace::should_sample(trace_seed);
+            trace::ScopedContext trace_scope(
+                sampled ? trace::make_trace_id() : std::string{},
+                sampled ? trace::make_correlation_id(session_id_, header_.msg_id, header_.seq) : std::string{},
+                sampled
+            );
+
+            if (trace_scope.active()) {
+                log::debug("span_start component=session span=ingress");
+                log::debug("span_start component=dispatcher span=dispatch");
+            }
+
             auto start = std::chrono::steady_clock::now();
             bool handled = dispatcher_.dispatch(header_.msg_id, *this, std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(read_buf_.get()), header_.length));
             runtime_metrics::record_dispatch_opcode(header_.msg_id);
             auto elapsed = std::chrono::steady_clock::now() - start;
             runtime_metrics::record_dispatch_attempt(handled, elapsed);
+
+            if (trace_scope.active()) {
+                const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+                log::debug(
+                    "span_end component=dispatcher span=dispatch duration_us="
+                    + std::to_string(elapsed_us)
+                    + " handled=" + (handled ? std::string("true") : std::string("false"))
+                );
+                log::debug("span_end component=session span=ingress");
+            }
+
             if (!handled) {
                 send_error(server::core::protocol::errc::UNKNOWN_MSG_ID, "unknown msg");
             }

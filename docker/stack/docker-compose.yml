@@ -122,6 +122,8 @@ services:
       CHAT_HOOK_PLUGINS_DIR: "/app/plugins"
       CHAT_HOOK_CACHE_DIR: "/tmp/chat_hook_cache"
       CHAT_HOOK_RELOAD_INTERVAL_MS: "500"
+      KNIGHTS_TRACING_ENABLED: "${KNIGHTS_TRACING_ENABLED:-0}"
+      KNIGHTS_TRACING_SAMPLE_PERCENT: "${KNIGHTS_TRACING_SAMPLE_PERCENT:-100}"
     depends_on:
       redis:
         condition: service_healthy
@@ -158,6 +160,8 @@ services:
       CHAT_HOOK_PLUGINS_DIR: "/app/plugins"
       CHAT_HOOK_CACHE_DIR: "/tmp/chat_hook_cache"
       CHAT_HOOK_RELOAD_INTERVAL_MS: "500"
+      KNIGHTS_TRACING_ENABLED: "${KNIGHTS_TRACING_ENABLED:-0}"
+      KNIGHTS_TRACING_SAMPLE_PERCENT: "${KNIGHTS_TRACING_SAMPLE_PERCENT:-100}"
     depends_on:
       redis:
         condition: service_healthy
@@ -181,6 +185,8 @@ services:
       WB_GROUP: "wb_group"
       WB_CONSUMER: "worker-1"
       METRICS_PORT: "9090"
+      KNIGHTS_TRACING_ENABLED: "${KNIGHTS_TRACING_ENABLED:-0}"
+      KNIGHTS_TRACING_SAMPLE_PERCENT: "${KNIGHTS_TRACING_SAMPLE_PERCENT:-100}"
     depends_on:
       redis:
         condition: service_healthy

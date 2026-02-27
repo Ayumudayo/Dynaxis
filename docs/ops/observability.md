@@ -162,6 +162,27 @@ max_over_time(wb_pending[5m])
   - `GatewayUdpReplayDropSpike`: replay/reorder drop 급증
   - `GatewayUdpJitterHigh`: jitter 지속 고수준
 
-## 7. 트레이싱 (로드맵)
+## 7. 트레이싱/상관키 (config-gated)
 
-OpenTelemetry/OTLP는 아직 `docker/stack` 표준 런타임에 포함되어 있지 않다. `/metrics` + 구조화 로그를 우선 기준으로 하고, tracing은 이후 단계에서 추가한다.
+경량 tracing context는 환경 변수로 켜고 끌 수 있다.
+
+- `KNIGHTS_TRACING_ENABLED=1`: ingress -> dispatch -> dependency 호출 경로에 span 로그를 남긴다.
+- `KNIGHTS_TRACING_SAMPLE_PERCENT`: 샘플링 비율(0~100).
+- `KNIGHTS_TRACING_ENABLED=0`이면 trace context가 비활성화되어 trace/correlation 로그 부가 정보가 붙지 않는다.
+
+현재 표준 스택은 OTLP exporter/collector를 기본 포함하지 않는다. 대신 `trace_id`/`correlation_id`를 로그와 write-behind 이벤트 필드로 전파해 운영자가 동일 요청을 교차 추적할 수 있게 한다.
+
+### 7.1 신호 상관 절차 (metrics -> logs -> trace)
+
+1) 메트릭으로 이상 구간을 특정한다.
+- 예: `chat_dispatch_unknown_total` 급증, `wb_flush_fail_total` 증가
+
+2) 해당 시점의 로그에서 `correlation_id` 또는 `trace_id`를 찾는다.
+- `server_app`: `component=session|dispatcher|server span=...` 라인
+- `wb_worker`: `component=wb_worker span=db_insert ...` 라인
+
+3) 같은 `trace_id`/`correlation_id`를 기준으로 서비스 경계를 따라 추적한다.
+- ingress(span_start) -> dispatch(span_end) -> redis_xadd -> db_insert
+
+4) tracing을 끄고 비교 검증한다(성능/부작용 점검).
+- `KNIGHTS_TRACING_ENABLED=0`으로 재기동 후 기능 동일성/지연 변화를 비교한다.

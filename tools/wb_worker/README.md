@@ -17,6 +17,7 @@ tools/wb_worker/
 6. flush는 1 배치 = 1 트랜잭션이며, 엔트리 단위 실패는 savepoint(subtransaction)로 격리한다.
 7. commit 성공 후 Redis에 ACK 한다. (At-least-once; 중복은 `ON CONFLICT DO NOTHING`으로 무해화)
 8. 개별 엔트리 처리 실패 시 DLQ로 이동(옵션) 후 ACK 정책(`WB_ACK_ON_ERROR`)에 따라 PEL 적체를 방지한다.
+9. stream entry에 `trace_id`/`correlation_id`가 포함되면 DB insert span 로그에도 같은 상관키를 연결한다.
 
 ## 환경 변수
 
@@ -69,6 +70,8 @@ tools/wb_worker/
 | --- | --- | --- |
 | `WB_RETRY_MAX` | flush 트랜잭션 즉시 재시도 최대 횟수 | `5` |
 | `WB_RETRY_BACKOFF_MS` | flush 재시도 선형 백오프 시작값(ms) | `250` |
+| `KNIGHTS_TRACING_ENABLED` | stream->DB tracing context 활성화 | `0` |
+| `KNIGHTS_TRACING_SAMPLE_PERCENT` | tracing 샘플링 비율(0~100) | `100` |
 
 `WB_RECLAIM_MIN_IDLE_MS`가 너무 작으면 아직 처리 중인 메시지를 회수해서 중복 처리가 발생할 수 있다.
 

@@ -1,4 +1,5 @@
 #include "server/core/util/log.hpp"
+#include "server/core/trace/context.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -135,6 +136,18 @@ std::string format_line(level lv, const std::string& msg) {
 #endif
     std::ostringstream oss;
     oss << std::put_time(&tm, "%F %T") << " [" << to_cstr(lv) << "] " << msg;
+
+    if (trace::current_sampled()) {
+        const auto trace_id = trace::current_trace_id();
+        const auto correlation_id = trace::current_correlation_id();
+        if (!trace_id.empty()) {
+            oss << " trace_id=" << trace_id;
+        }
+        if (!correlation_id.empty()) {
+            oss << " correlation_id=" << correlation_id;
+        }
+    }
+
     return oss.str();
 }
 
