@@ -147,6 +147,10 @@ pwsh scripts/smoke_metrics.ps1
   - `gateway_udp_loss_estimated_total` (counter; seq-gap 기반 추정치)
   - `gateway_udp_jitter_ms_last`, `gateway_udp_rtt_ms_last` (gauges; latest observed)
   - `gateway_udp_bind_ttl_ms`, `gateway_udp_bind_fail_window_ms`, `gateway_udp_bind_fail_limit`, `gateway_udp_bind_block_ms` (gauges)
+- RUDP adapter(기본 OFF, canary):
+  - `gateway_rudp_core_build_enabled`, `gateway_rudp_enabled`, `gateway_rudp_canary_percent` (gauges)
+  - `gateway_rudp_opcode_allowlist_size` (gauge)
+  - `gateway_rudp_packets_total`, `gateway_rudp_packets_reject_total`, `gateway_rudp_inner_forward_total`, `gateway_rudp_fallback_total` (counters)
 
 ### 워커(wb_worker)
 - 백로그: `wb_pending` (gauge)
@@ -221,30 +225,33 @@ max_over_time(wb_pending[5m])
   - 기준: 12h 오류율 > 0.3%가 6h 지속
 - 운영 정책: burn-rate 경보 지속 시 신규 기능 rollout을 일시 중지하고, 최근 배포/의존성 포화/백프레셔 설정을 우선 점검한다.
 
-### 6.3 RUDP 관측 계약 (계획, 기본 OFF)
+### 6.3 RUDP 관측 계약 (기본 OFF)
 
-RUDP는 현재 설계/단계적 구현 대상이며 기본 경로는 TCP이다. 아래 지표/알람은 구현 단계에서 추가되며, 기본값에서는 0 또는 미노출이 정상이다.
+RUDP adapter/core 엔진은 구현되어 있지만 기본 경로는 TCP다. 기본값에서는 `GATEWAY_RUDP_ENABLE=0` 또는 canary/allowlist 미설정으로 인해 RUDP 지표가 0에 머물 수 있다.
 
 게이트 조건:
 
 - 빌드: `KNIGHTS_ENABLE_CORE_RUDP=OFF` (기본)
 - 런타임: `GATEWAY_RUDP_ENABLE=0`, `GATEWAY_RUDP_CANARY_PERCENT=0` (기본)
 
-계획 메트릭:
+핵심 메트릭:
 
 - `core_runtime_rudp_handshake_total{result}`
 - `core_runtime_rudp_retransmit_total`
 - `core_runtime_rudp_inflight_packets`
 - `core_runtime_rudp_rtt_ms_bucket`, `core_runtime_rudp_rtt_ms_sum`, `core_runtime_rudp_rtt_ms_count`
 - `core_runtime_rudp_fallback_total{reason}`
+- `gateway_rudp_core_build_enabled`, `gateway_rudp_enabled`, `gateway_rudp_canary_percent`
+- `gateway_rudp_opcode_allowlist_size`
+- `gateway_rudp_packets_total`, `gateway_rudp_packets_reject_total`, `gateway_rudp_inner_forward_total`, `gateway_rudp_fallback_total`
 
-계획 알람:
+권장 알람:
 
 - `RudpHandshakeFailureSpike`
 - `RudpRetransmitRatioHigh`
 - `RudpFallbackSpike`
 
-예시 PromQL(구현 후 적용):
+예시 PromQL:
 
 ```promql
 # RUDP handshake 실패율(5m)

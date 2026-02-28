@@ -30,6 +30,7 @@
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
+#include "server/core/runtime_metrics.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/metrics/build_info.hpp"
 #include "server/core/metrics/metrics.hpp"
@@ -70,6 +71,17 @@ constexpr const char* kEnvGatewayUdpBindTtlMs = "GATEWAY_UDP_BIND_TTL_MS";
 constexpr const char* kEnvGatewayUdpBindFailWindowMs = "GATEWAY_UDP_BIND_FAIL_WINDOW_MS";
 constexpr const char* kEnvGatewayUdpBindFailLimit = "GATEWAY_UDP_BIND_FAIL_LIMIT";
 constexpr const char* kEnvGatewayUdpBindBlockMs = "GATEWAY_UDP_BIND_BLOCK_MS";
+constexpr const char* kEnvGatewayRudpEnable = "GATEWAY_RUDP_ENABLE";
+constexpr const char* kEnvGatewayRudpCanaryPercent = "GATEWAY_RUDP_CANARY_PERCENT";
+constexpr const char* kEnvGatewayRudpOpcodeAllowlist = "GATEWAY_RUDP_OPCODE_ALLOWLIST";
+constexpr const char* kEnvGatewayRudpHandshakeTimeoutMs = "GATEWAY_RUDP_HANDSHAKE_TIMEOUT_MS";
+constexpr const char* kEnvGatewayRudpIdleTimeoutMs = "GATEWAY_RUDP_IDLE_TIMEOUT_MS";
+constexpr const char* kEnvGatewayRudpAckDelayMs = "GATEWAY_RUDP_ACK_DELAY_MS";
+constexpr const char* kEnvGatewayRudpMaxInflightPackets = "GATEWAY_RUDP_MAX_INFLIGHT_PACKETS";
+constexpr const char* kEnvGatewayRudpMaxInflightBytes = "GATEWAY_RUDP_MAX_INFLIGHT_BYTES";
+constexpr const char* kEnvGatewayRudpMtuPayloadBytes = "GATEWAY_RUDP_MTU_PAYLOAD_BYTES";
+constexpr const char* kEnvGatewayRudpRtoMinMs = "GATEWAY_RUDP_RTO_MIN_MS";
+constexpr const char* kEnvGatewayRudpRtoMaxMs = "GATEWAY_RUDP_RTO_MAX_MS";
 constexpr const char* kDefaultGatewayListen = "0.0.0.0:6000";
 constexpr const char* kDefaultGatewayId = "gateway-default";
 constexpr const char* kDefaultRedisUri = "tcp://127.0.0.1:6379";
@@ -89,11 +101,19 @@ constexpr std::uint32_t kDefaultUdpBindTtlMs = 5000;
 constexpr std::uint32_t kDefaultUdpBindFailWindowMs = 10000;
 constexpr std::uint32_t kDefaultUdpBindFailLimit = 5;
 constexpr std::uint32_t kDefaultUdpBindBlockMs = 60000;
+constexpr bool kDefaultGatewayRudpEnable = false;
+constexpr std::uint32_t kDefaultGatewayRudpCanaryPercent = 0;
 
 #if defined(KNIGHTS_ENABLE_GATEWAY_UDP_INGRESS) && (KNIGHTS_ENABLE_GATEWAY_UDP_INGRESS == 1)
 constexpr bool kGatewayUdpIngressBuildEnabled = true;
 #else
 constexpr bool kGatewayUdpIngressBuildEnabled = false;
+#endif
+
+#if defined(KNIGHTS_ENABLE_CORE_RUDP) && (KNIGHTS_ENABLE_CORE_RUDP == 1)
+constexpr bool kCoreRudpBuildEnabled = true;
+#else
+constexpr bool kCoreRudpBuildEnabled = false;
 #endif
 
 std::uint64_t unix_time_ms() {
@@ -767,6 +787,18 @@ GatewayApp::GatewayApp()
         stream << "# TYPE gateway_udp_ingress_feature_enabled gauge\n";
         stream << "gateway_udp_ingress_feature_enabled " << (kGatewayUdpIngressBuildEnabled ? 1 : 0) << "\n";
 
+        stream << "# TYPE gateway_rudp_core_build_enabled gauge\n";
+        stream << "gateway_rudp_core_build_enabled " << (kCoreRudpBuildEnabled ? 1 : 0) << "\n";
+
+        stream << "# TYPE gateway_rudp_enabled gauge\n";
+        stream << "gateway_rudp_enabled " << (rudp_rollout_policy_.enabled ? 1 : 0) << "\n";
+
+        stream << "# TYPE gateway_rudp_canary_percent gauge\n";
+        stream << "gateway_rudp_canary_percent " << rudp_rollout_policy_.canary_percent << "\n";
+
+        stream << "# TYPE gateway_rudp_opcode_allowlist_size gauge\n";
+        stream << "gateway_rudp_opcode_allowlist_size " << rudp_rollout_policy_.opcode_allowlist.size() << "\n";
+
         stream << "# TYPE gateway_udp_packets_total counter\n";
         stream << "gateway_udp_packets_total " << udp_packets_total_.load(std::memory_order_relaxed) << "\n";
 
@@ -852,6 +884,22 @@ GatewayApp::GatewayApp()
         stream << "# TYPE gateway_udp_rtt_ms_last gauge\n";
         stream << "gateway_udp_rtt_ms_last "
                << udp_rtt_ms_last_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE gateway_rudp_packets_total counter\n";
+        stream << "gateway_rudp_packets_total "
+               << rudp_packets_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE gateway_rudp_packets_reject_total counter\n";
+        stream << "gateway_rudp_packets_reject_total "
+               << rudp_packets_reject_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE gateway_rudp_inner_forward_total counter\n";
+        stream << "gateway_rudp_inner_forward_total "
+               << rudp_inner_forward_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE gateway_rudp_fallback_total counter\n";
+        stream << "gateway_rudp_fallback_total "
+               << rudp_fallback_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << app_host_.dependency_metrics_text();
         stream << app_host_.lifecycle_metrics_text();
@@ -1203,6 +1251,15 @@ std::optional<std::vector<std::uint8_t>> GatewayApp::make_udp_bind_ticket_frame(
         it->second.udp_bound = false;
         it->second.udp_endpoint = {};
         it->second.udp_sequenced_metrics.reset();
+        it->second.rudp_fallback_to_tcp = false;
+        it->second.rudp_selected = kCoreRudpBuildEnabled
+            && rudp_rollout_policy_.session_selected(session_id, nonce)
+            && !rudp_rollout_policy_.opcode_allowlist.empty();
+        if (it->second.rudp_selected) {
+            it->second.rudp_engine = std::make_unique<server::core::net::rudp::RudpEngine>(rudp_config_);
+        } else {
+            it->second.rudp_engine.reset();
+        }
 
         ticket.session_id = session_id;
         ticket.nonce = nonce;
@@ -1306,6 +1363,10 @@ std::uint16_t GatewayApp::apply_udp_bind_request(const ParsedUdpBindRequest& req
     state.udp_bound = true;
     state.udp_endpoint = endpoint;
     state.udp_sequenced_metrics.reset();
+    state.rudp_fallback_to_tcp = false;
+    if (state.rudp_selected && !state.rudp_engine) {
+        state.rudp_engine = std::make_unique<server::core::net::rudp::RudpEngine>(rudp_config_);
+    }
 
     if (state.udp_ticket_issued_unix_ms != 0 && now_ms >= state.udp_ticket_issued_unix_ms) {
         const auto bind_rtt_ms = now_ms - state.udp_ticket_issued_unix_ms;
@@ -1560,6 +1621,95 @@ void GatewayApp::configure_gateway() {
         "GatewayApp invalid GATEWAY_UDP_BIND_BLOCK_MS; using default"
     );
 
+    rudp_rollout_policy_.enabled = parse_env_bool(
+        kEnvGatewayRudpEnable,
+        kDefaultGatewayRudpEnable
+    );
+    rudp_rollout_policy_.canary_percent = parse_env_u32_bounded(
+        kEnvGatewayRudpCanaryPercent,
+        kDefaultGatewayRudpCanaryPercent,
+        0,
+        100,
+        "GatewayApp invalid GATEWAY_RUDP_CANARY_PERCENT; using default"
+    );
+
+    if (const char* allowlist_env = std::getenv(kEnvGatewayRudpOpcodeAllowlist); allowlist_env && *allowlist_env) {
+        rudp_rollout_policy_.opcode_allowlist = gateway::parse_rudp_opcode_allowlist(allowlist_env);
+    } else {
+        rudp_rollout_policy_.opcode_allowlist.clear();
+    }
+
+    rudp_config_.handshake_timeout_ms = parse_env_u32_bounded(
+        kEnvGatewayRudpHandshakeTimeoutMs,
+        1500,
+        100,
+        60000,
+        "GatewayApp invalid GATEWAY_RUDP_HANDSHAKE_TIMEOUT_MS; using default"
+    );
+    rudp_config_.idle_timeout_ms = parse_env_u32_bounded(
+        kEnvGatewayRudpIdleTimeoutMs,
+        10000,
+        1000,
+        300000,
+        "GatewayApp invalid GATEWAY_RUDP_IDLE_TIMEOUT_MS; using default"
+    );
+    rudp_config_.ack_delay_ms = parse_env_u32_bounded(
+        kEnvGatewayRudpAckDelayMs,
+        10,
+        1,
+        200,
+        "GatewayApp invalid GATEWAY_RUDP_ACK_DELAY_MS; using default"
+    );
+    rudp_config_.max_inflight_packets = parse_env_size_bounded(
+        kEnvGatewayRudpMaxInflightPackets,
+        256,
+        1,
+        4096,
+        "GatewayApp invalid GATEWAY_RUDP_MAX_INFLIGHT_PACKETS; using default"
+    );
+    rudp_config_.max_inflight_bytes = parse_env_size_bounded(
+        kEnvGatewayRudpMaxInflightBytes,
+        256 * 1024,
+        1024,
+        16 * 1024 * 1024,
+        "GatewayApp invalid GATEWAY_RUDP_MAX_INFLIGHT_BYTES; using default"
+    );
+    rudp_config_.mtu_payload_bytes = parse_env_size_bounded(
+        kEnvGatewayRudpMtuPayloadBytes,
+        1200,
+        256,
+        1400,
+        "GatewayApp invalid GATEWAY_RUDP_MTU_PAYLOAD_BYTES; using default"
+    );
+    rudp_config_.rto_min_ms = parse_env_u32_bounded(
+        kEnvGatewayRudpRtoMinMs,
+        50,
+        1,
+        10000,
+        "GatewayApp invalid GATEWAY_RUDP_RTO_MIN_MS; using default"
+    );
+    rudp_config_.rto_max_ms = parse_env_u32_bounded(
+        kEnvGatewayRudpRtoMaxMs,
+        2000,
+        1,
+        60000,
+        "GatewayApp invalid GATEWAY_RUDP_RTO_MAX_MS; using default"
+    );
+    if (rudp_config_.rto_max_ms < rudp_config_.rto_min_ms) {
+        rudp_config_.rto_max_ms = rudp_config_.rto_min_ms;
+    }
+
+    if (!kCoreRudpBuildEnabled && rudp_rollout_policy_.enabled) {
+        server::core::log::warn("GatewayApp core RUDP build flag is OFF; forcing GATEWAY_RUDP_ENABLE=0");
+        rudp_rollout_policy_.enabled = false;
+        rudp_rollout_policy_.canary_percent = 0;
+        rudp_rollout_policy_.opcode_allowlist.clear();
+    }
+
+    if (!rudp_rollout_policy_.enabled) {
+        rudp_rollout_policy_.canary_percent = 0;
+    }
+
     if (!kGatewayUdpIngressBuildEnabled && udp_listen_port_ != 0) {
         server::core::log::warn("GatewayApp UDP ingress build flag is OFF; ignoring GATEWAY_UDP_LISTEN");
         udp_listen_host_.clear();
@@ -1593,7 +1743,19 @@ void GatewayApp::configure_gateway() {
         + " ingress_tokens_per_sec=" + std::to_string(ingress_tokens_per_sec_)
         + " ingress_burst_tokens=" + std::to_string(ingress_burst_tokens_)
         + " ingress_max_active_sessions=" + std::to_string(ingress_max_active_sessions_)
-        + " allow_anonymous=" + std::string(allow_anonymous_ ? "1" : "0"));
+        + " allow_anonymous=" + std::string(allow_anonymous_ ? "1" : "0")
+        + " rudp_core_build=" + std::string(kCoreRudpBuildEnabled ? "1" : "0")
+        + " rudp_enable=" + std::string(rudp_rollout_policy_.enabled ? "1" : "0")
+        + " rudp_canary_percent=" + std::to_string(rudp_rollout_policy_.canary_percent)
+        + " rudp_opcode_allowlist_size=" + std::to_string(rudp_rollout_policy_.opcode_allowlist.size())
+        + " rudp_handshake_timeout_ms=" + std::to_string(rudp_config_.handshake_timeout_ms)
+        + " rudp_idle_timeout_ms=" + std::to_string(rudp_config_.idle_timeout_ms)
+        + " rudp_ack_delay_ms=" + std::to_string(rudp_config_.ack_delay_ms)
+        + " rudp_rto_min_ms=" + std::to_string(rudp_config_.rto_min_ms)
+        + " rudp_rto_max_ms=" + std::to_string(rudp_config_.rto_max_ms)
+        + " rudp_max_inflight_packets=" + std::to_string(rudp_config_.max_inflight_packets)
+        + " rudp_max_inflight_bytes=" + std::to_string(rudp_config_.max_inflight_bytes)
+        + " rudp_mtu_payload_bytes=" + std::to_string(rudp_config_.mtu_payload_bytes));
 }
 
 void GatewayApp::configure_infrastructure() {
@@ -1766,6 +1928,161 @@ void GatewayApp::do_udp_receive() {
             }
 
             namespace proto = server::core::protocol;
+            const auto now_ms = unix_time_ms();
+            const auto incoming_datagram = std::span<const std::uint8_t>(udp_read_buffer_.data(), bytes);
+
+            if (server::core::net::rudp::looks_like_rudp(incoming_datagram)) {
+                (void)rudp_packets_total_.fetch_add(1, std::memory_order_relaxed);
+
+                GatewayApp::BackendConnectionPtr bound_session;
+                std::string bound_session_id;
+                {
+                    std::lock_guard<std::mutex> lock(session_mutex_);
+                    for (const auto& [sid, state] : sessions_) {
+                        if (state.udp_bound && state.udp_endpoint == udp_remote_endpoint_) {
+                            bound_session = state.session;
+                            bound_session_id = sid;
+                            break;
+                        }
+                    }
+                }
+
+                if (!bound_session) {
+                    (void)udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
+                    (void)rudp_packets_reject_total_.fetch_add(1, std::memory_order_relaxed);
+                    do_udp_receive();
+                    return;
+                }
+
+                std::vector<std::vector<std::uint8_t>> egress_datagrams;
+                std::vector<std::vector<std::uint8_t>> inner_frames;
+                std::uint64_t retransmit_count = 0;
+                bool fallback_required = false;
+                bool invalid_inner = false;
+
+                {
+                    std::lock_guard<std::mutex> lock(session_mutex_);
+                    auto it = sessions_.find(bound_session_id);
+                    if (it == sessions_.end()
+                        || !it->second.udp_bound
+                        || it->second.udp_endpoint != udp_remote_endpoint_) {
+                        fallback_required = true;
+                    } else {
+                        auto& state = it->second;
+                        if (!rudp_rollout_policy_.enabled
+                            || !state.rudp_selected
+                            || state.rudp_fallback_to_tcp
+                            || !state.rudp_engine) {
+                            state.rudp_fallback_to_tcp = true;
+                            fallback_required = true;
+                            server::core::runtime_metrics::record_rudp_fallback(
+                                server::core::runtime_metrics::RudpFallbackReason::kDisabled);
+                        } else {
+                            auto process_result = state.rudp_engine->process_datagram(incoming_datagram, now_ms);
+                            auto poll_result = state.rudp_engine->poll(now_ms);
+
+                            if (!process_result.egress_datagrams.empty()) {
+                                egress_datagrams = std::move(process_result.egress_datagrams);
+                            }
+                            if (!poll_result.egress_datagrams.empty()) {
+                                egress_datagrams.reserve(egress_datagrams.size() + poll_result.egress_datagrams.size());
+                                for (auto& frame : poll_result.egress_datagrams) {
+                                    egress_datagrams.push_back(std::move(frame));
+                                }
+                            }
+                            inner_frames = std::move(process_result.inner_frames);
+                            retransmit_count = poll_result.retransmit_count;
+
+                            if (process_result.fallback_required || poll_result.fallback_required) {
+                                state.rudp_fallback_to_tcp = true;
+                                fallback_required = true;
+                            }
+                        }
+                    }
+                }
+
+                for (auto& frame : egress_datagrams) {
+                    send_udp_datagram(std::move(frame), udp_remote_endpoint_);
+                }
+
+                if (retransmit_count > 0) {
+                    (void)udp_retransmit_total_.fetch_add(retransmit_count, std::memory_order_relaxed);
+                }
+
+                if (!fallback_required) {
+                    for (const auto& inner_frame : inner_frames) {
+                        if (inner_frame.size() < proto::k_header_bytes) {
+                            invalid_inner = true;
+                            break;
+                        }
+
+                        proto::PacketHeader inner_header{};
+                        proto::decode_header(inner_frame.data(), inner_header);
+                        const auto inner_body_len = static_cast<std::size_t>(inner_header.length);
+                        if (inner_body_len != (inner_frame.size() - proto::k_header_bytes)) {
+                            invalid_inner = true;
+                            break;
+                        }
+
+                        const bool is_game_opcode = !server::protocol::opcode_name(inner_header.msg_id).empty();
+                        const bool is_core_opcode = !server::core::protocol::opcode_name(inner_header.msg_id).empty();
+                        if (!is_game_opcode && !is_core_opcode) {
+                            invalid_inner = true;
+                            break;
+                        }
+
+                        if (!rudp_rollout_policy_.opcode_allowed(inner_header.msg_id)) {
+                            invalid_inner = true;
+                            break;
+                        }
+
+                        const auto policy = is_game_opcode
+                            ? server::protocol::opcode_policy(inner_header.msg_id)
+                            : server::core::protocol::opcode_policy(inner_header.msg_id);
+                        if (!server::core::protocol::transport_allows(
+                                policy.transport,
+                                server::core::protocol::TransportKind::kUdp)) {
+                            invalid_inner = true;
+                            break;
+                        }
+
+                        bound_session->send(inner_frame.data(), inner_frame.size());
+                        (void)udp_forward_total_.fetch_add(1, std::memory_order_relaxed);
+                        (void)rudp_inner_forward_total_.fetch_add(1, std::memory_order_relaxed);
+                        switch (policy.delivery) {
+                            case server::core::protocol::DeliveryClass::kReliableOrdered:
+                                (void)udp_forward_reliable_ordered_total_.fetch_add(1, std::memory_order_relaxed);
+                                break;
+                            case server::core::protocol::DeliveryClass::kReliable:
+                                (void)udp_forward_reliable_total_.fetch_add(1, std::memory_order_relaxed);
+                                break;
+                            case server::core::protocol::DeliveryClass::kUnreliableSequenced:
+                                (void)udp_forward_unreliable_sequenced_total_.fetch_add(1, std::memory_order_relaxed);
+                                break;
+                        }
+                    }
+                }
+
+                if (invalid_inner) {
+                    fallback_required = true;
+                    server::core::runtime_metrics::record_rudp_fallback(
+                        server::core::runtime_metrics::RudpFallbackReason::kProtocolError);
+                    std::lock_guard<std::mutex> lock(session_mutex_);
+                    auto it = sessions_.find(bound_session_id);
+                    if (it != sessions_.end()) {
+                        it->second.rudp_fallback_to_tcp = true;
+                    }
+                }
+
+                if (fallback_required) {
+                    (void)rudp_packets_reject_total_.fetch_add(1, std::memory_order_relaxed);
+                    (void)rudp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+                }
+
+                do_udp_receive();
+                return;
+            }
+
             if (bytes < proto::k_header_bytes) {
                 (void)udp_receive_error_total_.fetch_add(1, std::memory_order_relaxed);
                 do_udp_receive();
@@ -1785,7 +2102,6 @@ void GatewayApp::do_udp_receive() {
                 udp_read_buffer_.data() + proto::k_header_bytes,
                 body_len
             );
-            const auto now_ms = unix_time_ms();
 
             if (header.msg_id == server::protocol::MSG_UDP_BIND_REQ) {
                 const auto remote_key = endpoint_key(udp_remote_endpoint_);

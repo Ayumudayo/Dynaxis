@@ -65,6 +65,12 @@ class TokenAuthenticator : public gateway::auth::IAuthenticator {
 | `GATEWAY_INGRESS_TOKENS_PER_SEC` | ingress 토큰 버킷 초당 토큰 | `200` |
 | `GATEWAY_INGRESS_BURST_TOKENS` | ingress 토큰 버킷 burst 용량 | `400` |
 | `GATEWAY_INGRESS_MAX_ACTIVE_SESSIONS` | 동시 backend 세션 상한 | `50000` |
+| `GATEWAY_UDP_LISTEN` | UDP ingress listen 주소(`host:port`) | (unset) |
+| `GATEWAY_UDP_BIND_SECRET` | UDP bind ticket 서명 키 | (unset) |
+| `GATEWAY_UDP_BIND_TTL_MS` | UDP bind ticket TTL(ms) | `5000` |
+| `GATEWAY_RUDP_ENABLE` | RUDP adapter 활성화(1/0, 기본 OFF) | `0` |
+| `GATEWAY_RUDP_CANARY_PERCENT` | 신규 세션 RUDP canary 비율(0~100) | `0` |
+| `GATEWAY_RUDP_OPCODE_ALLOWLIST` | RUDP 허용 opcode CSV(빈 값이면 비활성) | (empty) |
 | `ALLOW_ANONYMOUS` | 익명 로그인 허용(1/0), `0`이면 토큰 없는/anonymous 로그인 거부 | `1` |
 | `AUTH_PROVIDER` / `AUTH_ENDPOINT` | 외부 인증 연동(옵션) | 빈 값 |
 
@@ -75,6 +81,8 @@ class TokenAuthenticator : public gateway::auth::IAuthenticator {
 - `gateway_backend_circuit_open_total`, `gateway_backend_circuit_reject_total`, `gateway_backend_circuit_open`
 - `gateway_backend_connect_retry_total`, `gateway_backend_retry_budget_exhausted_total`
 - `gateway_ingress_reject_not_ready_total`, `gateway_ingress_reject_rate_limit_total`, `gateway_ingress_reject_session_limit_total`, `gateway_ingress_reject_circuit_open_total`
+- `gateway_rudp_core_build_enabled`, `gateway_rudp_enabled`, `gateway_rudp_canary_percent`, `gateway_rudp_opcode_allowlist_size`
+- `gateway_rudp_packets_total`, `gateway_rudp_packets_reject_total`, `gateway_rudp_inner_forward_total`, `gateway_rudp_fallback_total`
 
 자세한 옵션은 `docs/configuration.md` 와 `docs/ops/gateway-and-lb.md` 를 참고하세요.
 

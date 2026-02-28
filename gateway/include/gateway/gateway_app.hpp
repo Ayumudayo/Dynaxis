@@ -21,12 +21,14 @@
 #include <boost/asio/steady_timer.hpp>
 
 #include "gateway/auth/authenticator.hpp"
+#include "gateway/rudp_rollout_policy.hpp"
 #include "gateway/resilience_controls.hpp"
 #include "gateway/udp_bind_abuse_guard.hpp"
 #include "gateway/udp_sequenced_metrics.hpp"
 #include "server/core/app/app_host.hpp"
 #include "server/core/net/hive.hpp"
 #include "server/core/net/listener.hpp"
+#include "server/core/net/rudp/rudp_engine.hpp"
 #include "server/state/instance_registry.hpp"
 #include "server/storage/redis/client.hpp"
 #include "gateway/session_directory.hpp"
@@ -313,6 +315,9 @@ public:
         std::uint64_t udp_ticket_issued_unix_ms{0}; ///< bind ticket 발급 시각
         std::string udp_token;                     ///< bind 검증 토큰
         UdpSequencedMetrics udp_sequenced_metrics; ///< UDP 순서/품질 추적기
+        bool rudp_selected{false};                 ///< canary/게이트에 의해 RUDP가 선택된 세션 여부
+        bool rudp_fallback_to_tcp{false};          ///< RUDP 실패 후 TCP fallback 고정 여부
+        std::unique_ptr<server::core::net::rudp::RudpEngine> rudp_engine; ///< 세션별 RUDP 엔진 상태
     };
     std::mutex session_mutex_;
     std::unordered_map<std::string, SessionState> sessions_;
@@ -359,6 +364,8 @@ public:
     std::uint32_t udp_bind_fail_window_ms_{10000};
     std::uint32_t udp_bind_fail_limit_{5};
     std::uint32_t udp_bind_block_ms_{60000};
+    RudpRolloutPolicy rudp_rollout_policy_{};
+    server::core::net::rudp::RudpConfig rudp_config_{};
     UdpBindAbuseGuard udp_bind_abuse_guard_;
     std::unique_ptr<boost::asio::ip::udp::socket> udp_socket_;
     boost::asio::ip::udp::endpoint udp_remote_endpoint_;
@@ -390,6 +397,10 @@ public:
     std::atomic<std::uint64_t> udp_loss_estimated_total_{0};
     std::atomic<std::uint64_t> udp_jitter_ms_last_{0};
     std::atomic<std::uint64_t> udp_rtt_ms_last_{0};
+    std::atomic<std::uint64_t> rudp_packets_total_{0};
+    std::atomic<std::uint64_t> rudp_packets_reject_total_{0};
+    std::atomic<std::uint64_t> rudp_inner_forward_total_{0};
+    std::atomic<std::uint64_t> rudp_fallback_total_{0};
     std::atomic<bool> udp_enabled_{false};
 };
 

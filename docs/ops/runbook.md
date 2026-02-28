@@ -53,9 +53,9 @@
 3. rollback: `pwsh scripts/deploy_docker.ps1 -Action up -Detached -Observability -EnvFile docker/stack/.env.udp-rollback.example`
 4. rollback 후 `gateway_udp_enabled`가 양 gateway에서 0인지 확인하고 `python tests/python/verify_pong.py`로 TCP smoke 검증
 
-### 3.6 RUDP canary/rollback (계획)
+### 3.6 RUDP canary/rollback
 1. 전제 확인: `KNIGHTS_ENABLE_CORE_RUDP=ON`으로 빌드되었고 운영 런타임 기본값은 `GATEWAY_RUDP_ENABLE=0` 상태
-2. canary 오픈: `GATEWAY_RUDP_ENABLE=1`, `GATEWAY_RUDP_CANARY_PERCENT=<소량>` 설정 후 신규 세션에서만 관찰
+2. canary 오픈: `GATEWAY_RUDP_ENABLE=1`, `GATEWAY_RUDP_CANARY_PERCENT=<소량>`, `GATEWAY_RUDP_OPCODE_ALLOWLIST=<opcode,...>` 설정 후 신규 세션에서만 관찰
 3. 모니터링: `core_runtime_rudp_handshake_total{result!="ok"}`, `core_runtime_rudp_retransmit_total`, `core_runtime_rudp_fallback_total{reason}`
 4. 이상 시 즉시 롤백:
    - `GATEWAY_RUDP_CANARY_PERCENT=0`

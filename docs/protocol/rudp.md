@@ -1,11 +1,12 @@
 # RUDP 설계 초안 (Phase 0, 기본 OFF)
 
-상태: `planned` (아직 런타임 기본 경로에 활성화되지 않음)
+상태: `staged` (구현은 존재하지만 런타임 기본 경로는 비활성)
 
 진행 상태 메모:
 
 - Phase 1/2 범위로 `core/include/server/core/net/rudp/*`, `core/src/net/rudp/*`에 엔진/ACK/재전송 기본 구현이 추가되었다.
-- 기본 경로는 여전히 OFF이며, gateway 통합 canary는 후속 phase에서 단계적으로 진행한다.
+- Phase 3 범위로 `gateway/src/gateway_app.cpp`에 RUDP adapter 분기(기본 OFF + canary + opcode allowlist + 세션 fallback)가 추가되었다.
+- 기본 경로는 여전히 OFF이며, `GATEWAY_RUDP_ENABLE=0` 또는 `GATEWAY_RUDP_CANARY_PERCENT=0`/allowlist 비어 있음 상태에서는 기존 경로를 사용한다.
 
 ## 1. 목표
 
