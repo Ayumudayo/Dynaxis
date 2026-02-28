@@ -42,18 +42,38 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Cache vcpkg artifacts (Windows)
-        uses: actions/cache@v4
+      - name: Mark vcpkg cache restore start (Windows)
+        shell: pwsh
+        run: |
+          "VCPKG_CACHE_RESTORE_START=$(Get-Date -AsUTC -Format o)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Restore vcpkg artifacts cache (Windows)
+        id: vcpkg_cache_restore
+        uses: actions/cache/restore@v4
         with:
           path: |
             .cache/vcpkg/archives
             .cache/vcpkg/downloads
             vcpkg_installed
             build-windows/vcpkg_installed
-          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'CMakePresets.json', 'scripts/setup_vcpkg.ps1', 'cmake/knights_vcpkg_toolchain.cmake') }}
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'scripts/setup_vcpkg.ps1', 'cmake/knights_vcpkg_toolchain.cmake') }}
           restore-keys: |
             ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json') }}-
             ${{ runner.os }}-vcpkg-
+
+      - name: Summarize vcpkg cache restore (Windows)
+        shell: pwsh
+        run: |
+          $start = [DateTime]::Parse($env:VCPKG_CACHE_RESTORE_START)
+          $elapsed = [Math]::Round(((Get-Date).ToUniversalTime() - $start).TotalSeconds, 2)
+          $hit = '${{ steps.vcpkg_cache_restore.outputs.cache-hit }}'
+          if ([string]::IsNullOrWhiteSpace($hit)) { $hit = 'false' }
+          $matchedKey = '${{ steps.vcpkg_cache_restore.outputs.cache-matched-key }}'
+          if ([string]::IsNullOrWhiteSpace($matchedKey)) { $matchedKey = 'N/A' }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '### vcpkg cache telemetry (Windows)'
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- restore_hit: `$hit`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- restore_elapsed_sec: `$elapsed`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- restore_key: `$matchedKey`"
 
       - name: Ensure vcpkg cache directories (Windows)
         shell: pwsh
@@ -123,6 +143,41 @@ jobs:
         run: |
           ctest --preset windows-test -R "CorePublicApi|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure
 
+      - name: Mark vcpkg cache save start (Windows)
+        if: success() && steps.vcpkg_cache_restore.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          "VCPKG_CACHE_SAVE_START=$(Get-Date -AsUTC -Format o)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Save vcpkg artifacts cache (Windows)
+        if: success() && steps.vcpkg_cache_restore.outputs.cache-hit != 'true'
+        id: vcpkg_cache_save
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .cache/vcpkg/archives
+            .cache/vcpkg/downloads
+            vcpkg_installed
+            build-windows/vcpkg_installed
+          key: ${{ steps.vcpkg_cache_restore.outputs.cache-primary-key }}
+
+      - name: Summarize vcpkg cache save (Windows)
+        if: always()
+        shell: pwsh
+        run: |
+          if ('${{ steps.vcpkg_cache_restore.outputs.cache-hit }}' -eq 'true') {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '- save_skipped: `true` (exact cache hit)'
+            return
+          }
+          if ([string]::IsNullOrWhiteSpace($env:VCPKG_CACHE_SAVE_START)) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- save_status: `${{ steps.vcpkg_cache_save.outcome }}`"
+            return
+          }
+          $start = [DateTime]::Parse($env:VCPKG_CACHE_SAVE_START)
+          $elapsed = [Math]::Round(((Get-Date).ToUniversalTime() - $start).TotalSeconds, 2)
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- save_status: `${{ steps.vcpkg_cache_save.outcome }}`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- save_elapsed_sec: `$elapsed`"
+
   core-api-consumer-linux:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -186,18 +241,38 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Cache vcpkg artifacts (Windows)
-        uses: actions/cache@v4
+      - name: Mark vcpkg cache restore start (Windows)
+        shell: pwsh
+        run: |
+          "VCPKG_CACHE_RESTORE_START=$(Get-Date -AsUTC -Format o)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Restore vcpkg artifacts cache (Windows)
+        id: vcpkg_cache_restore
+        uses: actions/cache/restore@v4
         with:
           path: |
             .cache/vcpkg/archives
             .cache/vcpkg/downloads
             vcpkg_installed
             build-windows/vcpkg_installed
-          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'CMakePresets.json', 'scripts/setup_vcpkg.ps1', 'cmake/knights_vcpkg_toolchain.cmake') }}
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'scripts/setup_vcpkg.ps1', 'cmake/knights_vcpkg_toolchain.cmake') }}
           restore-keys: |
             ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json') }}-
             ${{ runner.os }}-vcpkg-
+
+      - name: Summarize vcpkg cache restore (Windows)
+        shell: pwsh
+        run: |
+          $start = [DateTime]::Parse($env:VCPKG_CACHE_RESTORE_START)
+          $elapsed = [Math]::Round(((Get-Date).ToUniversalTime() - $start).TotalSeconds, 2)
+          $hit = '${{ steps.vcpkg_cache_restore.outputs.cache-hit }}'
+          if ([string]::IsNullOrWhiteSpace($hit)) { $hit = 'false' }
+          $matchedKey = '${{ steps.vcpkg_cache_restore.outputs.cache-matched-key }}'
+          if ([string]::IsNullOrWhiteSpace($matchedKey)) { $matchedKey = 'N/A' }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '### vcpkg cache telemetry (Windows)'
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- restore_hit: `$hit`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- restore_elapsed_sec: `$elapsed`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- restore_key: `$matchedKey`"
 
       - name: Ensure vcpkg cache directories (Windows)
         shell: pwsh
@@ -277,6 +352,41 @@ jobs:
         shell: pwsh
         run: |
           ctest --preset windows-test -R "Rudp.*Test|MetricsTest.RuntimeCoreMetricsIncludeRudpSignals|RuntimeMetricsTest.RudpCountersAreSnapshotted|OpcodePolicyTest.UdpBindOpcodePoliciesAreExpected|UdpBindAbuseGuardTest|UdpSequencedMetricsTest" --output-on-failure
+
+      - name: Mark vcpkg cache save start (Windows)
+        if: success() && steps.vcpkg_cache_restore.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          "VCPKG_CACHE_SAVE_START=$(Get-Date -AsUTC -Format o)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Save vcpkg artifacts cache (Windows)
+        if: success() && steps.vcpkg_cache_restore.outputs.cache-hit != 'true'
+        id: vcpkg_cache_save
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .cache/vcpkg/archives
+            .cache/vcpkg/downloads
+            vcpkg_installed
+            build-windows/vcpkg_installed
+          key: ${{ steps.vcpkg_cache_restore.outputs.cache-primary-key }}
+
+      - name: Summarize vcpkg cache save (Windows)
+        if: always()
+        shell: pwsh
+        run: |
+          if ('${{ steps.vcpkg_cache_restore.outputs.cache-hit }}' -eq 'true') {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '- save_skipped: `true` (exact cache hit)'
+            return
+          }
+          if ([string]::IsNullOrWhiteSpace($env:VCPKG_CACHE_SAVE_START)) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- save_status: `${{ steps.vcpkg_cache_save.outcome }}`"
+            return
+          }
+          $start = [DateTime]::Parse($env:VCPKG_CACHE_SAVE_START)
+          $elapsed = [Math]::Round(((Get-Date).ToUniversalTime() - $start).TotalSeconds, 2)
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- save_status: `${{ steps.vcpkg_cache_save.outcome }}`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- save_elapsed_sec: `$elapsed`"
 
   linux-docker-stack:
     runs-on: ubuntu-latest
