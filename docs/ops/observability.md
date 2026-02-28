@@ -214,7 +214,42 @@ max_over_time(wb_pending[5m])
   - 기준: 12h 오류율 > 0.3%가 6h 지속
 - 운영 정책: burn-rate 경보 지속 시 신규 기능 rollout을 일시 중지하고, 최근 배포/의존성 포화/백프레셔 설정을 우선 점검한다.
 
-### 6.1 인증서 만료 알람 소스 메트릭
+### 6.3 RUDP 관측 계약 (계획, 기본 OFF)
+
+RUDP는 현재 설계/단계적 구현 대상이며 기본 경로는 TCP이다. 아래 지표/알람은 구현 단계에서 추가되며, 기본값에서는 0 또는 미노출이 정상이다.
+
+게이트 조건:
+
+- 빌드: `KNIGHTS_ENABLE_CORE_RUDP=OFF` (기본)
+- 런타임: `GATEWAY_RUDP_ENABLE=0`, `GATEWAY_RUDP_CANARY_PERCENT=0` (기본)
+
+계획 메트릭:
+
+- `core_runtime_rudp_handshake_total{result}`
+- `core_runtime_rudp_retransmit_total`
+- `core_runtime_rudp_inflight_packets`
+- `core_runtime_rudp_rtt_ms_bucket`, `core_runtime_rudp_rtt_ms_sum`, `core_runtime_rudp_rtt_ms_count`
+- `core_runtime_rudp_fallback_total{reason}`
+
+계획 알람:
+
+- `RudpHandshakeFailureSpike`
+- `RudpRetransmitRatioHigh`
+- `RudpFallbackSpike`
+
+예시 PromQL(구현 후 적용):
+
+```promql
+# RUDP handshake 실패율(5m)
+sum(rate(core_runtime_rudp_handshake_total{result!="ok"}[5m]))
+/
+clamp_min(sum(rate(core_runtime_rudp_handshake_total[5m])), 1)
+
+# RUDP fallback 급증 감지(5m)
+sum(rate(core_runtime_rudp_fallback_total[5m]))
+```
+
+### 6.4 인증서 만료 알람 소스 메트릭
 
 - 기본 식은 blackbox exporter 메트릭 `probe_ssl_earliest_cert_expiry`를 사용한다.
 - 운영에서 x509 exporter를 사용할 경우 동일 임계치 식을 `x509_cert_not_after`로 치환해 적용한다.

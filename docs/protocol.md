@@ -43,6 +43,7 @@ Sapphire처럼 도메인별로 보기 좋게 관리하기 위해 JSON에 `groups
 ## 시퀀스/재전송
 - `seq`와 `utc_ts_ms32`는 항상 고정 헤더에 포함된다. (`core/include/server/core/protocol/packet.hpp`)
 - 현재는 재전송/ACK 등의 신뢰 레이어를 구현하지 않으며, `seq`는 클라이언트/서버 측 추적/디버깅/순서 확인 용도로만 사용한다. (core/src/net/session.cpp:48)
+- 향후 기본 OFF 상태로 도입할 RUDP 설계/단계 계획은 `docs/protocol/rudp.md`를 따른다.
 
 ## 예시 인코딩
 ```

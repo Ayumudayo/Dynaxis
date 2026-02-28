@@ -21,6 +21,7 @@
 | Dispatch Exception | `chat_dispatch_exception_total` 급증 | (1) server_app 로그 (2) 최근 배포 롤백 |
 | UDP bind abuse | `gateway_udp_bind_rate_limit_reject_total` 증가 + `gateway_udp_bind_block_total` 증가 | (1) 공격/오탐 source IP 확인 (2) `GATEWAY_UDP_BIND_FAIL_*`/`GATEWAY_UDP_BIND_BLOCK_MS` 재검토 (3) 필요 시 임시로 UDP ingress 제한 |
 | UDP quality degradation | `GatewayUdpEstimatedLossHigh` 또는 `GatewayUdpJitterHigh` 발생 | (1) `gateway-udp-quality` 대시보드에서 loss/jitter/replay 분해 (2) 네트워크 구간 확인 (3) 필요 시 UDP 대상 opcode 축소 또는 TCP fallback |
+| RUDP handshake/retransmit 이상(계획) | `RudpHandshakeFailureSpike`/`RudpRetransmitRatioHigh`/`RudpFallbackSpike` 발생 | (1) canary 비율 즉시 0으로 축소 (2) `GATEWAY_RUDP_ENABLE=0`으로 신규 세션 RUDP 차단 (3) TCP KPI 복귀 확인 후 원인 분석 |
 
 ## 3. 장애 시나리오
 ### 3.1 Redis 장애
@@ -51,6 +52,15 @@
 2. `gateway_udp_enabled` 상태 확인(gateway-1=1, gateway-2=0)
 3. rollback: `pwsh scripts/deploy_docker.ps1 -Action up -Detached -Observability -EnvFile docker/stack/.env.udp-rollback.example`
 4. rollback 후 `gateway_udp_enabled`가 양 gateway에서 0인지 확인하고 `python tests/python/verify_pong.py`로 TCP smoke 검증
+
+### 3.6 RUDP canary/rollback (계획)
+1. 전제 확인: `KNIGHTS_ENABLE_CORE_RUDP=ON`으로 빌드되었고 운영 런타임 기본값은 `GATEWAY_RUDP_ENABLE=0` 상태
+2. canary 오픈: `GATEWAY_RUDP_ENABLE=1`, `GATEWAY_RUDP_CANARY_PERCENT=<소량>` 설정 후 신규 세션에서만 관찰
+3. 모니터링: `core_runtime_rudp_handshake_total{result!="ok"}`, `core_runtime_rudp_retransmit_total`, `core_runtime_rudp_fallback_total{reason}`
+4. 이상 시 즉시 롤백:
+   - `GATEWAY_RUDP_CANARY_PERCENT=0`
+   - `GATEWAY_RUDP_ENABLE=0`
+   - TCP-only smoke(`python tests/python/verify_pong.py`)와 핵심 KPI 복귀 확인
 
 ## 4. 스모크 테스트 절차
 1. devclient 실행 → `/login runbook` → `/join lobby` → `/chat runbook-check`
