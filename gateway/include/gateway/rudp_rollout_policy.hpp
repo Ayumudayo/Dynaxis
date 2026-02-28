@@ -96,6 +96,7 @@ inline std::unordered_set<std::uint16_t> parse_rudp_opcode_allowlist(std::string
     return out;
 }
 
+/** @brief 세션 canary 및 opcode allowlist 기반 RUDP rollout 정책입니다. */
 struct RudpRolloutPolicy {
     /** @brief gateway RUDP 경로 활성화 여부입니다. */
     bool enabled{false};

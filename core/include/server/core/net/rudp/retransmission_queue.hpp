@@ -24,7 +24,12 @@ public:
     /** @brief 내부 상태를 초기화합니다. */
     void reset();
 
-    /** @brief ACK 대기 패킷을 큐에 추가합니다. */
+    /**
+     * @brief ACK 대기 패킷을 큐에 추가합니다.
+     * @param packet_number 전송한 packet number
+     * @param sent_unix_ms 최초/최근 전송 시각(unix ms)
+     * @param encoded_frame 전송된 RUDP 프레임 바이트
+     */
     void push(std::uint32_t packet_number, std::uint64_t sent_unix_ms, std::vector<std::uint8_t> encoded_frame);
 
     /** @brief `ack_largest + ack_mask(64)`로 ACK 처리합니다. */
@@ -48,6 +53,7 @@ private:
     static bool is_acked_by_mask(std::uint32_t packet_number, std::uint32_t ack_largest, std::uint64_t ack_mask);
     void erase_acked();
 
+    /** @brief ACK 처리 전 내부 큐 엔트리입니다. */
     struct Entry {
         PendingPacket packet;
         bool acked{false};

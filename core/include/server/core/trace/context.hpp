@@ -17,6 +17,7 @@ std::string current_trace_id();
 std::string current_correlation_id();
 bool current_sampled();
 
+/** @brief 현재 스레드의 trace/correlation 컨텍스트를 RAII로 전환합니다. */
 class ScopedContext {
 public:
     ScopedContext(std::string trace_id, std::string correlation_id, bool sampled);

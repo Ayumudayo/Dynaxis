@@ -6,6 +6,7 @@
 
 namespace gateway {
 
+/** @brief 고정 burst와 refill rate를 갖는 thread-safe 토큰 버킷입니다. */
 class TokenBucket {
 public:
     TokenBucket() = default;
@@ -61,6 +62,7 @@ private:
     std::uint64_t last_refill_ms_{0};
 };
 
+/** @brief 고정 시간 창 단위 재시도 예산을 제어합니다. */
 class RetryBudget {
 public:
     RetryBudget() = default;
@@ -122,6 +124,7 @@ private:
     std::uint32_t used_in_window_{0};
 };
 
+/** @brief 연속 실패 임계치 기반의 단순 circuit breaker입니다. */
 class CircuitBreaker {
 public:
     CircuitBreaker() = default;

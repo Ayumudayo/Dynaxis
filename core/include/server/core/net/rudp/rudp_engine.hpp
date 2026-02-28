@@ -32,16 +32,34 @@ public:
     /** @brief 엔진/피어 상태를 초기화합니다. */
     void reset();
 
-    /** @brief 외부에서 datagram을 입력해 상태를 진전시킵니다. */
+    /**
+     * @brief 외부에서 datagram을 입력해 상태를 진전시킵니다.
+     * @param datagram 수신한 RUDP datagram 바이트
+     * @param now_unix_ms 현재 시각(unix ms)
+     * @return 파싱/핸드셰이크/egress/fallback 정보를 포함한 처리 결과
+     */
     ProcessResult process_datagram(std::span<const std::uint8_t> datagram, std::uint64_t now_unix_ms);
 
-    /** @brief 재전송/타임아웃 poll 결과를 반환합니다. */
+    /**
+     * @brief 재전송/타임아웃 poll 결과를 반환합니다.
+     * @param now_unix_ms 현재 시각(unix ms)
+     * @return 재전송 datagram 및 fallback 여부를 포함한 poll 결과
+     */
     ProcessResult poll(std::uint64_t now_unix_ms);
 
-    /** @brief 로컬에서 HELLO 패킷을 생성합니다. */
+    /**
+     * @brief 로컬에서 HELLO 패킷을 생성합니다.
+     * @param connection_id peer 연결 식별자
+     * @param now_unix_ms 현재 시각(unix ms)
+     * @return 전송 가능한 HELLO datagram
+     */
     std::vector<std::uint8_t> make_hello(std::uint32_t connection_id, std::uint64_t now_unix_ms);
 
-    /** @brief 로컬에서 CLOSE 패킷을 생성합니다. */
+    /**
+     * @brief 로컬에서 CLOSE 패킷을 생성합니다.
+     * @param now_unix_ms 현재 시각(unix ms)
+     * @return 전송 가능한 CLOSE datagram
+     */
     std::vector<std::uint8_t> make_close(std::uint64_t now_unix_ms);
 
     /**

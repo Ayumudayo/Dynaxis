@@ -19,6 +19,7 @@ enum class VerifyResult {
     kSecretNotConfigured,
 };
 
+/** @brief 관리자 명령 서명 검증 시 허용 시간 범위를 정의합니다. */
 struct VerifyOptions {
     std::uint64_t ttl_ms{60'000};
     std::uint64_t future_skew_ms{5'000};
@@ -39,6 +40,7 @@ bool append_signature_fields(
 
 std::string to_string(VerifyResult result);
 
+/** @brief 관리자 명령 payload의 서명/재전송 보호 검증기입니다. */
 class Verifier {
 public:
     explicit Verifier(std::string secret, VerifyOptions options = {});
