@@ -64,3 +64,15 @@ TEST(RudpFlowControlTest, RejectsWhenInflightByteLimitExceeded) {
     ASSERT_TRUE(engine.queue_reliable_payload(four_bytes, 0, 1010, first));
     EXPECT_FALSE(engine.queue_reliable_payload(one_byte, 0, 1011, second));
 }
+
+TEST(RudpFlowControlTest, QueueRequiresEstablishedStateAndNonEmptyPayload) {
+    server::core::net::rudp::RudpEngine engine;
+
+    std::vector<std::uint8_t> datagram;
+    const std::vector<std::uint8_t> payload{0x01};
+    EXPECT_FALSE(engine.queue_reliable_payload(payload, 0, 1000, datagram));
+
+    establish(engine, 2468);
+    const std::vector<std::uint8_t> empty;
+    EXPECT_FALSE(engine.queue_reliable_payload(empty, 0, 1010, datagram));
+}

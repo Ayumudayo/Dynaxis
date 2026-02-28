@@ -58,3 +58,55 @@ TEST(RudpHandshakeTest, PollTriggersHandshakeAndIdleFallbacks) {
     EXPECT_TRUE(idle_timeout.fallback_required);
     EXPECT_EQ(idle_timeout.fallback_reason, "rudp_idle_timeout");
 }
+
+TEST(RudpHandshakeTest, DataBeforeHandshakeTriggersFallback) {
+    server::core::net::rudp::RudpEngine engine;
+
+    const std::vector<std::uint8_t> payload{0x01};
+    const auto data = make_packet(server::core::net::rudp::PacketType::kData, 123, 1, payload);
+    const auto result = engine.process_datagram(data, 1000);
+
+    EXPECT_TRUE(result.parsed);
+    EXPECT_TRUE(result.fallback_required);
+    EXPECT_EQ(result.fallback_reason, "rudp_not_established");
+}
+
+TEST(RudpHandshakeTest, ConnectionIdMismatchTriggersFallback) {
+    server::core::net::rudp::RudpEngine engine;
+
+    const auto hello = make_packet(server::core::net::rudp::PacketType::kHello, 77, 0);
+    const auto established = engine.process_datagram(hello, 1000);
+    ASSERT_TRUE(established.handshake_established);
+
+    const std::vector<std::uint8_t> payload{0x02};
+    const auto mismatched = make_packet(server::core::net::rudp::PacketType::kData, 88, 1, payload);
+    const auto result = engine.process_datagram(mismatched, 1010);
+
+    EXPECT_TRUE(result.parsed);
+    EXPECT_TRUE(result.fallback_required);
+    EXPECT_EQ(result.fallback_reason, "connection_id_mismatch");
+}
+
+TEST(RudpHandshakeTest, TimeoutBoundaryRequiresStrictGreaterThan) {
+    server::core::net::rudp::RudpEngine engine;
+
+    (void)engine.make_hello(99, 1000);
+    const auto handshake_boundary = engine.poll(2500);
+    EXPECT_FALSE(handshake_boundary.fallback_required);
+
+    const auto handshake_timeout = engine.poll(2501);
+    EXPECT_TRUE(handshake_timeout.fallback_required);
+    EXPECT_EQ(handshake_timeout.fallback_reason, "rudp_handshake_timeout");
+
+    engine.reset();
+    const auto hello = make_packet(server::core::net::rudp::PacketType::kHello, 99, 0);
+    const auto established = engine.process_datagram(hello, 1000);
+    ASSERT_TRUE(established.handshake_established);
+
+    const auto idle_boundary = engine.poll(11000);
+    EXPECT_FALSE(idle_boundary.fallback_required);
+
+    const auto idle_timeout = engine.poll(11001);
+    EXPECT_TRUE(idle_timeout.fallback_required);
+    EXPECT_EQ(idle_timeout.fallback_reason, "rudp_idle_timeout");
+}
