@@ -242,10 +242,10 @@ jobs:
           python tools/gen_wire_codec.py protocol/wire_map.json core/include/server/wire/codec.hpp
           git diff --exit-code -- core/include/server/wire/codec.hpp
 
-      - name: Build Fast Test Target (Debug)
+      - name: Build (Debug)
         shell: pwsh
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug -Target core_general_tests
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug
 
       - name: Build Protocol Fuzz Harness (Debug)
         shell: pwsh
@@ -258,65 +258,10 @@ jobs:
           $env:FUZZ_ITERATIONS = "120000"
           .\build-windows\tests\Debug\protocol_fuzz_harness.exe
 
-      - name: Run Fast Policy/Transport Tests
+      - name: Run Windows Unit Tests (ctest)
         shell: pwsh
         run: |
-          ctest --preset windows-test -R "DispatcherTest|OpcodePolicyTest|UdpBindAbuseGuardTest|UdpSequencedMetricsTest" --output-on-failure
-
-  windows-slow-tests:
-    runs-on: windows-latest
-    timeout-minutes: 60
-    needs: windows-fast-tests
-    env:
-      VCPKG_FEATURE_FLAGS: manifests,binarycaching
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
-      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.cache/vcpkg/archives,readwrite
-      VCPKG_DOWNLOADS: ${{ github.workspace }}/.cache/vcpkg/downloads
-      VCPKG_INSTALLED_DIR: ${{ github.workspace }}/build-windows/vcpkg_installed
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: recursive
-
-      - name: Cache vcpkg artifacts (Windows)
-        uses: actions/cache@v4
-        with:
-          path: |
-            .cache/vcpkg/archives
-            .cache/vcpkg/downloads
-            vcpkg_installed
-            build-windows/vcpkg_installed
-          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'CMakePresets.json', 'scripts/setup_vcpkg.ps1', 'cmake/knights_vcpkg_toolchain.cmake') }}
-          restore-keys: |
-            ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json') }}-
-            ${{ runner.os }}-vcpkg-
-
-      - name: Ensure vcpkg cache directories (Windows)
-        shell: pwsh
-        run: |
-          $buildInstalled = "${{ github.workspace }}/build-windows/vcpkg_installed"
-          $rootInstalled = "${{ github.workspace }}/vcpkg_installed"
-          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/vcpkg/archives" | Out-Null
-          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/vcpkg/downloads" | Out-Null
-          New-Item -ItemType Directory -Force -Path $buildInstalled | Out-Null
-          if (-not (Test-Path $rootInstalled)) {
-            New-Item -ItemType Junction -Path $rootInstalled -Target $buildInstalled | Out-Null
-          }
-
-      - name: Enable MSVC Developer Command Prompt
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Build (Debug)
-        shell: pwsh
-        run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug
-
-      - name: Run Slow Unit Tests (ctest)
-        shell: pwsh
-        run: |
-          ctest --preset windows-test -E "DispatcherTest|OpcodePolicyTest|UdpBindAbuseGuardTest|UdpSequencedMetricsTest" --output-on-failure
+          ctest --preset windows-test --output-on-failure
 
       - name: Configure RUDP ON (Debug)
         shell: pwsh
