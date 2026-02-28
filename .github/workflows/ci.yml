@@ -71,9 +71,9 @@ jobs:
           $matchedKey = '${{ steps.vcpkg_cache_restore.outputs.cache-matched-key }}'
           if ([string]::IsNullOrWhiteSpace($matchedKey)) { $matchedKey = 'N/A' }
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '### vcpkg cache telemetry (Windows)'
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- restore_hit: `$hit`"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- restore_elapsed_sec: `$elapsed`"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- restore_key: `$matchedKey`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_hit: {0}" -f $hit)
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_elapsed_sec: {0}" -f $elapsed)
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_key: {0}" -f $matchedKey)
 
       - name: Ensure vcpkg cache directories (Windows)
         shell: pwsh
@@ -165,18 +165,20 @@ jobs:
         if: always()
         shell: pwsh
         run: |
+          $saveOutcome = '${{ steps.vcpkg_cache_save.outcome }}'
+          if ([string]::IsNullOrWhiteSpace($saveOutcome)) { $saveOutcome = 'unknown' }
           if ('${{ steps.vcpkg_cache_restore.outputs.cache-hit }}' -eq 'true') {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '- save_skipped: `true` (exact cache hit)'
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '- save_skipped: true (exact cache hit)'
             return
           }
           if ([string]::IsNullOrWhiteSpace($env:VCPKG_CACHE_SAVE_START)) {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- save_status: `${{ steps.vcpkg_cache_save.outcome }}`"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- save_status: {0}" -f $saveOutcome)
             return
           }
           $start = [DateTime]::Parse($env:VCPKG_CACHE_SAVE_START)
           $elapsed = [Math]::Round(((Get-Date).ToUniversalTime() - $start).TotalSeconds, 2)
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- save_status: `${{ steps.vcpkg_cache_save.outcome }}`"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- save_elapsed_sec: `$elapsed`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- save_status: {0}" -f $saveOutcome)
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- save_elapsed_sec: {0}" -f $elapsed)
 
   core-api-consumer-linux:
     runs-on: ubuntu-latest
@@ -270,9 +272,9 @@ jobs:
           $matchedKey = '${{ steps.vcpkg_cache_restore.outputs.cache-matched-key }}'
           if ([string]::IsNullOrWhiteSpace($matchedKey)) { $matchedKey = 'N/A' }
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '### vcpkg cache telemetry (Windows)'
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- restore_hit: `$hit`"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- restore_elapsed_sec: `$elapsed`"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- restore_key: `$matchedKey`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_hit: {0}" -f $hit)
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_elapsed_sec: {0}" -f $elapsed)
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_key: {0}" -f $matchedKey)
 
       - name: Ensure vcpkg cache directories (Windows)
         shell: pwsh
@@ -375,18 +377,20 @@ jobs:
         if: always()
         shell: pwsh
         run: |
+          $saveOutcome = '${{ steps.vcpkg_cache_save.outcome }}'
+          if ([string]::IsNullOrWhiteSpace($saveOutcome)) { $saveOutcome = 'unknown' }
           if ('${{ steps.vcpkg_cache_restore.outputs.cache-hit }}' -eq 'true') {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '- save_skipped: `true` (exact cache hit)'
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '- save_skipped: true (exact cache hit)'
             return
           }
           if ([string]::IsNullOrWhiteSpace($env:VCPKG_CACHE_SAVE_START)) {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- save_status: `${{ steps.vcpkg_cache_save.outcome }}`"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- save_status: {0}" -f $saveOutcome)
             return
           }
           $start = [DateTime]::Parse($env:VCPKG_CACHE_SAVE_START)
           $elapsed = [Math]::Round(((Get-Date).ToUniversalTime() - $start).TotalSeconds, 2)
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- save_status: `${{ steps.vcpkg_cache_save.outcome }}`"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- save_elapsed_sec: `$elapsed`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- save_status: {0}" -f $saveOutcome)
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- save_elapsed_sec: {0}" -f $elapsed)
 
   linux-docker-stack:
     runs-on: ubuntu-latest
