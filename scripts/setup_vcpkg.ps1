@@ -50,6 +50,27 @@ function Ensure-VcpkgBaselineCommit([string]$VcpkgRoot, [string]$Baseline) {
   }
 }
 
+function Invoke-WithRetry(
+  [scriptblock]$Action,
+  [string]$Description,
+  [int]$MaxAttempts = 3,
+  [int]$InitialDelaySeconds = 3
+) {
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    try {
+      & $Action
+      if ($LASTEXITCODE -eq 0) { return }
+      throw "$Description exited with code $LASTEXITCODE"
+    } catch {
+      if ($attempt -ge $MaxAttempts) { throw }
+      $delay = [Math]::Min([int]($InitialDelaySeconds * [Math]::Pow(2, $attempt - 1)), 30)
+      Warn ("{0} 실패 (시도 {1}/{2}): {3}" -f $Description, $attempt, $MaxAttempts, $_.Exception.Message)
+      Info ("{0}초 후 재시도합니다." -f $delay)
+      Start-Sleep -Seconds $delay
+    }
+  }
+}
+
 if (-not $Triplet -or $Triplet -eq '') {
   if ($IsWindows) { $Triplet = 'x64-windows' }
   else { $Triplet = 'x64-linux' }
@@ -94,10 +115,12 @@ if (-not (Test-Path $exePath)) {
   Info "vcpkg bootstrap 실행: $bootstrapPath"
   Push-Location $vcpkgRoot
   try {
-    if ($IsWindows) {
-      & $bootstrapPath
-    } else {
-      bash $bootstrapPath
+    Invoke-WithRetry -Description 'vcpkg bootstrap' -MaxAttempts 4 -InitialDelaySeconds 5 -Action {
+      if ($IsWindows) {
+        & $bootstrapPath
+      } else {
+        bash $bootstrapPath
+      }
     }
   } finally {
     Pop-Location
