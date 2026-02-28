@@ -1,6 +1,8 @@
 #include "server/core/net/rudp/rudp_engine.hpp"
+#include "server/core/runtime_metrics.hpp"
 
 #include <algorithm>
+#include <string_view>
 #include <utility>
 
 namespace server::core::net::rudp {
@@ -9,6 +11,29 @@ namespace {
 
 std::uint32_t now32(std::uint64_t now_unix_ms) {
     return static_cast<std::uint32_t>(now_unix_ms & 0xFFFFFFFFu);
+}
+
+server::core::runtime_metrics::RudpFallbackReason classify_fallback_reason(std::string_view reason) {
+    using server::core::runtime_metrics::RudpFallbackReason;
+    if (reason == "rudp_handshake_timeout") {
+        return RudpFallbackReason::kHandshakeTimeout;
+    }
+    if (reason == "rudp_idle_timeout") {
+        return RudpFallbackReason::kIdleTimeout;
+    }
+    if (reason == "rudp_inflight_limit") {
+        return RudpFallbackReason::kInflightLimit;
+    }
+    if (reason == "rudp_disabled") {
+        return RudpFallbackReason::kDisabled;
+    }
+    if (reason == "invalid_rudp_packet"
+        || reason == "connection_id_mismatch"
+        || reason == "rudp_not_established"
+        || reason == "peer_closed") {
+        return RudpFallbackReason::kProtocolError;
+    }
+    return RudpFallbackReason::kOther;
 }
 
 } // namespace
@@ -20,6 +45,7 @@ void RudpEngine::reset() {
     state_.reset();
     ack_window_.reset();
     retransmission_queue_.reset();
+    server::core::runtime_metrics::set_rudp_inflight_packets(0);
 }
 
 std::vector<std::uint8_t> RudpEngine::make_packet(PacketType type,
@@ -45,6 +71,7 @@ std::vector<std::uint8_t> RudpEngine::make_packet(PacketType type,
 void RudpEngine::set_fallback(ProcessResult& result, std::string reason) {
     state_.mark_fallback(reason);
     state_.lifecycle = LifecycleState::kDraining;
+    server::core::runtime_metrics::record_rudp_fallback(classify_fallback_reason(reason));
     result.fallback_required = true;
     result.fallback_reason = std::move(state_.fallback_reason);
 }
@@ -71,6 +98,7 @@ ProcessResult RudpEngine::process_datagram(std::span<const std::uint8_t> datagra
     result.consumed = true;
     auto decoded = decode_packet(datagram);
     if (!decoded.ok || decoded.header.version != 1) {
+        server::core::runtime_metrics::record_rudp_handshake_result(false);
         set_fallback(result, "invalid_rudp_packet");
         return result;
     }
@@ -81,6 +109,7 @@ ProcessResult RudpEngine::process_datagram(std::span<const std::uint8_t> datagra
     if (state_.connection_id != 0
         && decoded.header.connection_id != 0
         && state_.connection_id != decoded.header.connection_id) {
+        server::core::runtime_metrics::record_rudp_handshake_result(false);
         set_fallback(result, "connection_id_mismatch");
         return result;
     }
@@ -90,6 +119,7 @@ ProcessResult RudpEngine::process_datagram(std::span<const std::uint8_t> datagra
     }
 
     retransmission_queue_.mark_acked(decoded.header.ack_largest, decoded.header.ack_mask);
+    server::core::runtime_metrics::set_rudp_inflight_packets(retransmission_queue_.inflight_packets());
 
     switch (decoded.header.type) {
     case PacketType::kHello: {
@@ -97,12 +127,14 @@ ProcessResult RudpEngine::process_datagram(std::span<const std::uint8_t> datagra
         state_.lifecycle = LifecycleState::kEstablished;
         state_.last_send_unix_ms = now_unix_ms;
         result.handshake_established = new_established;
+        server::core::runtime_metrics::record_rudp_handshake_result(true);
         result.egress_datagrams.push_back(make_packet(PacketType::kHelloAck, 0, 0, 0, now_unix_ms, {}));
         return result;
     }
     case PacketType::kHelloAck:
         state_.lifecycle = LifecycleState::kEstablished;
         result.handshake_established = true;
+        server::core::runtime_metrics::record_rudp_handshake_result(true);
         return result;
     case PacketType::kClose:
         state_.lifecycle = LifecycleState::kClosed;
@@ -116,6 +148,7 @@ ProcessResult RudpEngine::process_datagram(std::span<const std::uint8_t> datagra
     }
 
     if (state_.lifecycle != LifecycleState::kEstablished) {
+        server::core::runtime_metrics::record_rudp_handshake_result(false);
         set_fallback(result, "rudp_not_established");
         return result;
     }
@@ -145,6 +178,7 @@ ProcessResult RudpEngine::process_datagram(std::span<const std::uint8_t> datagra
         const auto now_ts = now_unix_ms & 0xFFFFFFFFu;
         const auto sample = static_cast<std::uint32_t>((now_ts >= sent_ts) ? (now_ts - sent_ts) : 0);
         state_.rtt.update(sample, config_.rto_min_ms, config_.rto_max_ms);
+        server::core::runtime_metrics::record_rudp_rtt_ms(sample);
     }
 
     return result;
@@ -167,16 +201,19 @@ bool RudpEngine::queue_reliable_payload(std::span<const std::uint8_t> inner_fram
     }
 
     if (retransmission_queue_.inflight_packets() >= config_.max_inflight_packets) {
+        server::core::runtime_metrics::record_rudp_fallback(server::core::runtime_metrics::RudpFallbackReason::kInflightLimit);
         return false;
     }
 
     if (retransmission_queue_.inflight_bytes() + inner_frame.size() > config_.max_inflight_bytes) {
+        server::core::runtime_metrics::record_rudp_fallback(server::core::runtime_metrics::RudpFallbackReason::kInflightLimit);
         return false;
     }
 
     const auto packet_number = state_.next_packet_number++;
     auto frame = make_packet(PacketType::kData, 0, channel, packet_number, now_unix_ms, inner_frame);
     retransmission_queue_.push(packet_number, now_unix_ms, frame);
+    server::core::runtime_metrics::set_rudp_inflight_packets(retransmission_queue_.inflight_packets());
     state_.last_send_unix_ms = now_unix_ms;
     out_datagram = std::move(frame);
     return true;
@@ -205,6 +242,8 @@ ProcessResult RudpEngine::poll(std::uint64_t now_unix_ms) {
     }
 
     result.retransmit_count = due.size();
+    server::core::runtime_metrics::record_rudp_retransmit(result.retransmit_count);
+    server::core::runtime_metrics::set_rudp_inflight_packets(retransmission_queue_.inflight_packets());
     result.egress_datagrams.reserve(due.size());
     for (const auto& packet : due) {
         auto frame = packet.encoded_frame;

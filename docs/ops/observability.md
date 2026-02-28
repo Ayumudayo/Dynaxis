@@ -76,6 +76,13 @@ pwsh scripts/smoke_metrics.ps1
   - `core_runtime_http_header_oversize_total`, `core_runtime_http_body_oversize_total`, `core_runtime_http_bad_request_total` (counters)
   - `core_runtime_setting_reload_attempt_total`, `core_runtime_setting_reload_success_total`, `core_runtime_setting_reload_failure_total` (counters)
   - `core_runtime_setting_reload_latency_sum_ns` (counter), `core_runtime_setting_reload_latency_max_ns` (gauge)
+  - RUDP(기본 비활성, 활성 시 노출):
+    - `core_runtime_rudp_handshake_total{result="ok|fail"}` (counter)
+    - `core_runtime_rudp_retransmit_total` (counter)
+    - `core_runtime_rudp_inflight_packets` (gauge)
+    - `core_runtime_rudp_rtt_ms_bucket`, `core_runtime_rudp_rtt_ms_sum`, `core_runtime_rudp_rtt_ms_count` (histogram)
+    - `core_runtime_rudp_rtt_ms_max` (gauge)
+    - `core_runtime_rudp_fallback_total{reason="..."}` (counter)
 
 ### 서버 앱(server_app)
 - 세션: `chat_session_active` (gauge), `chat_session_started_total`, `chat_session_stopped_total`

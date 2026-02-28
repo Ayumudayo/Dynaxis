@@ -11,6 +11,33 @@ namespace server::core::runtime_metrics {
 
 /** @brief dispatch processing_place 계열 메트릭 배열 길이입니다. */
 inline constexpr std::size_t kDispatchProcessingPlaceCount = 3;
+/** @brief RUDP fallback reason 라벨 개수입니다. */
+inline constexpr std::size_t kRudpFallbackReasonCount = 6;
+
+/** @brief RUDP RTT 히스토그램 버킷 상한(ms)입니다. */
+inline constexpr std::array<std::uint64_t, 11> kRudpRttBucketUpperBoundsMs = {
+    1,
+    2,
+    5,
+    10,
+    20,
+    50,
+    100,
+    200,
+    500,
+    1000,
+    2000,
+};
+
+/** @brief RUDP fallback 원인 분류입니다. */
+enum class RudpFallbackReason : std::uint8_t {
+    kHandshakeTimeout = 0,
+    kIdleTimeout,
+    kProtocolError,
+    kInflightLimit,
+    kDisabled,
+    kOther,
+};
 
 /**
  * @brief 디스패치 지연시간 히스토그램 버킷 상한(ns) 목록입니다.
@@ -109,6 +136,15 @@ struct Snapshot {
     std::uint64_t runtime_setting_reload_failure_total{0};
     std::uint64_t runtime_setting_reload_latency_sum_ns{0};
     std::uint64_t runtime_setting_reload_latency_max_ns{0};
+    std::uint64_t rudp_handshake_ok_total{0};
+    std::uint64_t rudp_handshake_fail_total{0};
+    std::uint64_t rudp_retransmit_total{0};
+    std::uint64_t rudp_inflight_packets{0};
+    std::uint64_t rudp_rtt_ms_sum{0};
+    std::uint64_t rudp_rtt_ms_count{0};
+    std::uint64_t rudp_rtt_ms_max{0};
+    std::array<std::uint64_t, kRudpRttBucketUpperBoundsMs.size()> rudp_rtt_ms_bucket_counts{};
+    std::array<std::uint64_t, kRudpFallbackReasonCount> rudp_fallback_total{};
     std::vector<std::pair<std::uint16_t, std::uint64_t>> opcode_counts;
 };
 
@@ -255,6 +291,17 @@ void record_runtime_setting_reload_success();
 void record_runtime_setting_reload_failure();
 /** @brief 런타임 설정 리로드 지연을 기록합니다. */
 void record_runtime_setting_reload_latency(std::chrono::nanoseconds elapsed);
+
+/** @brief RUDP handshake 결과를 기록합니다. */
+void record_rudp_handshake_result(bool ok);
+/** @brief RUDP 재전송 건수를 누적합니다. */
+void record_rudp_retransmit(std::uint64_t count = 1);
+/** @brief 현재 RUDP inflight 패킷 수를 기록합니다. */
+void set_rudp_inflight_packets(std::size_t packets);
+/** @brief RUDP RTT 샘플(ms)을 기록합니다. */
+void record_rudp_rtt_ms(std::uint32_t rtt_ms);
+/** @brief RUDP fallback 원인을 기록합니다. */
+void record_rudp_fallback(RudpFallbackReason reason);
 
 /**
  * @brief 현재 런타임 카운터 스냅샷을 반환합니다.

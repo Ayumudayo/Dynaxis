@@ -2,6 +2,11 @@
 
 상태: `planned` (아직 런타임 기본 경로에 활성화되지 않음)
 
+진행 상태 메모:
+
+- Phase 1/2 범위로 `core/include/server/core/net/rudp/*`, `core/src/net/rudp/*`에 엔진/ACK/재전송 기본 구현이 추가되었다.
+- 기본 경로는 여전히 OFF이며, gateway 통합 canary는 후속 phase에서 단계적으로 진행한다.
+
 ## 1. 목표
 
 - 기존 TCP 기본 경로와 기존 UDP bind control plane을 유지한다.

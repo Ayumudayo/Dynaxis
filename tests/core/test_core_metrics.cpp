@@ -210,6 +210,28 @@ TEST(RuntimeMetricsTest, ExtendedRuntimeCountersAreSnapshotted) {
     EXPECT_EQ(after.runtime_setting_reload_attempt_total, before.runtime_setting_reload_attempt_total + 1);
 }
 
+TEST(RuntimeMetricsTest, RudpCountersAreSnapshotted) {
+    const auto before = server::core::runtime_metrics::snapshot();
+
+    server::core::runtime_metrics::record_rudp_handshake_result(true);
+    server::core::runtime_metrics::record_rudp_handshake_result(false);
+    server::core::runtime_metrics::record_rudp_retransmit(2);
+    server::core::runtime_metrics::set_rudp_inflight_packets(7);
+    server::core::runtime_metrics::record_rudp_rtt_ms(42);
+    server::core::runtime_metrics::record_rudp_fallback(server::core::runtime_metrics::RudpFallbackReason::kHandshakeTimeout);
+
+    const auto after = server::core::runtime_metrics::snapshot();
+    EXPECT_EQ(after.rudp_handshake_ok_total, before.rudp_handshake_ok_total + 1);
+    EXPECT_EQ(after.rudp_handshake_fail_total, before.rudp_handshake_fail_total + 1);
+    EXPECT_EQ(after.rudp_retransmit_total, before.rudp_retransmit_total + 2);
+    EXPECT_EQ(after.rudp_inflight_packets, 7u);
+    EXPECT_EQ(after.rudp_rtt_ms_count, before.rudp_rtt_ms_count + 1);
+    EXPECT_GE(after.rudp_rtt_ms_sum, before.rudp_rtt_ms_sum + 42);
+    EXPECT_EQ(
+        after.rudp_fallback_total[static_cast<std::size_t>(server::core::runtime_metrics::RudpFallbackReason::kHandshakeTimeout)],
+        before.rudp_fallback_total[static_cast<std::size_t>(server::core::runtime_metrics::RudpFallbackReason::kHandshakeTimeout)] + 1);
+}
+
 TEST(MetricsTest, RuntimeCoreMetricsIncludeExtendedSignals) {
     server::core::runtime_metrics::record_exception_recoverable();
     server::core::runtime_metrics::record_log_async_queue_drop();
@@ -227,6 +249,26 @@ TEST(MetricsTest, RuntimeCoreMetricsIncludeExtendedSignals) {
     EXPECT_NE(text.find("core_runtime_log_async_flush_total"), std::string::npos);
     EXPECT_NE(text.find("core_runtime_http_auth_reject_total"), std::string::npos);
     EXPECT_NE(text.find("core_runtime_setting_reload_success_total"), std::string::npos);
+}
+
+TEST(MetricsTest, RuntimeCoreMetricsIncludeRudpSignals) {
+    server::core::runtime_metrics::record_rudp_handshake_result(true);
+    server::core::runtime_metrics::record_rudp_handshake_result(false);
+    server::core::runtime_metrics::record_rudp_retransmit();
+    server::core::runtime_metrics::set_rudp_inflight_packets(3);
+    server::core::runtime_metrics::record_rudp_rtt_ms(10);
+    server::core::runtime_metrics::record_rudp_fallback(server::core::runtime_metrics::RudpFallbackReason::kProtocolError);
+
+    std::ostringstream out;
+    append_runtime_core_metrics(out);
+    const std::string text = out.str();
+
+    EXPECT_NE(text.find("core_runtime_rudp_handshake_total{result=\"ok\"}"), std::string::npos);
+    EXPECT_NE(text.find("core_runtime_rudp_handshake_total{result=\"fail\"}"), std::string::npos);
+    EXPECT_NE(text.find("core_runtime_rudp_retransmit_total"), std::string::npos);
+    EXPECT_NE(text.find("core_runtime_rudp_inflight_packets"), std::string::npos);
+    EXPECT_NE(text.find("core_runtime_rudp_rtt_ms_bucket"), std::string::npos);
+    EXPECT_NE(text.find("core_runtime_rudp_fallback_total{reason=\"protocol_error\"}"), std::string::npos);
 }
 
 TEST(MetricsHttpServerTest, BuiltInRoutesRejectNonGetMethods) {

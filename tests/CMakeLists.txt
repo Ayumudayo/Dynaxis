@@ -85,6 +85,7 @@ if (BUILD_GTEST_TESTS)
         core/test_trace_context.cpp
         core/test_udp_bind_abuse_guard.cpp
         core/test_udp_sequenced_metrics.cpp
+        core/test_rudp_engine.cpp
         core/test_security_compression.cpp
         core/test_admin_command_auth.cpp
     )
