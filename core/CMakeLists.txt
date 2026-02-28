@@ -6,6 +6,9 @@ add_library(server_core
     src/net/hive.cpp
     src/net/connection.cpp
     src/net/listener.cpp
+    src/net/rudp/ack_window.cpp
+    src/net/rudp/retransmission_queue.cpp
+    src/net/rudp/rudp_engine.cpp
     src/util/log.cpp
     src/trace/context.cpp
     src/metrics/metrics.cpp
@@ -24,6 +27,12 @@ add_library(server_core
     src/compression/compressor.cpp
 )
 add_library(server_core::server_core ALIAS server_core)
+
+if (KNIGHTS_ENABLE_CORE_RUDP)
+    target_compile_definitions(server_core PUBLIC KNIGHTS_ENABLE_CORE_RUDP=1)
+else()
+    target_compile_definitions(server_core PUBLIC KNIGHTS_ENABLE_CORE_RUDP=0)
+endif()
 
 # -----------------------------------------------------------------------------
 # Build metadata (git hash/describe + build time)
