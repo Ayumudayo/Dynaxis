@@ -44,7 +44,6 @@ jobs:
           path: |
             .cache/vcpkg/archives
             .cache/vcpkg/downloads
-            vcpkg_installed
             build-windows/vcpkg_installed
           key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'scripts/setup_vcpkg.ps1', 'cmake/knights_vcpkg_toolchain.cmake') }}
           restore-keys: |
@@ -139,6 +138,5 @@ jobs:
           path: |
             .cache/vcpkg/archives
             .cache/vcpkg/downloads
-            vcpkg_installed
             build-windows/vcpkg_installed
           key: ${{ steps.vcpkg_cache_restore.outputs.cache-primary-key }}
