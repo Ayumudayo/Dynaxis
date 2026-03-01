@@ -28,12 +28,6 @@ add_library(server_core
 )
 add_library(server_core::server_core ALIAS server_core)
 
-if (KNIGHTS_ENABLE_CORE_RUDP)
-    target_compile_definitions(server_core PUBLIC KNIGHTS_ENABLE_CORE_RUDP=1)
-else()
-    target_compile_definitions(server_core PUBLIC KNIGHTS_ENABLE_CORE_RUDP=0)
-endif()
-
 # -----------------------------------------------------------------------------
 # Build metadata (git hash/describe + build time)
 #

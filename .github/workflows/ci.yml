@@ -337,21 +337,6 @@ jobs:
         run: |
           ctest --preset windows-test --output-on-failure
 
-      - name: Configure RUDP ON (Debug)
-        shell: pwsh
-        run: |
-          cmake --preset windows -DVCPKG_MANIFEST_INSTALL=OFF -DKNIGHTS_ENABLE_CORE_RUDP=ON
-
-      - name: Build RUDP ON Targets (Debug)
-        shell: pwsh
-        run: |
-          cmake --build --preset windows-debug --target core_general_tests server_general_tests gateway_app --parallel
-
-      - name: Run RUDP ON Scenario Tests
-        shell: pwsh
-        run: |
-          ctest --preset windows-test -R "Rudp.*Test|MetricsTest.RuntimeCoreMetricsIncludeRudpSignals|RuntimeMetricsTest.RudpCountersAreSnapshotted|OpcodePolicyTest.UdpBindOpcodePoliciesAreExpected|UdpBindAbuseGuardTest|UdpSequencedMetricsTest" --output-on-failure
-
       - name: Mark vcpkg cache save start (Windows)
         if: success() && steps.vcpkg_cache_restore.outputs.cache-hit != 'true'
         shell: pwsh

@@ -110,11 +110,7 @@ constexpr bool kGatewayUdpIngressBuildEnabled = true;
 constexpr bool kGatewayUdpIngressBuildEnabled = false;
 #endif
 
-#if defined(KNIGHTS_ENABLE_CORE_RUDP) && (KNIGHTS_ENABLE_CORE_RUDP == 1)
 constexpr bool kCoreRudpBuildEnabled = true;
-#else
-constexpr bool kCoreRudpBuildEnabled = false;
-#endif
 
 std::uint64_t unix_time_ms() {
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1252,8 +1248,7 @@ std::optional<std::vector<std::uint8_t>> GatewayApp::make_udp_bind_ticket_frame(
         it->second.udp_endpoint = {};
         it->second.udp_sequenced_metrics.reset();
         it->second.rudp_fallback_to_tcp = false;
-        it->second.rudp_selected = kCoreRudpBuildEnabled
-            && rudp_rollout_policy_.session_selected(session_id, nonce)
+        it->second.rudp_selected = rudp_rollout_policy_.session_selected(session_id, nonce)
             && !rudp_rollout_policy_.opcode_allowlist.empty();
         if (it->second.rudp_selected) {
             it->second.rudp_engine = std::make_unique<server::core::net::rudp::RudpEngine>(rudp_config_);
@@ -1697,13 +1692,6 @@ void GatewayApp::configure_gateway() {
     );
     if (rudp_config_.rto_max_ms < rudp_config_.rto_min_ms) {
         rudp_config_.rto_max_ms = rudp_config_.rto_min_ms;
-    }
-
-    if (!kCoreRudpBuildEnabled && rudp_rollout_policy_.enabled) {
-        server::core::log::warn("GatewayApp core RUDP build flag is OFF; forcing GATEWAY_RUDP_ENABLE=0");
-        rudp_rollout_policy_.enabled = false;
-        rudp_rollout_policy_.canary_percent = 0;
-        rudp_rollout_policy_.opcode_allowlist.clear();
     }
 
     if (!rudp_rollout_policy_.enabled) {

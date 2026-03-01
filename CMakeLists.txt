@@ -7,7 +7,6 @@ option(SERVER_USE_HEADER_ONLY_BOOST_SYSTEM "Use header-only boost::system (no li
 option(KNIGHTS_ENABLE_SANITIZERS "Enable sanitizers (ASan+UBSan)" OFF)
 option(KNIGHTS_ENABLE_IPO "Enable interprocedural optimization (IPO/LTO)" OFF)
 option(KNIGHTS_ENABLE_GATEWAY_UDP_INGRESS "Enable gateway UDP ingress feature path" ON)
-option(KNIGHTS_ENABLE_CORE_RUDP "Enable core RUDP engine path" OFF)
 option(BUILD_SERVER_STACK "Build server libraries and server_app" ON)
 option(BUILD_GATEWAY_APP "Build gateway_app" ON)
 
