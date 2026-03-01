@@ -142,6 +142,87 @@
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "KNIGHTS_ENABLE_SANITIZERS": "ON"
       }
+    },
+    {
+      "name": "windows-conan-base",
+      "hidden": true,
+      "displayName": "Windows Conan Base",
+      "description": "Base configuration for Windows using VS2022 and Conan2 toolchain",
+      "generator": "Visual Studio 17 2022",
+      "binaryDir": "${sourceDir}/build-windows-conan",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "toolchainFile": "${sourceDir}/build-windows-conan/conan/build/generators/conan_toolchain.cmake",
+      "cacheVariables": {
+        "CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO": "Release",
+        "CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL": "Release"
+      }
+    },
+    {
+      "name": "windows-conan",
+      "inherits": "windows-conan-base",
+      "displayName": "Windows Conan2 (VS2022)",
+      "description": "Windows configuration using Conan2-generated toolchain"
+    },
+    {
+      "name": "windows-client-conan",
+      "inherits": "windows-conan-base",
+      "displayName": "Windows Client Conan2 (VS2022)",
+      "description": "Client-only configuration using Conan2-generated toolchain",
+      "binaryDir": "${sourceDir}/build-windows-client-conan",
+      "toolchainFile": "${sourceDir}/build-windows-client-conan/conan/build/generators/conan_toolchain.cmake",
+      "cacheVariables": {
+        "CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO": "Release",
+        "CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL": "Release",
+        "BUILD_SERVER_STACK": "OFF",
+        "BUILD_GATEWAY_APP": "OFF",
+        "BUILD_SERVER_TESTS": "OFF",
+        "BUILD_WRITE_BEHIND_TOOLS": "OFF",
+        "BUILD_ADMIN_APP": "OFF",
+        "BUILD_MIGRATIONS_RUNNER": "OFF"
+      }
+    },
+    {
+      "name": "linux-conan-base",
+      "hidden": true,
+      "displayName": "Linux Conan Base",
+      "description": "Base configuration for Linux using Ninja and Conan2 toolchain",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-linux-conan",
+      "condition": {
+        "type": "notEquals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "toolchainFile": "${sourceDir}/build-linux-conan/conan/build/Debug/generators/conan_toolchain.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO": "Release",
+        "CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL": "Release"
+      }
+    },
+    {
+      "name": "linux-conan",
+      "inherits": "linux-conan-base",
+      "displayName": "Linux Conan2 (Ninja)",
+      "description": "Linux Debug configuration using Conan2-generated toolchain"
+    },
+    {
+      "name": "linux-conan-release",
+      "inherits": "linux-conan-base",
+      "displayName": "Linux Conan2 Release (Ninja)",
+      "description": "Linux Release configuration using Conan2-generated toolchain",
+      "toolchainFile": "${sourceDir}/build-linux-conan/conan/build/Release/generators/conan_toolchain.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO": "Release",
+        "CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL": "Release"
+      }
     }
   ],
   "buildPresets": [
@@ -198,6 +279,42 @@
       "configurePreset": "linux-asan",
       "configuration": "Debug",
       "displayName": "Linux ASan/UBSan"
+    },
+    {
+      "name": "windows-conan-debug",
+      "configurePreset": "windows-conan",
+      "configuration": "Debug",
+      "displayName": "Windows Conan2 Debug"
+    },
+    {
+      "name": "windows-conan-relwithdebinfo",
+      "configurePreset": "windows-conan",
+      "configuration": "RelWithDebInfo",
+      "displayName": "Windows Conan2 RelWithDebInfo"
+    },
+    {
+      "name": "windows-conan-release",
+      "configurePreset": "windows-conan",
+      "configuration": "Release",
+      "displayName": "Windows Conan2 Release"
+    },
+    {
+      "name": "windows-client-conan-release",
+      "configurePreset": "windows-client-conan",
+      "configuration": "Release",
+      "displayName": "Windows Client Conan2 Release"
+    },
+    {
+      "name": "linux-conan-debug",
+      "configurePreset": "linux-conan",
+      "configuration": "Debug",
+      "displayName": "Linux Conan2 Debug"
+    },
+    {
+      "name": "linux-conan-release",
+      "configurePreset": "linux-conan-release",
+      "configuration": "Release",
+      "displayName": "Linux Conan2 Release"
     }
   ],
   "testPresets": [
@@ -212,6 +329,21 @@
     {
       "name": "linux-test",
       "configurePreset": "linux",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-conan-test",
+      "configurePreset": "windows-conan",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-conan-test",
+      "configurePreset": "linux-conan",
       "output": {
         "outputOnFailure": true
       }

@@ -1,6 +1,7 @@
 <#
   빌드/구성 스크립트 (PowerShell)
   - Windows/MSVC default. Dependencies come from vcpkg manifest features (see vcpkg.json).
+  - Conan2 flow is optional via -UseConan and is intended for migration/PoC.
   - Linux runtime is Docker (system packages + source builds in Dockerfile.base). This script does not auto-run vcpkg on Linux.
 #>
 [CmdletBinding()]
@@ -17,6 +18,7 @@ param(
   [string]$Run = 'none',
   [int]$Port = 5000,
   [switch]$UseVcpkg,
+  [switch]$UseConan,
   [string]$VcpkgTriplet = "",
   [switch]$ReleasePackage,
   [string]$ReleaseOutput = "artifacts",
@@ -94,13 +96,24 @@ if ($ClientOnly) {
 if (-not $BuildDir -or $BuildDir -eq '') {
   # CMakePresets.json의 기본 binaryDir과 일치시키는 것을 전제로 한다.
   if ($onWindows) {
-    if ($ClientOnly) { $BuildDir = 'build-windows-client' }
-    else { $BuildDir = 'build-windows' }
+    if ($ClientOnly) {
+      if ($UseConan) { $BuildDir = 'build-windows-client-conan' }
+      else { $BuildDir = 'build-windows-client' }
+    }
+    else {
+      if ($UseConan) { $BuildDir = 'build-windows-conan' }
+      else { $BuildDir = 'build-windows' }
+    }
   } else {
-    $BuildDir = 'build-linux'
+    if ($UseConan) { $BuildDir = 'build-linux-conan' }
+    else { $BuildDir = 'build-linux' }
   }
 }
 Info "BuildDir=$BuildDir"
+
+if ($UseConan -and $UseVcpkg) {
+  Fail "UseConan과 UseVcpkg를 동시에 사용할 수 없습니다."
+}
 
 if ($Clean) {
   if (Test-Path $BuildDir) { Info "빌드 폴더 정리: $BuildDir"; Remove-Item -Recurse -Force $BuildDir }
@@ -108,76 +121,197 @@ if ($Clean) {
 
 # 제너레이터 설정 및 프리셋 선택
 if (-not $Generator -or $Generator -eq '') {
-  if ($onWindows) { 
-      if ($ClientOnly) {
-          $Preset = "windows-client"
-          $BuildPreset = "windows-client-release"
-      } else {
-          $Preset = "windows"
-          $BuildPreset = "windows-debug"
-          if ($Config -eq "RelWithDebInfo") { $BuildPreset = "windows-release" }
-      }
-  } else { 
-      $Preset = "linux"
-      $BuildPreset = "linux-debug"
-      if ($Config -eq "RelWithDebInfo") { $BuildPreset = "linux-release" }
+  if ($UseConan) {
+    if ($onWindows) {
+      if ($ClientOnly) { $Preset = 'windows-client-conan' }
+      else { $Preset = 'windows-conan' }
+    } else {
+      if ($Config -eq 'Debug') { $Preset = 'linux-conan' }
+      else { $Preset = 'linux-conan-release' }
+    }
+  } else {
+    if ($onWindows) {
+        if ($ClientOnly) {
+            $Preset = "windows-client"
+            $BuildPreset = "windows-client-release"
+        } else {
+            $Preset = "windows"
+            $BuildPreset = "windows-debug"
+            if ($Config -eq "RelWithDebInfo") { $BuildPreset = "windows-release" }
+        }
+    } else {
+        $Preset = "linux"
+        $BuildPreset = "linux-debug"
+        if ($Config -eq "RelWithDebInfo") { $BuildPreset = "linux-release" }
+    }
   }
 }
 
-$cmakeArgs = @('--preset', $Preset)
+$cmakeArgs = @()
+$useVsBuildLayout = $false
 
-# vcpkg toolchain (local checkout)
-$vcpkgJsonExists = Test-Path 'vcpkg.json'
-if (-not $VcpkgTriplet -or $VcpkgTriplet -eq '') {
-  if ($onWindows) { $VcpkgTriplet = 'x64-windows' } else { $VcpkgTriplet = 'x64-linux' }
-}
-$shouldUseVcpkg = $UseVcpkg -or ($onWindows -and $vcpkgJsonExists)
-if ($UseVcpkg -and -not $onWindows) {
-  Warn "UseVcpkg requested on non-Windows; Linux presets are configured for system dependencies (no vcpkg toolchain)."
+if ($UseConan) {
+  $setupConanScript = Join-Path $PSScriptRoot 'setup_conan.ps1'
+  if (-not (Test-Path $setupConanScript)) { Fail "setup_conan.ps1 스크립트를 찾을 수 없습니다: $setupConanScript" }
+
+  $conanFeature = 'windows-dev'
+  if ($ClientOnly) { $conanFeature = 'windows-client' }
+  $conanLockfile = 'conan.lock'
+  if ($conanFeature -eq 'windows-client') { $conanLockfile = 'conan-client.lock' }
+
+  $conanOutputDir = & $setupConanScript -Config $Config -Feature $conanFeature -BuildDir $BuildDir -LockfilePath $conanLockfile
+  if (-not $conanOutputDir) { Fail "Conan output 경로를 확인할 수 없습니다." }
+
+  $toolchainCandidates = @(
+    (Join-Path $conanOutputDir 'conan_toolchain.cmake'),
+    (Join-Path $conanOutputDir 'build\generators\conan_toolchain.cmake'),
+    (Join-Path $conanOutputDir 'build\Debug\generators\conan_toolchain.cmake'),
+    (Join-Path $conanOutputDir 'build\Release\generators\conan_toolchain.cmake')
+  )
+  $toolchainFile = $null
+  foreach ($candidate in $toolchainCandidates) {
+    if (Test-Path $candidate) {
+      $toolchainFile = $candidate
+      break
+    }
+  }
+  if (-not $toolchainFile) {
+    Fail "Conan toolchain 파일을 찾지 못했습니다. 확인한 경로: $($toolchainCandidates -join ', ')"
+  }
+
+  $useConanPreset = ($Preset -and $Preset -ne '')
+  if ($useConanPreset) {
+    $useVsBuildLayout = $onWindows
+    $cmakeArgs = @('--preset', $Preset)
+    if ($onWindows) {
+      # Conan install은 단일 build_type 바이너리 그래프를 생성하므로,
+      # Multi-config(VS)에서도 해당 구성만 생성 대상으로 제한한다.
+      $cmakeArgs += "-DCMAKE_CONFIGURATION_TYPES=$Config"
+    }
+    Info "CMake 구성 중... (Conan preset: $Preset)"
+  } else {
+    if ($onWindows) { $Generator = 'Visual Studio 17 2022' }
+    else { $Generator = 'Ninja' }
+    $useVsBuildLayout = ($onWindows -and $Generator -like 'Visual Studio*')
+
+    $cmakeArgs = @('-S', '.', '-B', $BuildDir, '-G', $Generator, "-DCMAKE_TOOLCHAIN_FILE=$toolchainFile")
+    if ($onWindows) {
+      if ($Generator -like 'Visual Studio*') {
+        $cmakeArgs += @('-A', 'x64')
+      } else {
+        $cmakeArgs += "-DCMAKE_BUILD_TYPE=$Config"
+      }
+    } else {
+      $cmakeArgs += "-DCMAKE_BUILD_TYPE=$Config"
+    }
+
+    $cmakeArgs += @(
+      '-DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release',
+      '-DCMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL=Release'
+    )
+
+    if ($ClientOnly) {
+      $cmakeArgs += @(
+        '-DBUILD_SERVER_STACK=OFF',
+        '-DBUILD_GATEWAY_APP=OFF',
+        '-DBUILD_SERVER_TESTS=OFF',
+        '-DBUILD_WRITE_BEHIND_TOOLS=OFF',
+        '-DBUILD_ADMIN_APP=OFF',
+        '-DBUILD_MIGRATIONS_RUNNER=OFF'
+      )
+    }
+
+    Info "CMake 구성 중... (Conan + Generator: $Generator)"
+  }
+} else {
+  $cmakeArgs = @('--preset', $Preset)
+
+  # vcpkg toolchain (local checkout)
+  $vcpkgJsonExists = Test-Path 'vcpkg.json'
+  if (-not $VcpkgTriplet -or $VcpkgTriplet -eq '') {
+    if ($onWindows) { $VcpkgTriplet = 'x64-windows' } else { $VcpkgTriplet = 'x64-linux' }
+  }
+  $shouldUseVcpkg = $UseVcpkg -or ($onWindows -and $vcpkgJsonExists)
+  if ($UseVcpkg -and -not $onWindows) {
+    Warn "UseVcpkg requested on non-Windows; Linux presets are configured for system dependencies (no vcpkg toolchain)."
+  }
+
+  if ($shouldUseVcpkg) {
+    $setupScript = Join-Path $PSScriptRoot 'setup_vcpkg.ps1'
+    if (-not (Test-Path $setupScript)) { Fail "setup_vcpkg.ps1 스크립트를 찾을 수 없습니다: $setupScript" }
+    # CMake preset(toolchain) will run manifest install; here we only ensure vcpkg is cloned/bootstrapped.
+    $vcpkgRoot = & $setupScript -Triplet $VcpkgTriplet -SkipInstall
+    if (-not $vcpkgRoot) { Fail "vcpkg root 경로를 확인할 수 없습니다." }
+    Info "vcpkg root: $vcpkgRoot"
+    # Presets handle toolchain file, but we might need to ensure vcpkg is bootstrapped
+  }
+
+  Info "CMake 구성 중... (Preset: $Preset)"
 }
 
-if ($shouldUseVcpkg) {
-  $setupScript = Join-Path $PSScriptRoot 'setup_vcpkg.ps1'
-  if (-not (Test-Path $setupScript)) { Fail "setup_vcpkg.ps1 스크립트를 찾을 수 없습니다: $setupScript" }
-  # CMake preset(toolchain) will run manifest install; here we only ensure vcpkg is cloned/bootstrapped.
-  $vcpkgRoot = & $setupScript -Triplet $VcpkgTriplet -SkipInstall
-  if (-not $vcpkgRoot) { Fail "vcpkg root 경로를 확인할 수 없습니다." }
-  Info "vcpkg root: $vcpkgRoot"
-  # Presets handle toolchain file, but we might need to ensure vcpkg is bootstrapped
-}
-
-Info "CMake 구성 중... (Preset: $Preset)"
 & cmake @cmakeArgs
 if ($LASTEXITCODE -ne 0) { Fail "CMake 구성 실패" }
 
-Info "빌드 중... (Preset: $BuildPreset)"
+if ($UseConan) {
+  Info "빌드 중... (Directory: $BuildDir)"
+} else {
+  Info "빌드 중... (Preset: $BuildPreset)"
+}
 
 $buildArgs = @()
-if ($Target -and $Target -ne '') {
-  # Visual Studio generator는 타깃별 .vcxproj가 서브 디렉터리에 생성될 수 있어
-  # `cmake --build --preset ... --target <name>`가 실패할 수 있다.
-  # (예: build-windows/gateway/gateway_app.vcxproj)
-  # 이 경우 해당 .vcxproj가 있는 디렉터리를 빌드 디렉터리로 사용한다.
-  if ($onWindows) {
-    $resolvedBuildDir = $BuildDir
-    try { $resolvedBuildDir = (Resolve-Path $BuildDir).Path } catch {}
-    $proj = $null
-    try {
-      $proj = Get-ChildItem -Path $resolvedBuildDir -Recurse -File -Filter "$Target.vcxproj" -ErrorAction SilentlyContinue |
-              Sort-Object FullName |
-              Select-Object -First 1
-    } catch {}
+if ($UseConan) {
+  if ($Target -and $Target -ne '') {
+    if ($useVsBuildLayout) {
+      $resolvedBuildDir = $BuildDir
+      try { $resolvedBuildDir = (Resolve-Path $BuildDir).Path } catch {}
+      $proj = $null
+      try {
+        $proj = Get-ChildItem -Path $resolvedBuildDir -Recurse -File -Filter "$Target.vcxproj" -ErrorAction SilentlyContinue |
+                Sort-Object FullName |
+                Select-Object -First 1
+      } catch {}
 
-    if ($proj) {
-      $buildArgs = @('--build', $proj.DirectoryName, '--config', $Config, '--target', $Target)
+      if ($proj) {
+        $buildArgs = @('--build', $proj.DirectoryName, '--config', $Config, '--target', $Target)
+      } else {
+        $buildArgs = @('--build', $BuildDir, '--config', $Config, '--target', $Target)
+      }
+    } else {
+      $buildArgs = @('--build', $BuildDir, '--target', $Target)
+    }
+  } else {
+    $buildArgs = @('--build', $BuildDir)
+    if ($useVsBuildLayout) {
+      $buildArgs += @('--config', $Config)
+    }
+  }
+} else {
+  if ($Target -and $Target -ne '') {
+    # Visual Studio generator는 타깃별 .vcxproj가 서브 디렉터리에 생성될 수 있어
+    # `cmake --build --preset ... --target <name>`가 실패할 수 있다.
+    # (예: build-windows/gateway/gateway_app.vcxproj)
+    # 이 경우 해당 .vcxproj가 있는 디렉터리를 빌드 디렉터리로 사용한다.
+    if ($onWindows) {
+      $resolvedBuildDir = $BuildDir
+      try { $resolvedBuildDir = (Resolve-Path $BuildDir).Path } catch {}
+      $proj = $null
+      try {
+        $proj = Get-ChildItem -Path $resolvedBuildDir -Recurse -File -Filter "$Target.vcxproj" -ErrorAction SilentlyContinue |
+                Sort-Object FullName |
+                Select-Object -First 1
+      } catch {}
+
+      if ($proj) {
+        $buildArgs = @('--build', $proj.DirectoryName, '--config', $Config, '--target', $Target)
+      } else {
+        $buildArgs = @('--build', '--preset', $BuildPreset, '--target', $Target)
+      }
     } else {
       $buildArgs = @('--build', '--preset', $BuildPreset, '--target', $Target)
     }
   } else {
-    $buildArgs = @('--build', '--preset', $BuildPreset, '--target', $Target)
+    $buildArgs = @('--build', '--preset', $BuildPreset)
   }
-} else {
-  $buildArgs = @('--build', '--preset', $BuildPreset)
 }
 
 if ($MaxJobs -gt 0) {
