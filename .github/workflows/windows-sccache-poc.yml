@@ -1,0 +1,144 @@
+name: Windows SCCache PoC
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Build target for PoC
+        required: false
+        default: core_general_tests
+      double_build:
+        description: Run clean-first second build for cache-hit check (true/false)
+        required: false
+        default: "true"
+
+permissions:
+  contents: read
+
+env:
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  windows-sccache-poc:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      VCPKG_FEATURE_FLAGS: manifests,binarycaching
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.cache/vcpkg/archives,readwrite
+      VCPKG_DOWNLOADS: ${{ github.workspace }}/.cache/vcpkg/downloads
+      VCPKG_INSTALLED_DIR: ${{ github.workspace }}/build-windows/vcpkg_installed
+      SCCACHE_DIR: ${{ github.workspace }}/.cache/sccache
+      SCCACHE_CACHE_SIZE: 10G
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Restore vcpkg artifacts cache (Windows)
+        id: vcpkg_cache_restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .cache/vcpkg/archives
+            .cache/vcpkg/downloads
+            vcpkg_installed
+            build-windows/vcpkg_installed
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'scripts/setup_vcpkg.ps1', 'cmake/knights_vcpkg_toolchain.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json') }}-
+            ${{ runner.os }}-vcpkg-
+
+      - name: Restore sccache artifacts cache (Windows)
+        id: sccache_restore
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/sccache
+          key: ${{ runner.os }}-sccache-${{ github.ref_name }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'vcpkg.json', 'cmake/knights_vcpkg_toolchain.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-sccache-${{ github.ref_name }}-
+            ${{ runner.os }}-sccache-
+
+      - name: Ensure cache directories (Windows)
+        shell: pwsh
+        run: |
+          $buildInstalled = "${{ github.workspace }}/build-windows/vcpkg_installed"
+          $rootInstalled = "${{ github.workspace }}/vcpkg_installed"
+          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/vcpkg/archives" | Out-Null
+          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/vcpkg/downloads" | Out-Null
+          New-Item -ItemType Directory -Force -Path $buildInstalled | Out-Null
+          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/sccache" | Out-Null
+          if (-not (Test-Path $rootInstalled)) {
+            New-Item -ItemType Junction -Path $rootInstalled -Target $buildInstalled | Out-Null
+          }
+
+      - name: Install sccache
+        shell: pwsh
+        run: |
+          choco install sccache -y --no-progress
+
+      - name: Enable MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Select PoC parameters
+        shell: pwsh
+        run: |
+          $target = '${{ github.event.inputs.target }}'
+          if ([string]::IsNullOrWhiteSpace($target)) { $target = 'core_general_tests' }
+          "POC_TARGET=$target" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $double = '${{ github.event.inputs.double_build }}'
+          if ([string]::IsNullOrWhiteSpace($double)) { $double = 'true' }
+          "POC_DOUBLE_BUILD=$double" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '### sccache PoC parameters'
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- target: {0}" -f $target)
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- double_build: {0}" -f $double)
+
+      - name: Configure with sccache (Ninja, Debug)
+        shell: pwsh
+        run: |
+          cmake --preset windows-ninja -DVCPKG_MANIFEST_INSTALL=OFF -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Build pass #1
+        shell: pwsh
+        run: |
+          sccache --stop-server | Out-Null
+          sccache --start-server
+          sccache --zero-stats
+          $first = Measure-Command { cmake --build --preset windows-ninja-debug --target $env:POC_TARGET --parallel }
+          $firstSec = [Math]::Round($first.TotalSeconds, 2)
+          "POC_FIRST_BUILD_SEC=$firstSec" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- build_pass_1_sec: {0}" -f $firstSec)
+
+      - name: Build pass #2 (clean-first)
+        if: env.POC_DOUBLE_BUILD == 'true'
+        shell: pwsh
+        run: |
+          $second = Measure-Command { cmake --build --preset windows-ninja-debug --target $env:POC_TARGET --clean-first --parallel }
+          $secondSec = [Math]::Round($second.TotalSeconds, 2)
+          "POC_SECOND_BUILD_SEC=$secondSec" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- build_pass_2_sec: {0}" -f $secondSec)
+
+      - name: Show sccache stats
+        shell: pwsh
+        run: |
+          sccache --show-stats
+
+      - name: Save sccache artifacts cache (Windows)
+        if: success() && steps.sccache_restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/sccache
+          key: ${{ steps.sccache_restore.outputs.cache-primary-key }}
+
+      - name: Save vcpkg artifacts cache (Windows)
+        if: success() && steps.vcpkg_cache_restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .cache/vcpkg/archives
+            .cache/vcpkg/downloads
+            vcpkg_installed
+            build-windows/vcpkg_installed
+          key: ${{ steps.vcpkg_cache_restore.outputs.cache-primary-key }}
