@@ -54,7 +54,7 @@
 4. rollback 후 `gateway_udp_enabled`가 양 gateway에서 0인지 확인하고 `python tests/python/verify_pong.py`로 TCP smoke 검증
 
 ### 3.6 RUDP canary/rollback
-1. 전제 확인: `KNIGHTS_ENABLE_CORE_RUDP=ON`으로 빌드되었고 운영 런타임 기본값은 `GATEWAY_RUDP_ENABLE=0` 상태
+1. 전제 확인: 운영 런타임 기본값은 `GATEWAY_RUDP_ENABLE=0` 상태이며 canary 전개 시에도 allowlist 기반으로 신규 세션만 점진 적용한다
 2. canary 오픈: `GATEWAY_RUDP_ENABLE=1`, `GATEWAY_RUDP_CANARY_PERCENT=<소량>`, `GATEWAY_RUDP_OPCODE_ALLOWLIST=<opcode,...>` 설정 후 신규 세션에서만 관찰
 3. 모니터링: `RudpHandshakeFailureSpike`(실패율 >20%), `RudpRetransmitRatioHigh`(재전송비율 >15%), `RudpFallbackSpike`(fallback >0.1/s)와 원인 지표(`core_runtime_rudp_*`, `gateway_rudp_*`)를 함께 확인
 4. 이상 시 즉시 롤백:
