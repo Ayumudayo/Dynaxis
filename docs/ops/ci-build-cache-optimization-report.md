@@ -91,7 +91,7 @@ Windows vcpkg cache restore step 소요(과거 step 기준, 6회):
    - 잡 요약에 다음 시간을 기록(또는 log grep):
      - vcpkg cache restore 소요
      - `Build (Debug)` 소요
-     - `Build RUDP ON Targets` 소요
+     - `Run Windows Unit Tests (ctest)` 소요
    - 목표: 최적화 전/후를 데이터로 비교.
 
 ### Phase B (중기, 효과 큼)
