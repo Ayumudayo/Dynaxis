@@ -31,7 +31,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     env:
-      CONAN_HOME: ${{ github.workspace }}/.cache/conan2
+      CONAN_HOME: ${{ runner.temp }}/conan2
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,7 +43,7 @@ jobs:
         id: conan_cache_restore
         uses: actions/cache/restore@v4
         with:
-          path: .cache/conan2
+          path: ${{ env.CONAN_HOME }}
           key: ${{ runner.os }}-conan2-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/**', 'scripts/setup_conan.ps1', 'scripts/build.ps1') }}
           restore-keys: |
             ${{ runner.os }}-conan2-
@@ -51,7 +51,7 @@ jobs:
       - name: Ensure Conan cache directory
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/conan2" | Out-Null
+          New-Item -ItemType Directory -Force -Path "${{ env.CONAN_HOME }}" | Out-Null
 
       - name: Ensure lockfile exists
         shell: pwsh
@@ -100,5 +100,5 @@ jobs:
         if: success() && steps.conan_cache_restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: .cache/conan2
+          path: ${{ env.CONAN_HOME }}
           key: ${{ steps.conan_cache_restore.outputs.cache-primary-key }}
