@@ -1,0 +1,104 @@
+name: Conan2 PoC
+
+on:
+  workflow_dispatch:
+    inputs:
+      config:
+        description: Build configuration
+        required: false
+        default: Debug
+        type: choice
+        options:
+          - Debug
+          - RelWithDebInfo
+      target:
+        description: Optional CMake target
+        required: false
+        default: ""
+      run_ctest:
+        description: Run ctest after build (true/false)
+        required: false
+        default: "true"
+
+permissions:
+  contents: read
+
+env:
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  windows-conan2-poc:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CONAN_HOME: ${{ github.workspace }}/.cache/conan2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Restore Conan cache (Windows)
+        id: conan_cache_restore
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/conan2
+          key: ${{ runner.os }}-conan2-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/**', 'scripts/setup_conan.ps1', 'scripts/build.ps1') }}
+          restore-keys: |
+            ${{ runner.os }}-conan2-
+
+      - name: Ensure Conan cache directory
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/conan2" | Out-Null
+
+      - name: Ensure lockfile exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "conan.lock")) {
+            throw "conan.lock is required for reproducible Conan2 PoC runs"
+          }
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan2
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install "conan>=2.0,<3"
+          conan --version
+
+      - name: Enable MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build with Conan2
+        shell: pwsh
+        run: |
+          $config = '${{ github.event.inputs.config }}'
+          if ([string]::IsNullOrWhiteSpace($config)) { $config = 'Debug' }
+          $target = '${{ github.event.inputs.target }}'
+
+          $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/build.ps1', '-UseConan', '-Config', $config)
+          if (-not [string]::IsNullOrWhiteSpace($target)) {
+            $args += @('-Target', $target)
+          }
+          & pwsh @args
+
+      - name: Run ctest (Conan2 build)
+        if: github.event.inputs.run_ctest != 'false' && github.event.inputs.target == ''
+        shell: pwsh
+        run: |
+          $config = '${{ github.event.inputs.config }}'
+          if ([string]::IsNullOrWhiteSpace($config)) { $config = 'Debug' }
+          ctest --test-dir build-windows-conan --build-config $config --output-on-failure
+
+      - name: Save Conan cache (Windows)
+        if: success() && steps.conan_cache_restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/conan2
+          key: ${{ steps.conan_cache_restore.outputs.cache-primary-key }}

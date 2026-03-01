@@ -1,0 +1,13 @@
+[settings]
+os=Windows
+arch=x86_64
+compiler=msvc
+compiler.version=194
+compiler.cppstd=20
+build_type=Debug
+compiler.runtime=dynamic
+compiler.runtime_type=Debug
+
+[conf]
+tools.cmake.cmaketoolchain:generator=Visual Studio 17 2022
+tools.build:jobs=8
