@@ -73,7 +73,7 @@ if (SERVER_USE_HEADER_ONLY_BOOST_SYSTEM)
     find_package(Boost REQUIRED)
 else()
     find_package(Boost QUIET COMPONENTS system)
-    if (NOT Boost_FOUND)
+    if (NOT Boost_FOUND OR NOT TARGET Boost::system)
         message(WARNING "Boost::system을 찾지 못했습니다. header-only 모드로 폴백합니다. (BOOST_ERROR_CODE_HEADER_ONLY)")
         set(SERVER_USE_HEADER_ONLY_BOOST_SYSTEM ON CACHE BOOL "Use header-only boost::system" FORCE)
         find_package(Boost REQUIRED)
@@ -84,6 +84,8 @@ message(STATUS "Boost header-only-system: ${SERVER_USE_HEADER_ONLY_BOOST_SYSTEM}
 message(STATUS "Boost include: ${Boost_INCLUDE_DIRS}")
 message(STATUS "Boost libs: ${Boost_LIBRARIES}")
 message(STATUS "Boost lib dirs: ${Boost_LIBRARY_DIRS}")
+
+find_package(nlohmann_json CONFIG QUIET)
 
 # Python3가 있으면 opcode 헤더를 빌드 시 자동 생성
 find_package(Python3 COMPONENTS Interpreter QUIET)
@@ -147,6 +149,14 @@ if (BUILD_WRITE_BEHIND_TOOLS)
     target_link_libraries(wb_emit PRIVATE server_storage_redis)
   endif()
 
+  if (TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(wb_worker PRIVATE nlohmann_json::nlohmann_json)
+    target_link_libraries(wb_dlq_replayer PRIVATE nlohmann_json::nlohmann_json)
+    target_link_libraries(wb_check PRIVATE nlohmann_json::nlohmann_json)
+  else()
+    message(WARNING "nlohmann_json target not found ? wb_worker/wb_dlq_replayer/wb_check may fail to compile")
+  endif()
+
   set(_PQXX_TARGET "")
   find_package(libpqxx CONFIG QUIET)
   if (libpqxx_FOUND AND TARGET libpqxx::pqxx)
@@ -174,6 +184,11 @@ endif()
 if (BUILD_ADMIN_APP)
   add_executable(admin_app tools/admin_app/main.cpp)
   target_link_libraries(admin_app PRIVATE server_core)
+  if (TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(admin_app PRIVATE nlohmann_json::nlohmann_json)
+  else()
+    message(WARNING "nlohmann_json target not found ? admin_app may fail to compile")
+  endif()
   if (TARGET server_storage_redis)
     target_link_libraries(admin_app PRIVATE server_storage_redis)
   endif()
@@ -189,23 +204,26 @@ if (BUILD_ADMIN_APP)
   if (WIN32 AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.21")
     # Ensure local execution works without manually extending PATH.
     add_custom_command(TARGET admin_app POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              $<TARGET_RUNTIME_DLLS:admin_app>
-              $<TARGET_FILE_DIR:admin_app>
+      COMMAND ${CMAKE_COMMAND}
+              -Druntime_dlls=$<TARGET_RUNTIME_DLLS:admin_app>
+              -Dtarget_dir=$<TARGET_FILE_DIR:admin_app>
+              -P ${CMAKE_SOURCE_DIR}/cmake/copy_runtime_dlls_if_any.cmake
       COMMAND_EXPAND_LISTS)
 
-    # Copy release bin first (contains hiredis.dll required by some debug import chains).
-    add_custom_command(TARGET admin_app POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_directory
-              "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin"
-              "$<TARGET_FILE_DIR:admin_app>")
+    if (VCPKG_TARGET_TRIPLET)
+      # Copy release bin first (contains hiredis.dll required by some debug import chains).
+      add_custom_command(TARGET admin_app POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin"
+                "$<TARGET_FILE_DIR:admin_app>")
 
-    # Some transitive runtime DLLs (e.g. OpenSSL legacy/zlib chain) are not
-    # always surfaced via imported target metadata; mirror vcpkg bin for safety.
-    add_custom_command(TARGET admin_app POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_directory
-              "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/$<$<CONFIG:Debug>:debug/>bin"
-              "$<TARGET_FILE_DIR:admin_app>")
+      # Some transitive runtime DLLs (e.g. OpenSSL legacy/zlib chain) are not
+      # always surfaced via imported target metadata; mirror vcpkg bin for safety.
+      add_custom_command(TARGET admin_app POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/$<$<CONFIG:Debug>:debug/>bin"
+                "$<TARGET_FILE_DIR:admin_app>")
+    endif()
   endif()
 endif()
 

@@ -37,7 +37,16 @@ if (Python3_Interpreter_FOUND)
 endif()
 
 # vcpkg DLL 자동 복사(Windows)
-if(WIN32)
+if(WIN32 AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.21")
+    add_custom_command(TARGET server_app POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+        -Druntime_dlls=$<TARGET_RUNTIME_DLLS:server_app>
+        -Dtarget_dir=$<TARGET_FILE_DIR:server_app>
+        -P ${CMAKE_SOURCE_DIR}/cmake/copy_runtime_dlls_if_any.cmake
+        COMMAND_EXPAND_LISTS)
+endif()
+
+if(WIN32 AND VCPKG_TARGET_TRIPLET)
     set(_SERVER_VCPKG_INSTALLED_DIR "${VCPKG_INSTALLED_DIR}")
     if(NOT _SERVER_VCPKG_INSTALLED_DIR)
         set(_SERVER_VCPKG_INSTALLED_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed")
