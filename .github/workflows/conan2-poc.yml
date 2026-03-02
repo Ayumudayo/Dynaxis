@@ -94,7 +94,7 @@ jobs:
         run: |
           $config = '${{ github.event.inputs.config }}'
           if ([string]::IsNullOrWhiteSpace($config)) { $config = 'Release' }
-          ctest --test-dir build-windows --build-config $config --output-on-failure
+          ctest --test-dir build-windows --build-config $config --parallel --output-on-failure
 
       - name: Save Conan cache (Windows)
         if: success() && steps.conan_cache_restore.outputs.cache-hit != 'true'

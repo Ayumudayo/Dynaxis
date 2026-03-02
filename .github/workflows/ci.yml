@@ -251,7 +251,7 @@ jobs:
       - name: Run Core Public API Consumer Tests
         shell: pwsh
         run: |
-          ctest --preset windows-test -R "CorePublicApi|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure
+          ctest --preset windows-test --parallel -R "CorePublicApi|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure
 
   core-api-consumer-linux:
     runs-on: ubuntu-latest
@@ -298,7 +298,7 @@ jobs:
             python3 tools/check_core_api_contracts.py --check-stable-governance-fixtures; \
             cmake --preset linux -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=ON; \
             cmake --build --preset linux-debug --target core_public_api_smoke core_public_api_headers_compile core_public_api_stable_header_scenarios --parallel; \
-            ctest --preset linux-test -R 'CorePublicApi|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures' --output-on-failure"
+            ctest --preset linux-test --parallel -R 'CorePublicApi|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures' --output-on-failure"
 
   windows-fast-tests:
     needs: windows-conan-deps
@@ -415,7 +415,7 @@ jobs:
       - name: Run Windows Unit Tests (ctest)
         shell: pwsh
         run: |
-          ctest --preset windows-test --output-on-failure
+          ctest --preset windows-test --parallel --output-on-failure
 
   linux-docker-stack:
     runs-on: ubuntu-latest
