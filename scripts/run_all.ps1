@@ -5,8 +5,7 @@ param(
   [int]$Port = 5000,
   [switch]$RunDLQ,
   [switch]$WithClient,
-  [switch]$Smoke,
-  [switch]$UseVcpkg
+  [switch]$Smoke
 )
 
 $ErrorActionPreference = 'Stop'
@@ -24,7 +23,6 @@ if ($RunDLQ)     { $targets += 'wb_dlq_replayer' }
 if ($WithClient) { $targets += 'dev_chat_cli' }
 Info ("필요 타깃 빌드: " + ($targets -join ', '))
 $argsCommon = @{ Config = $Config; BuildDir = $BuildDir }
-if ($UseVcpkg) { $argsCommon['UseVcpkg'] = $true }
 & ./scripts/build.ps1 @argsCommon -Target server_app | Out-Null
 if ($LASTEXITCODE -ne 0) { Fail "빌드 실패: server_app" }
 & ./scripts/build.ps1 @argsCommon -Target wb_worker   | Out-Null

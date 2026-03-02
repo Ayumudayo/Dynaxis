@@ -537,14 +537,6 @@ FodyWeavers.xsd
 # JetBrains Rider
 *.sln.iml
 
-### vcpkg ###
-# Vcpkg
-
-vcpkg-manifest-install.log
-
-## Manifest Mode
-vcpkg_installed/
-
 # Etc
 info.txt
 inst.txt

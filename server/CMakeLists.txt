@@ -36,7 +36,7 @@ if (Python3_Interpreter_FOUND)
     add_dependencies(server_app generate_game_opcodes)
 endif()
 
-# vcpkg DLL 자동 복사(Windows)
+# Runtime DLL 자동 복사(Windows)
 if(WIN32 AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.21")
     add_custom_command(TARGET server_app POST_BUILD
         COMMAND ${CMAKE_COMMAND}
@@ -46,20 +46,6 @@ if(WIN32 AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.21")
         COMMAND_EXPAND_LISTS)
 endif()
 
-if(WIN32 AND VCPKG_TARGET_TRIPLET)
-    set(_SERVER_VCPKG_INSTALLED_DIR "${VCPKG_INSTALLED_DIR}")
-    if(NOT _SERVER_VCPKG_INSTALLED_DIR)
-        set(_SERVER_VCPKG_INSTALLED_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed")
-    endif()
-
-    add_custom_command(TARGET server_app POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${_SERVER_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/$<$<CONFIG:Debug>:debug/>bin/libprotobuf$<$<CONFIG:Debug>:d>.dll"
-        "${_SERVER_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/$<$<CONFIG:Debug>:debug/>bin/libprotoc$<$<CONFIG:Debug>:d>.dll"
-        "${_SERVER_VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/$<$<CONFIG:Debug>:debug/>bin/abseil_dll.dll"
-        $<TARGET_FILE_DIR:server_app>)
-endif()
-
 # Postgres storage adapter
 add_library(server_storage_pg STATIC
     src/storage/postgres/connection_pool.cpp
@@ -67,7 +53,7 @@ add_library(server_storage_pg STATIC
 target_include_directories(server_storage_pg PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(server_storage_pg PUBLIC server_core)
 
-# libpqxx 필수: vcpkg가 libpqxx::pqxx 또는 unofficial::libpqxx::libpqxx를 제공
+# libpqxx 필수: provider가 libpqxx::pqxx 또는 unofficial::libpqxx::libpqxx를 제공해야 함
 find_package(libpqxx CONFIG QUIET)
 if (libpqxx_FOUND AND TARGET libpqxx::pqxx)
     target_link_libraries(server_storage_pg PUBLIC libpqxx::pqxx)
@@ -92,7 +78,7 @@ add_library(server_storage_redis STATIC
 target_include_directories(server_storage_redis PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(server_storage_redis PUBLIC server_core)
 
-# Try to find redis-plus-plus; vcpkg exports namespaced targets
+# Try to find redis-plus-plus exported targets
 find_package(redis++ CONFIG QUIET)
 if (TARGET redis++::redis++)
     target_link_libraries(server_storage_redis PUBLIC redis++::redis++)

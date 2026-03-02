@@ -10,7 +10,7 @@
       "name": "windows-base",
       "hidden": true,
       "displayName": "Windows Base",
-      "description": "Base configuration for Windows using VS2022 and vcpkg",
+      "description": "Base configuration for Windows using VS2022 and Conan2 toolchain",
       "generator": "Visual Studio 17 2022",
       "binaryDir": "${sourceDir}/build-windows",
       "condition": {
@@ -18,17 +18,17 @@
         "lhs": "${hostSystemName}",
         "rhs": "Windows"
       },
-      "toolchainFile": "${sourceDir}/cmake/knights_vcpkg_toolchain.cmake",
+      "toolchainFile": "${sourceDir}/build-windows/conan/build/generators/conan_toolchain.cmake",
       "cacheVariables": {
-        "VCPKG_TARGET_TRIPLET": "x64-windows",
-        "VCPKG_MANIFEST_FEATURES": "windows-dev"
+        "CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO": "Release",
+        "CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL": "Release"
       }
     },
     {
       "name": "windows-ninja-base",
       "hidden": true,
       "displayName": "Windows Ninja Base",
-      "description": "Base configuration for Windows using Ninja (for clangd/compile_commands.json)",
+      "description": "Base configuration for Windows using Ninja and Conan2 toolchain",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-windows-ninja",
       "condition": {
@@ -36,12 +36,12 @@
         "lhs": "${hostSystemName}",
         "rhs": "Windows"
       },
-      "toolchainFile": "${sourceDir}/cmake/knights_vcpkg_toolchain.cmake",
+      "toolchainFile": "${sourceDir}/build-windows-ninja/conan/build/Debug/generators/conan_toolchain.cmake",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "VCPKG_TARGET_TRIPLET": "x64-windows",
-        "VCPKG_MANIFEST_FEATURES": "windows-dev"
+        "CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO": "Release",
+        "CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL": "Release"
       }
     },
     {
@@ -73,6 +73,7 @@
       "displayName": "Windows Core Engine (VS2022)",
       "description": "Standalone server_core-only profile (no server/gateway/tools/tests)",
       "binaryDir": "${sourceDir}/build-windows-core-engine",
+      "toolchainFile": "${sourceDir}/build-windows-core-engine/conan/build/generators/conan_toolchain.cmake",
       "cacheVariables": {
         "BUILD_SERVER_STACK": "OFF",
         "BUILD_GATEWAY_APP": "OFF",
@@ -85,17 +86,16 @@
       "name": "windows-client",
       "inherits": "windows-base",
       "displayName": "Windows Client Release (VS2022)",
-      "description": "Low-footprint client_gui-only profile (Release + vcpkg release libs)",
+      "description": "Low-footprint client_gui-only profile (Conan2)",
       "binaryDir": "${sourceDir}/build-windows-client",
+      "toolchainFile": "${sourceDir}/build-windows-client/conan/build/generators/conan_toolchain.cmake",
       "cacheVariables": {
-        "VCPKG_TARGET_TRIPLET": "x64-windows-release",
         "BUILD_SERVER_STACK": "OFF",
         "BUILD_GATEWAY_APP": "OFF",
         "BUILD_SERVER_TESTS": "OFF",
         "BUILD_WRITE_BEHIND_TOOLS": "OFF",
         "BUILD_ADMIN_APP": "OFF",
-        "BUILD_MIGRATIONS_RUNNER": "OFF",
-        "VCPKG_MANIFEST_FEATURES": "windows-client"
+        "BUILD_MIGRATIONS_RUNNER": "OFF"
       }
     },
     {
@@ -109,11 +109,12 @@
       "inherits": "windows-ninja-base",
       "displayName": "Windows Release (Ninja)",
       "description": "Windows configuration using Ninja (Release, exports compile_commands.json)",
+      "toolchainFile": "${sourceDir}/build-windows-ninja/conan/build/Release/generators/conan_toolchain.cmake",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "VCPKG_TARGET_TRIPLET": "x64-windows",
-        "VCPKG_MANIFEST_FEATURES": "windows-dev"
+        "CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO": "Release",
+        "CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL": "Release"
       }
     },
     {
@@ -149,13 +150,13 @@
       "displayName": "Windows Conan Base",
       "description": "Base configuration for Windows using VS2022 and Conan2 toolchain",
       "generator": "Visual Studio 17 2022",
-      "binaryDir": "${sourceDir}/build-windows-conan",
+      "binaryDir": "${sourceDir}/build-windows",
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",
         "rhs": "Windows"
       },
-      "toolchainFile": "${sourceDir}/build-windows-conan/conan/build/generators/conan_toolchain.cmake",
+      "toolchainFile": "${sourceDir}/build-windows/conan/build/generators/conan_toolchain.cmake",
       "cacheVariables": {
         "CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO": "Release",
         "CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL": "Release"
@@ -172,8 +173,8 @@
       "inherits": "windows-conan-base",
       "displayName": "Windows Client Conan2 (VS2022)",
       "description": "Client-only configuration using Conan2-generated toolchain",
-      "binaryDir": "${sourceDir}/build-windows-client-conan",
-      "toolchainFile": "${sourceDir}/build-windows-client-conan/conan/build/generators/conan_toolchain.cmake",
+      "binaryDir": "${sourceDir}/build-windows-client",
+      "toolchainFile": "${sourceDir}/build-windows-client/conan/build/generators/conan_toolchain.cmake",
       "cacheVariables": {
         "CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO": "Release",
         "CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL": "Release",

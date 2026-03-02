@@ -13,6 +13,7 @@ param(
   [string]$BuildDir = '',
   [string]$HostProfile = '',
   [string]$BuildProfile = '',
+  [string]$ToolchainGenerator = '',
   [string]$LockfilePath = 'conan.lock',
   [switch]$NoLockfile,
   [switch]$SkipInstall
@@ -56,8 +57,8 @@ $flavor = Resolve-ConfigFlavor $Config
 
 if (-not $BuildDir -or $BuildDir -eq '') {
   if ($IsWindows) {
-    if ($Feature -eq 'windows-client') { $BuildDir = 'build-windows-client-conan' }
-    else { $BuildDir = 'build-windows-conan' }
+    if ($Feature -eq 'windows-client') { $BuildDir = 'build-windows-client' }
+    else { $BuildDir = 'build-windows' }
   } else {
     $BuildDir = 'build-linux-conan'
   }
@@ -124,6 +125,10 @@ if (-not $SkipInstall) {
     '--profile:build', $buildProfilePath,
     '--options:host', "&:knights_feature=$Feature"
   )
+
+  if ($ToolchainGenerator -and $ToolchainGenerator -ne '') {
+    $installArgs += @('--conf', "tools.cmake.cmaketoolchain:generator=$ToolchainGenerator")
+  }
 
   if ($resolvedLockfilePath -and $resolvedLockfilePath -ne '') {
     if (Test-Path $resolvedLockfilePath) {

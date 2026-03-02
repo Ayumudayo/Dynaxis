@@ -82,7 +82,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($config)) { $config = 'Debug' }
           $target = '${{ github.event.inputs.target }}'
 
-          $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/build.ps1', '-UseConan', '-Config', $config)
+          $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'scripts/build.ps1', '-Config', $config)
           if (-not [string]::IsNullOrWhiteSpace($target)) {
             $args += @('-Target', $target)
           }
@@ -94,7 +94,7 @@ jobs:
         run: |
           $config = '${{ github.event.inputs.config }}'
           if ([string]::IsNullOrWhiteSpace($config)) { $config = 'Debug' }
-          ctest --test-dir build-windows-conan --build-config $config --output-on-failure
+          ctest --test-dir build-windows --build-config $config --output-on-failure
 
       - name: Save Conan cache (Windows)
         if: success() && steps.conan_cache_restore.outputs.cache-hit != 'true'

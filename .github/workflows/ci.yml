@@ -97,7 +97,7 @@ jobs:
         if: steps.conan_cache_restore.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup_conan.ps1 -Config Debug -Feature windows-dev -BuildDir build-windows-conan
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup_conan.ps1 -Config Debug -Feature windows-dev -BuildDir build-windows
 
       - name: Mark Conan cache save start (Windows)
         if: success() && steps.conan_cache_restore.outputs.cache-hit != 'true'
@@ -236,22 +236,22 @@ jobs:
       - name: Build Core Public API Smoke Target (Debug)
         shell: pwsh
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -UseConan -Config Debug -Target core_public_api_smoke
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug -Target core_public_api_smoke
 
       - name: Build Core Public API Header Compile Target (Debug)
         shell: pwsh
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -UseConan -Config Debug -Target core_public_api_headers_compile
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug -Target core_public_api_headers_compile
 
       - name: Build Core Public API Stable Header Scenarios Target (Debug)
         shell: pwsh
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -UseConan -Config Debug -Target core_public_api_stable_header_scenarios
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug -Target core_public_api_stable_header_scenarios
 
       - name: Run Core Public API Consumer Tests
         shell: pwsh
         run: |
-          ctest --preset windows-conan-test -R "CorePublicApi|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure
+          ctest --preset windows-test -R "CorePublicApi|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure
 
   core-api-consumer-linux:
     runs-on: ubuntu-latest
@@ -399,23 +399,23 @@ jobs:
       - name: Build (Debug)
         shell: pwsh
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -UseConan -Config Debug
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug
 
       - name: Build Protocol Fuzz Harness (Debug)
         shell: pwsh
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -UseConan -Config Debug -Target protocol_fuzz_harness
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug -Target protocol_fuzz_harness
 
       - name: Run Protocol Fuzz Harness
         shell: pwsh
         run: |
           $env:FUZZ_ITERATIONS = "120000"
-          .\build-windows-conan\tests\Debug\protocol_fuzz_harness.exe
+          .\build-windows\tests\Debug\protocol_fuzz_harness.exe
 
       - name: Run Windows Unit Tests (ctest)
         shell: pwsh
         run: |
-          ctest --preset windows-conan-test --output-on-failure
+          ctest --preset windows-test --output-on-failure
 
   linux-docker-stack:
     runs-on: ubuntu-latest

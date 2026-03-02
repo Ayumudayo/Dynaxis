@@ -209,21 +209,6 @@ if (BUILD_ADMIN_APP)
               -Dtarget_dir=$<TARGET_FILE_DIR:admin_app>
               -P ${CMAKE_SOURCE_DIR}/cmake/copy_runtime_dlls_if_any.cmake
       COMMAND_EXPAND_LISTS)
-
-    if (VCPKG_TARGET_TRIPLET)
-      # Copy release bin first (contains hiredis.dll required by some debug import chains).
-      add_custom_command(TARGET admin_app POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin"
-                "$<TARGET_FILE_DIR:admin_app>")
-
-      # Some transitive runtime DLLs (e.g. OpenSSL legacy/zlib chain) are not
-      # always surfaced via imported target metadata; mirror vcpkg bin for safety.
-      add_custom_command(TARGET admin_app POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/$<$<CONFIG:Debug>:debug/>bin"
-                "$<TARGET_FILE_DIR:admin_app>")
-    endif()
   endif()
 endif()
 

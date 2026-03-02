@@ -101,7 +101,7 @@ python tools/gen_opcode_docs.py --check
 - Repo 구조 원칙/금지사항: `docs/repo-structure.md`.
 - Headers: `.hpp` + `#pragma once`, include 순서(표준 -> 서드파티 -> 프로젝트).
 - CMake: 소스는 명시적으로 나열(= `file(GLOB ...)` 금지). 옵션은 `BUILD_SERVER_STACK`, `BUILD_GATEWAY_APP`, `BUILD_SERVER_TESTS`, `BUILD_GTEST_TESTS`, `BUILD_CONTRACT_TESTS`, `BUILD_WRITE_BEHIND_TOOLS` 중심.
-- vcpkg: `vcpkg.json`의 `windows-dev` feature로 Windows 개발 의존성을 묶음(리눅스/도커 런타임은 시스템 패키지 기반).
+- Conan2: `conanfile.py` + `conan.lock` 기반으로 Windows 개발 의존성을 고정하며(리눅스/도커 런타임은 시스템 패키지 기반).
 - Metrics: `/metrics`는 Prometheus text format. 포트는 `METRICS_PORT`로 제어(서비스별 환경 변수로 주입).
 
 ## Anti-Patterns (This Repo)
