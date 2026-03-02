@@ -53,15 +53,20 @@ find_package(OpenGL REQUIRED)
 find_package(OpenSSL REQUIRED)
 
 # Link Libraries
-target_link_libraries(client_gui PRIVATE 
+set(CLIENT_GUI_LINK_LIBS
     glfw
     OpenGL::GL
-    wire_proto 
+    wire_proto
     server_core
-    Boost::system
-    OpenSSL::SSL 
+    OpenSSL::SSL
     OpenSSL::Crypto
 )
+
+if (NOT SERVER_USE_HEADER_ONLY_BOOST_SYSTEM)
+    list(APPEND CLIENT_GUI_LINK_LIBS Boost::system)
+endif()
+
+target_link_libraries(client_gui PRIVATE ${CLIENT_GUI_LINK_LIBS})
 
 # Windows Specifics
 if (WIN32)
@@ -75,8 +80,9 @@ endif()
 if (WIN32)
     # Copy runtime DLLs resolved by CMake target metadata.
     add_custom_command(TARGET client_gui POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_RUNTIME_DLLS:client_gui>
-        $<TARGET_FILE_DIR:client_gui>
+        COMMAND ${CMAKE_COMMAND}
+        -Druntime_dlls=$<TARGET_RUNTIME_DLLS:client_gui>
+        -Dtarget_dir=$<TARGET_FILE_DIR:client_gui>
+        -P ${CMAKE_SOURCE_DIR}/cmake/copy_runtime_dlls_if_any.cmake
         COMMAND_EXPAND_LISTS)
 endif()

@@ -20,6 +20,26 @@ namespace server::core::protocol {
 // 프로토콜 v1.1 고정 헤더 길이(바이트)
 inline constexpr std::size_t k_header_bytes = 14;
 
+enum class ConnectionType : std::uint8_t {
+    kUnknown = 0,
+    kClientEdge = 1,
+    kBackendBridge = 2,
+};
+
+enum class SegmentType : std::uint8_t {
+    kUnknown = 0,
+    kSystemControl = 1,
+    kApplicationPayload = 2,
+};
+
+inline constexpr bool is_system_msg_id(std::uint16_t msg_id) noexcept {
+    return msg_id >= 0x0001 && msg_id <= 0x000F;
+}
+
+inline constexpr SegmentType classify_segment_type(std::uint16_t msg_id) noexcept {
+    return is_system_msg_id(msg_id) ? SegmentType::kSystemControl : SegmentType::kApplicationPayload;
+}
+
 /**
  * @brief 메시지 헤더 구조체
  */

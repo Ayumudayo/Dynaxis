@@ -23,11 +23,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     env:
-      VCPKG_FEATURE_FLAGS: manifests,binarycaching
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
-      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.cache/vcpkg/archives,readwrite
-      VCPKG_DOWNLOADS: ${{ github.workspace }}/.cache/vcpkg/downloads
-      VCPKG_INSTALLED_DIR: ${{ github.workspace }}/build-windows/vcpkg_installed
+      CONAN_HOME: ${{ github.workspace }}-conan2
       SCCACHE_DIR: ${{ github.workspace }}/.cache/sccache
       SCCACHE_CACHE_SIZE: 10G
     steps:
@@ -37,25 +33,21 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Restore vcpkg artifacts cache (Windows)
-        id: vcpkg_cache_restore
+      - name: Restore Conan cache (Windows)
+        id: conan_cache_restore
         uses: actions/cache/restore@v4
         with:
-          path: |
-            .cache/vcpkg/archives
-            .cache/vcpkg/downloads
-            build-windows/vcpkg_installed
-          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'scripts/setup_vcpkg.ps1', 'cmake/knights_vcpkg_toolchain.cmake') }}
+          path: ${{ env.CONAN_HOME }}
+          key: ${{ runner.os }}-conan2-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/**', 'scripts/setup_conan.ps1', 'scripts/build.ps1') }}
           restore-keys: |
-            ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json') }}-
-            ${{ runner.os }}-vcpkg-
+            ${{ runner.os }}-conan2-
 
       - name: Restore sccache artifacts cache (Windows)
         id: sccache_restore
         uses: actions/cache/restore@v4
         with:
           path: .cache/sccache
-          key: ${{ runner.os }}-sccache-${{ github.ref_name }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'vcpkg.json', 'cmake/knights_vcpkg_toolchain.cmake') }}
+          key: ${{ runner.os }}-sccache-${{ github.ref_name }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'conanfile.py', 'conan.lock', 'conan/profiles/**', 'scripts/setup_conan.ps1') }}
           restore-keys: |
             ${{ runner.os }}-sccache-${{ github.ref_name }}-
             ${{ runner.os }}-sccache-
@@ -63,15 +55,27 @@ jobs:
       - name: Ensure cache directories (Windows)
         shell: pwsh
         run: |
-          $buildInstalled = "${{ github.workspace }}/build-windows/vcpkg_installed"
-          $rootInstalled = "${{ github.workspace }}/vcpkg_installed"
-          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/vcpkg/archives" | Out-Null
-          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/vcpkg/downloads" | Out-Null
-          New-Item -ItemType Directory -Force -Path $buildInstalled | Out-Null
+          New-Item -ItemType Directory -Force -Path "${{ env.CONAN_HOME }}" | Out-Null
           New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/sccache" | Out-Null
-          if (-not (Test-Path $rootInstalled)) {
-            New-Item -ItemType Junction -Path $rootInstalled -Target $buildInstalled | Out-Null
+
+      - name: Ensure lockfile exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "conan.lock")) {
+            throw "conan.lock is required for reproducible Conan SCCache PoC runs"
           }
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan2
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install "conan>=2.0,<3"
+          conan --version
 
       - name: Install sccache
         shell: pwsh
@@ -94,10 +98,15 @@ jobs:
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- target: {0}" -f $target)
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- double_build: {0}" -f $double)
 
-      - name: Configure with sccache (Ninja, Debug)
+      - name: Prepare Conan dependencies (Release)
         shell: pwsh
         run: |
-          cmake --preset windows-ninja -DVCPKG_MANIFEST_INSTALL=OFF -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup_conan.ps1 -Config Release -Feature windows-dev -BuildDir build-windows-sccache-conan
+
+      - name: Configure with sccache (Ninja, Release)
+        shell: pwsh
+        run: |
+          cmake -S . -B build-windows-sccache-conan -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/build-windows-sccache-conan/conan/build/Release/generators/conan_toolchain.cmake" -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release -DCMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL=Release
 
       - name: Build pass #1
         shell: pwsh
@@ -105,7 +114,7 @@ jobs:
           sccache --stop-server | Out-Null
           sccache --start-server
           sccache --zero-stats
-          $first = Measure-Command { cmake --build --preset windows-ninja-debug --target $env:POC_TARGET --parallel }
+          $first = Measure-Command { cmake --build build-windows-sccache-conan --target $env:POC_TARGET --parallel }
           $firstSec = [Math]::Round($first.TotalSeconds, 2)
           "POC_FIRST_BUILD_SEC=$firstSec" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- build_pass_1_sec: {0}" -f $firstSec)
@@ -114,7 +123,7 @@ jobs:
         if: env.POC_DOUBLE_BUILD == 'true'
         shell: pwsh
         run: |
-          $second = Measure-Command { cmake --build --preset windows-ninja-debug --target $env:POC_TARGET --clean-first --parallel }
+          $second = Measure-Command { cmake --build build-windows-sccache-conan --target $env:POC_TARGET --clean-first --parallel }
           $secondSec = [Math]::Round($second.TotalSeconds, 2)
           "POC_SECOND_BUILD_SEC=$secondSec" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- build_pass_2_sec: {0}" -f $secondSec)
@@ -131,12 +140,9 @@ jobs:
           path: .cache/sccache
           key: ${{ steps.sccache_restore.outputs.cache-primary-key }}
 
-      - name: Save vcpkg artifacts cache (Windows)
-        if: success() && steps.vcpkg_cache_restore.outputs.cache-hit != 'true'
+      - name: Save Conan cache (Windows)
+        if: success() && steps.conan_cache_restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: |
-            .cache/vcpkg/archives
-            .cache/vcpkg/downloads
-            build-windows/vcpkg_installed
-          key: ${{ steps.vcpkg_cache_restore.outputs.cache-primary-key }}
+          path: ${{ env.CONAN_HOME }}
+          key: ${{ steps.conan_cache_restore.outputs.cache-primary-key }}

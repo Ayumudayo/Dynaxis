@@ -11,10 +11,8 @@ TARGET=""
 PREFIX=""
 PORT=5000
 RELEASE_DIR=""
-RELEASE_LIST="server_app,gateway_app,dev_chat_cli,wb_worker"
+RELEASE_LIST="server_app,gateway_app,wb_worker"
 RELEASE_ARCHIVE=""
-VCPKG_TRIPLET="x64-linux"
-SETUP_VCPKG="$REPO_ROOT/scripts/setup_vcpkg.sh"
 
 usage(){
   cat <<EOF
@@ -29,11 +27,10 @@ Usage: build.sh [options]
   -R <dir>          Output directory for release bundle
   -L <names>        Comma list of binaries for release bundle
   -z <archive>      Release tar.gz path
-  -T <triplet>      vcpkg triplet (default: $VCPKG_TRIPLET)
 EOF
 }
 
-while getopts ":g:c:b:r:p:P:t:R:L:z:T:h" opt; do
+while getopts ":g:c:b:r:p:P:t:R:L:z:h" opt; do
   case $opt in
     g) GENERATOR="$OPTARG";;
     c) CONFIG="$OPTARG";;
@@ -45,24 +42,14 @@ while getopts ":g:c:b:r:p:P:t:R:L:z:T:h" opt; do
     R) RELEASE_DIR="$OPTARG";;
     L) RELEASE_LIST="$OPTARG";;
     z) RELEASE_ARCHIVE="$OPTARG";;
-    T) VCPKG_TRIPLET="$OPTARG";;
     h) usage; exit 0;;
     :) echo "Option -$OPTARG requires a value" >&2; usage; exit 2;;
     \?) echo "Unknown option -$OPTARG" >&2; usage; exit 2;;
   esac
 done
 
-ensure_vcpkg(){
-  [[ -x "$SETUP_VCPKG" ]] || { echo "setup_vcpkg.sh not found: $SETUP_VCPKG" >&2; exit 1; }
-  VCPKG_ROOT="$($SETUP_VCPKG --triplet "$VCPKG_TRIPLET")"
-  TOOLCHAIN="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
-  [[ -f "$TOOLCHAIN" ]] || { echo "Missing vcpkg toolchain: $TOOLCHAIN" >&2; exit 1; }
-}
-
 conf(){
-  ensure_vcpkg
   ARGS=( -S . -B "$BUILD_DIR" -G "$GENERATOR" -DCMAKE_BUILD_TYPE="$CONFIG" )
-  ARGS+=( "-DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN" "-DVCPKG_TARGET_TRIPLET=$VCPKG_TRIPLET" )
   cmake "${ARGS[@]}"
 }
 
@@ -91,10 +78,9 @@ run_server(){
 }
 
 run_client(){
-  exe="$BUILD_DIR/devclient/dev_chat_cli"
-  [[ -x "$exe" ]] || exe="$BUILD_DIR/dev_chat_cli"
-  [[ -x "$exe" ]] || { echo "dev_chat_cli 실행 파일을 찾을 수 없습니다." >&2; exit 1; }
-  "$exe" 127.0.0.1 "$PORT"
+  echo "run-client is no longer supported on Linux/WSL (legacy CLI client removed)." >&2
+  echo "Use client_gui on Windows: pwsh scripts/build.ps1 -ClientOnly -Target client_gui" >&2
+  exit 1
 }
 
 find_binary(){
@@ -103,7 +89,7 @@ find_binary(){
     "$BUILD_DIR/$name"
     "$BUILD_DIR/$CONFIG/$name"
   )
-  for sub in server gateway load_balancer devclient tools wb; do
+  for sub in server gateway load_balancer client_gui tools wb; do
     candidates+=("$BUILD_DIR/$sub/$name" "$BUILD_DIR/$sub/$CONFIG/$name")
   done
   for path in "${candidates[@]}"; do

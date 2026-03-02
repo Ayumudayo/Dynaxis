@@ -14,11 +14,10 @@ WORKDIR /app
 # Copy source code
 COPY . .
 
-# Configure CMake with Linux preset (no vcpkg, uses system packages)
-ENV VCPKG_DISABLE_METRICS=1
+# Configure CMake with Linux preset (uses system packages)
 RUN cmake --preset linux-release -DBUILD_SERVER_TESTS=OFF
 
-# Build server components only (devclient excluded - requires ftxui from vcpkg)
+# Build server components only (devclient excluded for image scope)
 RUN cmake --build --preset linux-release --target \
     server_app \
     chat_hook_sample \

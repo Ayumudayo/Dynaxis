@@ -253,7 +253,7 @@
   - `server/src/app/metrics_server.cpp`: `chat_dispatch_processing_place_calls_total`, `chat_dispatch_processing_place_reject_total`, `chat_dispatch_processing_place_exception_total` 노출.
   - `tests/core/test_core_net.cpp`: worker queue 경유/queue unavailable reject/room strand post/invalid policy reject 시나리오 추가.
   - `tests/core/test_core_metrics.cpp`: `processing_place` 카운터 증가 검증 추가.
-  - `server/CMakeLists.txt`: Windows 빌드 검증을 막던 post-build DLL copy 경로를 `${CMAKE_SOURCE_DIR}/vcpkg_installed` 하드코딩에서 `${VCPKG_INSTALLED_DIR}` 기반으로 수정.
+  - `server/CMakeLists.txt`: Windows 빌드 검증을 막던 post-build DLL copy 경로의 하드코딩을 제거하고 런타임 DLL 자동 수집 경로로 정리.
 - 문서 동기화:
   - `docs/core-design.md`: Dispatcher `processing_place` 정책과 신규 메트릭 반영.
 - 검증 결과:

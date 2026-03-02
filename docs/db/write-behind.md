@@ -3,7 +3,7 @@
 목표: 세션에서 발생하는 고빈도 이벤트를 Redis에 임시 저장하고, 주기적으로(또는 임계 도달 시) RDB(PostgreSQL)에 배치 커밋하여 RDB I/O를 줄이고 지연을 낮춘다.
 
 ## 현재 상태
-- 라이브러리: redis-plus-plus 1.3.15(vcpkg, x64-windows)
+- 라이브러리: redis-plus-plus 1.3.15 (Conan2 lockfile 기준)
 - Redis 클라이언트: Streams API(XGROUP CREATE MKSTREAM, XADD, XREADGROUP, XPENDING, XACK, XAUTOCLAIM) 제공
   - 파일: `server/src/storage/redis/client.cpp`, `server/include/server/storage/redis/client.hpp`
 - 생산자(server_app): 세션/룸 이벤트를 Redis Stream으로 발행

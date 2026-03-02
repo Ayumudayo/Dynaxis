@@ -26,15 +26,118 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  core-api-consumer-windows:
+  windows-conan-deps:
     runs-on: windows-latest
     timeout-minutes: 60
     env:
-      VCPKG_FEATURE_FLAGS: manifests,binarycaching
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
-      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.cache/vcpkg/archives,readwrite
-      VCPKG_DOWNLOADS: ${{ github.workspace }}/.cache/vcpkg/downloads
-      VCPKG_INSTALLED_DIR: ${{ github.workspace }}/build-windows/vcpkg_installed
+      CONAN_HOME: ${{ github.workspace }}-conan2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Mark Conan cache restore start (Windows)
+        shell: pwsh
+        run: |
+          "CONAN_CACHE_RESTORE_START=$(Get-Date -AsUTC -Format o)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Restore Conan cache (Windows)
+        id: conan_cache_restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CONAN_HOME }}
+          key: ${{ runner.os }}-conan2-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/**', 'scripts/setup_conan.ps1', 'scripts/build.ps1') }}
+          restore-keys: |
+            ${{ runner.os }}-conan2-
+
+      - name: Summarize Conan cache restore (Windows)
+        shell: pwsh
+        run: |
+          $start = [DateTime]::Parse($env:CONAN_CACHE_RESTORE_START)
+          $elapsed = [Math]::Round(((Get-Date).ToUniversalTime() - $start).TotalSeconds, 2)
+          $hit = '${{ steps.conan_cache_restore.outputs.cache-hit }}'
+          if ([string]::IsNullOrWhiteSpace($hit)) { $hit = 'false' }
+          $matchedKey = '${{ steps.conan_cache_restore.outputs.cache-matched-key }}'
+          if ([string]::IsNullOrWhiteSpace($matchedKey)) { $matchedKey = 'N/A' }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '### conan cache telemetry (Windows deps job)'
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_hit: {0}" -f $hit)
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_elapsed_sec: {0}" -f $elapsed)
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_key: {0}" -f $matchedKey)
+
+      - name: Ensure Conan cache directory
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "${{ env.CONAN_HOME }}" | Out-Null
+
+      - name: Ensure lockfile exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "conan.lock")) {
+            throw "conan.lock is required for reproducible Conan CI runs"
+          }
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan2
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install "conan>=2.0,<3"
+          conan --version
+
+      - name: Enable MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Prime Conan dependencies (Release)
+        if: steps.conan_cache_restore.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup_conan.ps1 -Config Release -Feature windows-dev -BuildDir build-windows
+
+      - name: Mark Conan cache save start (Windows)
+        if: success() && steps.conan_cache_restore.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          "CONAN_CACHE_SAVE_START=$(Get-Date -AsUTC -Format o)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Save Conan cache (Windows)
+        if: success() && steps.conan_cache_restore.outputs.cache-hit != 'true'
+        id: conan_cache_save
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CONAN_HOME }}
+          key: ${{ steps.conan_cache_restore.outputs.cache-primary-key }}
+
+      - name: Summarize Conan cache save (Windows)
+        if: always()
+        shell: pwsh
+        run: |
+          $saveOutcome = '${{ steps.conan_cache_save.outcome }}'
+          if ([string]::IsNullOrWhiteSpace($saveOutcome)) { $saveOutcome = 'unknown' }
+          if ('${{ steps.conan_cache_restore.outputs.cache-hit }}' -eq 'true') {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '- save_skipped: true (exact cache hit)'
+            return
+          }
+          if ([string]::IsNullOrWhiteSpace($env:CONAN_CACHE_SAVE_START)) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- save_status: {0}" -f $saveOutcome)
+            return
+          }
+          $start = [DateTime]::Parse($env:CONAN_CACHE_SAVE_START)
+          $elapsed = [Math]::Round(((Get-Date).ToUniversalTime() - $start).TotalSeconds, 2)
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- save_status: {0}" -f $saveOutcome)
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- save_elapsed_sec: {0}" -f $elapsed)
+
+  core-api-consumer-windows:
+    needs: windows-conan-deps
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CONAN_HOME: ${{ github.workspace }}-conan2
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,49 +145,57 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Mark vcpkg cache restore start (Windows)
+      - name: Mark Conan cache restore start (Windows)
         shell: pwsh
         run: |
-          "VCPKG_CACHE_RESTORE_START=$(Get-Date -AsUTC -Format o)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CONAN_CACHE_RESTORE_START=$(Get-Date -AsUTC -Format o)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Restore vcpkg artifacts cache (Windows)
-        id: vcpkg_cache_restore
+      - name: Restore Conan cache (Windows)
+        id: conan_cache_restore
         uses: actions/cache/restore@v4
         with:
-          path: |
-            .cache/vcpkg/archives
-            .cache/vcpkg/downloads
-            build-windows/vcpkg_installed
-          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'scripts/setup_vcpkg.ps1', 'cmake/knights_vcpkg_toolchain.cmake') }}
+          path: ${{ env.CONAN_HOME }}
+          key: ${{ runner.os }}-conan2-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/**', 'scripts/setup_conan.ps1', 'scripts/build.ps1') }}
           restore-keys: |
-            ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json') }}-
-            ${{ runner.os }}-vcpkg-
+            ${{ runner.os }}-conan2-
 
-      - name: Summarize vcpkg cache restore (Windows)
+      - name: Summarize Conan cache restore (Windows)
         shell: pwsh
         run: |
-          $start = [DateTime]::Parse($env:VCPKG_CACHE_RESTORE_START)
+          $start = [DateTime]::Parse($env:CONAN_CACHE_RESTORE_START)
           $elapsed = [Math]::Round(((Get-Date).ToUniversalTime() - $start).TotalSeconds, 2)
-          $hit = '${{ steps.vcpkg_cache_restore.outputs.cache-hit }}'
+          $hit = '${{ steps.conan_cache_restore.outputs.cache-hit }}'
           if ([string]::IsNullOrWhiteSpace($hit)) { $hit = 'false' }
-          $matchedKey = '${{ steps.vcpkg_cache_restore.outputs.cache-matched-key }}'
+          $matchedKey = '${{ steps.conan_cache_restore.outputs.cache-matched-key }}'
           if ([string]::IsNullOrWhiteSpace($matchedKey)) { $matchedKey = 'N/A' }
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '### vcpkg cache telemetry (Windows)'
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '### conan cache telemetry (Windows)'
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_hit: {0}" -f $hit)
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_elapsed_sec: {0}" -f $elapsed)
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_key: {0}" -f $matchedKey)
 
-      - name: Ensure vcpkg cache directories (Windows)
+      - name: Ensure Conan cache directory
         shell: pwsh
         run: |
-          $buildInstalled = "${{ github.workspace }}/build-windows/vcpkg_installed"
-          $rootInstalled = "${{ github.workspace }}/vcpkg_installed"
-          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/vcpkg/archives" | Out-Null
-          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/vcpkg/downloads" | Out-Null
-          New-Item -ItemType Directory -Force -Path $buildInstalled | Out-Null
-          if (-not (Test-Path $rootInstalled)) {
-            New-Item -ItemType Junction -Path $rootInstalled -Target $buildInstalled | Out-Null
+          New-Item -ItemType Directory -Force -Path "${{ env.CONAN_HOME }}" | Out-Null
+
+      - name: Ensure lockfile exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "conan.lock")) {
+            throw "conan.lock is required for reproducible Conan CI runs"
           }
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan2
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install "conan>=2.0,<3"
+          conan --version
 
       - name: Enable MSVC Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1
@@ -122,61 +233,25 @@ jobs:
         run: |
           python tools/check_core_api_contracts.py --check-stable-change-governance --base-sha "${{ github.event.pull_request.base.sha }}" --head-sha "${{ github.sha }}"
 
-      - name: Build Core Public API Smoke Target (Debug)
+      - name: Build Core Public API Smoke Target (Release)
         shell: pwsh
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug -Target core_public_api_smoke
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Release -Target core_public_api_smoke
 
-      - name: Build Core Public API Header Compile Target (Debug)
+      - name: Build Core Public API Header Compile Target (Release)
         shell: pwsh
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug -Target core_public_api_headers_compile
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Release -Target core_public_api_headers_compile
 
-      - name: Build Core Public API Stable Header Scenarios Target (Debug)
+      - name: Build Core Public API Stable Header Scenarios Target (Release)
         shell: pwsh
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug -Target core_public_api_stable_header_scenarios
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Release -Target core_public_api_stable_header_scenarios
 
       - name: Run Core Public API Consumer Tests
         shell: pwsh
         run: |
-          ctest --preset windows-test -R "CorePublicApi|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure
-
-      - name: Mark vcpkg cache save start (Windows)
-        if: success() && steps.vcpkg_cache_restore.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          "VCPKG_CACHE_SAVE_START=$(Get-Date -AsUTC -Format o)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Save vcpkg artifacts cache (Windows)
-        if: success() && steps.vcpkg_cache_restore.outputs.cache-hit != 'true'
-        id: vcpkg_cache_save
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            .cache/vcpkg/archives
-            .cache/vcpkg/downloads
-            build-windows/vcpkg_installed
-          key: ${{ steps.vcpkg_cache_restore.outputs.cache-primary-key }}
-
-      - name: Summarize vcpkg cache save (Windows)
-        if: always()
-        shell: pwsh
-        run: |
-          $saveOutcome = '${{ steps.vcpkg_cache_save.outcome }}'
-          if ([string]::IsNullOrWhiteSpace($saveOutcome)) { $saveOutcome = 'unknown' }
-          if ('${{ steps.vcpkg_cache_restore.outputs.cache-hit }}' -eq 'true') {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '- save_skipped: true (exact cache hit)'
-            return
-          }
-          if ([string]::IsNullOrWhiteSpace($env:VCPKG_CACHE_SAVE_START)) {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- save_status: {0}" -f $saveOutcome)
-            return
-          }
-          $start = [DateTime]::Parse($env:VCPKG_CACHE_SAVE_START)
-          $elapsed = [Math]::Round(((Get-Date).ToUniversalTime() - $start).TotalSeconds, 2)
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- save_status: {0}" -f $saveOutcome)
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- save_elapsed_sec: {0}" -f $elapsed)
+          ctest --preset windows-test --parallel 8 -R "CorePublicApi|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure
 
   core-api-consumer-linux:
     runs-on: ubuntu-latest
@@ -222,18 +297,15 @@ jobs:
             python3 tools/check_core_api_contracts.py --check-boundary-fixtures; \
             python3 tools/check_core_api_contracts.py --check-stable-governance-fixtures; \
             cmake --preset linux -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=ON; \
-            cmake --build --preset linux-debug --target core_public_api_smoke core_public_api_headers_compile core_public_api_stable_header_scenarios --parallel; \
-            ctest --preset linux-test -R 'CorePublicApi|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures' --output-on-failure"
+            cmake --build --preset linux-debug --target core_public_api_smoke core_public_api_headers_compile core_public_api_stable_header_scenarios protocol_fuzz_harness --parallel; \
+            ctest --test-dir build-linux --parallel 8 -R 'CorePublicApi|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures' --output-on-failure"
 
   windows-fast-tests:
+    needs: windows-conan-deps
     runs-on: windows-latest
     timeout-minutes: 60
     env:
-      VCPKG_FEATURE_FLAGS: manifests,binarycaching
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
-      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.cache/vcpkg/archives,readwrite
-      VCPKG_DOWNLOADS: ${{ github.workspace }}/.cache/vcpkg/downloads
-      VCPKG_INSTALLED_DIR: ${{ github.workspace }}/build-windows/vcpkg_installed
+      CONAN_HOME: ${{ github.workspace }}-conan2
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -241,49 +313,57 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Mark vcpkg cache restore start (Windows)
+      - name: Mark Conan cache restore start (Windows)
         shell: pwsh
         run: |
-          "VCPKG_CACHE_RESTORE_START=$(Get-Date -AsUTC -Format o)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CONAN_CACHE_RESTORE_START=$(Get-Date -AsUTC -Format o)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Restore vcpkg artifacts cache (Windows)
-        id: vcpkg_cache_restore
+      - name: Restore Conan cache (Windows)
+        id: conan_cache_restore
         uses: actions/cache/restore@v4
         with:
-          path: |
-            .cache/vcpkg/archives
-            .cache/vcpkg/downloads
-            build-windows/vcpkg_installed
-          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'scripts/setup_vcpkg.ps1', 'cmake/knights_vcpkg_toolchain.cmake') }}
+          path: ${{ env.CONAN_HOME }}
+          key: ${{ runner.os }}-conan2-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/**', 'scripts/setup_conan.ps1', 'scripts/build.ps1') }}
           restore-keys: |
-            ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json') }}-
-            ${{ runner.os }}-vcpkg-
+            ${{ runner.os }}-conan2-
 
-      - name: Summarize vcpkg cache restore (Windows)
+      - name: Summarize Conan cache restore (Windows)
         shell: pwsh
         run: |
-          $start = [DateTime]::Parse($env:VCPKG_CACHE_RESTORE_START)
+          $start = [DateTime]::Parse($env:CONAN_CACHE_RESTORE_START)
           $elapsed = [Math]::Round(((Get-Date).ToUniversalTime() - $start).TotalSeconds, 2)
-          $hit = '${{ steps.vcpkg_cache_restore.outputs.cache-hit }}'
+          $hit = '${{ steps.conan_cache_restore.outputs.cache-hit }}'
           if ([string]::IsNullOrWhiteSpace($hit)) { $hit = 'false' }
-          $matchedKey = '${{ steps.vcpkg_cache_restore.outputs.cache-matched-key }}'
+          $matchedKey = '${{ steps.conan_cache_restore.outputs.cache-matched-key }}'
           if ([string]::IsNullOrWhiteSpace($matchedKey)) { $matchedKey = 'N/A' }
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '### vcpkg cache telemetry (Windows)'
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '### conan cache telemetry (Windows)'
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_hit: {0}" -f $hit)
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_elapsed_sec: {0}" -f $elapsed)
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_key: {0}" -f $matchedKey)
 
-      - name: Ensure vcpkg cache directories (Windows)
+      - name: Ensure Conan cache directory
         shell: pwsh
         run: |
-          $buildInstalled = "${{ github.workspace }}/build-windows/vcpkg_installed"
-          $rootInstalled = "${{ github.workspace }}/vcpkg_installed"
-          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/vcpkg/archives" | Out-Null
-          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/vcpkg/downloads" | Out-Null
-          New-Item -ItemType Directory -Force -Path $buildInstalled | Out-Null
-          if (-not (Test-Path $rootInstalled)) {
-            New-Item -ItemType Junction -Path $rootInstalled -Target $buildInstalled | Out-Null
+          New-Item -ItemType Directory -Force -Path "${{ env.CONAN_HOME }}" | Out-Null
+
+      - name: Ensure lockfile exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "conan.lock")) {
+            throw "conan.lock is required for reproducible Conan CI runs"
           }
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan2
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install "conan>=2.0,<3"
+          conan --version
 
       - name: Enable MSVC Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1
@@ -316,62 +396,26 @@ jobs:
           python tools/gen_wire_codec.py protocol/wire_map.json core/include/server/wire/codec.hpp
           git diff --exit-code -- core/include/server/wire/codec.hpp
 
-      - name: Build (Debug)
+      - name: Build (Release)
         shell: pwsh
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Release
 
-      - name: Build Protocol Fuzz Harness (Debug)
+      - name: Build Protocol Fuzz Harness (Release)
         shell: pwsh
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Debug -Target protocol_fuzz_harness
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Release -Target protocol_fuzz_harness
 
       - name: Run Protocol Fuzz Harness
         shell: pwsh
         run: |
           $env:FUZZ_ITERATIONS = "120000"
-          .\build-windows\tests\Debug\protocol_fuzz_harness.exe
+          .\build-windows\tests\Release\protocol_fuzz_harness.exe
 
       - name: Run Windows Unit Tests (ctest)
         shell: pwsh
         run: |
-          ctest --preset windows-test --output-on-failure
-
-      - name: Mark vcpkg cache save start (Windows)
-        if: success() && steps.vcpkg_cache_restore.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          "VCPKG_CACHE_SAVE_START=$(Get-Date -AsUTC -Format o)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Save vcpkg artifacts cache (Windows)
-        if: success() && steps.vcpkg_cache_restore.outputs.cache-hit != 'true'
-        id: vcpkg_cache_save
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            .cache/vcpkg/archives
-            .cache/vcpkg/downloads
-            build-windows/vcpkg_installed
-          key: ${{ steps.vcpkg_cache_restore.outputs.cache-primary-key }}
-
-      - name: Summarize vcpkg cache save (Windows)
-        if: always()
-        shell: pwsh
-        run: |
-          $saveOutcome = '${{ steps.vcpkg_cache_save.outcome }}'
-          if ([string]::IsNullOrWhiteSpace($saveOutcome)) { $saveOutcome = 'unknown' }
-          if ('${{ steps.vcpkg_cache_restore.outputs.cache-hit }}' -eq 'true') {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '- save_skipped: true (exact cache hit)'
-            return
-          }
-          if ([string]::IsNullOrWhiteSpace($env:VCPKG_CACHE_SAVE_START)) {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- save_status: {0}" -f $saveOutcome)
-            return
-          }
-          $start = [DateTime]::Parse($env:VCPKG_CACHE_SAVE_START)
-          $elapsed = [Math]::Round(((Get-Date).ToUniversalTime() - $start).TotalSeconds, 2)
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- save_status: {0}" -f $saveOutcome)
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- save_elapsed_sec: {0}" -f $elapsed)
+          ctest --preset windows-test --parallel 8 --output-on-failure
 
   linux-docker-stack:
     runs-on: ubuntu-latest

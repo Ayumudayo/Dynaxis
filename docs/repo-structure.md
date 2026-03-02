@@ -50,7 +50,7 @@
 - 상위 CMake는 전역 include 디렉터리/컴파일 옵션을 최소화하고, 하위 타깃에만 필요한 설정을 부여한다.
 - 타깃/네임스페이스/출력물에 프로젝트명(예: knights) 금지. 예시:
   - 라이브러리: `server_core` (STATIC/SHARED 선택), `gateway_service_lib`
-  - 실행 파일: `gateway_service`, `dev_chat_cli`
+- 실행 파일: `gateway_service`, `client_gui`
   - C++ 네임스페이스: `server::core`, `server::gateway`
 - `core`는 PUBLIC 헤더만 노출: `target_include_directories(server_core PUBLIC include)`
 - 종속 관계는 단방향 유지: `services/*` → `core`, `clients/*` → `core` (역참조 금지)

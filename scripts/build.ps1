@@ -1,7 +1,8 @@
 <#
   빌드/구성 스크립트 (PowerShell)
-  - Windows/MSVC default. Dependencies come from vcpkg manifest features (see vcpkg.json).
-  - Linux runtime is Docker (system packages + source builds in Dockerfile.base). This script does not auto-run vcpkg on Linux.
+  - Conan2 is the default and only supported dependency provider.
+  - Windows/Linux configure+build both go through Conan-generated toolchains.
+  - Linux runtime remains Docker-first for stack execution.
 #>
 [CmdletBinding()]
 param(
@@ -16,11 +17,10 @@ param(
   [ValidateSet('none','server','client','both')]
   [string]$Run = 'none',
   [int]$Port = 5000,
-  [switch]$UseVcpkg,
-  [string]$VcpkgTriplet = "",
+  [switch]$UseConan,
   [switch]$ReleasePackage,
   [string]$ReleaseOutput = "artifacts",
-  [string[]]$ReleaseTargets = @('server_app','gateway_app','dev_chat_cli','wb_worker'),
+  [string[]]$ReleaseTargets = @('server_app','gateway_app','wb_worker'),
   [switch]$ReleaseZip,
   [int]$MaxJobs = 0
 )
@@ -54,7 +54,7 @@ function Resolve-BinaryPath([string]$Name, [bool]$IsWindows) {
     (Join-Path $BuildDir "$Name$ext"),
     (Join-Path $BuildDir (Join-Path $Config "$Name$ext"))
   )
-  foreach ($sub in @('server','gateway','load_balancer','devclient','tools','wb')) {
+  foreach ($sub in @('server','gateway','load_balancer','client_gui','tools','wb')) {
     $candidates += (Join-Path $BuildDir (Join-Path $sub "$Name$ext"))
     $candidates += (Join-Path $BuildDir (Join-Path $sub (Join-Path $Config "$Name$ext")))
   }
@@ -91,13 +91,25 @@ if ($ClientOnly) {
   }
 }
 
+if (-not $PSBoundParameters.ContainsKey('UseConan')) {
+  $UseConan = $true
+}
+if (-not $UseConan) {
+  Warn "비-Conan 빌드 경로는 제거되었습니다. Conan 모드로 강제 전환합니다."
+  $UseConan = $true
+}
+
 if (-not $BuildDir -or $BuildDir -eq '') {
   # CMakePresets.json의 기본 binaryDir과 일치시키는 것을 전제로 한다.
   if ($onWindows) {
-    if ($ClientOnly) { $BuildDir = 'build-windows-client' }
-    else { $BuildDir = 'build-windows' }
+    if ($ClientOnly) {
+      $BuildDir = 'build-windows-client'
+    }
+    else {
+      $BuildDir = 'build-windows'
+    }
   } else {
-    $BuildDir = 'build-linux'
+    $BuildDir = 'build-linux-conan'
   }
 }
 Info "BuildDir=$BuildDir"
@@ -108,57 +120,99 @@ if ($Clean) {
 
 # 제너레이터 설정 및 프리셋 선택
 if (-not $Generator -or $Generator -eq '') {
-  if ($onWindows) { 
-      if ($ClientOnly) {
-          $Preset = "windows-client"
-          $BuildPreset = "windows-client-release"
-      } else {
-          $Preset = "windows"
-          $BuildPreset = "windows-debug"
-          if ($Config -eq "RelWithDebInfo") { $BuildPreset = "windows-release" }
-      }
-  } else { 
-      $Preset = "linux"
-      $BuildPreset = "linux-debug"
-      if ($Config -eq "RelWithDebInfo") { $BuildPreset = "linux-release" }
+  if ($onWindows) {
+    if ($ClientOnly) { $Preset = 'windows-client' }
+    else { $Preset = 'windows' }
+  } else {
+    if ($Config -eq 'Debug') { $Preset = 'linux-conan' }
+    else { $Preset = 'linux-conan-release' }
   }
 }
 
-$cmakeArgs = @('--preset', $Preset)
+$cmakeArgs = @()
+$useVsBuildLayout = $false
 
-# vcpkg toolchain (local checkout)
-$vcpkgJsonExists = Test-Path 'vcpkg.json'
-if (-not $VcpkgTriplet -or $VcpkgTriplet -eq '') {
-  if ($onWindows) { $VcpkgTriplet = 'x64-windows' } else { $VcpkgTriplet = 'x64-linux' }
+$setupConanScript = Join-Path $PSScriptRoot 'setup_conan.ps1'
+if (-not (Test-Path $setupConanScript)) { Fail "setup_conan.ps1 스크립트를 찾을 수 없습니다: $setupConanScript" }
+
+$conanFeature = 'windows-dev'
+if ($ClientOnly) { $conanFeature = 'windows-client' }
+$conanLockfile = 'conan.lock'
+if ($conanFeature -eq 'windows-client') { $conanLockfile = 'conan-client.lock' }
+
+$conanOutputDir = & $setupConanScript -Config $Config -Feature $conanFeature -BuildDir $BuildDir -LockfilePath $conanLockfile
+if (-not $conanOutputDir) { Fail "Conan output 경로를 확인할 수 없습니다." }
+
+$toolchainCandidates = @(
+  (Join-Path $conanOutputDir 'conan_toolchain.cmake'),
+  (Join-Path $conanOutputDir 'build\generators\conan_toolchain.cmake'),
+  (Join-Path $conanOutputDir 'build\Debug\generators\conan_toolchain.cmake'),
+  (Join-Path $conanOutputDir 'build\Release\generators\conan_toolchain.cmake')
+)
+$toolchainFile = $null
+foreach ($candidate in $toolchainCandidates) {
+  if (Test-Path $candidate) {
+    $toolchainFile = $candidate
+    break
+  }
 }
-$shouldUseVcpkg = $UseVcpkg -or ($onWindows -and $vcpkgJsonExists)
-if ($UseVcpkg -and -not $onWindows) {
-  Warn "UseVcpkg requested on non-Windows; Linux presets are configured for system dependencies (no vcpkg toolchain)."
+if (-not $toolchainFile) {
+  Fail "Conan toolchain 파일을 찾지 못했습니다. 확인한 경로: $($toolchainCandidates -join ', ')"
 }
 
-if ($shouldUseVcpkg) {
-  $setupScript = Join-Path $PSScriptRoot 'setup_vcpkg.ps1'
-  if (-not (Test-Path $setupScript)) { Fail "setup_vcpkg.ps1 스크립트를 찾을 수 없습니다: $setupScript" }
-  # CMake preset(toolchain) will run manifest install; here we only ensure vcpkg is cloned/bootstrapped.
-  $vcpkgRoot = & $setupScript -Triplet $VcpkgTriplet -SkipInstall
-  if (-not $vcpkgRoot) { Fail "vcpkg root 경로를 확인할 수 없습니다." }
-  Info "vcpkg root: $vcpkgRoot"
-  # Presets handle toolchain file, but we might need to ensure vcpkg is bootstrapped
+$useConanPreset = ($Preset -and $Preset -ne '')
+if ($useConanPreset) {
+  $useVsBuildLayout = $onWindows
+  $cmakeArgs = @('--preset', $Preset)
+  if ($onWindows) {
+    # Conan install은 단일 build_type 바이너리 그래프를 생성하므로,
+    # Multi-config(VS)에서도 해당 구성만 생성 대상으로 제한한다.
+    $cmakeArgs += "-DCMAKE_CONFIGURATION_TYPES=$Config"
+  }
+  Info "CMake 구성 중... (Conan preset: $Preset)"
+} else {
+  if ($onWindows) { $Generator = 'Visual Studio 17 2022' }
+  else { $Generator = 'Ninja' }
+  $useVsBuildLayout = ($onWindows -and $Generator -like 'Visual Studio*')
+
+  $cmakeArgs = @('-S', '.', '-B', $BuildDir, '-G', $Generator, "-DCMAKE_TOOLCHAIN_FILE=$toolchainFile")
+  if ($onWindows) {
+    if ($Generator -like 'Visual Studio*') {
+      $cmakeArgs += @('-A', 'x64')
+    } else {
+      $cmakeArgs += "-DCMAKE_BUILD_TYPE=$Config"
+    }
+  } else {
+    $cmakeArgs += "-DCMAKE_BUILD_TYPE=$Config"
+  }
+
+  $cmakeArgs += @(
+    '-DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release',
+    '-DCMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL=Release'
+  )
+
+  if ($ClientOnly) {
+    $cmakeArgs += @(
+      '-DBUILD_SERVER_STACK=OFF',
+      '-DBUILD_GATEWAY_APP=OFF',
+      '-DBUILD_SERVER_TESTS=OFF',
+      '-DBUILD_WRITE_BEHIND_TOOLS=OFF',
+      '-DBUILD_ADMIN_APP=OFF',
+      '-DBUILD_MIGRATIONS_RUNNER=OFF'
+    )
+  }
+
+  Info "CMake 구성 중... (Conan + Generator: $Generator)"
 }
 
-Info "CMake 구성 중... (Preset: $Preset)"
 & cmake @cmakeArgs
 if ($LASTEXITCODE -ne 0) { Fail "CMake 구성 실패" }
 
-Info "빌드 중... (Preset: $BuildPreset)"
+Info "빌드 중... (Directory: $BuildDir)"
 
 $buildArgs = @()
 if ($Target -and $Target -ne '') {
-  # Visual Studio generator는 타깃별 .vcxproj가 서브 디렉터리에 생성될 수 있어
-  # `cmake --build --preset ... --target <name>`가 실패할 수 있다.
-  # (예: build-windows/gateway/gateway_app.vcxproj)
-  # 이 경우 해당 .vcxproj가 있는 디렉터리를 빌드 디렉터리로 사용한다.
-  if ($onWindows) {
+  if ($useVsBuildLayout) {
     $resolvedBuildDir = $BuildDir
     try { $resolvedBuildDir = (Resolve-Path $BuildDir).Path } catch {}
     $proj = $null
@@ -171,13 +225,16 @@ if ($Target -and $Target -ne '') {
     if ($proj) {
       $buildArgs = @('--build', $proj.DirectoryName, '--config', $Config, '--target', $Target)
     } else {
-      $buildArgs = @('--build', '--preset', $BuildPreset, '--target', $Target)
+      $buildArgs = @('--build', $BuildDir, '--config', $Config, '--target', $Target)
     }
   } else {
-    $buildArgs = @('--build', '--preset', $BuildPreset, '--target', $Target)
+    $buildArgs = @('--build', $BuildDir, '--target', $Target)
   }
 } else {
-  $buildArgs = @('--build', '--preset', $BuildPreset)
+  $buildArgs = @('--build', $BuildDir)
+  if ($useVsBuildLayout) {
+    $buildArgs += @('--config', $Config)
+  }
 }
 
 if ($MaxJobs -gt 0) {
@@ -235,10 +292,21 @@ if ($Run -ne 'none') {
     & $exe $Port
   }
   elseif ($Run -eq 'client') {
-    if ($onWindows -and $Generator -like 'Visual Studio*') { $exe = Join-Path $BuildDir (Join-Path $Config 'dev_chat_cli.exe') }
-    else { $exe = Join-Path $BuildDir 'devclient/dev_chat_cli' }
-    if (-not (Test-Path $exe)) { $exe = Join-Path $BuildDir 'dev_chat_cli' }
-    if (-not (Test-Path $exe)) { Fail "dev_chat_cli 실행 파일을 찾을 수 없습니다." }
+    if (-not $onWindows) {
+      Fail "클라이언트 실행은 Windows에서만 지원됩니다. client_gui를 사용하세요."
+    }
+    $candidates = @(
+      (Join-Path $BuildDir (Join-Path 'client_gui' (Join-Path $Config 'client_gui.exe'))),
+      (Join-Path $BuildDir (Join-Path $Config 'client_gui.exe')),
+      (Join-Path $BuildDir 'client_gui.exe')
+    )
+    foreach ($candidate in $candidates) {
+      if (Test-Path $candidate) {
+        $exe = $candidate
+        break
+      }
+    }
+    if (-not $exe -or -not (Test-Path $exe)) { Fail "client_gui 실행 파일을 찾을 수 없습니다." }
     Info "클라이언트 실행: $exe 127.0.0.1 $Port"
     & $exe '127.0.0.1' $Port
   }
@@ -250,11 +318,22 @@ if ($Run -ne 'none') {
     if (-not (Test-Path $serverExe)) { $serverExe = Join-Path $BuildDir 'server_app' }
     if (-not (Test-Path $serverExe)) { Fail "server_app 실행 파일을 찾을 수 없습니다." }
 
+    if (-not $onWindows) {
+      Fail "both 모드는 Windows에서만 지원됩니다. client_gui를 사용하세요."
+    }
     $clientExe = ''
-    if ($onWindows -and $Generator -like 'Visual Studio*') { $clientExe = Join-Path $BuildDir (Join-Path $Config 'dev_chat_cli.exe') }
-    else { $clientExe = Join-Path $BuildDir 'devclient/dev_chat_cli' }
-    if (-not (Test-Path $clientExe)) { $clientExe = Join-Path $BuildDir 'dev_chat_cli' }
-    if (-not (Test-Path $clientExe)) { Fail "dev_chat_cli 실행 파일을 찾을 수 없습니다." }
+    $clientCandidates = @(
+      (Join-Path $BuildDir (Join-Path 'client_gui' (Join-Path $Config 'client_gui.exe'))),
+      (Join-Path $BuildDir (Join-Path $Config 'client_gui.exe')),
+      (Join-Path $BuildDir 'client_gui.exe')
+    )
+    foreach ($candidate in $clientCandidates) {
+      if (Test-Path $candidate) {
+        $clientExe = $candidate
+        break
+      }
+    }
+    if (-not $clientExe -or -not (Test-Path $clientExe)) { Fail "client_gui 실행 파일을 찾을 수 없습니다." }
 
     Info "서버 시작: $serverExe 5000 (백그라운드)"
     if ($onWindows) {

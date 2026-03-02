@@ -37,7 +37,7 @@ pwsh scripts/smoke_metrics.ps1
 ```
 
 2) 트래픽 주입
-- 채팅 트래픽(권장): `client_gui` 또는 `dev_chat_cli`로 로그인/룸 입장/채팅 몇 회 수행
+- 채팅 트래픽(권장): `client_gui`로 로그인/룸 입장/채팅 몇 회 수행
 - write-behind 왕복 검증(roundtrip, 도구 기반): `pwsh scripts/smoke_wb.ps1` (Streams -> DB 검증)
 - soak + 성능 회귀 게이트(로그인 RTT/처리량 + bounded queue): `python tests/python/verify_soak_perf_gate.py`
 

@@ -51,7 +51,10 @@ Client --TCP--> HAProxy --TCP--> Gateway --TCP--> server_app
 HAProxy는 TCP 레벨에서만 Gateway로 분산한다. (애플리케이션 opcode는 Gateway/Server가 처리)
 
 로컬 검증은 `docker/stack/docker-compose.yml` 을 권장한다.
-HAProxy 설정은 `docker/stack/haproxy/haproxy.cfg` 로 관리한다.
+HAProxy 설정은 compose 환경 변수 `HAPROXY_CONFIG`로 선택한다.
+
+- Dev 기본값: `HAPROXY_CONFIG=haproxy.cfg`
+- Prod 템플릿: `HAPROXY_CONFIG=haproxy.tls13.cfg`
 
 ### 3.1 로컬 개발용 예시 설정
 아래 예시는 HAProxy 컨테이너가 `gateway-1`, `gateway-2` 컨테이너로 TCP를 분산하는 형태다.

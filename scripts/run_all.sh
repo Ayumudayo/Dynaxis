@@ -15,18 +15,21 @@ fail(){ echo -e "\033[31m[fail]\033[0m $*"; exit 1; }
 
 if [[ ! -f .env ]]; then warn ".env 없음 — OS 환경변수 사용"; fi
 
-info "필요 타깃 빌드(server_app, wb_worker${RUN_DLQ:+, wb_dlq_replayer}${WITH_CLIENT:+, dev_chat_cli})"
+if [[ "$WITH_CLIENT" == "1" ]]; then
+  warn "WITH_CLIENT is ignored on Linux/WSL (GUI client is Windows-only)."
+  WITH_CLIENT=0
+fi
+
+info "필요 타깃 빌드(server_app, wb_worker${RUN_DLQ:+, wb_dlq_replayer})"
 pwsh ./scripts/build.ps1 -Config "$CONFIG" -BuildDir "$BUILDDIR" -Target server_app >/dev/null
 pwsh ./scripts/build.ps1 -Config "$CONFIG" -BuildDir "$BUILDDIR" -Target wb_worker   >/dev/null
 if [[ "$RUN_DLQ" == "1" ]]; then pwsh ./scripts/build.ps1 -Config "$CONFIG" -BuildDir "$BUILDDIR" -Target wb_dlq_replayer >/dev/null; fi
-if [[ "$WITH_CLIENT" == "1" ]]; then pwsh ./scripts/build.ps1 -Config "$CONFIG" -BuildDir "$BUILDDIR" -Target dev_chat_cli >/dev/null; fi
 
 serverExe="$BUILDDIR/server/$CONFIG/server_app"
 [[ -f "$serverExe.exe" ]] && serverExe="$BUILDDIR/server/$CONFIG/server_app.exe"
 workerExe="$BUILDDIR/$CONFIG/wb_worker"
 [[ -f "$workerExe.exe" ]] && workerExe="$BUILDDIR/$CONFIG/wb_worker.exe"
 dlqExe="$BUILDDIR/$CONFIG/wb_dlq_replayer"; [[ -f "$dlqExe.exe" ]] && dlqExe="$BUILDDIR/$CONFIG/wb_dlq_replayer.exe"
-cliExe="$BUILDDIR/devclient/$CONFIG/dev_chat_cli"; [[ -f "$cliExe.exe" ]] && cliExe="$BUILDDIR/devclient/$CONFIG/dev_chat_cli.exe"
 
 [[ -f "$serverExe" ]] || fail "server_app 실행 파일을 찾을 수 없습니다: $serverExe"
 [[ -f "$workerExe" ]] || fail "wb_worker 실행 파일을 찾을 수 없습니다: $workerExe"
@@ -44,10 +47,6 @@ sleep 0.8
 if [[ "$RUN_DLQ" == "1" ]]; then
   info "wb_dlq_replayer 시작"
   if [[ -f "$dlqExe" ]]; then "$dlqExe" & dlq_pid=$!; fi
-fi
-
-if [[ "$WITH_CLIENT" == "1" ]]; then
-  if [[ -f "$cliExe" ]]; then "$cliExe" & fi
 fi
 
 if [[ "$SMOKE" == "1" ]]; then
