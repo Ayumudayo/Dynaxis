@@ -11,7 +11,7 @@ TARGET=""
 PREFIX=""
 PORT=5000
 RELEASE_DIR=""
-RELEASE_LIST="server_app,gateway_app,dev_chat_cli,wb_worker"
+RELEASE_LIST="server_app,gateway_app,wb_worker"
 RELEASE_ARCHIVE=""
 
 usage(){
@@ -78,10 +78,9 @@ run_server(){
 }
 
 run_client(){
-  exe="$BUILD_DIR/devclient/dev_chat_cli"
-  [[ -x "$exe" ]] || exe="$BUILD_DIR/dev_chat_cli"
-  [[ -x "$exe" ]] || { echo "dev_chat_cli 실행 파일을 찾을 수 없습니다." >&2; exit 1; }
-  "$exe" 127.0.0.1 "$PORT"
+  echo "run-client is no longer supported on Linux/WSL (legacy CLI client removed)." >&2
+  echo "Use client_gui on Windows: pwsh scripts/build.ps1 -ClientOnly -Target client_gui" >&2
+  exit 1
 }
 
 find_binary(){
@@ -90,7 +89,7 @@ find_binary(){
     "$BUILD_DIR/$name"
     "$BUILD_DIR/$CONFIG/$name"
   )
-  for sub in server gateway load_balancer devclient tools wb; do
+  for sub in server gateway load_balancer client_gui tools wb; do
     candidates+=("$BUILD_DIR/$sub/$name" "$BUILD_DIR/$sub/$CONFIG/$name")
   done
   for path in "${candidates[@]}"; do

@@ -20,7 +20,7 @@ if (-not (Test-Path '.env')) { Warn ".env 없음 — OS 환경변수 사용" }
 # 1) 빌드
 $targets = @('server_app','wb_worker')
 if ($RunDLQ)     { $targets += 'wb_dlq_replayer' }
-if ($WithClient) { $targets += 'dev_chat_cli' }
+if ($WithClient) { $targets += 'client_gui' }
 Info ("필요 타깃 빌드: " + ($targets -join ', '))
 $argsCommon = @{ Config = $Config; BuildDir = $BuildDir }
 & ./scripts/build.ps1 @argsCommon -Target server_app | Out-Null
@@ -28,13 +28,13 @@ if ($LASTEXITCODE -ne 0) { Fail "빌드 실패: server_app" }
 & ./scripts/build.ps1 @argsCommon -Target wb_worker   | Out-Null
 if ($LASTEXITCODE -ne 0) { Fail "빌드 실패: wb_worker" }
 if ($RunDLQ)    { & ./scripts/build.ps1 @argsCommon -Target wb_dlq_replayer | Out-Null; if ($LASTEXITCODE -ne 0) { Fail "빌드 실패: wb_dlq_replayer" } }
-if ($WithClient){ & ./scripts/build.ps1 @argsCommon -Target dev_chat_cli    | Out-Null; if ($LASTEXITCODE -ne 0) { Fail "빌드 실패: dev_chat_cli" } }
+if ($WithClient){ & ./scripts/build.ps1 @argsCommon -Target client_gui      | Out-Null; if ($LASTEXITCODE -ne 0) { Fail "빌드 실패: client_gui" } }
 
 # 2) 실행 파일 경로 계산
 $serverExe = if (Test-Path (Join-Path $BuildDir "server/$Config/server_app.exe")) { Join-Path $BuildDir "server/$Config/server_app.exe" } else { Join-Path $BuildDir 'server_app' }
 $workerExe = if (Test-Path (Join-Path $BuildDir "$Config/wb_worker.exe"))        { Join-Path $BuildDir "$Config/wb_worker.exe" }        else { Join-Path $BuildDir 'wb_worker' }
 $dlqExe    = if (Test-Path (Join-Path $BuildDir "$Config/wb_dlq_replayer.exe"))  { Join-Path $BuildDir "$Config/wb_dlq_replayer.exe" }  else { Join-Path $BuildDir 'wb_dlq_replayer' }
-$cliExe    = if (Test-Path (Join-Path $BuildDir "devclient/$Config/dev_chat_cli.exe")) { Join-Path $BuildDir "devclient/$Config/dev_chat_cli.exe" } else { Join-Path $BuildDir 'dev_chat_cli' }
+$cliExe    = if (Test-Path (Join-Path $BuildDir "client_gui/$Config/client_gui.exe")) { Join-Path $BuildDir "client_gui/$Config/client_gui.exe" } else { Join-Path $BuildDir 'client_gui' }
 if (-not (Test-Path $serverExe)) { Fail "server_app 실행 파일을 찾을 수 없습니다: $serverExe" }
 if (-not (Test-Path $workerExe)) { Fail "wb_worker 실행 파일을 찾을 수 없습니다: $workerExe" }
 
@@ -61,10 +61,10 @@ if ($RunDLQ) {
 
 if ($WithClient) {
   if (Test-Path $cliExe) {
-    Info "개발 클라이언트(dev_chat_cli) 실행"
+    Info "개발 클라이언트(client_gui) 실행"
     Start-Process -FilePath $cliExe | Out-Null
   } else {
-    Warn "dev_chat_cli 실행 파일을 찾을 수 없습니다: $cliExe"
+    Warn "client_gui 실행 파일을 찾을 수 없습니다: $cliExe"
   }
 }
 

@@ -20,7 +20,7 @@ param(
   [switch]$UseConan,
   [switch]$ReleasePackage,
   [string]$ReleaseOutput = "artifacts",
-  [string[]]$ReleaseTargets = @('server_app','gateway_app','dev_chat_cli','wb_worker'),
+  [string[]]$ReleaseTargets = @('server_app','gateway_app','wb_worker'),
   [switch]$ReleaseZip,
   [int]$MaxJobs = 0
 )
@@ -54,7 +54,7 @@ function Resolve-BinaryPath([string]$Name, [bool]$IsWindows) {
     (Join-Path $BuildDir "$Name$ext"),
     (Join-Path $BuildDir (Join-Path $Config "$Name$ext"))
   )
-  foreach ($sub in @('server','gateway','load_balancer','devclient','tools','wb')) {
+  foreach ($sub in @('server','gateway','load_balancer','client_gui','tools','wb')) {
     $candidates += (Join-Path $BuildDir (Join-Path $sub "$Name$ext"))
     $candidates += (Join-Path $BuildDir (Join-Path $sub (Join-Path $Config "$Name$ext")))
   }
@@ -292,10 +292,21 @@ if ($Run -ne 'none') {
     & $exe $Port
   }
   elseif ($Run -eq 'client') {
-    if ($onWindows -and $Generator -like 'Visual Studio*') { $exe = Join-Path $BuildDir (Join-Path $Config 'dev_chat_cli.exe') }
-    else { $exe = Join-Path $BuildDir 'devclient/dev_chat_cli' }
-    if (-not (Test-Path $exe)) { $exe = Join-Path $BuildDir 'dev_chat_cli' }
-    if (-not (Test-Path $exe)) { Fail "dev_chat_cli 실행 파일을 찾을 수 없습니다." }
+    if (-not $onWindows) {
+      Fail "클라이언트 실행은 Windows에서만 지원됩니다. client_gui를 사용하세요."
+    }
+    $candidates = @(
+      (Join-Path $BuildDir (Join-Path 'client_gui' (Join-Path $Config 'client_gui.exe'))),
+      (Join-Path $BuildDir (Join-Path $Config 'client_gui.exe')),
+      (Join-Path $BuildDir 'client_gui.exe')
+    )
+    foreach ($candidate in $candidates) {
+      if (Test-Path $candidate) {
+        $exe = $candidate
+        break
+      }
+    }
+    if (-not $exe -or -not (Test-Path $exe)) { Fail "client_gui 실행 파일을 찾을 수 없습니다." }
     Info "클라이언트 실행: $exe 127.0.0.1 $Port"
     & $exe '127.0.0.1' $Port
   }
@@ -307,11 +318,22 @@ if ($Run -ne 'none') {
     if (-not (Test-Path $serverExe)) { $serverExe = Join-Path $BuildDir 'server_app' }
     if (-not (Test-Path $serverExe)) { Fail "server_app 실행 파일을 찾을 수 없습니다." }
 
+    if (-not $onWindows) {
+      Fail "both 모드는 Windows에서만 지원됩니다. client_gui를 사용하세요."
+    }
     $clientExe = ''
-    if ($onWindows -and $Generator -like 'Visual Studio*') { $clientExe = Join-Path $BuildDir (Join-Path $Config 'dev_chat_cli.exe') }
-    else { $clientExe = Join-Path $BuildDir 'devclient/dev_chat_cli' }
-    if (-not (Test-Path $clientExe)) { $clientExe = Join-Path $BuildDir 'dev_chat_cli' }
-    if (-not (Test-Path $clientExe)) { Fail "dev_chat_cli 실행 파일을 찾을 수 없습니다." }
+    $clientCandidates = @(
+      (Join-Path $BuildDir (Join-Path 'client_gui' (Join-Path $Config 'client_gui.exe'))),
+      (Join-Path $BuildDir (Join-Path $Config 'client_gui.exe')),
+      (Join-Path $BuildDir 'client_gui.exe')
+    )
+    foreach ($candidate in $clientCandidates) {
+      if (Test-Path $candidate) {
+        $clientExe = $candidate
+        break
+      }
+    }
+    if (-not $clientExe -or -not (Test-Path $clientExe)) { Fail "client_gui 실행 파일을 찾을 수 없습니다." }
 
     Info "서버 시작: $serverExe 5000 (백그라운드)"
     if ($onWindows) {
