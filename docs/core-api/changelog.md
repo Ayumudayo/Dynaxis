@@ -11,6 +11,8 @@
 ### 변경됨(Changed)
 - 헤더별 소비자 사용 커버리지를 높이기 위해 `CorePublicApiStableHeaderScenarios` 테스트 타깃을 추가했습니다.
 - `tools/check_core_api_contracts.py`에 stable-governance fixture 회귀 검증을 추가했습니다.
+- `server/core/protocol/packet.hpp`에 연결/세그먼트 분류 enum(`ConnectionType`, `SegmentType`)과 `classify_segment_type()` 헬퍼를 추가했습니다.
+- `server/core/net/queue_budget.hpp`를 추가해 게이트웨이/세션 송신 큐 예산 초과 판단 로직을 공용화했습니다.
 
 ### 파괴적 변경(Breaking)
 - 없음
