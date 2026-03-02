@@ -1,6 +1,7 @@
 #include "server/core/net/session.hpp"
 #include "server/core/net/connection_runtime_state.hpp"
 #include "server/core/net/dispatcher.hpp"
+#include "server/core/net/queue_budget.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/config/options.hpp"
 #include "server/core/protocol/protocol_flags.hpp"
@@ -127,7 +128,8 @@ bool Session::post_serialized(std::function<void()> fn) {
 void Session::async_send(BufferManager::PooledBuffer data, size_t packet_size) {
     asio::dispatch(strand_, [self = shared_from_this(), data = std::move(data), packet_size]() mutable {
         if (self->stopped_.load(std::memory_order_acquire)) return;
-        if (self->options_ && self->options_->send_queue_max > 0 && self->queued_bytes_ + packet_size > self->options_->send_queue_max) {
+        if (self->options_
+            && server::core::net::exceeds_queue_budget(self->options_->send_queue_max, self->queued_bytes_, packet_size)) {
             runtime_metrics::record_send_queue_drop();
             log::warn("Send queue limit exceeded; stopping session");
             self->stop();

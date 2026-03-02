@@ -177,6 +177,16 @@ bool GatewayConnection::try_finish_handshake() {
         return false;
     }
 
+    const auto segment_type = proto::classify_segment_type(header.msg_id);
+    if (segment_type != proto::SegmentType::kApplicationPayload) {
+        server::core::log::warn(
+            std::string("GatewayConnection expected application payload at handshake; got system msg_id=")
+            + std::to_string(header.msg_id)
+        );
+        stop();
+        return true;
+    }
+
     if (header.msg_id != game_proto::MSG_LOGIN_REQ) {
         server::core::log::warn(
             std::string("GatewayConnection expected MSG_LOGIN_REQ first; got msg_id=") + std::to_string(header.msg_id)

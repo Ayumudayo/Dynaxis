@@ -27,6 +27,7 @@
 #include <boost/asio/ip/tcp.hpp>
 
 #include "gateway/gateway_connection.hpp"
+#include "server/core/net/queue_budget.hpp"
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
@@ -487,8 +488,7 @@ void GatewayApp::BackendConnection::send(std::vector<std::uint8_t> payload) {
         }
 
         const auto payload_bytes = payload.size();
-        if (payload_bytes > send_queue_max_bytes_ ||
-            queued_bytes_ > (send_queue_max_bytes_ - payload_bytes)) {
+        if (server::core::net::exceeds_queue_budget(send_queue_max_bytes_, queued_bytes_, payload_bytes)) {
             overflow = true;
         } else {
             queued_bytes_ += payload_bytes;
@@ -526,8 +526,7 @@ void GatewayApp::BackendConnection::send(const std::uint8_t* data, std::size_t l
             return;
         }
 
-        if (length > send_queue_max_bytes_ ||
-            queued_bytes_ > (send_queue_max_bytes_ - length)) {
+        if (server::core::net::exceeds_queue_budget(send_queue_max_bytes_, queued_bytes_, length)) {
             overflow = true;
         } else {
             queued_bytes_ += length;
