@@ -23,7 +23,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     env:
-      CONAN_HOME: ${{ github.workspace }}/.cache/conan2
+      CONAN_HOME: ${{ runner.temp }}/conan2
       SCCACHE_DIR: ${{ github.workspace }}/.cache/sccache
       SCCACHE_CACHE_SIZE: 10G
     steps:
