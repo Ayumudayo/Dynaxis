@@ -169,7 +169,9 @@ if (BUILD_GTEST_TESTS)
     add_executable(server_general_tests
         server/test_server_chat.cpp
         server/test_server_config.cpp
+        server/test_chat_lua_bindings.cpp
         ${CMAKE_SOURCE_DIR}/server/src/app/config.cpp
+        ${CMAKE_SOURCE_DIR}/server/src/scripting/chat_lua_bindings.cpp
         ${CMAKE_SOURCE_DIR}/server/src/chat/chat_service_core.cpp
         ${CMAKE_SOURCE_DIR}/server/src/chat/chat_hook_plugin_manager.cpp
         ${CMAKE_SOURCE_DIR}/server/src/chat/chat_hook_plugin_chain.cpp
