@@ -1242,6 +1242,8 @@ ChatService::LuaColdHookOutcome ChatService::invoke_lua_cold_hook(std::string_vi
             + " failed=" + std::to_string(call_result.failed));
     }
 
+    outcome.notices = call_result.notices;
+
     switch (call_result.decision) {
     case server::core::scripting::LuaHookDecision::kPass:
     case server::core::scripting::LuaHookDecision::kAllow:
@@ -1280,6 +1282,11 @@ bool ChatService::maybe_handle_chat_hook_plugin(Session& s,
 bool ChatService::maybe_handle_login_hook(Session& s, const std::string& user) {
     if (!hook_plugin_) {
         const auto lua_out = invoke_lua_cold_hook("on_login");
+        for (const auto& notice : lua_out.notices) {
+            if (!notice.empty()) {
+                send_system_notice(s, notice);
+            }
+        }
         if (!lua_out.stop_default) {
             return false;
         }
@@ -1298,6 +1305,11 @@ bool ChatService::maybe_handle_login_hook(Session& s, const std::string& user) {
 
     if (!out.stop_default) {
         const auto lua_out = invoke_lua_cold_hook("on_login");
+        for (const auto& notice : lua_out.notices) {
+            if (!notice.empty()) {
+                send_system_notice(s, notice);
+            }
+        }
         if (!lua_out.stop_default) {
             return false;
         }
@@ -1315,6 +1327,11 @@ bool ChatService::maybe_handle_login_hook(Session& s, const std::string& user) {
 bool ChatService::maybe_handle_join_hook(Session& s, const std::string& user, const std::string& room) {
     if (!hook_plugin_) {
         const auto lua_out = invoke_lua_cold_hook("on_join");
+        for (const auto& notice : lua_out.notices) {
+            if (!notice.empty()) {
+                send_system_notice(s, notice);
+            }
+        }
         if (!lua_out.stop_default) {
             return false;
         }
@@ -1333,6 +1350,11 @@ bool ChatService::maybe_handle_join_hook(Session& s, const std::string& user, co
 
     if (!out.stop_default) {
         const auto lua_out = invoke_lua_cold_hook("on_join");
+        for (const auto& notice : lua_out.notices) {
+            if (!notice.empty()) {
+                send_system_notice(s, notice);
+            }
+        }
         if (!lua_out.stop_default) {
             return false;
         }
@@ -1350,6 +1372,11 @@ bool ChatService::maybe_handle_join_hook(Session& s, const std::string& user, co
 bool ChatService::maybe_handle_leave_hook(Session& s, const std::string& user, const std::string& room) {
     if (!hook_plugin_) {
         const auto lua_out = invoke_lua_cold_hook("on_leave");
+        for (const auto& notice : lua_out.notices) {
+            if (!notice.empty()) {
+                send_system_notice(s, notice);
+            }
+        }
         if (!lua_out.stop_default) {
             return false;
         }
@@ -1368,6 +1395,11 @@ bool ChatService::maybe_handle_leave_hook(Session& s, const std::string& user, c
 
     if (!out.stop_default) {
         const auto lua_out = invoke_lua_cold_hook("on_leave");
+        for (const auto& notice : lua_out.notices) {
+            if (!notice.empty()) {
+                send_system_notice(s, notice);
+            }
+        }
         if (!lua_out.stop_default) {
             return false;
         }
@@ -1388,6 +1420,11 @@ void ChatService::notify_session_event_hook(std::uint32_t session_id,
                                             const std::string& reason) {
     if (!hook_plugin_) {
         const auto lua_out = invoke_lua_cold_hook("on_session_event");
+        for (const auto& notice : lua_out.notices) {
+            if (!notice.empty()) {
+                corelog::info("lua session_event notice: " + notice);
+            }
+        }
         if (lua_out.stop_default) {
             corelog::warn("lua on_session_event requested stop_default; ignored for cleanup safety");
         }
@@ -1406,6 +1443,11 @@ void ChatService::notify_session_event_hook(std::uint32_t session_id,
     }
 
     const auto lua_out = invoke_lua_cold_hook("on_session_event");
+    for (const auto& notice : lua_out.notices) {
+        if (!notice.empty()) {
+            corelog::info("lua session_event notice: " + notice);
+        }
+    }
     if (lua_out.stop_default) {
         corelog::warn("lua on_session_event requested stop_default; ignored for cleanup safety");
     }
@@ -1418,6 +1460,11 @@ bool ChatService::maybe_handle_admin_command_hook(std::string_view command,
     deny_reason.clear();
     if (!hook_plugin_) {
         const auto lua_out = invoke_lua_cold_hook("on_admin_command");
+        for (const auto& notice : lua_out.notices) {
+            if (!notice.empty()) {
+                corelog::info("lua admin notice: " + notice);
+            }
+        }
         if (!lua_out.stop_default) {
             return false;
         }
@@ -1438,6 +1485,11 @@ bool ChatService::maybe_handle_admin_command_hook(std::string_view command,
 
     if (!out.stop_default) {
         const auto lua_out = invoke_lua_cold_hook("on_admin_command");
+        for (const auto& notice : lua_out.notices) {
+            if (!notice.empty()) {
+                corelog::info("lua admin notice: " + notice);
+            }
+        }
         if (!lua_out.stop_default) {
             return false;
         }

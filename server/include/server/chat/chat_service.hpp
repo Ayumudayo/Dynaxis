@@ -402,6 +402,7 @@ private:
     struct LuaColdHookOutcome {
         bool stop_default{false};
         std::string deny_reason;
+        std::vector<std::string> notices;
     };
 
     LuaColdHookOutcome invoke_lua_cold_hook(std::string_view hook_name);
