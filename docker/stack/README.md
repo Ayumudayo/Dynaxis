@@ -62,4 +62,5 @@ pwsh scripts/deploy_docker.ps1 -Action down
 
 ## 참고
 - `server_app`은 (실험) chat hook 플러그인을 사용할 수 있다. 기본 스택은 `CHAT_HOOK_PLUGINS_DIR=/app/plugins`로 샘플 플러그인을 로드한다. (`server/README.md` 참고)
+- Lua cold-hook 샘플 스크립트는 `docker/stack/scripts/*.lua`를 `/app/scripts`로 read-only 마운트해 로드한다. 기본값은 `LUA_ENABLED=1`, `LUA_SCRIPTS_DIR=/app/scripts`다.
 - 기본 `haproxy.cfg`는 로컬 검증용 TCP 구성이며, 운영 TLS baseline은 `docker/stack/haproxy/haproxy.tls13.cfg` 템플릿(TLS 1.3 기본 + 레거시 예외 분리 + 내부 mTLS)을 참고한다.
