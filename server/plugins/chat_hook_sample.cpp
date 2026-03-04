@@ -21,7 +21,8 @@ constexpr const char* kVersion = "v2";
 constexpr const char* kVersion = "v1";
 #endif
 
-static void write_buf(ChatHookStrBufV1* b, const char* s) {
+template <typename StrBuf>
+static void write_buf(StrBuf* b, const char* s) {
     if (!b || !b->data || b->capacity == 0) {
         return;
     }
@@ -79,7 +80,8 @@ static bool contains_case_insensitive(const char* s, const char* needle) {
     return false;
 }
 
-static void write_upper_ascii(ChatHookStrBufV1* b, const char* s) {
+template <typename StrBuf>
+static void write_upper_ascii(StrBuf* b, const char* s) {
     if (!b || !b->data || b->capacity == 0) {
         return;
     }
@@ -106,9 +108,9 @@ static void write_upper_ascii(ChatHookStrBufV1* b, const char* s) {
 
 extern "C" {
 
-static ChatHookDecisionV1 CHAT_HOOK_CALL on_chat_send(void*,
-                                                      const ChatHookChatSendV1* in,
-                                                      ChatHookChatSendOutV1* out) {
+static ChatHookDecisionV1 CHAT_HOOK_CALL on_chat_send_v1(void*,
+                                                         const ChatHookChatSendV1* in,
+                                                         ChatHookChatSendOutV1* out) {
     if (!in || !out) {
         return ChatHookDecisionV1::kPass;
     }
@@ -142,13 +144,64 @@ static ChatHookDecisionV1 CHAT_HOOK_CALL on_chat_send(void*,
     return ChatHookDecisionV1::kPass;
 }
 
+#if defined(CHAT_HOOK_SAMPLE_V2)
+static HookDecisionV2 CHAT_HOOK_CALL on_chat_send_v2(void*,
+                                                     const ChatHookChatSendV2* in,
+                                                     ChatHookChatSendOutV2* out) {
+    if (!in || !out) {
+        return HookDecisionV2::kPass;
+    }
+
+    const char* text = in->text ? in->text : "";
+
+    if (std::strcmp(text, "/plugin") == 0) {
+        char msg[192]{};
+        (void)std::snprintf(msg, sizeof(msg), "[%s] active version=%s", kName, kVersion);
+        write_buf(&out->notice, msg);
+        return HookDecisionV2::kHandled;
+    }
+
+    if (starts_with(text, "/shout ")) {
+        const char* rest = text + std::strlen("/shout ");
+        write_upper_ascii(&out->replacement_text, rest);
+        return HookDecisionV2::kModify;
+    }
+
+    if (contains_case_insensitive(text, "banana")) {
+        write_buf(&out->notice, "[chat_hook_sample v2] filtered: banana -> apple");
+        write_buf(&out->replacement_text, "apple");
+        return HookDecisionV2::kModify;
+    }
+
+    return HookDecisionV2::kPass;
+}
+
+static HookDecisionV2 CHAT_HOOK_CALL on_login_v2(void*, const LoginEventV2* in, LoginEventOutV2* out) {
+    if (!in || !out) {
+        return HookDecisionV2::kPass;
+    }
+
+    const char* user = in->user ? in->user : "";
+    if (std::strcmp(user, "sample_deny_login") == 0) {
+        write_buf(&out->notice, "[chat_hook_sample v2] login denied by sample policy");
+        write_buf(&out->deny_reason, "sample policy denied login");
+        return HookDecisionV2::kDeny;
+    }
+
+    if (std::strcmp(user, "sample_login_notice") == 0) {
+        write_buf(&out->notice, "[chat_hook_sample v2] login hook observed user");
+    }
+    return HookDecisionV2::kPass;
+}
+#endif
+
 static const ChatHookApiV1 g_api{
     CHAT_HOOK_ABI_VERSION_V1,
     kName,
     kVersion,
     nullptr,
     nullptr,
-    &on_chat_send,
+    &on_chat_send_v1,
 };
 
 #if defined(CHAT_HOOK_SAMPLE_V2)
@@ -158,8 +211,8 @@ static const ChatHookApiV2 g_api_v2{
     kVersion,
     nullptr,
     nullptr,
-    reinterpret_cast<HookDecisionV2 (CHAT_HOOK_CALL*)(void*, const ChatHookChatSendV2*, ChatHookChatSendOutV2*)>(&on_chat_send),
-    nullptr,
+    &on_chat_send_v2,
+    &on_login_v2,
     nullptr,
     nullptr,
     nullptr,

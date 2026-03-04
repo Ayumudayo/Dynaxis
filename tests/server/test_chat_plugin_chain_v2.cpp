@@ -222,6 +222,21 @@ TEST_F(ChatPluginChainV2Test, MixedV2AndV1ChainAppliesInOrder) {
     EXPECT_EQ(tag->version, "v1");
 }
 
+TEST_F(ChatPluginChainV2Test, SampleV2PluginImplementsLoginGateExample) {
+    build_chain({
+        {sample_v2_module_, "10_chat_hook_sample"},
+    });
+
+    const auto denied = chain_->on_login(230, "sample_deny_login");
+    EXPECT_TRUE(denied.stop_default);
+    EXPECT_EQ(denied.deny_reason, "sample policy denied login");
+    EXPECT_TRUE(notice_contains(denied, "login denied by sample policy"));
+
+    const auto observed = chain_->on_login(231, "sample_login_notice");
+    EXPECT_FALSE(observed.stop_default);
+    EXPECT_TRUE(notice_contains(observed, "login hook observed user"));
+}
+
 TEST_F(ChatPluginChainV2Test, V2LoginHookCanDenyWithReason) {
     const auto out = chain_->on_login(301, "deny_login");
 

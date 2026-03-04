@@ -269,6 +269,11 @@ public:
 
 class ChatServiceTest : public ::testing::Test {
 protected:
+    struct ErrorFrame {
+        std::uint16_t code{0};
+        std::string message;
+    };
+
     boost::asio::io_context io_;
     JobQueue job_queue_;
     std::shared_ptr<MockConnectionPool> db_pool_;
@@ -433,7 +438,7 @@ protected:
         return true;
     }
 
-    std::optional<std::uint16_t> WaitForErrorCode(int timeout_ms = 300) {
+    std::optional<ErrorFrame> WaitForError(int timeout_ms = 300) {
         auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
         while (std::chrono::steady_clock::now() < deadline) {
             std::uint16_t msg_id = 0;
@@ -444,12 +449,31 @@ protected:
             if (msg_id != core_proto::MSG_ERR) {
                 continue;
             }
-            if (payload.size() < 2) {
+
+            if (payload.size() < 4) {
                 return std::nullopt;
             }
-            return static_cast<std::uint16_t>((static_cast<std::uint16_t>(payload[0]) << 8) | payload[1]);
+
+            ErrorFrame out{};
+            out.code = static_cast<std::uint16_t>((static_cast<std::uint16_t>(payload[0]) << 8) | payload[1]);
+
+            const auto msg_len = static_cast<std::uint16_t>((static_cast<std::uint16_t>(payload[2]) << 8) | payload[3]);
+            if (payload.size() < 4u + static_cast<std::size_t>(msg_len)) {
+                return std::nullopt;
+            }
+
+            out.message.assign(reinterpret_cast<const char*>(payload.data() + 4), msg_len);
+            return out;
         }
         return std::nullopt;
+    }
+
+    std::optional<std::uint16_t> WaitForErrorCode(int timeout_ms = 300) {
+        const auto err = WaitForError(timeout_ms);
+        if (!err.has_value()) {
+            return std::nullopt;
+        }
+        return err->code;
     }
 
     bool WaitForBroadcastText(const std::string& expected_substring, int timeout_ms = 500) {
@@ -974,9 +998,10 @@ TEST_F(ChatServiceTest, LoginDeniedByV2HookPluginReturnsForbidden) {
     ProcessJobs();
     FlushSessionIO();
 
-    const auto error_code = WaitForErrorCode();
-    ASSERT_TRUE(error_code.has_value());
-    EXPECT_EQ(*error_code, core_proto::errc::FORBIDDEN);
+    const auto error = WaitForError();
+    ASSERT_TRUE(error.has_value());
+    EXPECT_EQ(error->code, core_proto::errc::FORBIDDEN);
+    EXPECT_EQ(error->message, "login blocked by v2-only test plugin");
     chat_service_.reset();
 }
 
@@ -1005,9 +1030,10 @@ TEST_F(ChatServiceTest, JoinDeniedByV2HookPluginReturnsForbidden) {
     ProcessJobs();
     FlushSessionIO();
 
-    const auto error_code = WaitForErrorCode();
-    ASSERT_TRUE(error_code.has_value());
-    EXPECT_EQ(*error_code, core_proto::errc::FORBIDDEN);
+    const auto error = WaitForError();
+    ASSERT_TRUE(error.has_value());
+    EXPECT_EQ(error->code, core_proto::errc::FORBIDDEN);
+    EXPECT_EQ(error->message, "join blocked by v2-only test plugin");
     chat_service_.reset();
 }
 
