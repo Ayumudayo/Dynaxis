@@ -1223,9 +1223,10 @@ void ChatService::send_system_notice(Session& s, const std::string& text) {
     s.async_send(game_proto::MSG_CHAT_BROADCAST, body, 0);
 }
 
-void ChatService::invoke_lua_cold_hook(std::string_view hook_name) {
+ChatService::LuaColdHookOutcome ChatService::invoke_lua_cold_hook(std::string_view hook_name) {
+    LuaColdHookOutcome outcome{};
     if (!lua_runtime_) {
-        return;
+        return outcome;
     }
 
     const auto call_result = lua_runtime_->call_all(std::string(hook_name));
@@ -1233,7 +1234,6 @@ void ChatService::invoke_lua_cold_hook(std::string_view hook_name) {
         corelog::warn(
             "lua cold hook call failed hook=" + std::string(hook_name)
             + " reason=" + call_result.error);
-        return;
     }
 
     if (call_result.failed != 0) {
@@ -1241,6 +1241,25 @@ void ChatService::invoke_lua_cold_hook(std::string_view hook_name) {
             "lua cold hook call had failures hook=" + std::string(hook_name)
             + " failed=" + std::to_string(call_result.failed));
     }
+
+    switch (call_result.decision) {
+    case server::core::scripting::LuaHookDecision::kPass:
+    case server::core::scripting::LuaHookDecision::kAllow:
+    case server::core::scripting::LuaHookDecision::kModify:
+        break;
+    case server::core::scripting::LuaHookDecision::kHandled:
+        outcome.stop_default = true;
+        break;
+    case server::core::scripting::LuaHookDecision::kBlock:
+    case server::core::scripting::LuaHookDecision::kDeny:
+        outcome.stop_default = true;
+        outcome.deny_reason = call_result.reason;
+        break;
+    default:
+        break;
+    }
+
+    return outcome;
 }
 
 bool ChatService::maybe_handle_chat_hook_plugin(Session& s,
@@ -1262,8 +1281,14 @@ bool ChatService::maybe_handle_chat_hook_plugin(Session& s,
 
 bool ChatService::maybe_handle_login_hook(Session& s, const std::string& user) {
     if (!hook_plugin_) {
-        invoke_lua_cold_hook("on_login");
-        return false;
+        const auto lua_out = invoke_lua_cold_hook("on_login");
+        if (!lua_out.stop_default) {
+            return false;
+        }
+
+        const std::string reason = lua_out.deny_reason.empty() ? "login denied by lua script" : lua_out.deny_reason;
+        s.send_error(proto::errc::FORBIDDEN, reason);
+        return true;
     }
 
     const auto out = hook_plugin_->chain.on_login(s.session_id(), user);
@@ -1274,8 +1299,14 @@ bool ChatService::maybe_handle_login_hook(Session& s, const std::string& user) {
     }
 
     if (!out.stop_default) {
-        invoke_lua_cold_hook("on_login");
-        return false;
+        const auto lua_out = invoke_lua_cold_hook("on_login");
+        if (!lua_out.stop_default) {
+            return false;
+        }
+
+        const std::string reason = lua_out.deny_reason.empty() ? "login denied by lua script" : lua_out.deny_reason;
+        s.send_error(proto::errc::FORBIDDEN, reason);
+        return true;
     }
 
     const std::string reason = out.deny_reason.empty() ? "login denied by plugin" : out.deny_reason;
@@ -1285,8 +1316,14 @@ bool ChatService::maybe_handle_login_hook(Session& s, const std::string& user) {
 
 bool ChatService::maybe_handle_join_hook(Session& s, const std::string& user, const std::string& room) {
     if (!hook_plugin_) {
-        invoke_lua_cold_hook("on_join");
-        return false;
+        const auto lua_out = invoke_lua_cold_hook("on_join");
+        if (!lua_out.stop_default) {
+            return false;
+        }
+
+        const std::string reason = lua_out.deny_reason.empty() ? "join denied by lua script" : lua_out.deny_reason;
+        s.send_error(proto::errc::FORBIDDEN, reason);
+        return true;
     }
 
     const auto out = hook_plugin_->chain.on_join(s.session_id(), user, room);
@@ -1297,8 +1334,14 @@ bool ChatService::maybe_handle_join_hook(Session& s, const std::string& user, co
     }
 
     if (!out.stop_default) {
-        invoke_lua_cold_hook("on_join");
-        return false;
+        const auto lua_out = invoke_lua_cold_hook("on_join");
+        if (!lua_out.stop_default) {
+            return false;
+        }
+
+        const std::string reason = lua_out.deny_reason.empty() ? "join denied by lua script" : lua_out.deny_reason;
+        s.send_error(proto::errc::FORBIDDEN, reason);
+        return true;
     }
 
     const std::string reason = out.deny_reason.empty() ? "join denied by plugin" : out.deny_reason;
@@ -1308,8 +1351,14 @@ bool ChatService::maybe_handle_join_hook(Session& s, const std::string& user, co
 
 bool ChatService::maybe_handle_leave_hook(Session& s, const std::string& user, const std::string& room) {
     if (!hook_plugin_) {
-        invoke_lua_cold_hook("on_leave");
-        return false;
+        const auto lua_out = invoke_lua_cold_hook("on_leave");
+        if (!lua_out.stop_default) {
+            return false;
+        }
+
+        const std::string reason = lua_out.deny_reason.empty() ? "leave denied by lua script" : lua_out.deny_reason;
+        s.send_error(proto::errc::FORBIDDEN, reason);
+        return true;
     }
 
     const auto out = hook_plugin_->chain.on_leave(s.session_id(), user, room);
@@ -1320,8 +1369,14 @@ bool ChatService::maybe_handle_leave_hook(Session& s, const std::string& user, c
     }
 
     if (!out.stop_default) {
-        invoke_lua_cold_hook("on_leave");
-        return false;
+        const auto lua_out = invoke_lua_cold_hook("on_leave");
+        if (!lua_out.stop_default) {
+            return false;
+        }
+
+        const std::string reason = lua_out.deny_reason.empty() ? "leave denied by lua script" : lua_out.deny_reason;
+        s.send_error(proto::errc::FORBIDDEN, reason);
+        return true;
     }
 
     const std::string reason = out.deny_reason.empty() ? "leave denied by plugin" : out.deny_reason;
@@ -1334,7 +1389,10 @@ void ChatService::notify_session_event_hook(std::uint32_t session_id,
                                             const std::string& user,
                                             const std::string& reason) {
     if (!hook_plugin_) {
-        invoke_lua_cold_hook("on_session_event");
+        const auto lua_out = invoke_lua_cold_hook("on_session_event");
+        if (lua_out.stop_default) {
+            corelog::warn("lua on_session_event requested stop_default; ignored for cleanup safety");
+        }
         return;
     }
 
@@ -1346,9 +1404,13 @@ void ChatService::notify_session_event_hook(std::uint32_t session_id,
     }
     if (out.stop_default) {
         corelog::warn("chat_hook session_event requested stop_default; ignored for cleanup safety");
+        return;
     }
 
-    invoke_lua_cold_hook("on_session_event");
+    const auto lua_out = invoke_lua_cold_hook("on_session_event");
+    if (lua_out.stop_default) {
+        corelog::warn("lua on_session_event requested stop_default; ignored for cleanup safety");
+    }
 }
 
 bool ChatService::maybe_handle_admin_command_hook(std::string_view command,
@@ -1357,8 +1419,13 @@ bool ChatService::maybe_handle_admin_command_hook(std::string_view command,
                                                   std::string& deny_reason) {
     deny_reason.clear();
     if (!hook_plugin_) {
-        invoke_lua_cold_hook("on_admin_command");
-        return false;
+        const auto lua_out = invoke_lua_cold_hook("on_admin_command");
+        if (!lua_out.stop_default) {
+            return false;
+        }
+
+        deny_reason = lua_out.deny_reason.empty() ? "admin command denied by lua script" : lua_out.deny_reason;
+        return true;
     }
 
     const auto out = hook_plugin_->chain.on_admin_command(command, issuer, payload_json);
@@ -1372,8 +1439,13 @@ bool ChatService::maybe_handle_admin_command_hook(std::string_view command,
     }
 
     if (!out.stop_default) {
-        invoke_lua_cold_hook("on_admin_command");
-        return false;
+        const auto lua_out = invoke_lua_cold_hook("on_admin_command");
+        if (!lua_out.stop_default) {
+            return false;
+        }
+
+        deny_reason = lua_out.deny_reason.empty() ? "admin command denied by lua script" : lua_out.deny_reason;
+        return true;
     }
 
     deny_reason = out.deny_reason.empty() ? "admin command denied by plugin" : out.deny_reason;

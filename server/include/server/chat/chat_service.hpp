@@ -399,7 +399,12 @@ private:
                                          std::vector<server::wire::v1::StateSnapshot::SnapshotMessage>& out);
     void handle_refresh(std::shared_ptr<Session> session);
 
-    void invoke_lua_cold_hook(std::string_view hook_name);
+    struct LuaColdHookOutcome {
+        bool stop_default{false};
+        std::string deny_reason;
+    };
+
+    LuaColdHookOutcome invoke_lua_cold_hook(std::string_view hook_name);
 
     // 플러그인이 메시지를 처리/차단했으면 true를 반환합니다(기본 로직은 중단).
     // 필요 시 텍스트를 변경(replace)하거나 시스템 공지를 전송할 수 있습니다.

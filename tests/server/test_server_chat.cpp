@@ -1118,6 +1118,45 @@ TEST_F(ChatServiceTest, LuaColdHooksRunForLoginAndJoinButNotChatSend) {
 #endif
 }
 
+TEST_F(ChatServiceTest, LuaColdHookDenyStopsLoginWhenNativePathPasses) {
+#if !KNIGHTS_BUILD_LUA_SCRIPTING
+    GTEST_SKIP() << "Lua scripting build flag is disabled";
+#else
+    ScopedTempDir script_temp("knights_chat_lua_login_deny");
+    const auto script_path = script_temp.path() / "policy.lua";
+    {
+        std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(out.good());
+        out << "-- hook=on_login decision=deny reason=login denied by lua scaffold\n";
+        out << "return 1\n";
+        out.flush();
+        ASSERT_TRUE(out.good());
+    }
+
+    auto lua_runtime = std::make_shared<server::core::scripting::LuaRuntime>();
+    std::vector<server::core::scripting::LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(server::core::scripting::LuaRuntime::ScriptEntry{script_path, "policy"});
+    const auto reload_result = lua_runtime->reload_scripts(scripts);
+    ASSERT_TRUE(reload_result.error.empty());
+    ASSERT_EQ(reload_result.loaded, 1u);
+
+    services::set(lua_runtime);
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    std::vector<std::uint8_t> payload;
+    write_lp_utf8(payload, "lua_deny_user");
+    write_lp_utf8(payload, "test_token");
+    chat_service_->on_login(*session_, payload);
+    ProcessJobs();
+    FlushSessionIO();
+
+    const auto error = WaitForError();
+    ASSERT_TRUE(error.has_value());
+    EXPECT_EQ(error->code, core_proto::errc::FORBIDDEN);
+    EXPECT_EQ(error->message, "login denied by lua scaffold");
+#endif
+}
+
 TEST_F(ChatServiceTest, LuaColdHookSkippedWhenNativePluginBlocksLogin) {
 #if !KNIGHTS_BUILD_LUA_SCRIPTING
     GTEST_SKIP() << "Lua scripting build flag is disabled";
