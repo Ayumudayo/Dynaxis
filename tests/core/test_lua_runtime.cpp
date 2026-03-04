@@ -73,7 +73,7 @@ TEST_F(LuaRuntimeTest, CallUnknownEnvironmentIsSkippableWhenEnabled) {
 #endif
 }
 
-TEST_F(LuaRuntimeTest, CallLoadedEnvironmentReportsScaffoldNotImplemented) {
+TEST_F(LuaRuntimeTest, CallLoadedEnvironmentIsSkippableInScaffoldMode) {
     LuaRuntime runtime;
 
     const auto script_path = temp_dir_ / "sample.lua";
@@ -83,9 +83,9 @@ TEST_F(LuaRuntimeTest, CallLoadedEnvironmentReportsScaffoldNotImplemented) {
     const auto result = runtime.call("sample", "on_login");
 
 #if KNIGHTS_BUILD_LUA_SCRIPTING
-    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(result.ok);
     EXPECT_FALSE(result.executed);
-    EXPECT_NE(result.error.find("not implemented"), std::string::npos);
+    EXPECT_TRUE(result.error.empty());
 #else
     EXPECT_FALSE(result.ok);
     EXPECT_FALSE(result.executed);

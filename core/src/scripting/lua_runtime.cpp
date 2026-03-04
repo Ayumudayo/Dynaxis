@@ -116,8 +116,8 @@ LuaRuntime::CallResult LuaRuntime::call(const std::string& env_name,
     }
 
     (void)it;
-    ++errors_total_;
-    return CallResult{false, false, "lua execution is not implemented in the current scaffold"};
+    ++calls_total_;
+    return CallResult{true, false, {}};
 }
 
 bool LuaRuntime::register_host_api(const std::string& table_name,
