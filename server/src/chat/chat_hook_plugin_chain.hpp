@@ -25,6 +25,9 @@ public:
         /** @brief plugin_paths가 비어 있을 때 사용할 디렉터리 모드 경로입니다. */
         std::optional<std::filesystem::path> plugins_dir;
 
+        /** @brief plugins_dir가 비어 있거나 로드 가능한 모듈이 없을 때 사용할 fallback 디렉터리입니다. */
+        std::optional<std::filesystem::path> fallback_plugins_dir;
+
         /** @brief 모든 플러그인이 공유하는 cache-copy 디렉터리입니다. */
         std::filesystem::path cache_dir;
 

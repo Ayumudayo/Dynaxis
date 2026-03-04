@@ -53,6 +53,7 @@ server::core::plugin::PluginChainHost<ChatHookApiV2>::Config make_chain_host_con
     server::core::plugin::PluginChainHost<ChatHookApiV2>::Config out{};
     out.plugin_paths = std::move(cfg.plugin_paths);
     out.plugins_dir = std::move(cfg.plugins_dir);
+    out.fallback_plugins_dir = std::move(cfg.fallback_plugins_dir);
     out.cache_dir = std::move(cfg.cache_dir);
     out.single_lock_path = std::move(cfg.single_lock_path);
     out.entrypoint_symbol = "chat_hook_api_v2";

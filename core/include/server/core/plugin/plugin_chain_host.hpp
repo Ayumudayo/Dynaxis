@@ -31,6 +31,7 @@ public:
     struct Config {
         std::vector<std::filesystem::path> plugin_paths;
         std::optional<std::filesystem::path> plugins_dir;
+        std::optional<std::filesystem::path> fallback_plugins_dir;
         std::filesystem::path cache_dir;
         std::optional<std::filesystem::path> single_lock_path;
         std::string entrypoint_symbol;
@@ -52,6 +53,9 @@ public:
         : cfg_(std::move(cfg)) {
         if (cfg_.plugins_dir.has_value() && cfg_.plugins_dir->empty()) {
             cfg_.plugins_dir.reset();
+        }
+        if (cfg_.fallback_plugins_dir.has_value() && cfg_.fallback_plugins_dir->empty()) {
+            cfg_.fallback_plugins_dir.reset();
         }
         if (cfg_.single_lock_path.has_value() && cfg_.single_lock_path->empty()) {
             cfg_.single_lock_path.reset();
@@ -202,29 +206,14 @@ private:
         return s;
     }
 
-    bool get_desired_paths(std::vector<std::filesystem::path>& out) const {
+    bool scan_plugins_dir(const std::filesystem::path& dir, std::vector<std::filesystem::path>& out) const {
         out.clear();
 
-        if (!cfg_.plugin_paths.empty()) {
-            out.reserve(cfg_.plugin_paths.size());
-            for (const auto& p : cfg_.plugin_paths) {
-                if (!p.empty()) {
-                    out.push_back(p);
-                }
-            }
-            return true;
-        }
-
-        if (!cfg_.plugins_dir.has_value()) {
-            return true;
-        }
-
         const auto ext = module_extension();
-
         std::error_code ec;
-        std::filesystem::directory_iterator it(*cfg_.plugins_dir, ec);
+        std::filesystem::directory_iterator it(dir, ec);
         if (ec) {
-            server::core::log::warn(std::string("plugin_chain_host: failed to scan plugins dir: ") + cfg_.plugins_dir->string());
+            server::core::log::warn(std::string("plugin_chain_host: failed to scan plugins dir: ") + dir.string());
             return false;
         }
 
@@ -243,6 +232,43 @@ private:
         std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) {
             return a.filename().string() < b.filename().string();
         });
+        return true;
+    }
+
+    bool get_desired_paths(std::vector<std::filesystem::path>& out) const {
+        out.clear();
+
+        if (!cfg_.plugin_paths.empty()) {
+            out.reserve(cfg_.plugin_paths.size());
+            for (const auto& p : cfg_.plugin_paths) {
+                if (!p.empty()) {
+                    out.push_back(p);
+                }
+            }
+            return true;
+        }
+
+        if (!cfg_.plugins_dir.has_value()) {
+            return true;
+        }
+
+        std::vector<std::filesystem::path> primary_paths;
+        if (!scan_plugins_dir(*cfg_.plugins_dir, primary_paths)) {
+            if (!cfg_.fallback_plugins_dir.has_value()) {
+                return false;
+            }
+            return scan_plugins_dir(*cfg_.fallback_plugins_dir, out);
+        }
+
+        if (!primary_paths.empty()) {
+            out = std::move(primary_paths);
+            return true;
+        }
+
+        if (cfg_.fallback_plugins_dir.has_value()) {
+            return scan_plugins_dir(*cfg_.fallback_plugins_dir, out);
+        }
+
         return true;
     }
 
