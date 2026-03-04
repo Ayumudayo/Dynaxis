@@ -93,6 +93,7 @@ Windows에서 빌드된 실행 파일은 `build-windows/server/Debug/server_app.
 | `CHAT_HOOK_RELOAD_INTERVAL_MS` | reload 폴링 주기(ms) | `500` |
 | `LUA_ENABLED` | (실험) Lua 스크립팅 활성화 (`1`: 활성화, `0`: 비활성화) | `0` |
 | `LUA_SCRIPTS_DIR` | (실험) Lua 스크립트 디렉터리 | `/app/scripts` |
+| `LUA_LOCK_PATH` | (실험) Lua 리로드 lock/sentinel 파일 경로(존재 시 watcher poll/reload 스킵) | (unset) |
 | `LUA_RELOAD_INTERVAL_MS` | (실험) Lua 스크립트 리로드 폴링 주기(ms) | `1000` |
 | `LUA_INSTRUCTION_LIMIT` | (실험) Lua 호출 1회당 instruction 제한 | `100000` |
 | `LUA_MEMORY_LIMIT_BYTES` | (실험) Lua 런타임 메모리 상한(바이트) | `1048576` |

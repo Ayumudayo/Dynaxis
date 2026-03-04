@@ -57,6 +57,7 @@ private:
 TEST(ServerConfigTest, LuaDefaultsAppliedWhenEnvironmentIsUnset) {
     ScopedEnvVar enabled("LUA_ENABLED", nullptr);
     ScopedEnvVar scripts_dir("LUA_SCRIPTS_DIR", nullptr);
+    ScopedEnvVar lock_path("LUA_LOCK_PATH", nullptr);
     ScopedEnvVar reload_ms("LUA_RELOAD_INTERVAL_MS", nullptr);
     ScopedEnvVar instruction_limit("LUA_INSTRUCTION_LIMIT", nullptr);
     ScopedEnvVar memory_limit("LUA_MEMORY_LIMIT_BYTES", nullptr);
@@ -69,6 +70,7 @@ TEST(ServerConfigTest, LuaDefaultsAppliedWhenEnvironmentIsUnset) {
     ASSERT_TRUE(config.load(1, argv));
     EXPECT_FALSE(config.lua_enabled);
     EXPECT_TRUE(config.lua_scripts_dir.empty());
+    EXPECT_TRUE(config.lua_lock_path.empty());
     EXPECT_EQ(config.lua_reload_interval_ms, 1000u);
     EXPECT_EQ(config.lua_instruction_limit, 100000u);
     EXPECT_EQ(config.lua_memory_limit_bytes, 1048576u);
@@ -78,6 +80,7 @@ TEST(ServerConfigTest, LuaDefaultsAppliedWhenEnvironmentIsUnset) {
 TEST(ServerConfigTest, LuaEnvironmentOverridesAreParsed) {
     ScopedEnvVar enabled("LUA_ENABLED", "1");
     ScopedEnvVar scripts_dir("LUA_SCRIPTS_DIR", "/app/scripts");
+    ScopedEnvVar lock_path("LUA_LOCK_PATH", "/app/scripts/.reload.lock");
     ScopedEnvVar reload_ms("LUA_RELOAD_INTERVAL_MS", "2500");
     ScopedEnvVar instruction_limit("LUA_INSTRUCTION_LIMIT", "200000");
     ScopedEnvVar memory_limit("LUA_MEMORY_LIMIT_BYTES", "2097152");
@@ -90,6 +93,7 @@ TEST(ServerConfigTest, LuaEnvironmentOverridesAreParsed) {
     ASSERT_TRUE(config.load(1, argv));
     EXPECT_TRUE(config.lua_enabled);
     EXPECT_EQ(config.lua_scripts_dir, "/app/scripts");
+    EXPECT_EQ(config.lua_lock_path, "/app/scripts/.reload.lock");
     EXPECT_EQ(config.lua_reload_interval_ms, 2500u);
     EXPECT_EQ(config.lua_instruction_limit, 200000u);
     EXPECT_EQ(config.lua_memory_limit_bytes, 2097152u);

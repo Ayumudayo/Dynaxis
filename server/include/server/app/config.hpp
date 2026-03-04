@@ -57,6 +57,7 @@ struct ServerConfig {
     // Lua scripting (Stream B scaffold)
     bool lua_enabled = false;
     std::string lua_scripts_dir;
+    std::string lua_lock_path;
     std::uint64_t lua_reload_interval_ms = 1'000;
     std::uint64_t lua_instruction_limit = 100'000;
     std::uint64_t lua_memory_limit_bytes = 1'048'576;

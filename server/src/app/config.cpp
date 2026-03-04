@@ -133,6 +133,9 @@ bool ServerConfig::load(int argc, char** argv) {
     if (const char* val = std::getenv("LUA_SCRIPTS_DIR"); val && *val) {
         lua_scripts_dir = val;
     }
+    if (const char* val = std::getenv("LUA_LOCK_PATH"); val && *val) {
+        lua_lock_path = val;
+    }
     if (const char* val = std::getenv("LUA_RELOAD_INTERVAL_MS"); val && *val) {
         auto parsed = std::strtoull(val, nullptr, 10);
         if (parsed > 0 && parsed <= 600'000) {

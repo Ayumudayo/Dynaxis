@@ -365,6 +365,9 @@ int run_server(int argc, char** argv) {
             watcher_cfg.scripts_dir = std::filesystem::path(config.lua_scripts_dir);
             watcher_cfg.extensions = {".lua"};
             watcher_cfg.recursive = true;
+            if (!config.lua_lock_path.empty()) {
+                watcher_cfg.lock_path = std::filesystem::path(config.lua_lock_path);
+            }
 
             const auto scripts_dir = watcher_cfg.scripts_dir;
             lua_script_watcher = std::make_shared<core::scripting::ScriptWatcher>(std::move(watcher_cfg));
