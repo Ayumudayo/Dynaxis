@@ -37,6 +37,7 @@
 #include "server/core/memory/memory_pool.hpp"
 #include "server/core/runtime_metrics.hpp"
 #include "server/core/scripting/lua_runtime.hpp"
+#include "server/core/scripting/script_watcher.hpp"
 #include "server/chat/chat_service.hpp"
 // Protobuf (수신 payload ts_ms 파싱용)
 #include "wire.pb.h"
@@ -141,6 +142,22 @@ std::vector<std::string> split_csv(std::string_view input) {
     return out;
 }
 
+std::string make_lua_env_name(const std::filesystem::path& scripts_dir,
+                              const std::filesystem::path& script_path) {
+    std::error_code ec;
+    std::filesystem::path relative = std::filesystem::relative(script_path, scripts_dir, ec);
+    if (ec || relative.empty()) {
+        relative = script_path.filename();
+    }
+    relative.replace_extension();
+
+    std::string env_name = relative.lexically_normal().generic_string();
+    if (env_name.empty()) {
+        env_name = script_path.stem().string();
+    }
+    return env_name;
+}
+
 } // namespace
 
 // 메인 서버 실행 함수
@@ -162,6 +179,7 @@ int run_server(int argc, char** argv) {
     std::shared_ptr<asio::steady_timer> scheduler_timer;
     std::shared_ptr<core::storage::DbWorkerPool> db_workers;
     std::shared_ptr<core::scripting::LuaRuntime> lua_runtime;
+    std::shared_ptr<core::scripting::ScriptWatcher> lua_script_watcher;
     std::shared_ptr<server::state::RedisInstanceStateBackend> registry_backend;
     server::state::InstanceRecord registry_record{};
     bool registry_registered = false;
@@ -287,6 +305,65 @@ int run_server(int argc, char** argv) {
             });
         };
         (*scheduler_tick)();
+
+#if KNIGHTS_BUILD_LUA_SCRIPTING
+        if (lua_runtime && !config.lua_scripts_dir.empty()) {
+            core::scripting::ScriptWatcher::Config watcher_cfg{};
+            watcher_cfg.scripts_dir = std::filesystem::path(config.lua_scripts_dir);
+            watcher_cfg.extensions = {".lua"};
+            watcher_cfg.recursive = true;
+
+            const auto scripts_dir = watcher_cfg.scripts_dir;
+            lua_script_watcher = std::make_shared<core::scripting::ScriptWatcher>(std::move(watcher_cfg));
+
+            const auto poll_lua_scripts = [lua_runtime, lua_script_watcher, scripts_dir]() {
+                const bool poll_ok = lua_script_watcher->poll([
+                    lua_runtime,
+                    &scripts_dir
+                ](const core::scripting::ScriptWatcher::ChangeEvent& event) {
+                    if (event.kind == core::scripting::ScriptWatcher::ChangeKind::kRemoved) {
+                        corelog::warn(
+                            "Lua script removed path=" + event.path.string()
+                            + " (reload scaffold keeps existing environment until restart)");
+                        return;
+                    }
+
+                    const std::string env_name = make_lua_env_name(scripts_dir, event.path);
+                    const auto load_result = lua_runtime->load_script(event.path, env_name);
+                    if (!load_result.ok) {
+                        corelog::warn(
+                            "Lua script load failed path=" + event.path.string()
+                            + " env=" + env_name
+                            + " reason=" + load_result.error);
+                        return;
+                    }
+
+                    corelog::info(
+                        "Lua script loaded path=" + event.path.string()
+                        + " env=" + env_name);
+                });
+
+                if (!poll_ok) {
+                    corelog::warn("Lua script watcher poll failed scripts_dir=" + scripts_dir.string());
+                }
+            };
+
+            poll_lua_scripts();
+
+            const std::uint64_t max_interval = static_cast<std::uint64_t>(std::numeric_limits<long long>::max());
+            const std::uint64_t capped_interval =
+                config.lua_reload_interval_ms > max_interval ? max_interval : config.lua_reload_interval_ms;
+
+            scheduler.schedule_every(
+                [poll_lua_scripts]() {
+                    poll_lua_scripts();
+                },
+                std::chrono::milliseconds{static_cast<long long>(capped_interval)});
+            corelog::info(
+                "Lua script watcher started scripts_dir=" + scripts_dir.string()
+                + " interval_ms=" + std::to_string(config.lua_reload_interval_ms));
+        }
+#endif
 
         // 4. DB 커넥션 풀 구성
         std::shared_ptr<core::storage::IConnectionPool> db_pool;
