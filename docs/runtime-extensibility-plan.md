@@ -2,7 +2,7 @@
 
 > 목적: 서버 스택(server_app, gateway_app, wb_worker)이 런타임에 동적으로 동작을 변경할 수 있도록, **네이티브 플러그인(C ABI)**과 **Lua 스크립팅**을 하이브리드로 도입하는 구현 계획을 정의한다.
 
-> 상태: 설계 단계 (Draft)
+> 상태: 실행 중 (Stream A 완료, Stream B 대기)
 
 ---
 
@@ -22,6 +22,15 @@
 ### 0.2 실행 스트림
 
 #### Stream A - Phase 2 마감 (P0)
+
+완료 상태(2026-03-04, `feature/Plugin-Script`):
+- [x] `server/plugins/chat_hook_sample.cpp`를 `ChatHookApiV2` 기준으로 승격하고 v1 동작 호환을 유지함
+- [x] `on_join` deny 시 `deny_reason` 클라이언트 전달 통합 테스트 추가/검증 완료
+- [x] ABI/사용법 문서 동기화 완료 (`server/README.md`, `docs/core-api/extensions.md`, `chat_hook_plugin_abi.hpp`)
+- [x] 검증 게이트 통과
+  - `pwsh scripts/build.ps1 -Config Debug -Target server_general_tests`
+  - `pwsh scripts/build.ps1 -Config Release`
+  - `ctest --preset windows-test --output-on-failure`
 
 1. `server/plugins/chat_hook_sample.cpp`를 `ChatHookApiV2` 기준으로 승격하고 v1 동작 호환을 유지한다.
 2. `on_join` deny 시 `deny_reason`이 클라이언트 수신 payload로 전달되는 통합 테스트를 추가한다.

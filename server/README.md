@@ -110,11 +110,19 @@ Windows에서 빌드된 실행 파일은 `build-windows/server/Debug/server_app.
 
 ## 채팅 훅(Chat Hook) 플러그인 (실험)
 
-`server_app`은 `MSG_CHAT_SEND` 경로에 hot-reload 가능한 플러그인 훅을 붙일 수 있습니다.
+`server_app`은 hot-reload 가능한 플러그인 훅을 다음 경로에 붙일 수 있습니다.
+
+- `on_chat_send` (`MSG_CHAT_SEND`)
+- `on_login`
+- `on_join`
+- `on_leave`
+- `on_session_event`
+- `on_admin_command`
 
 - ABI: `server/include/server/chat/chat_hook_plugin_abi.hpp` (`ChatHookApiV2` + `ChatHookApiV1` 하위 호환)
 - 엔트리포인트 탐색: `chat_hook_api_v2()` 우선, 미존재 시 `chat_hook_api_v1()` 자동 폴백
-- 멀티 플러그인: 파일명 순서(예: `10_*.so`, `20_*.so`)로 순차 적용; `kReplaceText`는 다음 플러그인에 반영됨
+- 멀티 플러그인: 파일명 순서(예: `10_*.so`, `20_*.so`)로 순차 적용; 텍스트 변경(`v1:kReplaceText`, `v2:kModify`) 결과는 다음 플러그인에 반영됨
+- deny 계열 결정(`kBlock`/`kDeny`)은 기본 경로를 중단하고 `MSG_ERR(FORBIDDEN)`로 전달됨
 - Docker 샘플 플러그인:
   - `/app/plugins/10_chat_hook_sample.so`
   - `/app/plugins/20_chat_hook_tag.so`
