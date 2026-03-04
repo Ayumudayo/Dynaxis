@@ -370,37 +370,28 @@ int run_server(int argc, char** argv) {
             lua_script_watcher = std::make_shared<core::scripting::ScriptWatcher>(std::move(watcher_cfg));
 
             const auto reload_all_lua_scripts = [lua_runtime, scripts_dir]() {
-                lua_runtime->reset();
-
-                const auto binding_result = server::app::scripting::register_chat_lua_bindings(*lua_runtime);
-                if (binding_result.registered != binding_result.attempted) {
-                    corelog::warn(
-                        "Lua host API binding registration is partial during reload"
-                        " registered=" + std::to_string(binding_result.registered)
-                        + "/" + std::to_string(binding_result.attempted));
+                const auto scripts = list_lua_scripts(scripts_dir);
+                std::vector<core::scripting::LuaRuntime::ScriptEntry> entries;
+                entries.reserve(scripts.size());
+                for (const auto& script_path : scripts) {
+                    entries.push_back(core::scripting::LuaRuntime::ScriptEntry{
+                        script_path,
+                        make_lua_env_name(scripts_dir, script_path)
+                    });
                 }
 
-                const auto scripts = list_lua_scripts(scripts_dir);
-                std::size_t loaded_count = 0;
-                std::size_t failed_count = 0;
-                for (const auto& script_path : scripts) {
-                    const std::string env_name = make_lua_env_name(scripts_dir, script_path);
-                    const auto load_result = lua_runtime->load_script(script_path, env_name);
-                    if (!load_result.ok) {
-                        ++failed_count;
-                        corelog::warn(
-                            "Lua script load failed path=" + script_path.string()
-                            + " env=" + env_name
-                            + " reason=" + load_result.error);
-                        continue;
-                    }
-                    ++loaded_count;
+                const auto reload_result = lua_runtime->reload_scripts(entries);
+                if (!reload_result.error.empty()) {
+                    corelog::warn(
+                        "Lua script reload failed scripts_dir=" + scripts_dir.string()
+                        + " reason=" + reload_result.error);
+                    return;
                 }
 
                 corelog::info(
                     "Lua script reload complete scripts_dir=" + scripts_dir.string()
-                    + " loaded=" + std::to_string(loaded_count)
-                    + " failed=" + std::to_string(failed_count));
+                    + " loaded=" + std::to_string(reload_result.loaded)
+                    + " failed=" + std::to_string(reload_result.failed));
             };
 
             reload_all_lua_scripts();

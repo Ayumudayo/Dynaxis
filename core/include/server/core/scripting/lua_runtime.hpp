@@ -46,6 +46,17 @@ public:
         std::string error;
     };
 
+    struct ScriptEntry {
+        std::filesystem::path path;
+        std::string env_name;
+    };
+
+    struct ReloadResult {
+        std::size_t loaded{0};
+        std::size_t failed{0};
+        std::string error;
+    };
+
     using HostCallback = std::function<void()>;
 
     struct MetricsSnapshot {
@@ -63,6 +74,8 @@ public:
     explicit LuaRuntime(Config cfg);
 
     LoadResult load_script(const std::filesystem::path& path, const std::string& env_name);
+
+    ReloadResult reload_scripts(const std::vector<ScriptEntry>& scripts);
 
     CallResult call(const std::string& env_name, const std::string& func_name);
 

@@ -53,6 +53,49 @@ LuaRuntime::LoadResult LuaRuntime::load_script(const std::filesystem::path& path
     return LoadResult{true, {}};
 }
 
+LuaRuntime::ReloadResult LuaRuntime::reload_scripts(const std::vector<ScriptEntry>& scripts) {
+    std::lock_guard<std::mutex> lock(mu_);
+
+    if (!enabled()) {
+        ++errors_total_;
+        return ReloadResult{0, scripts.size(), make_disabled_error()};
+    }
+
+    std::unordered_map<std::string, std::filesystem::path> reloaded;
+    reloaded.reserve(scripts.size());
+
+    std::size_t failed = 0;
+    for (const auto& script : scripts) {
+        if (script.env_name.empty()) {
+            ++errors_total_;
+            ++failed;
+            continue;
+        }
+
+        std::error_code ec;
+        if (!std::filesystem::exists(script.path, ec) || ec) {
+            ++errors_total_;
+            ++failed;
+            continue;
+        }
+        if (!std::filesystem::is_regular_file(script.path, ec) || ec) {
+            ++errors_total_;
+            ++failed;
+            continue;
+        }
+
+        auto [it, inserted] = reloaded.emplace(script.env_name, script.path);
+        if (!inserted) {
+            ++errors_total_;
+            ++failed;
+            it->second = script.path;
+        }
+    }
+
+    loaded_scripts_ = std::move(reloaded);
+    return ReloadResult{loaded_scripts_.size(), failed, {}};
+}
+
 LuaRuntime::CallResult LuaRuntime::call(const std::string& env_name,
                                         const std::string& func_name) {
     std::lock_guard<std::mutex> lock(mu_);
@@ -73,8 +116,8 @@ LuaRuntime::CallResult LuaRuntime::call(const std::string& env_name,
     }
 
     (void)it;
-    ++calls_total_;
-    return CallResult{true, true, {}};
+    ++errors_total_;
+    return CallResult{false, false, "lua execution is not implemented in the current scaffold"};
 }
 
 bool LuaRuntime::register_host_api(const std::string& table_name,
