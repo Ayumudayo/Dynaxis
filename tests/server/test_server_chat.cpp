@@ -1127,8 +1127,7 @@ TEST_F(ChatServiceTest, LuaColdHookDenyStopsLoginWhenNativePathPasses) {
     {
         std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
         ASSERT_TRUE(out.good());
-        out << "-- hook=on_login decision=deny reason=login denied by lua scaffold\n";
-        out << "return 1\n";
+        out << "return { hook = \"on_login\", decision = \"deny\", reason = \"login denied by lua scaffold\" }\n";
         out.flush();
         ASSERT_TRUE(out.good());
     }

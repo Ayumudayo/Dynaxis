@@ -1246,9 +1246,7 @@ ChatService::LuaColdHookOutcome ChatService::invoke_lua_cold_hook(std::string_vi
     case server::core::scripting::LuaHookDecision::kPass:
     case server::core::scripting::LuaHookDecision::kAllow:
     case server::core::scripting::LuaHookDecision::kModify:
-        break;
     case server::core::scripting::LuaHookDecision::kHandled:
-        outcome.stop_default = true;
         break;
     case server::core::scripting::LuaHookDecision::kBlock:
     case server::core::scripting::LuaHookDecision::kDeny:
@@ -1403,7 +1401,7 @@ void ChatService::notify_session_event_hook(std::uint32_t session_id,
         }
     }
     if (out.stop_default) {
-        corelog::warn("chat_hook session_event requested stop_default; ignored for cleanup safety");
+        corelog::warn("chat_hook session_event requested stop_default; skipping lua cold hook because native did not pass");
         return;
     }
 

@@ -162,11 +162,12 @@ TEST_F(LuaRuntimeTest, CallAllTracksLoadedScriptCountInScaffoldMode) {
 #endif
 }
 
-TEST_F(LuaRuntimeTest, CallAllParsesScaffoldDecisionForMatchingHook) {
+TEST_F(LuaRuntimeTest, CallAllParsesReturnTableDecisionForMatchingHook) {
     LuaRuntime runtime;
 
     const auto script_path = temp_dir_ / "policy.lua";
-    write_text(script_path, "-- hook=on_login decision=deny reason=login denied by lua scaffold\nreturn 1\n");
+    write_text(script_path,
+               "return { hook = \"on_login\", decision = \"deny\", reason = \"login denied by lua scaffold\" }\n");
 
     std::vector<LuaRuntime::ScriptEntry> scripts;
     scripts.push_back(LuaRuntime::ScriptEntry{script_path, "policy"});

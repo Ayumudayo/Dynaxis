@@ -4,6 +4,7 @@
 #include <cctype>
 #include <fstream>
 #include <optional>
+#include <sstream>
 #include <system_error>
 
 namespace server::core::scripting {
@@ -75,6 +76,58 @@ std::optional<std::string> extract_tail_value(std::string_view text,
     return trim_ascii(text.substr(begin));
 }
 
+std::optional<std::string> extract_quoted_value_after_key(std::string_view text,
+                                                          std::string_view key) {
+    std::size_t key_pos = text.find(key);
+    while (key_pos != std::string_view::npos) {
+        const bool left_boundary = key_pos == 0
+            || (std::isalnum(static_cast<unsigned char>(text[key_pos - 1])) == 0
+                && text[key_pos - 1] != '_');
+        const std::size_t right_index = key_pos + key.size();
+        const bool right_boundary = right_index >= text.size()
+            || (std::isalnum(static_cast<unsigned char>(text[right_index])) == 0
+                && text[right_index] != '_');
+
+        if (left_boundary && right_boundary) {
+            break;
+        }
+
+        key_pos = text.find(key, key_pos + 1);
+    }
+
+    if (key_pos == std::string_view::npos) {
+        return std::nullopt;
+    }
+
+    const std::size_t eq_pos = text.find('=', key_pos + key.size());
+    if (eq_pos == std::string_view::npos) {
+        return std::nullopt;
+    }
+
+    std::size_t value_pos = eq_pos + 1;
+    while (value_pos < text.size()
+           && std::isspace(static_cast<unsigned char>(text[value_pos])) != 0) {
+        ++value_pos;
+    }
+
+    if (value_pos >= text.size()) {
+        return std::nullopt;
+    }
+
+    const char quote = text[value_pos];
+    if (quote != '\'' && quote != '"') {
+        return std::nullopt;
+    }
+
+    ++value_pos;
+    const std::size_t end_pos = text.find(quote, value_pos);
+    if (end_pos == std::string_view::npos || end_pos < value_pos) {
+        return std::nullopt;
+    }
+
+    return std::string(text.substr(value_pos, end_pos - value_pos));
+}
+
 bool parse_hook_decision(std::string_view token,
                          LuaHookDecision& out_decision) {
     const std::string lowered = to_lower_ascii(trim_ascii(token));
@@ -124,11 +177,9 @@ int hook_decision_rank(LuaHookDecision decision) {
 
 struct ParsedDirective {
     bool present{false};
-    bool valid{true};
-    LuaHookDecision decision{LuaHookDecision::kPass};
     std::string hook_name;
+    std::string decision_token;
     std::string reason;
-    std::string error;
 };
 
 ParsedDirective parse_directive_line(std::string_view line) {
@@ -139,24 +190,25 @@ ParsedDirective parse_directive_line(std::string_view line) {
         return out;
     }
 
-    const auto decision_token = extract_word_value(trimmed, "decision=");
+    const std::string payload = trim_ascii(std::string_view(trimmed).substr(2));
+    if (payload.rfind("decision=", 0) != 0 && payload.rfind("hook=", 0) != 0) {
+        return out;
+    }
+
+    const auto decision_token = extract_word_value(payload, "decision=");
     if (!decision_token.has_value() || decision_token->empty()) {
         return out;
     }
 
     out.present = true;
-    if (!parse_hook_decision(*decision_token, out.decision)) {
-        out.valid = false;
-        out.error = "invalid decision token: " + *decision_token;
-        return out;
-    }
+    out.decision_token = to_lower_ascii(trim_ascii(*decision_token));
 
-    if (const auto hook_token = extract_word_value(trimmed, "hook=");
+    if (const auto hook_token = extract_word_value(payload, "hook=");
         hook_token.has_value()) {
         out.hook_name = to_lower_ascii(trim_ascii(*hook_token));
     }
 
-    if (const auto reason_token = extract_tail_value(trimmed, "reason=");
+    if (const auto reason_token = extract_tail_value(payload, "reason=");
         reason_token.has_value()) {
         out.reason = *reason_token;
     }
@@ -171,6 +223,44 @@ struct ScriptDecisionResult {
     std::string error;
 };
 
+ScriptDecisionResult parse_return_table_scaffold(std::string_view script_text,
+                                                 std::string_view func_name) {
+    ScriptDecisionResult out{};
+
+    if (script_text.find("return") == std::string_view::npos
+        || script_text.find('{') == std::string_view::npos
+        || script_text.find('}') == std::string_view::npos) {
+        return out;
+    }
+
+    const auto decision_token = extract_quoted_value_after_key(script_text, "decision");
+    if (!decision_token.has_value() || decision_token->empty()) {
+        return out;
+    }
+
+    if (!parse_hook_decision(*decision_token, out.decision)) {
+        out.valid = false;
+        out.error = "invalid decision token in return table: " + *decision_token;
+        return out;
+    }
+
+    if (const auto hook_token = extract_quoted_value_after_key(script_text, "hook");
+        hook_token.has_value() && !hook_token->empty()) {
+        const std::string token = to_lower_ascii(trim_ascii(*hook_token));
+        const std::string target = to_lower_ascii(std::string(func_name));
+        if (token != target) {
+            return ScriptDecisionResult{};
+        }
+    }
+
+    if (const auto reason_token = extract_quoted_value_after_key(script_text, "reason");
+        reason_token.has_value()) {
+        out.reason = *reason_token;
+    }
+
+    return out;
+}
+
 ScriptDecisionResult read_script_scaffold_decision(
     const std::filesystem::path& path,
     std::string_view func_name) {
@@ -182,32 +272,43 @@ ScriptDecisionResult read_script_scaffold_decision(
         return out;
     }
 
+    const std::string script_text{
+        std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>()
+    };
+
     const std::string target_hook = to_lower_ascii(std::string(func_name));
+    std::istringstream lines(script_text);
     std::string line;
-    while (std::getline(input, line)) {
+    while (std::getline(lines, line)) {
         const ParsedDirective directive = parse_directive_line(line);
         if (!directive.present) {
             continue;
-        }
-
-        if (!directive.valid) {
-            ScriptDecisionResult out{};
-            out.valid = false;
-            out.error = directive.error + " path=" + path.string();
-            return out;
         }
 
         if (!directive.hook_name.empty() && directive.hook_name != target_hook) {
             continue;
         }
 
+        LuaHookDecision decision = LuaHookDecision::kPass;
+        if (!parse_hook_decision(directive.decision_token, decision)) {
+            ScriptDecisionResult out{};
+            out.valid = false;
+            out.error = "invalid decision token: " + directive.decision_token + " path=" + path.string();
+            return out;
+        }
+
         ScriptDecisionResult out{};
-        out.decision = directive.decision;
+        out.decision = decision;
         out.reason = directive.reason;
         return out;
     }
 
-    return ScriptDecisionResult{};
+    ScriptDecisionResult table_result = parse_return_table_scaffold(script_text, func_name);
+    if (!table_result.valid) {
+        table_result.error += " path=" + path.string();
+    }
+    return table_result;
 }
 
 } // namespace
@@ -345,7 +446,16 @@ LuaRuntime::CallAllResult LuaRuntime::call_all(const std::string& func_name) {
     std::string aggregated_reason;
     std::string first_error;
 
-    for (const auto& [env_name, path] : loaded_scripts_) {
+    std::vector<std::pair<std::string, std::filesystem::path>> ordered_scripts;
+    ordered_scripts.reserve(loaded_scripts_.size());
+    for (const auto& entry : loaded_scripts_) {
+        ordered_scripts.emplace_back(entry.first, entry.second);
+    }
+    std::sort(ordered_scripts.begin(), ordered_scripts.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.first < rhs.first;
+    });
+
+    for (const auto& [env_name, path] : ordered_scripts) {
         (void)env_name;
         const auto script_result = read_script_scaffold_decision(path, func_name);
         if (!script_result.valid) {
