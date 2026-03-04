@@ -193,6 +193,59 @@ TEST_F(LuaRuntimeTest, CallAllParsesReturnTableDecisionForMatchingHook) {
 #endif
 }
 
+TEST_F(LuaRuntimeTest, CallAllIgnoresInvalidDirectiveForDifferentHook) {
+    LuaRuntime runtime;
+
+    const auto script_path = temp_dir_ / "policy.lua";
+    write_text(script_path,
+               "-- hook=on_join decision=denyy reason=invalid token for join\n"
+               "return 1\n");
+
+    std::vector<LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(LuaRuntime::ScriptEntry{script_path, "policy"});
+    const auto reload = runtime.reload_scripts(scripts);
+    const auto result = runtime.call_all("on_login");
+
+#if KNIGHTS_BUILD_LUA_SCRIPTING
+    EXPECT_TRUE(reload.error.empty());
+    EXPECT_EQ(result.decision, LuaHookDecision::kPass);
+    EXPECT_TRUE(result.reason.empty());
+    EXPECT_TRUE(result.error.empty());
+    EXPECT_EQ(result.failed, 0u);
+#else
+    EXPECT_FALSE(reload.error.empty());
+    EXPECT_FALSE(result.error.empty());
+#endif
+}
+
+TEST_F(LuaRuntimeTest, CallAllUsesDeterministicReasonAcrossMultipleDenyScripts) {
+    LuaRuntime runtime;
+
+    const auto script_a = temp_dir_ / "a.lua";
+    const auto script_b = temp_dir_ / "b.lua";
+    write_text(script_a,
+               "return { hook = \"on_login\", decision = \"deny\", reason = \"reason from env_a\" }\n");
+    write_text(script_b,
+               "return { hook = \"on_login\", decision = \"deny\", reason = \"reason from env_b\" }\n");
+
+    std::vector<LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(LuaRuntime::ScriptEntry{script_b, "env_b"});
+    scripts.push_back(LuaRuntime::ScriptEntry{script_a, "env_a"});
+
+    const auto reload = runtime.reload_scripts(scripts);
+    const auto result = runtime.call_all("on_login");
+
+#if KNIGHTS_BUILD_LUA_SCRIPTING
+    EXPECT_TRUE(reload.error.empty());
+    EXPECT_EQ(result.decision, LuaHookDecision::kDeny);
+    EXPECT_EQ(result.reason, "reason from env_a");
+    EXPECT_TRUE(result.error.empty());
+#else
+    EXPECT_FALSE(reload.error.empty());
+    EXPECT_FALSE(result.error.empty());
+#endif
+}
+
 TEST_F(LuaRuntimeTest, ResetClearsRuntimeState) {
     LuaRuntime runtime;
 
