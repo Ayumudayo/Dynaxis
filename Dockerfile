@@ -81,6 +81,7 @@ ENTRYPOINT ["/app/entrypoint.sh"]
 # ==============================================================================
 FROM runtime-base AS server-runtime
 COPY --from=builder /opt/knights/bin/server_app /app/server_app
+COPY --from=builder /opt/knights/plugins /app/plugins_builtin
 COPY --from=builder /opt/knights/plugins /app/plugins
 
 FROM runtime-base AS gateway-runtime
@@ -107,5 +108,6 @@ COPY --from=builder /opt/knights/bin/wb_dlq_replayer /app/wb_dlq_replayer
 COPY --from=builder /opt/knights/bin/gateway_app /app/gateway_app
 COPY --from=builder /opt/knights/bin/migrations_runner /app/migrations_runner
 COPY --from=builder /opt/knights/admin_ui.html /app/admin_ui.html
+COPY --from=builder /opt/knights/plugins /app/plugins_builtin
 COPY --from=builder /opt/knights/plugins /app/plugins
 COPY --from=builder /opt/knights/migrations /app/migrations

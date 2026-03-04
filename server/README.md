@@ -86,6 +86,7 @@ Windows에서 빌드된 실행 파일은 `build-windows/server/Debug/server_app.
 | `SERVER_DRAIN_TIMEOUT_MS` | SIGTERM 이후 기존 연결 drain 대기 최대 시간(ms) | `15000` |
 | `SERVER_DRAIN_POLL_MS` | drain 진행률(남은 연결 수) 폴링 주기(ms) | `100` |
 | `CHAT_HOOK_PLUGINS_DIR` | (실험, 권장) 플러그인 디렉터리(모든 `.so/.dll`을 파일명 순으로 로드) | `/app/plugins` |
+| `CHAT_HOOK_FALLBACK_PLUGINS_DIR` | (실험) `CHAT_HOOK_PLUGINS_DIR`가 비어있거나 읽기 실패일 때 사용할 fallback 플러그인 디렉터리 | `/app/plugins_builtin` |
 | `CHAT_HOOK_PLUGIN_PATHS` | (실험) 플러그인 경로 목록(순서 고정, 구분자 `;` 또는 `,`) | `/app/plugins/10_chat_hook_sample.so;/app/plugins/20_chat_hook_tag.so` |
 | `CHAT_HOOK_PLUGIN_PATH` | (실험, 레거시) 단일 플러그인(.so/.dll) 경로 | `/app/plugins/10_chat_hook_sample.so` |
 | `CHAT_HOOK_CACHE_DIR` | 플러그인 캐시 디렉터리(원본을 cache-copy 후 로드) | `/tmp/chat_hook_cache` |

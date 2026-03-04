@@ -25,6 +25,7 @@
 #include <cctype>
 #include <cstring>
 #include <cstdlib>
+#include <filesystem>
 #include <limits>
 #include <sstream>
 #include <utility>
@@ -123,6 +124,36 @@ std::string json_array_of_strings(const std::vector<std::string>& values) {
     }
     out += ']';
     return out;
+}
+
+std::string plugin_module_extension() {
+#if defined(_WIN32)
+    return ".dll";
+#elif defined(__APPLE__)
+    return ".dylib";
+#else
+    return ".so";
+#endif
+}
+
+bool directory_has_plugin_modules(const std::filesystem::path& dir) {
+    std::error_code ec;
+    std::filesystem::directory_iterator it(dir, ec);
+    if (ec) {
+        return false;
+    }
+
+    const auto ext = plugin_module_extension();
+    for (const auto& entry : it) {
+        std::error_code st_ec;
+        if (!entry.is_regular_file(st_ec) || st_ec) {
+            continue;
+        }
+        if (entry.path().extension().string() == ext) {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace
@@ -336,6 +367,7 @@ ChatService::ChatService(boost::asio::io_context& io,
         };
 
         bool enabled = false;
+        bool plugins_dir_from_env = false;
         if (const char* list = std::getenv("CHAT_HOOK_PLUGIN_PATHS"); list && *list) {
             cfg.plugin_paths = split_paths(list);
             enabled = !cfg.plugin_paths.empty();
@@ -345,6 +377,7 @@ ChatService::ChatService(boost::asio::io_context& io,
             if (const char* dir = std::getenv("CHAT_HOOK_PLUGINS_DIR"); dir && *dir) {
                 cfg.plugins_dir = std::filesystem::path(dir);
                 enabled = true;
+                plugins_dir_from_env = true;
             }
         }
 
@@ -352,6 +385,22 @@ ChatService::ChatService(boost::asio::io_context& io,
             if (const char* val = std::getenv("CHAT_HOOK_PLUGIN_PATH"); val && *val) {
                 cfg.plugin_paths.emplace_back(val);
                 enabled = true;
+            }
+        }
+
+        if (enabled && plugins_dir_from_env && cfg.plugins_dir.has_value()) {
+            if (!directory_has_plugin_modules(*cfg.plugins_dir)) {
+                if (const char* fallback = std::getenv("CHAT_HOOK_FALLBACK_PLUGINS_DIR"); fallback && *fallback) {
+                    const std::filesystem::path fallback_dir{fallback};
+                    if (directory_has_plugin_modules(fallback_dir)) {
+                        corelog::warn("chat hook plugins dir is empty/unreadable, using fallback dir=" + fallback_dir.string());
+                        cfg.plugins_dir = fallback_dir;
+                    } else {
+                        corelog::warn("chat hook plugins dir is empty/unreadable and fallback dir has no loadable plugin modules");
+                    }
+                } else {
+                    corelog::warn("chat hook plugins dir is empty/unreadable and no fallback dir was configured");
+                }
             }
         }
 

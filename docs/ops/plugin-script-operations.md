@@ -11,6 +11,7 @@
 ## 1. 기본 경로와 전제
 
 - 플러그인 디렉터리: `/app/plugins` (`docker/stack/plugins` read-only mount)
+- 플러그인 fallback 디렉터리: `/app/plugins_builtin` (`CHAT_HOOK_FALLBACK_PLUGINS_DIR`)
 - 스크립트 디렉터리: `/app/scripts` (`docker/stack/scripts` read-only mount)
 - 기본 Lua 활성: `LUA_ENABLED=1`
 - 서버 컨테이너 예시: `knights-stack-server-1-1`, `knights-stack-server-2-1`
