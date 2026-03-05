@@ -39,6 +39,10 @@ Knights는 C++20 기반 분산 채팅 스택입니다: HAProxy(TCP) -> `gateway_
 | `server::app::run_server` | fn | `server/src/app/bootstrap.cpp` | server_app 부트스트랩(설정/DI/리스너/루프) |
 | `server::app::register_routes` | fn | `server/src/app/router.cpp` | opcode -> handler 라우팅 |
 | `server::app::chat::ChatService` | class | `server/include/server/chat/chat_service.hpp` | 채팅 상태/핸들러 구현 |
+| `server::core::plugin::PluginHost<ApiTable>` | class template | `core/include/server/core/plugin/plugin_host.hpp` | 단일 플러그인 로딩/리로드 host (cache-copy + validator) |
+| `server::core::plugin::PluginChainHost<ApiTable>` | class template | `core/include/server/core/plugin/plugin_chain_host.hpp` | 멀티 플러그인 체인 host (디렉터리 스캔 + lock-free read) |
+| `server::core::scripting::ScriptWatcher` | class | `core/include/server/core/scripting/script_watcher.hpp` | 스크립트/파일 mtime 감시 + sentinel/lock 지원 |
+| `server::core::scripting::LuaRuntime` | class | `core/include/server/core/scripting/lua_runtime.hpp` | Lua 스크립트 로드/호출/메트릭 공용 런타임 |
 | `server::app::chat::ChatHookPluginChain` | class | `server/src/chat/chat_hook_plugin_chain.hpp` | 채팅 훅 플러그인 체인(멀티 플러그인 + reload 폴링) |
 | `server::app::chat::ChatHookPluginManager` | class | `server/src/chat/chat_hook_plugin_manager.hpp` | 단일 플러그인 로더(cache-copy + lock/sentinel) |
 | `server::app::MetricsServer` | class | `server/src/app/metrics_server.cpp` | server_app `/metrics` endpoint |
@@ -55,6 +59,8 @@ Knights는 C++20 기반 분산 채팅 스택입니다: HAProxy(TCP) -> `gateway_
 - Gateway backend guardrail: `GATEWAY_BACKEND_CONNECT_TIMEOUT_MS`, `GATEWAY_BACKEND_SEND_QUEUE_MAX_BYTES`로 connect 지연/송신 큐 폭주를 제한.
 - Distributed fanout: `server_app` can `psubscribe` to `${REDIS_CHANNEL_PREFIX}fanout:*` for room broadcasts.
 - Chat hook plugin(실험): `MSG_CHAT_SEND` 경로에 hot-reload 가능한 플러그인 체인을 적용(파일명 순서; cache-copy + 선택적 lock/sentinel).
+- Runtime extensibility(실험): native v2 hook(login/join/leave/session/admin/chat) + Lua cold-hook(scaffold directive) 체인을 결합하고, `kBlock/kDeny`는 기본 경로를 중단한다.
+- Plugin/script fallback: `CHAT_HOOK_FALLBACK_PLUGINS_DIR`, `LUA_FALLBACK_SCRIPTS_DIR`를 reload poll마다 재평가해 primary 경로가 비었을 때 자동 전환한다.
 - Streams -> DB: `wb_emit`(`XADD`) -> `wb_worker`(`XREADGROUP`) -> Postgres `session_events`.
 - wb_worker readiness/recovery: Redis+DB 의존성 정상화 전 `ready=false`, DB 장애 시 `WB_DB_RECONNECT_BASE_MS`/`WB_DB_RECONNECT_MAX_MS` 기반 지수 백오프 재연결.
 - Metrics: each service exposes Prometheus text format on `/metrics` (ports wired in `docker/stack/docker-compose.yml`).
@@ -67,7 +73,10 @@ Knights는 C++20 기반 분산 채팅 스택입니다: HAProxy(TCP) -> `gateway_
 | Docker 풀스택 | `docker/stack/docker-compose.yml`, `scripts/deploy_docker.ps1` | `observability` profile 포함 |
 | Observability | `docker/observability/prometheus/prometheus.yml`, `docker/observability/grafana/dashboards/`, `docs/ops/observability.md` | Grafana provisioning은 `docker/observability/grafana/provisioning/`; gateway/wb_worker 신규 하드닝 메트릭 포함 |
 | 서버 런타임 메트릭 | `core/include/server/core/runtime_metrics.hpp`, `server/src/app/metrics_server.cpp` | `/metrics` 텍스트 포맷 노출 |
+| 코어 플러그인/스크립팅 인프라 | `core/include/server/core/plugin/`, `core/include/server/core/scripting/`, `core/src/plugin/`, `core/src/scripting/` | `server`/`gateway`가 재사용하는 공용 host 계층 |
 | Chat hook plugin | `server/src/chat/chat_hook_plugin_*.{hpp,cpp}`, `server/plugins/` | 설정: `docs/configuration.md`, `server/README.md` |
+| Lua cold-hook scaffold | `core/src/scripting/lua_runtime.cpp`, `server/src/scripting/chat_lua_bindings.cpp`, `server/scripts/` | 현재는 directive/return-table 기반 scaffold 실행 |
+| Runtime extensibility docs | `docs/runtime-extensibility-plan.md`, `docs/extensibility/`, `docs/core-api/extensions.md` | quickstart/recipes/정책 및 ABI 계약 |
 | 게이트웨이 라우팅/세션 | `gateway/src/gateway_app.cpp`, `gateway/src/gateway_connection.cpp`, `gateway/README.md` | Redis Instance Registry + SessionDirectory + backend connect timeout/send queue guardrail |
 | Write-behind 워커 | `tools/wb_worker/main.cpp`, `tools/wb_worker/README.md`, `docs/db/write-behind.md` | Redis Streams -> Postgres + `/metrics`(옵션) + DB reconnect backoff/readiness/drop visibility |
 | DB 마이그레이션 | `tools/migrations/runner.cpp`, `tools/migrations/*.sql` | `CREATE INDEX CONCURRENTLY`는 트랜잭션 밖 |
