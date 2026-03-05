@@ -31,11 +31,84 @@ struct InstanceRecord {
     std::string host;                 ///< 접속 가능한 호스트 주소(IP 또는 도메인)
     std::uint16_t port{0};            ///< 접속 포트
     std::string role;                 ///< 역할(예: `chat-server`)
+    std::string game_mode;            ///< 게임 모드 식별자(예: `pvp`, `pve`)
+    std::string region;               ///< 지역 식별자(예: `ap-northeast`)
+    std::string shard;                ///< 샤드 식별자(예: `shard-01`)
+    std::vector<std::string> tags;    ///< 운영 태그 목록(예: `canary`, `vip`)
     std::uint32_t capacity{0};        ///< 최대 수용 가능한 세션 수
     std::uint32_t active_sessions{0}; ///< 현재 활성 세션 수
     bool ready{true};                 ///< 라우팅 가능 상태(readiness)
     std::uint64_t last_heartbeat_ms{0}; ///< 마지막 생존 신호 시간(Epoch ms)
 };
+
+/**
+ * @brief 제어면 배포 명령에서 사용하는 서버 선택 조건입니다.
+ *
+ * 각 필드는 OR 매칭(예: `roles`에 포함된 값 중 하나)이며,
+ * 필드 간에는 AND 매칭으로 결합됩니다.
+ */
+struct InstanceSelector {
+    bool all{false};                      ///< true면 모든 인스턴스 선택
+    std::vector<std::string> server_ids; ///< 특정 인스턴스 ID 목록
+    std::vector<std::string> roles;      ///< 역할 목록
+    std::vector<std::string> game_modes; ///< 게임 모드 목록
+    std::vector<std::string> regions;    ///< 지역 목록
+    std::vector<std::string> shards;     ///< 샤드 목록
+    std::vector<std::string> tags;       ///< 태그 목록(교집합 1개 이상이면 매치)
+};
+
+/**
+ * @brief selector 정책 계층입니다.
+ *
+ * 우선순위는 `global -> game_mode -> region -> shard -> server` 순서입니다.
+ */
+enum class SelectorPolicyLayer {
+    kGlobal,
+    kGameMode,
+    kRegion,
+    kShard,
+    kServer,
+};
+
+/** @brief selector 매칭 결과 집계입니다(메트릭 연동용). */
+struct SelectorMatchStats {
+    std::uint64_t scanned{0};              ///< 전체 검사 수
+    std::uint64_t matched{0};              ///< 매치 수
+    std::uint64_t selector_mismatch{0};    ///< selector 불일치 수
+};
+
+/**
+ * @brief 단일 인스턴스가 selector와 일치하는지 확인합니다.
+ * @param record 검사할 인스턴스
+ * @param selector 선택 조건
+ * @return 일치 시 `true`
+ */
+bool matches_selector(const InstanceRecord& record, const InstanceSelector& selector);
+
+/**
+ * @brief selector의 정책 계층을 계산합니다.
+ * @param selector 선택 조건
+ * @return selector가 표현하는 정책 계층
+ */
+SelectorPolicyLayer classify_selector_policy_layer(const InstanceSelector& selector);
+
+/**
+ * @brief 정책 계층을 고정 문자열로 변환합니다.
+ * @param layer 정책 계층
+ * @return `global|game_mode|region|shard|server`
+ */
+std::string_view selector_policy_layer_name(SelectorPolicyLayer layer);
+
+/**
+ * @brief selector에 일치하는 인스턴스 목록을 반환합니다.
+ * @param instances 전체 인스턴스 목록
+ * @param selector 선택 조건
+ * @param stats 선택 통계(옵션)
+ * @return 매치된 인스턴스 목록
+ */
+std::vector<InstanceRecord> select_instances(const std::vector<InstanceRecord>& instances,
+                                             const InstanceSelector& selector,
+                                             SelectorMatchStats* stats = nullptr);
 
 /**
  * @brief 인스턴스 상태 관리 백엔드 인터페이스

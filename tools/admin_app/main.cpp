@@ -2,6 +2,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
@@ -68,6 +69,13 @@ constexpr std::uint32_t kDefaultAuditTrendMaxPoints = 300;
 constexpr std::uint32_t kMaxAuditTrendMaxPoints = 5000;
 constexpr std::size_t kMaxDisconnectTargets = 200;
 constexpr std::size_t kMaxAnnouncementTextBytes = 512;
+constexpr std::uint32_t kDefaultExtMaxClockSkewMs = 5000;
+
+constexpr std::string_view kDefaultExtPluginsDir = "server/plugins";
+constexpr std::string_view kDefaultExtPluginsFallbackDir = "server/plugins_builtin";
+constexpr std::string_view kDefaultExtScriptsDir = "server/scripts";
+constexpr std::string_view kDefaultExtScriptsFallbackDir = "server/scripts_builtin";
+constexpr std::string_view kDefaultExtScheduleStorePath = "tasks/runtime_ext_deployments_store.json";
 
 constexpr std::string_view kAdminUiFileName = "admin_ui.html";
 
@@ -161,6 +169,16 @@ struct QueryOptions {
 
 struct QueryParseResult {
     QueryOptions options;
+    bool ok{true};
+    std::string error_message;
+    std::string error_param;
+    std::string error_value;
+};
+
+struct SelectorParseResult {
+    server::state::InstanceSelector selector;
+    bool selector_specified{false};
+    bool all_specified{false};
     bool ok{true};
     std::string error_message;
     std::string error_param;
@@ -683,6 +701,111 @@ QueryParseResult parse_common_query_options(std::string_view query) {
     return result;
 }
 
+bool parse_u64_strict(std::string_view raw, std::uint64_t& out_value) {
+    if (raw.empty()) {
+        return false;
+    }
+    try {
+        std::size_t pos = 0;
+        const auto parsed = std::stoull(std::string(raw), &pos, 10);
+        if (pos != raw.size()) {
+            return false;
+        }
+        out_value = static_cast<std::uint64_t>(parsed);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool parse_bool_relaxed(std::string_view raw, bool& out_value) {
+    const std::string normalized = to_lower_ascii(trim_ascii(raw));
+    if (normalized.empty() || normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on") {
+        out_value = true;
+        return true;
+    }
+    if (normalized == "0" || normalized == "false" || normalized == "no" || normalized == "off") {
+        out_value = false;
+        return true;
+    }
+    return false;
+}
+
+SelectorParseResult parse_instance_selector_query(std::string_view query) {
+    SelectorParseResult result;
+    if (query.empty()) {
+        return result;
+    }
+
+    const auto params = parse_query_string(query);
+    auto parse_csv_field = [&](const char* key, std::vector<std::string>& out_values) {
+        const auto it = params.find(key);
+        if (it == params.end()) {
+            return;
+        }
+        result.selector_specified = true;
+        out_values = split_csv_trimmed(it->second);
+    };
+
+    if (const auto it = params.find("all"); it != params.end()) {
+        result.selector_specified = true;
+        result.all_specified = true;
+        const std::string normalized = to_lower_ascii(trim_ascii(it->second));
+        if (normalized.empty() || normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on") {
+            result.selector.all = true;
+        } else if (normalized == "0" || normalized == "false" || normalized == "no" || normalized == "off") {
+            result.selector.all = false;
+        } else {
+            result.ok = false;
+            result.error_param = "all";
+            result.error_value = it->second;
+            result.error_message = "all must be a boolean value";
+            return result;
+        }
+    }
+
+    parse_csv_field("server_ids", result.selector.server_ids);
+    parse_csv_field("roles", result.selector.roles);
+    parse_csv_field("game_modes", result.selector.game_modes);
+    parse_csv_field("regions", result.selector.regions);
+    parse_csv_field("shards", result.selector.shards);
+    parse_csv_field("tags", result.selector.tags);
+
+    return result;
+}
+
+void append_selector_command_fields(std::unordered_map<std::string, std::string>& fields,
+                                    const SelectorParseResult& selector_parse) {
+    if (!selector_parse.selector_specified) {
+        return;
+    }
+
+    if (selector_parse.all_specified) {
+        fields["all"] = selector_parse.selector.all ? "1" : "0";
+    }
+
+    const auto append_csv_field = [&](const char* key, const std::vector<std::string>& values) {
+        if (!values.empty()) {
+            fields[key] = join_csv(values);
+        }
+    };
+
+    append_csv_field("server_ids", selector_parse.selector.server_ids);
+    append_csv_field("roles", selector_parse.selector.roles);
+    append_csv_field("game_modes", selector_parse.selector.game_modes);
+    append_csv_field("regions", selector_parse.selector.regions);
+    append_csv_field("shards", selector_parse.selector.shards);
+    append_csv_field("tags", selector_parse.selector.tags);
+}
+
+void append_selector_response_json(std::ostringstream& data, const SelectorParseResult& selector_parse) {
+    const auto selector_layer = server::state::classify_selector_policy_layer(selector_parse.selector);
+    data << "\"selector\":{";
+    data << "\"applied\":" << bool_json(selector_parse.selector_specified) << ",";
+    data << "\"layer\":\"" << server::state::selector_policy_layer_name(selector_layer) << "\"";
+    data << "}";
+}
+
 std::string json_details(std::string_view key, std::string_view value) {
     std::ostringstream details;
     details << "{\"" << json_escape(key) << "\":\"" << json_escape(value) << "\"}";
@@ -695,11 +818,15 @@ std::string resource_from_path(std::string_view path) {
         std::string_view resource;
     };
 
-static constexpr std::array<ExactRoute, 15> kExactRoutes{{
+static constexpr std::array<ExactRoute, 19> kExactRoutes{{
         {"/api/v1/auth/context", "auth_context"},
         {"/api/v1/overview", "overview"},
         {"/api/v1/instances", "instances"},
         {"/api/v1/users", "users"},
+        {"/api/v1/ext/inventory", "ext_inventory"},
+        {"/api/v1/ext/precheck", "ext_precheck"},
+        {"/api/v1/ext/deployments", "ext_deployments"},
+        {"/api/v1/ext/schedules", "ext_schedules"},
         {"/api/v1/users/disconnect", "users_disconnect"},
         {"/api/v1/users/mute", "users_mute"},
         {"/api/v1/users/unmute", "users_unmute"},
@@ -903,6 +1030,8 @@ public:
         admin_ui_html_ = load_admin_ui_html();
         init_dependencies();
         init_backends();
+        refresh_ext_inventory_cache();
+        load_ext_deployments_store();
         capture_audit_trend_point();
 
         poller_running_.store(true, std::memory_order_release);
@@ -987,6 +1116,134 @@ private:
         std::uint64_t http_server_errors_total{0};
     };
 
+    struct ExtArtifactInventoryItem {
+        std::string artifact_id;
+        std::string kind;
+        std::string name;
+        std::string version;
+        std::vector<std::string> hook_scope;
+        std::string stage;
+        std::uint32_t priority{0};
+        std::string exclusive_group;
+        std::string checksum;
+        std::vector<std::string> target_profiles;
+        std::vector<std::string> allowed_decisions;
+        std::string description;
+        std::string owner;
+        std::string manifest_path;
+        std::string artifact_path;
+        std::vector<std::string> issues;
+    };
+
+    struct ExtRolloutStrategy {
+        std::string type{"all_at_once"};
+        std::vector<std::uint32_t> waves{100};
+        bool rollback_on_failure{false};
+    };
+
+    struct ExtCommandSpec {
+        std::string command_id;
+        std::string artifact_id;
+        server::state::InstanceSelector selector;
+        bool selector_specified{false};
+        std::optional<std::uint64_t> run_at_utc;
+        ExtRolloutStrategy rollout;
+    };
+
+    struct ExtPrecheckIssue {
+        std::string code;
+        std::string message;
+    };
+
+    struct ExtPrecheckResult {
+        bool ok{false};
+        std::size_t target_count{0};
+        std::vector<ExtPrecheckIssue> issues;
+    };
+
+    struct ExtPrecheckRecord {
+        ExtCommandSpec command;
+        ExtPrecheckResult result;
+        std::uint64_t created_at_ms{0};
+    };
+
+    struct ExtDeploymentRecord {
+        std::string command_id;
+        std::string artifact_id;
+        std::string actor;
+        std::string status{"pending"};
+        std::string status_reason;
+        server::state::InstanceSelector selector;
+        bool selector_specified{false};
+        std::optional<std::uint64_t> run_at_utc;
+        ExtRolloutStrategy rollout;
+        std::string kind;
+        std::vector<std::string> hook_scope;
+        std::string stage;
+        std::uint32_t priority{0};
+        std::string exclusive_group;
+        std::size_t target_count{0};
+        std::size_t applied_targets{0};
+        std::vector<ExtPrecheckIssue> issues;
+        std::uint64_t created_at_ms{0};
+        std::uint64_t updated_at_ms{0};
+    };
+
+    struct ExtCommandParseResult {
+        bool ok{false};
+        std::string error_message;
+        ExtCommandSpec command;
+    };
+
+    static bool is_ext_valid_hook_scope(std::string_view hook) {
+        static constexpr std::array<std::string_view, 6> kAllowedHooks{{
+            "on_chat_send",
+            "on_login",
+            "on_join",
+            "on_leave",
+            "on_session_event",
+            "on_admin_command",
+        }};
+        return std::find(kAllowedHooks.begin(), kAllowedHooks.end(), hook) != kAllowedHooks.end();
+    }
+
+    static bool is_ext_valid_stage(std::string_view stage) {
+        static constexpr std::array<std::string_view, 5> kAllowedStages{{
+            "pre_validate",
+            "mutate",
+            "authorize",
+            "side_effect",
+            "observe",
+        }};
+        return std::find(kAllowedStages.begin(), kAllowedStages.end(), stage) != kAllowedStages.end();
+    }
+
+    static bool is_ext_valid_kind(std::string_view kind) {
+        return kind == "native_plugin" || kind == "lua_script";
+    }
+
+    static bool is_ext_valid_target_profile(std::string_view profile) {
+        return profile == "chat" || profile == "world" || profile == "all";
+    }
+
+    static bool is_ext_valid_terminal_decision(std::string_view decision) {
+        return decision == "block" || decision == "deny" || decision == "handled"
+            || decision == "modify" || decision == "pass" || decision == "allow";
+    }
+
+    static std::int32_t terminal_decision_priority(std::string_view decision) {
+        if (decision == "block" || decision == "deny") {
+            return 0;
+        }
+        if (decision == "handled") {
+            return 1;
+        }
+        if (decision == "modify") {
+            return 2;
+        }
+        return 3;
+    }
+
     void load_config() {
         metrics_port_ = read_env_u16("METRICS_PORT", kDefaultAdminPort, 1, 65535);
         poll_interval_ms_ = read_env_u32("ADMIN_POLL_INTERVAL_MS", kDefaultPollIntervalMs, 100, 60000);
@@ -1012,6 +1269,28 @@ private:
         prometheus_base_url_ = read_env_string("PROMETHEUS_BASE_URL", "http://127.0.0.1:39090");
         admin_read_only_ = read_env_bool("ADMIN_READ_ONLY", false);
         admin_command_signing_secret_ = read_env_string("ADMIN_COMMAND_SIGNING_SECRET", "");
+
+        ext_plugins_dir_ = read_env_string("CHAT_HOOK_PLUGINS_DIR", std::string(kDefaultExtPluginsDir));
+        ext_plugins_fallback_dir_ = read_env_string(
+            "CHAT_HOOK_FALLBACK_PLUGINS_DIR",
+            std::string(kDefaultExtPluginsFallbackDir));
+        ext_scripts_dir_ = read_env_string("LUA_SCRIPTS_DIR", std::string(kDefaultExtScriptsDir));
+        ext_scripts_fallback_dir_ = read_env_string(
+            "LUA_FALLBACK_SCRIPTS_DIR",
+            std::string(kDefaultExtScriptsFallbackDir));
+        ext_schedule_store_path_ = read_env_string(
+            "ADMIN_EXT_SCHEDULE_STORE_PATH",
+            std::string(kDefaultExtScheduleStorePath));
+        ext_max_clock_skew_ms_ = read_env_u32(
+            "ADMIN_EXT_MAX_CLOCK_SKEW_MS",
+            kDefaultExtMaxClockSkewMs,
+            0,
+            60000);
+        ext_force_fail_wave_index_ = read_env_u32(
+            "ADMIN_EXT_FORCE_FAIL_WAVE_INDEX",
+            0,
+            0,
+            32);
 
         auth_mode_raw_ = read_env_string("ADMIN_AUTH_MODE", "off");
         auth_mode_ = parse_auth_mode(auth_mode_raw_);
@@ -1284,6 +1563,8 @@ private:
         while (poller_running_.load(std::memory_order_acquire) && !app_host_.stop_requested()) {
             refresh_instances_cache();
             refresh_worker_cache();
+            refresh_ext_inventory_cache();
+            process_ext_deployment_queue();
             capture_audit_trend_point();
             std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms_));
         }
@@ -1381,6 +1662,1101 @@ private:
         app_host_.set_dependency_ok("wb_metrics", true);
     }
 
+    std::filesystem::path resolve_ext_path(std::string_view raw_path) const {
+        std::filesystem::path path = std::filesystem::path(std::string(raw_path));
+        if (!path.is_absolute()) {
+            path = std::filesystem::current_path() / path;
+        }
+        return path.lexically_normal();
+    }
+
+    std::vector<std::filesystem::path> scan_ext_manifest_paths_from_dir(const std::filesystem::path& root) const {
+        std::vector<std::filesystem::path> manifests;
+        std::error_code ec;
+        if (!std::filesystem::exists(root, ec) || ec) {
+            return manifests;
+        }
+
+        std::filesystem::recursive_directory_iterator it(
+            root,
+            std::filesystem::directory_options::skip_permission_denied,
+            ec);
+        std::filesystem::recursive_directory_iterator end;
+        for (; it != end; it.increment(ec)) {
+            if (ec) {
+                ec.clear();
+                continue;
+            }
+            if (!it->is_regular_file()) {
+                continue;
+            }
+            const auto name = it->path().filename().string();
+            if (name.ends_with(".plugin.json") || name.ends_with(".script.json")) {
+                manifests.push_back(it->path());
+            }
+        }
+        return manifests;
+    }
+
+    std::filesystem::path derive_ext_artifact_path(const std::filesystem::path& manifest_path,
+                                                   std::string_view kind) const {
+        const std::string filename = manifest_path.filename().string();
+        if (kind == "native_plugin" && filename.ends_with(".plugin.json")) {
+            const std::string stem = filename.substr(0, filename.size() - std::string(".plugin.json").size());
+            static constexpr std::array<std::string_view, 4> kExts{{".so", ".dll", ".dylib", ".cpp"}};
+            for (const auto& ext : kExts) {
+                const auto candidate = manifest_path.parent_path() / (stem + std::string(ext));
+                std::error_code ec;
+                if (std::filesystem::exists(candidate, ec) && !ec) {
+                    return candidate;
+                }
+            }
+            return manifest_path.parent_path() / (stem + ".so");
+        }
+        if (kind == "lua_script" && filename.ends_with(".script.json")) {
+            const std::string stem = filename.substr(0, filename.size() - std::string(".script.json").size());
+            return manifest_path.parent_path() / (stem + ".lua");
+        }
+        return {};
+    }
+
+    static std::vector<std::string> parse_json_string_list(const nlohmann::json& node) {
+        std::vector<std::string> out;
+        if (!node.is_array()) {
+            return out;
+        }
+        for (const auto& item : node) {
+            if (!item.is_string()) {
+                continue;
+            }
+            std::string value = trim_ascii(item.get<std::string>());
+            if (!value.empty()) {
+                out.push_back(std::move(value));
+            }
+        }
+        return out;
+    }
+
+    static std::string ext_status_text(std::string_view status) {
+        if (status == "pending") {
+            return "pending";
+        }
+        if (status == "precheck_passed") {
+            return "precheck_passed";
+        }
+        if (status == "executing") {
+            return "executing";
+        }
+        if (status == "completed") {
+            return "completed";
+        }
+        if (status == "failed") {
+            return "failed";
+        }
+        if (status == "cancelled") {
+            return "cancelled";
+        }
+        return "failed";
+    }
+
+    std::string make_ext_artifact_id(std::string_view kind, const std::filesystem::path& manifest_path) const {
+        const std::string filename = manifest_path.filename().string();
+        std::string stem = filename;
+        if (kind == "native_plugin" && filename.ends_with(".plugin.json")) {
+            stem = filename.substr(0, filename.size() - std::string(".plugin.json").size());
+            return "plugin:" + stem;
+        }
+        if (kind == "lua_script" && filename.ends_with(".script.json")) {
+            stem = filename.substr(0, filename.size() - std::string(".script.json").size());
+            return "script:" + stem;
+        }
+        return "artifact:" + stem;
+    }
+
+    ExtArtifactInventoryItem parse_ext_manifest_file(const std::filesystem::path& manifest_path) const {
+        ExtArtifactInventoryItem item;
+        item.manifest_path = manifest_path.string();
+
+        std::string expected_kind;
+        const std::string filename = manifest_path.filename().string();
+        if (filename.ends_with(".plugin.json")) {
+            expected_kind = "native_plugin";
+        } else if (filename.ends_with(".script.json")) {
+            expected_kind = "lua_script";
+        }
+
+        std::ifstream in(manifest_path, std::ios::binary);
+        if (!in) {
+            item.issues.push_back("manifest_read_failed");
+            item.kind = expected_kind;
+            item.artifact_id = make_ext_artifact_id(item.kind.empty() ? "native_plugin" : item.kind, manifest_path);
+            return item;
+        }
+
+        std::ostringstream buf;
+        buf << in.rdbuf();
+        const auto parsed = nlohmann::json::parse(buf.str(), nullptr, false);
+        if (parsed.is_discarded() || !parsed.is_object()) {
+            item.issues.push_back("manifest_json_invalid");
+            item.kind = expected_kind;
+            item.artifact_id = make_ext_artifact_id(item.kind.empty() ? "native_plugin" : item.kind, manifest_path);
+            return item;
+        }
+
+        const auto read_string = [&](std::string_view key) -> std::string {
+            if (!parsed.contains(key) || !parsed[key].is_string()) {
+                return {};
+            }
+            return trim_ascii(parsed[key].get<std::string>());
+        };
+
+        item.name = read_string("name");
+        item.version = read_string("version");
+        item.kind = read_string("kind");
+        item.stage = read_string("stage");
+        item.exclusive_group = read_string("exclusive_group");
+        item.checksum = read_string("checksum");
+        item.description = read_string("description");
+        item.owner = read_string("owner");
+
+        if (parsed.contains("priority") && parsed["priority"].is_number_unsigned()) {
+            item.priority = parsed["priority"].get<std::uint32_t>();
+        } else if (parsed.contains("priority") && parsed["priority"].is_number_integer()) {
+            const auto signed_priority = parsed["priority"].get<long long>();
+            if (signed_priority >= 0) {
+                item.priority = static_cast<std::uint32_t>(signed_priority);
+            } else {
+                item.issues.push_back("priority_must_be_non_negative");
+            }
+        } else {
+            item.issues.push_back("priority_missing");
+        }
+
+        if (parsed.contains("hook_scope")) {
+            item.hook_scope = parse_json_string_list(parsed["hook_scope"]);
+        }
+        if (parsed.contains("target_profiles")) {
+            item.target_profiles = parse_json_string_list(parsed["target_profiles"]);
+        }
+        if (parsed.contains("allowed_decisions")) {
+            item.allowed_decisions = parse_json_string_list(parsed["allowed_decisions"]);
+        }
+
+        if (!is_ext_valid_kind(item.kind)) {
+            item.issues.push_back("kind_invalid");
+            if (!expected_kind.empty()) {
+                item.kind = expected_kind;
+            }
+        }
+        if (!expected_kind.empty() && !item.kind.empty() && item.kind != expected_kind) {
+            item.issues.push_back("kind_mismatch");
+        }
+        if (item.name.empty()) {
+            item.issues.push_back("name_missing");
+        }
+        if (item.version.empty()) {
+            item.issues.push_back("version_missing");
+        }
+        if (!is_ext_valid_stage(item.stage)) {
+            item.issues.push_back("stage_invalid");
+        }
+        if (item.exclusive_group.empty()) {
+            item.issues.push_back("exclusive_group_missing");
+        }
+        if (item.hook_scope.empty()) {
+            item.issues.push_back("hook_scope_missing");
+        } else {
+            for (const auto& hook : item.hook_scope) {
+                if (!is_ext_valid_hook_scope(hook)) {
+                    item.issues.push_back("hook_scope_invalid");
+                    break;
+                }
+            }
+        }
+
+        if (!item.target_profiles.empty()) {
+            for (const auto& profile : item.target_profiles) {
+                if (!is_ext_valid_target_profile(profile)) {
+                    item.issues.push_back("target_profile_invalid");
+                    break;
+                }
+            }
+        }
+
+        if (!item.allowed_decisions.empty()) {
+            std::int32_t prev_rank = -1;
+            for (const auto& raw : item.allowed_decisions) {
+                const std::string decision = to_lower_ascii(trim_ascii(raw));
+                if (!is_ext_valid_terminal_decision(decision)) {
+                    item.issues.push_back("terminal_decision_invalid");
+                    continue;
+                }
+                const auto rank = terminal_decision_priority(decision);
+                if (prev_rank > rank) {
+                    item.issues.push_back("terminal_decision_precedence_invalid");
+                }
+                prev_rank = rank;
+            }
+            if (item.stage == "observe") {
+                for (const auto& raw : item.allowed_decisions) {
+                    const std::string decision = to_lower_ascii(trim_ascii(raw));
+                    if (decision != "pass") {
+                        item.issues.push_back("observe_stage_decision_forbidden");
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (item.kind.empty()) {
+            item.kind = expected_kind.empty() ? std::string("native_plugin") : expected_kind;
+        }
+
+        item.artifact_id = make_ext_artifact_id(item.kind, manifest_path);
+        const auto artifact_path = derive_ext_artifact_path(manifest_path, item.kind);
+        item.artifact_path = artifact_path.empty() ? std::string() : artifact_path.string();
+        if (!artifact_path.empty()) {
+            std::error_code ec;
+            if (!std::filesystem::exists(artifact_path, ec) || ec) {
+                item.issues.push_back("artifact_missing");
+            }
+        }
+
+        return item;
+    }
+
+    void refresh_ext_inventory_cache() {
+        std::vector<std::filesystem::path> manifests;
+        for (const auto& root : {
+                 resolve_ext_path(ext_plugins_dir_),
+                 resolve_ext_path(ext_plugins_fallback_dir_),
+                 resolve_ext_path(ext_scripts_dir_),
+                 resolve_ext_path(ext_scripts_fallback_dir_)}) {
+            auto found = scan_ext_manifest_paths_from_dir(root);
+            manifests.insert(manifests.end(), found.begin(), found.end());
+        }
+
+        std::sort(manifests.begin(), manifests.end());
+        manifests.erase(std::unique(manifests.begin(), manifests.end()), manifests.end());
+
+        std::vector<ExtArtifactInventoryItem> items;
+        items.reserve(manifests.size());
+        std::size_t error_count = 0;
+        for (const auto& manifest : manifests) {
+            auto item = parse_ext_manifest_file(manifest);
+            error_count += item.issues.size();
+            items.push_back(std::move(item));
+        }
+
+        std::unordered_map<std::string, std::size_t> index;
+        index.reserve(items.size());
+        for (std::size_t i = 0; i < items.size(); ++i) {
+            const auto [_, inserted] = index.emplace(items[i].artifact_id, i);
+            if (!inserted) {
+                items[i].issues.push_back("artifact_id_collision");
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(ext_mutex_);
+            ext_inventory_cache_ = std::move(items);
+            ext_inventory_index_ = std::move(index);
+            ext_inventory_updated_at_ms_ = now_ms();
+            ext_inventory_error_count_.store(static_cast<std::uint64_t>(error_count), std::memory_order_relaxed);
+        }
+    }
+
+    const ExtArtifactInventoryItem* find_ext_inventory_item_locked(std::string_view artifact_id) const {
+        const auto it = ext_inventory_index_.find(std::string(artifact_id));
+        if (it == ext_inventory_index_.end()) {
+            return nullptr;
+        }
+        if (it->second >= ext_inventory_cache_.size()) {
+            return nullptr;
+        }
+        return &ext_inventory_cache_[it->second];
+    }
+
+    std::vector<server::state::InstanceRecord> resolve_ext_targets(const server::state::InstanceSelector& selector,
+                                                                    bool selector_specified) const {
+        std::vector<server::state::InstanceRecord> targets;
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            targets = instances_cache_;
+        }
+
+        if (!selector_specified) {
+            return targets;
+        }
+        return server::state::select_instances(targets, selector, nullptr);
+    }
+
+    bool parse_rollout_strategy_json(const nlohmann::json& root,
+                                     ExtRolloutStrategy& rollout,
+                                     std::string& error_message) const {
+        rollout.type = "all_at_once";
+        rollout.waves = {100};
+        rollout.rollback_on_failure = false;
+
+        if (!root.contains("rollout_strategy") || root["rollout_strategy"].is_null()) {
+            return true;
+        }
+        if (!root["rollout_strategy"].is_object()) {
+            error_message = "rollout_strategy must be an object";
+            return false;
+        }
+
+        const auto& strategy = root["rollout_strategy"];
+        if (strategy.contains("type")) {
+            if (!strategy["type"].is_string()) {
+                error_message = "rollout_strategy.type must be a string";
+                return false;
+            }
+            rollout.type = to_lower_ascii(trim_ascii(strategy["type"].get<std::string>()));
+        }
+
+        if (strategy.contains("rollback_on_failure")) {
+            if (strategy["rollback_on_failure"].is_boolean()) {
+                rollout.rollback_on_failure = strategy["rollback_on_failure"].get<bool>();
+            } else {
+                error_message = "rollout_strategy.rollback_on_failure must be a boolean";
+                return false;
+            }
+        }
+
+        if (rollout.type == "all_at_once") {
+            rollout.waves = {100};
+            return true;
+        }
+
+        if (rollout.type != "canary_wave") {
+            error_message = "rollout_strategy.type must be all_at_once or canary_wave";
+            return false;
+        }
+
+        rollout.waves.clear();
+        if (strategy.contains("waves") && strategy["waves"].is_array()) {
+            for (const auto& wave : strategy["waves"]) {
+                std::uint32_t value = 0;
+                if (wave.is_number_unsigned()) {
+                    value = wave.get<std::uint32_t>();
+                } else if (wave.is_number_integer()) {
+                    const auto signed_value = wave.get<long long>();
+                    if (signed_value < 0) {
+                        error_message = "rollout_strategy.waves must contain values 1..100";
+                        return false;
+                    }
+                    value = static_cast<std::uint32_t>(signed_value);
+                } else {
+                    error_message = "rollout_strategy.waves must be numeric";
+                    return false;
+                }
+                if (value == 0 || value > 100) {
+                    error_message = "rollout_strategy.waves must contain values 1..100";
+                    return false;
+                }
+                rollout.waves.push_back(value);
+            }
+        }
+
+        if (rollout.waves.empty()) {
+            rollout.waves = {5, 25, 100};
+        }
+
+        if (!std::is_sorted(rollout.waves.begin(), rollout.waves.end())) {
+            error_message = "rollout_strategy.waves must be ascending";
+            return false;
+        }
+        if (std::adjacent_find(rollout.waves.begin(), rollout.waves.end()) != rollout.waves.end()) {
+            error_message = "rollout_strategy.waves must be strictly increasing";
+            return false;
+        }
+        if (rollout.waves.back() != 100) {
+            error_message = "rollout_strategy.waves last value must be 100";
+            return false;
+        }
+        return true;
+    }
+
+    ExtCommandParseResult parse_ext_command_request(
+        const server::core::metrics::MetricsHttpServer::HttpRequest& request,
+        bool require_run_at) const {
+        ExtCommandParseResult result;
+
+        if (request.body.empty()) {
+            result.error_message = "JSON body is required";
+            return result;
+        }
+
+        std::string content_type;
+        if (const auto it = request.headers.find("content-type"); it != request.headers.end()) {
+            content_type = to_lower_ascii(trim_ascii(it->second));
+        }
+        if (content_type.rfind("application/json", 0) != 0) {
+            result.error_message = "content-type must be application/json";
+            return result;
+        }
+
+        const auto parsed = nlohmann::json::parse(request.body, nullptr, false);
+        if (parsed.is_discarded() || !parsed.is_object()) {
+            result.error_message = "malformed JSON body";
+            return result;
+        }
+
+        if (!parsed.contains("command_id") || !parsed["command_id"].is_string()) {
+            result.error_message = "command_id is required";
+            return result;
+        }
+        if (!parsed.contains("artifact_id") || !parsed["artifact_id"].is_string()) {
+            result.error_message = "artifact_id is required";
+            return result;
+        }
+
+        result.command.command_id = trim_ascii(parsed["command_id"].get<std::string>());
+        result.command.artifact_id = trim_ascii(parsed["artifact_id"].get<std::string>());
+        if (result.command.command_id.empty() || result.command.artifact_id.empty()) {
+            result.error_message = "command_id and artifact_id must be non-empty";
+            return result;
+        }
+
+        if (parsed.contains("selector") && !parsed["selector"].is_null()) {
+            if (!parsed["selector"].is_object()) {
+                result.error_message = "selector must be an object";
+                return result;
+            }
+
+            const auto& selector_json = parsed["selector"];
+            result.command.selector_specified = true;
+            if (selector_json.contains("all")) {
+                if (!selector_json["all"].is_boolean()) {
+                    result.error_message = "selector.all must be boolean";
+                    return result;
+                }
+                result.command.selector.all = selector_json["all"].get<bool>();
+            }
+            auto parse_array_field = [&](const char* key, std::vector<std::string>& out) -> bool {
+                if (!selector_json.contains(key)) {
+                    return true;
+                }
+                out = parse_json_string_list(selector_json[key]);
+                if (!selector_json[key].is_array()) {
+                    result.error_message = std::string("selector.") + key + " must be array";
+                    return false;
+                }
+                return true;
+            };
+
+            if (!parse_array_field("server_ids", result.command.selector.server_ids)
+                || !parse_array_field("roles", result.command.selector.roles)
+                || !parse_array_field("game_modes", result.command.selector.game_modes)
+                || !parse_array_field("regions", result.command.selector.regions)
+                || !parse_array_field("shards", result.command.selector.shards)
+                || !parse_array_field("tags", result.command.selector.tags)) {
+                return result;
+            }
+        }
+
+        if (parsed.contains("run_at_utc") && !parsed["run_at_utc"].is_null()) {
+            std::uint64_t run_at = 0;
+            if (parsed["run_at_utc"].is_number_unsigned()) {
+                run_at = parsed["run_at_utc"].get<std::uint64_t>();
+            } else if (parsed["run_at_utc"].is_number_integer()) {
+                const auto signed_value = parsed["run_at_utc"].get<long long>();
+                if (signed_value < 0) {
+                    result.error_message = "run_at_utc must be >= 0";
+                    return result;
+                }
+                run_at = static_cast<std::uint64_t>(signed_value);
+            } else if (parsed["run_at_utc"].is_string()) {
+                if (!parse_u64_strict(parsed["run_at_utc"].get<std::string>(), run_at)) {
+                    result.error_message = "run_at_utc must be an unsigned integer";
+                    return result;
+                }
+            } else {
+                result.error_message = "run_at_utc must be null or unsigned integer";
+                return result;
+            }
+            result.command.run_at_utc = run_at;
+        }
+
+        if (require_run_at && !result.command.run_at_utc.has_value()) {
+            result.error_message = "run_at_utc is required for schedules";
+            return result;
+        }
+
+        if (!parse_rollout_strategy_json(parsed, result.command.rollout, result.error_message)) {
+            return result;
+        }
+
+        result.ok = true;
+        return result;
+    }
+
+    ExtPrecheckResult run_ext_precheck_locked(const ExtCommandSpec& command) {
+        ExtPrecheckResult result;
+        result.ok = true;
+
+        auto add_issue = [&](std::string code, std::string message) {
+            result.ok = false;
+            result.issues.push_back({std::move(code), std::move(message)});
+        };
+
+        const ExtArtifactInventoryItem* artifact = find_ext_inventory_item_locked(command.artifact_id);
+        if (artifact == nullptr) {
+            add_issue("artifact_not_found", "artifact_id not found in inventory");
+            return result;
+        }
+
+        if (!artifact->issues.empty()) {
+            add_issue("artifact_manifest_invalid", "artifact manifest has validation issues");
+        }
+
+        if (!is_ext_valid_stage(artifact->stage)) {
+            add_issue("stage_invalid", "stage must be one of pre_validate|mutate|authorize|side_effect|observe");
+        }
+
+        if (artifact->hook_scope.empty()) {
+            add_issue("hook_scope_missing", "artifact hook_scope is required");
+        }
+
+        if (artifact->exclusive_group.empty()) {
+            add_issue("exclusive_group_missing", "artifact exclusive_group is required");
+        }
+
+        if (artifact->stage == "observe") {
+            for (const auto& raw : artifact->allowed_decisions) {
+                const std::string decision = to_lower_ascii(trim_ascii(raw));
+                if (decision != "pass") {
+                    add_issue("observe_stage_decision_forbidden", "observe stage artifacts must only allow pass");
+                    break;
+                }
+            }
+        }
+
+        for (const auto& [existing_command_id, deployment] : ext_deployments_) {
+            if (existing_command_id == command.command_id) {
+                continue;
+            }
+            if (deployment.status == "failed" || deployment.status == "cancelled") {
+                continue;
+            }
+            if (deployment.artifact_id == command.artifact_id) {
+                continue;
+            }
+            if (deployment.stage != artifact->stage) {
+                continue;
+            }
+            if (deployment.exclusive_group != artifact->exclusive_group) {
+                continue;
+            }
+
+            bool hook_overlap = false;
+            for (const auto& hook : artifact->hook_scope) {
+                if (std::find(deployment.hook_scope.begin(), deployment.hook_scope.end(), hook)
+                    != deployment.hook_scope.end()) {
+                    hook_overlap = true;
+                    break;
+                }
+            }
+            if (!hook_overlap) {
+                continue;
+            }
+
+            add_issue(
+                "exclusive_group_conflict",
+                "hook_scope/stage/exclusive_group conflict with command_id=" + existing_command_id);
+        }
+
+        auto targets = resolve_ext_targets(command.selector, command.selector_specified);
+        result.target_count = targets.size();
+        if (targets.empty()) {
+            add_issue("target_empty", "selector does not match any live server instance");
+        }
+
+        return result;
+    }
+
+    bool save_ext_deployments_locked() {
+        nlohmann::json root;
+        root["version"] = 1;
+        root["saved_at_ms"] = now_ms();
+        root["deployments"] = nlohmann::json::array();
+
+        std::vector<std::string> keys;
+        keys.reserve(ext_deployments_.size());
+        for (const auto& [key, _] : ext_deployments_) {
+            keys.push_back(key);
+        }
+        std::sort(keys.begin(), keys.end());
+
+        for (const auto& key : keys) {
+            const auto it = ext_deployments_.find(key);
+            if (it == ext_deployments_.end()) {
+                continue;
+            }
+            const auto& d = it->second;
+
+            nlohmann::json item;
+            item["command_id"] = d.command_id;
+            item["artifact_id"] = d.artifact_id;
+            item["actor"] = d.actor;
+            item["status"] = d.status;
+            item["status_reason"] = d.status_reason;
+            item["selector_specified"] = d.selector_specified;
+            item["selector"] = {
+                {"all", d.selector.all},
+                {"server_ids", d.selector.server_ids},
+                {"roles", d.selector.roles},
+                {"game_modes", d.selector.game_modes},
+                {"regions", d.selector.regions},
+                {"shards", d.selector.shards},
+                {"tags", d.selector.tags},
+            };
+            if (d.run_at_utc.has_value()) {
+                item["run_at_utc"] = *d.run_at_utc;
+            } else {
+                item["run_at_utc"] = nullptr;
+            }
+            item["rollout_strategy"] = {
+                {"type", d.rollout.type},
+                {"waves", d.rollout.waves},
+                {"rollback_on_failure", d.rollout.rollback_on_failure},
+            };
+            item["kind"] = d.kind;
+            item["hook_scope"] = d.hook_scope;
+            item["stage"] = d.stage;
+            item["priority"] = d.priority;
+            item["exclusive_group"] = d.exclusive_group;
+            item["target_count"] = d.target_count;
+            item["applied_targets"] = d.applied_targets;
+            item["issues"] = nlohmann::json::array();
+            for (const auto& issue : d.issues) {
+                item["issues"].push_back({{"code", issue.code}, {"message", issue.message}});
+            }
+            item["created_at_ms"] = d.created_at_ms;
+            item["updated_at_ms"] = d.updated_at_ms;
+
+            root["deployments"].push_back(std::move(item));
+        }
+
+        const auto path = resolve_ext_path(ext_schedule_store_path_);
+        const auto tmp_path = path.string() + ".tmp";
+
+        std::error_code ec;
+        const auto parent = path.parent_path();
+        if (!parent.empty()) {
+            std::filesystem::create_directories(parent, ec);
+        }
+
+        std::ofstream out(tmp_path, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            corelog::warn("admin_app failed to open ext deployment store temp file");
+            return false;
+        }
+        out << root.dump(2);
+        out.close();
+
+        const auto backup_path = path.string() + ".bak";
+        if (std::filesystem::exists(path, ec) && !ec) {
+            ec.clear();
+            std::filesystem::remove(backup_path, ec);
+            ec.clear();
+            std::filesystem::rename(path, backup_path, ec);
+            if (ec) {
+                corelog::warn(std::string("admin_app failed to backup ext deployment store: ") + ec.message());
+            }
+        }
+
+        ec.clear();
+        std::filesystem::rename(tmp_path, path, ec);
+        if (ec) {
+            corelog::warn(std::string("admin_app failed to persist ext deployment store: ") + ec.message());
+
+            std::error_code restore_ec;
+            if (std::filesystem::exists(backup_path, restore_ec) && !restore_ec) {
+                std::filesystem::rename(backup_path, path, restore_ec);
+                if (restore_ec) {
+                    corelog::warn(std::string("admin_app failed to restore ext deployment backup: ") + restore_ec.message());
+                }
+            }
+            return false;
+        }
+
+        std::filesystem::remove(backup_path, ec);
+
+        ext_store_write_ok_total_.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
+
+    void load_ext_deployments_store() {
+        const auto path = resolve_ext_path(ext_schedule_store_path_);
+        std::ifstream in(path, std::ios::binary);
+        if (!in) {
+            return;
+        }
+
+        std::ostringstream buf;
+        buf << in.rdbuf();
+        const auto parsed = nlohmann::json::parse(buf.str(), nullptr, false);
+        if (parsed.is_discarded() || !parsed.is_object() || !parsed.contains("deployments")
+            || !parsed["deployments"].is_array()) {
+            corelog::warn("admin_app failed to parse ext deployment store");
+            ext_store_read_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        std::unordered_map<std::string, ExtDeploymentRecord> loaded;
+        for (const auto& item : parsed["deployments"]) {
+            if (!item.is_object()) {
+                continue;
+            }
+            if (!item.contains("command_id") || !item["command_id"].is_string()) {
+                continue;
+            }
+
+            ExtDeploymentRecord d;
+            d.command_id = trim_ascii(item["command_id"].get<std::string>());
+            if (d.command_id.empty()) {
+                continue;
+            }
+            if (item.contains("artifact_id") && item["artifact_id"].is_string()) {
+                d.artifact_id = trim_ascii(item["artifact_id"].get<std::string>());
+            }
+            if (item.contains("actor") && item["actor"].is_string()) {
+                d.actor = trim_ascii(item["actor"].get<std::string>());
+            }
+            if (item.contains("status") && item["status"].is_string()) {
+                d.status = ext_status_text(item["status"].get<std::string>());
+            }
+            if (item.contains("status_reason") && item["status_reason"].is_string()) {
+                d.status_reason = trim_ascii(item["status_reason"].get<std::string>());
+            }
+            if (item.contains("selector_specified") && item["selector_specified"].is_boolean()) {
+                d.selector_specified = item["selector_specified"].get<bool>();
+            }
+            if (item.contains("selector") && item["selector"].is_object()) {
+                const auto& selector = item["selector"];
+                if (selector.contains("all") && selector["all"].is_boolean()) {
+                    d.selector.all = selector["all"].get<bool>();
+                }
+                if (selector.contains("server_ids")) {
+                    d.selector.server_ids = parse_json_string_list(selector["server_ids"]);
+                }
+                if (selector.contains("roles")) {
+                    d.selector.roles = parse_json_string_list(selector["roles"]);
+                }
+                if (selector.contains("game_modes")) {
+                    d.selector.game_modes = parse_json_string_list(selector["game_modes"]);
+                }
+                if (selector.contains("regions")) {
+                    d.selector.regions = parse_json_string_list(selector["regions"]);
+                }
+                if (selector.contains("shards")) {
+                    d.selector.shards = parse_json_string_list(selector["shards"]);
+                }
+                if (selector.contains("tags")) {
+                    d.selector.tags = parse_json_string_list(selector["tags"]);
+                }
+            }
+            if (item.contains("run_at_utc") && !item["run_at_utc"].is_null()) {
+                if (item["run_at_utc"].is_number_unsigned()) {
+                    d.run_at_utc = item["run_at_utc"].get<std::uint64_t>();
+                } else if (item["run_at_utc"].is_number_integer()) {
+                    const auto signed_value = item["run_at_utc"].get<long long>();
+                    if (signed_value >= 0) {
+                        d.run_at_utc = static_cast<std::uint64_t>(signed_value);
+                    }
+                }
+            }
+
+            if (item.contains("rollout_strategy") && item["rollout_strategy"].is_object()) {
+                const auto& rollout = item["rollout_strategy"];
+                if (rollout.contains("type") && rollout["type"].is_string()) {
+                    d.rollout.type = to_lower_ascii(trim_ascii(rollout["type"].get<std::string>()));
+                }
+                if (rollout.contains("waves") && rollout["waves"].is_array()) {
+                    d.rollout.waves.clear();
+                    for (const auto& wave : rollout["waves"]) {
+                        if (wave.is_number_unsigned()) {
+                            d.rollout.waves.push_back(wave.get<std::uint32_t>());
+                        } else if (wave.is_number_integer()) {
+                            const auto signed_value = wave.get<long long>();
+                            if (signed_value >= 0) {
+                                d.rollout.waves.push_back(static_cast<std::uint32_t>(signed_value));
+                            }
+                        }
+                    }
+                }
+                if (rollout.contains("rollback_on_failure") && rollout["rollback_on_failure"].is_boolean()) {
+                    d.rollout.rollback_on_failure = rollout["rollback_on_failure"].get<bool>();
+                }
+            }
+            if (d.rollout.waves.empty()) {
+                d.rollout.waves = (d.rollout.type == "canary_wave") ? std::vector<std::uint32_t>{5, 25, 100}
+                                                                      : std::vector<std::uint32_t>{100};
+            }
+
+            if (item.contains("kind") && item["kind"].is_string()) {
+                d.kind = trim_ascii(item["kind"].get<std::string>());
+            }
+            if (item.contains("hook_scope")) {
+                d.hook_scope = parse_json_string_list(item["hook_scope"]);
+            }
+            if (item.contains("stage") && item["stage"].is_string()) {
+                d.stage = trim_ascii(item["stage"].get<std::string>());
+            }
+            if (item.contains("priority") && item["priority"].is_number_unsigned()) {
+                d.priority = item["priority"].get<std::uint32_t>();
+            }
+            if (item.contains("exclusive_group") && item["exclusive_group"].is_string()) {
+                d.exclusive_group = trim_ascii(item["exclusive_group"].get<std::string>());
+            }
+            if (item.contains("target_count") && item["target_count"].is_number_unsigned()) {
+                d.target_count = static_cast<std::size_t>(item["target_count"].get<std::uint64_t>());
+            }
+            if (item.contains("applied_targets") && item["applied_targets"].is_number_unsigned()) {
+                d.applied_targets = static_cast<std::size_t>(item["applied_targets"].get<std::uint64_t>());
+            }
+            if (item.contains("issues") && item["issues"].is_array()) {
+                for (const auto& issue_json : item["issues"]) {
+                    if (!issue_json.is_object()) {
+                        continue;
+                    }
+                    ExtPrecheckIssue issue;
+                    if (issue_json.contains("code") && issue_json["code"].is_string()) {
+                        issue.code = issue_json["code"].get<std::string>();
+                    }
+                    if (issue_json.contains("message") && issue_json["message"].is_string()) {
+                        issue.message = issue_json["message"].get<std::string>();
+                    }
+                    if (!issue.code.empty() || !issue.message.empty()) {
+                        d.issues.push_back(std::move(issue));
+                    }
+                }
+            }
+            if (item.contains("created_at_ms") && item["created_at_ms"].is_number_unsigned()) {
+                d.created_at_ms = item["created_at_ms"].get<std::uint64_t>();
+            }
+            if (item.contains("updated_at_ms") && item["updated_at_ms"].is_number_unsigned()) {
+                d.updated_at_ms = item["updated_at_ms"].get<std::uint64_t>();
+            }
+
+            loaded[d.command_id] = std::move(d);
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(ext_mutex_);
+            ext_deployments_ = std::move(loaded);
+        }
+        ext_store_read_ok_total_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    bool publish_ext_wave_command(const ExtDeploymentRecord& deployment,
+                                  const std::vector<std::string>& target_ids,
+                                  std::size_t wave_index,
+                                  std::uint32_t wave_percent,
+                                  bool rollback) {
+        if (!redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            return false;
+        }
+
+        const std::string channel = redis_channel_prefix_ + (rollback ? "fanout:admin:ext:rollback" : "fanout:admin:ext:deploy");
+        std::unordered_map<std::string, std::string> fields;
+        fields["op"] = rollback ? "ext_rollback" : "ext_deploy";
+        fields["actor"] = sanitize_single_line(deployment.actor);
+        fields["request_id"] = "admin-ext-" + deployment.command_id + "-wave-" + std::to_string(wave_index + 1);
+        fields["command_id"] = deployment.command_id;
+        fields["artifact_id"] = deployment.artifact_id;
+        fields["kind"] = deployment.kind;
+        fields["stage"] = deployment.stage;
+        fields["priority"] = std::to_string(deployment.priority);
+        fields["exclusive_group"] = deployment.exclusive_group;
+        fields["hook_scope"] = join_csv(deployment.hook_scope);
+        fields["rollout_type"] = deployment.rollout.type;
+        fields["wave_index"] = std::to_string(wave_index + 1);
+        fields["wave_percent"] = std::to_string(wave_percent);
+        fields["server_ids"] = join_csv(target_ids);
+        fields["all"] = "0";
+        if (deployment.run_at_utc.has_value()) {
+            fields["run_at_utc"] = std::to_string(*deployment.run_at_utc);
+        }
+
+        const auto message = build_signed_admin_message(std::move(fields), request_seq_.fetch_add(1, std::memory_order_relaxed));
+        if (!message) {
+            return false;
+        }
+        return redis_->publish(channel, *message);
+    }
+
+    void process_ext_deployment_queue() {
+        ext_scheduler_runs_total_.fetch_add(1, std::memory_order_relaxed);
+        const std::uint64_t now = now_ms();
+
+        std::vector<std::string> due_commands;
+        {
+            std::lock_guard<std::mutex> lock(ext_mutex_);
+            due_commands.reserve(ext_deployments_.size());
+            for (const auto& [command_id, deployment] : ext_deployments_) {
+                if (deployment.status != "pending" && deployment.status != "precheck_passed") {
+                    continue;
+                }
+                if (!deployment.run_at_utc.has_value()) {
+                    due_commands.push_back(command_id);
+                    continue;
+                }
+                if (now < *deployment.run_at_utc) {
+                    continue;
+                }
+                due_commands.push_back(command_id);
+            }
+        }
+
+        if (!due_commands.empty()) {
+            ext_scheduler_due_total_.fetch_add(
+                static_cast<std::uint64_t>(due_commands.size()),
+                std::memory_order_relaxed);
+        }
+
+        for (const auto& command_id : due_commands) {
+            execute_ext_deployment(command_id, now);
+        }
+    }
+
+    void execute_ext_deployment(const std::string& command_id, std::uint64_t now) {
+        ExtDeploymentRecord deployment;
+        {
+            std::lock_guard<std::mutex> lock(ext_mutex_);
+            const auto it = ext_deployments_.find(command_id);
+            if (it == ext_deployments_.end()) {
+                return;
+            }
+            if (it->second.status != "pending" && it->second.status != "precheck_passed") {
+                return;
+            }
+
+            if (it->second.run_at_utc.has_value()
+                && now > (*it->second.run_at_utc + static_cast<std::uint64_t>(ext_max_clock_skew_ms_))) {
+                it->second.status = "failed";
+                it->second.status_reason = "clock_skew";
+                it->second.updated_at_ms = now;
+                it->second.issues.push_back({"clock_skew", "run_at_utc exceeded max_clock_skew_ms"});
+                ext_deployments_failed_total_.fetch_add(1, std::memory_order_relaxed);
+                ext_clock_skew_failed_total_.fetch_add(1, std::memory_order_relaxed);
+                save_ext_deployments_locked();
+                return;
+            }
+
+            it->second.status = "executing";
+            it->second.updated_at_ms = now;
+            deployment = it->second;
+            save_ext_deployments_locked();
+        }
+
+        auto targets = resolve_ext_targets(deployment.selector, deployment.selector_specified);
+        std::sort(targets.begin(), targets.end(), [](const auto& lhs, const auto& rhs) {
+            return lhs.instance_id < rhs.instance_id;
+        });
+
+        if (targets.empty()) {
+            std::lock_guard<std::mutex> lock(ext_mutex_);
+            if (auto it = ext_deployments_.find(command_id); it != ext_deployments_.end()) {
+                it->second.status = "failed";
+                it->second.status_reason = "target_empty";
+                it->second.updated_at_ms = now_ms();
+                it->second.issues.push_back({"target_empty", "selector does not match any live server instance"});
+                ext_deployments_failed_total_.fetch_add(1, std::memory_order_relaxed);
+                save_ext_deployments_locked();
+            }
+            return;
+        }
+
+        const std::size_t total_targets = targets.size();
+        std::size_t applied_count = 0;
+        std::vector<std::string> applied_ids;
+        applied_ids.reserve(total_targets);
+
+        bool failed = false;
+        ExtPrecheckIssue failure_issue;
+
+        for (std::size_t wave_index = 0; wave_index < deployment.rollout.waves.size(); ++wave_index) {
+            const std::uint32_t wave_percent = deployment.rollout.waves[wave_index];
+            const std::size_t wave_target_end = std::max<std::size_t>(
+                applied_count,
+                static_cast<std::size_t>(std::ceil((static_cast<double>(total_targets) * wave_percent) / 100.0)));
+            const std::size_t bounded_end = std::min<std::size_t>(wave_target_end, total_targets);
+            if (bounded_end <= applied_count) {
+                continue;
+            }
+
+            if (ext_force_fail_wave_index_ > 0
+                && static_cast<std::uint32_t>(wave_index + 1) == ext_force_fail_wave_index_) {
+                failed = true;
+                failure_issue = {
+                    "wave_forced_failure",
+                    "forced failure at wave " + std::to_string(wave_index + 1)
+                        + " by ADMIN_EXT_FORCE_FAIL_WAVE_INDEX"};
+                ext_wave_failed_total_.fetch_add(1, std::memory_order_relaxed);
+                break;
+            }
+
+            std::vector<std::string> wave_targets;
+            wave_targets.reserve(bounded_end - applied_count);
+            for (std::size_t i = applied_count; i < bounded_end; ++i) {
+                wave_targets.push_back(targets[i].instance_id);
+            }
+
+            if (!publish_ext_wave_command(deployment, wave_targets, wave_index, wave_percent, false)) {
+                failed = true;
+                failure_issue = {
+                    "wave_publish_failed",
+                    "failed to publish deployment wave " + std::to_string(wave_index + 1)};
+                ext_wave_failed_total_.fetch_add(1, std::memory_order_relaxed);
+                break;
+            }
+
+            applied_ids.insert(applied_ids.end(), wave_targets.begin(), wave_targets.end());
+            applied_count = bounded_end;
+            ext_deployment_wave_total_.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(ext_mutex_);
+            const auto it = ext_deployments_.find(command_id);
+            if (it == ext_deployments_.end()) {
+                return;
+            }
+
+            it->second.target_count = total_targets;
+            it->second.applied_targets = applied_count;
+            it->second.updated_at_ms = now_ms();
+
+            if (failed) {
+                it->second.status = "failed";
+                it->second.status_reason = failure_issue.code;
+                it->second.issues.push_back(failure_issue);
+                ext_deployments_failed_total_.fetch_add(1, std::memory_order_relaxed);
+
+                if (it->second.rollout.rollback_on_failure && !applied_ids.empty()) {
+                    const bool rollback_ok = publish_ext_wave_command(
+                        it->second,
+                        applied_ids,
+                        0,
+                        100,
+                        true);
+                    if (rollback_ok) {
+                        ext_rollbacks_total_.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }
+            } else {
+                it->second.status = "completed";
+                it->second.status_reason.clear();
+                ext_deployments_completed_total_.fetch_add(1, std::memory_order_relaxed);
+            }
+
+            save_ext_deployments_locked();
+        }
+    }
+
     std::string render_metrics() const {
         std::ostringstream stream;
 
@@ -1414,6 +2790,14 @@ private:
         stream << "# TYPE admin_instances_requests_total counter\n";
         stream << "admin_instances_requests_total " << instances_requests_total_.load(std::memory_order_relaxed) << "\n";
 
+        stream << "# TYPE admin_instances_selector_requests_total counter\n";
+        stream << "admin_instances_selector_requests_total "
+               << instances_selector_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_instances_selector_mismatch_total counter\n";
+        stream << "admin_instances_selector_mismatch_total "
+               << instances_selector_mismatch_total_.load(std::memory_order_relaxed) << "\n";
+
         stream << "# TYPE admin_session_lookup_requests_total counter\n";
         stream << "admin_session_lookup_requests_total " << session_lookup_requests_total_.load(std::memory_order_relaxed) << "\n";
 
@@ -1446,11 +2830,91 @@ private:
         stream << "admin_command_signing_errors_total "
                << command_signing_errors_total_.load(std::memory_order_relaxed) << "\n";
 
+        stream << "# TYPE admin_ext_inventory_requests_total counter\n";
+        stream << "admin_ext_inventory_requests_total "
+               << ext_inventory_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_ext_precheck_requests_total counter\n";
+        stream << "admin_ext_precheck_requests_total "
+               << ext_precheck_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_ext_deployments_requests_total counter\n";
+        stream << "admin_ext_deployments_requests_total "
+               << ext_deployments_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_ext_schedules_requests_total counter\n";
+        stream << "admin_ext_schedules_requests_total "
+               << ext_schedules_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_ext_precheck_failed_total counter\n";
+        stream << "admin_ext_precheck_failed_total "
+               << ext_precheck_failed_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_ext_command_id_conflict_total counter\n";
+        stream << "admin_ext_command_id_conflict_total "
+               << ext_command_id_conflict_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_ext_scheduler_runs_total counter\n";
+        stream << "admin_ext_scheduler_runs_total "
+               << ext_scheduler_runs_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_ext_scheduler_due_total counter\n";
+        stream << "admin_ext_scheduler_due_total "
+               << ext_scheduler_due_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_ext_deployment_wave_total counter\n";
+        stream << "admin_ext_deployment_wave_total "
+               << ext_deployment_wave_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_ext_wave_failed_total counter\n";
+        stream << "admin_ext_wave_failed_total "
+               << ext_wave_failed_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_ext_rollbacks_total counter\n";
+        stream << "admin_ext_rollbacks_total "
+               << ext_rollbacks_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_ext_clock_skew_failed_total counter\n";
+        stream << "admin_ext_clock_skew_failed_total "
+               << ext_clock_skew_failed_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_ext_deployments_completed_total counter\n";
+        stream << "admin_ext_deployments_completed_total "
+               << ext_deployments_completed_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_ext_deployments_failed_total counter\n";
+        stream << "admin_ext_deployments_failed_total "
+               << ext_deployments_failed_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_ext_store_read_ok_total counter\n";
+        stream << "admin_ext_store_read_ok_total "
+               << ext_store_read_ok_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_ext_store_read_fail_total counter\n";
+        stream << "admin_ext_store_read_fail_total "
+               << ext_store_read_fail_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_ext_store_write_ok_total counter\n";
+        stream << "admin_ext_store_write_ok_total "
+               << ext_store_write_ok_total_.load(std::memory_order_relaxed) << "\n";
+
         stream << "# TYPE admin_instances_cached gauge\n";
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
             stream << "admin_instances_cached " << instances_cache_.size() << "\n";
         }
+
+        stream << "# TYPE admin_ext_inventory_cached gauge\n";
+        {
+            std::lock_guard<std::mutex> lock(ext_mutex_);
+            stream << "admin_ext_inventory_cached " << ext_inventory_cache_.size() << "\n";
+            stream << "# TYPE admin_ext_deployments_cached gauge\n";
+            stream << "admin_ext_deployments_cached " << ext_deployments_.size() << "\n";
+        }
+
+        stream << "# TYPE admin_ext_inventory_errors_total gauge\n";
+        stream << "admin_ext_inventory_errors_total "
+               << ext_inventory_error_count_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE admin_redis_available gauge\n";
         stream << "admin_redis_available " << (redis_available_.load(std::memory_order_relaxed) ? 1 : 0) << "\n";
@@ -1545,13 +3009,21 @@ private:
         const bool is_disconnect = (path == "/api/v1/users/disconnect");
         const bool is_announce = (path == "/api/v1/announcements");
         const bool is_settings = (path == "/api/v1/settings");
+        const bool is_ext_inventory = (path == "/api/v1/ext/inventory");
+        const bool is_ext_precheck = (path == "/api/v1/ext/precheck");
+        const bool is_ext_deployments = (path == "/api/v1/ext/deployments");
+        const bool is_ext_schedules = (path == "/api/v1/ext/schedules");
         const bool is_mute = (path == "/api/v1/users/mute");
         const bool is_unmute = (path == "/api/v1/users/unmute");
         const bool is_ban = (path == "/api/v1/users/ban");
         const bool is_unban = (path == "/api/v1/users/unban");
         const bool is_kick = (path == "/api/v1/users/kick");
         const bool is_user_moderation = is_mute || is_unmute || is_ban || is_unban || is_kick;
-        const bool is_write_endpoint = is_disconnect || is_announce || is_settings || is_user_moderation;
+        const bool is_legacy_write_endpoint = is_disconnect || is_announce || is_settings || is_user_moderation;
+        const bool is_ext_deployments_write = is_ext_deployments && method == "POST";
+        const bool is_ext_write_endpoint = is_ext_precheck || is_ext_deployments_write || is_ext_schedules;
+        const bool is_readonly_blocked_endpoint = is_legacy_write_endpoint || is_ext_deployments_write || is_ext_schedules;
+        const bool is_write_endpoint = is_legacy_write_endpoint || is_ext_write_endpoint;
 
         if (!is_write_endpoint && method != "GET") {
             http_errors_total_.fetch_add(1, std::memory_order_relaxed);
@@ -1598,7 +3070,43 @@ private:
                 "moderation endpoints require POST"));
         }
 
-        if (is_write_endpoint && admin_read_only_) {
+        if (is_ext_inventory && method != "GET") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "ext inventory endpoint requires GET"));
+        }
+
+        if (is_ext_precheck && method != "POST") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "ext precheck endpoint requires POST"));
+        }
+
+        if (is_ext_deployments && method != "GET" && method != "POST") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "ext deployments endpoint supports GET and POST"));
+        }
+
+        if (is_ext_schedules && method != "POST") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "ext schedules endpoint requires POST"));
+        }
+
+        if (is_readonly_blocked_endpoint && admin_read_only_) {
             http_errors_total_.fetch_add(1, std::memory_order_relaxed);
             return finalize(json_error(
                 request_id,
@@ -1623,7 +3131,9 @@ private:
                         "\",\"value\":\"" + json_escape(query.error_value) + "\"}"));
             }
             query_options = query.options;
-        } else {
+        }
+
+        if (is_legacy_write_endpoint) {
             const WriteParamsResult write_params = merge_write_params_from_request(split.query, request);
             if (!write_params.ok) {
                 http_errors_total_.fetch_add(1, std::memory_order_relaxed);
@@ -1663,7 +3173,7 @@ private:
 
         if (path == "/api/v1/instances") {
             instances_requests_total_.fetch_add(1, std::memory_order_relaxed);
-            return finalize(handle_instances(request_id, query_options));
+            return finalize(handle_instances(request_id, query_options, split.query));
         }
 
         constexpr std::string_view kInstancesPrefix = "/api/v1/instances/";
@@ -1671,6 +3181,38 @@ private:
             instances_requests_total_.fetch_add(1, std::memory_order_relaxed);
             const std::string id = std::string(path.substr(kInstancesPrefix.size()));
             return finalize(handle_instance_detail(request_id, id, query_options));
+        }
+
+        if (is_ext_inventory) {
+            ext_inventory_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(handle_ext_inventory(request_id, query_options, split.query));
+        }
+
+        if (is_ext_precheck) {
+            if (auto forbidden = require_role(kRoleRequiredSettings)) {
+                return finalize(std::move(*forbidden));
+            }
+            ext_precheck_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(handle_ext_precheck(request_id, auth, request));
+        }
+
+        if (is_ext_deployments) {
+            ext_deployments_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            if (method == "GET") {
+                return finalize(handle_ext_deployments(request_id, query_options, split.query));
+            }
+            if (auto forbidden = require_role(kRoleRequiredSettings)) {
+                return finalize(std::move(*forbidden));
+            }
+            return finalize(handle_ext_deployment_submit(request_id, auth, request, false));
+        }
+
+        if (is_ext_schedules) {
+            if (auto forbidden = require_role(kRoleRequiredSettings)) {
+                return finalize(std::move(*forbidden));
+            }
+            ext_schedules_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(handle_ext_deployment_submit(request_id, auth, request, true));
         }
 
         if (path == "/api/v1/users") {
@@ -1760,12 +3302,14 @@ private:
         const bool allow_announce = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredAnnouncement);
         const bool allow_settings = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredSettings);
         const bool allow_moderation = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredModeration);
+        const bool allow_ext_deploy = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredSettings);
 
         data << "\"capabilities\":{";
         data << "\"disconnect\":" << bool_json(allow_disconnect) << ",";
         data << "\"announce\":" << bool_json(allow_announce) << ",";
         data << "\"settings\":" << bool_json(allow_settings) << ",";
-        data << "\"moderation\":" << bool_json(allow_moderation);
+        data << "\"moderation\":" << bool_json(allow_moderation) << ",";
+        data << "\"ext_deploy\":" << bool_json(allow_ext_deploy);
         data << "}";
         data << "}";
         return json_ok(request_id, data.str());
@@ -1861,7 +3405,9 @@ private:
         data << "\"links\":{";
         data << "\"instances\":\"/api/v1/instances\",";
         data << "\"users\":\"/api/v1/users\",";
-        data << "\"worker\":\"/api/v1/worker/write-behind\"";
+        data << "\"worker\":\"/api/v1/worker/write-behind\",";
+        data << "\"ext_inventory\":\"/api/v1/ext/inventory\",";
+        data << "\"ext_deployments\":\"/api/v1/ext/deployments\"";
         data << "}";
         data << "}";
 
@@ -1869,7 +3415,9 @@ private:
     }
 
     server::core::metrics::MetricsHttpServer::RouteResponse
-    handle_instances(std::uint64_t request_id, const QueryOptions& options) {
+    handle_instances(std::uint64_t request_id,
+                     const QueryOptions& options,
+                     std::string_view selector_query) {
         if (!registry_backend_ || !redis_available_.load(std::memory_order_relaxed)) {
             http_errors_total_.fetch_add(1, std::memory_order_relaxed);
             return json_error(
@@ -1881,11 +3429,33 @@ private:
 
         std::vector<server::state::InstanceRecord> items;
         std::uint64_t updated_ms = 0;
+        server::state::SelectorMatchStats selector_stats{};
+        bool selector_applied = false;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
             items = instances_cache_;
             updated_ms = instances_updated_at_ms_;
         }
+
+        const SelectorParseResult selector_parse = parse_instance_selector_query(selector_query);
+        if (!selector_parse.ok) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "400 Bad Request",
+                "BAD_REQUEST",
+                selector_parse.error_message,
+                "{" +
+                    std::string("\"parameter\":\"") + json_escape(selector_parse.error_param) +
+                    "\",\"value\":\"" + json_escape(selector_parse.error_value) + "\"}");
+        }
+        if (selector_parse.selector_specified) {
+            selector_applied = true;
+            items = server::state::select_instances(items, selector_parse.selector, &selector_stats);
+            instances_selector_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            instances_selector_mismatch_total_.fetch_add(selector_stats.selector_mismatch, std::memory_order_relaxed);
+        }
+        const auto selector_layer = server::state::classify_selector_policy_layer(selector_parse.selector);
 
         if (options.timeout_overridden) {
             const std::uint64_t now = now_ms();
@@ -1942,6 +3512,17 @@ private:
             data << "\"host\":\"" << json_escape(it.host) << "\",";
             data << "\"port\":" << it.port << ",";
             data << "\"role\":\"" << json_escape(it.role) << "\",";
+            data << "\"game_mode\":\"" << json_escape(it.game_mode) << "\",";
+            data << "\"region\":\"" << json_escape(it.region) << "\",";
+            data << "\"shard\":\"" << json_escape(it.shard) << "\",";
+            data << "\"tags\":[";
+            for (std::size_t tag_index = 0; tag_index < it.tags.size(); ++tag_index) {
+                if (tag_index != 0) {
+                    data << ",";
+                }
+                data << "\"" << json_escape(it.tags[tag_index]) << "\"";
+            }
+            data << "],";
             data << "\"ready\":" << bool_json(it.ready) << ",";
             data << "\"active_sessions\":" << it.active_sessions << ",";
             data << "\"last_heartbeat_ms\":" << it.last_heartbeat_ms << ",";
@@ -1968,6 +3549,13 @@ private:
         }
         data << ",";
         data << "\"total\":" << items.size();
+        data << "},";
+        data << "\"selector\":{";
+        data << "\"applied\":" << bool_json(selector_applied) << ",";
+        data << "\"layer\":\"" << server::state::selector_policy_layer_name(selector_layer) << "\",";
+        data << "\"scanned\":" << selector_stats.scanned << ",";
+        data << "\"matched\":" << selector_stats.matched << ",";
+        data << "\"mismatch\":" << selector_stats.selector_mismatch;
         data << "},";
         data << "\"updated_at_ms\":" << updated_ms;
         data << "}";
@@ -2022,6 +3610,17 @@ private:
         data << "\"host\":\"" << json_escape(item->host) << "\",";
         data << "\"port\":" << item->port << ",";
         data << "\"role\":\"" << json_escape(item->role) << "\",";
+        data << "\"game_mode\":\"" << json_escape(item->game_mode) << "\",";
+        data << "\"region\":\"" << json_escape(item->region) << "\",";
+        data << "\"shard\":\"" << json_escape(item->shard) << "\",";
+        data << "\"tags\":[";
+        for (std::size_t i = 0; i < item->tags.size(); ++i) {
+            if (i != 0) {
+                data << ",";
+            }
+            data << "\"" << json_escape(item->tags[i]) << "\"";
+        }
+        data << "],";
         data << "\"ready\":" << bool_json(item->ready) << ",";
         data << "\"ready_reason\":\"" << json_escape(ready_reason) << "\",";
         data << "\"active_sessions\":" << item->active_sessions << ",";
@@ -2029,6 +3628,489 @@ private:
         data << "\"metrics_url\":\"" << json_escape(metrics_url) << "\",";
         data << "\"source\":{";
         data << "\"registry_key\":\"" << json_escape(registry_prefix_ + item->instance_id) << "\"";
+        data << "}";
+        data << "}";
+
+        return json_ok(request_id, data.str());
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_ext_inventory(std::uint64_t request_id,
+                         const QueryOptions& options,
+                         std::string_view query_string) {
+        (void)options;
+        const auto params = parse_query_string(query_string);
+
+        std::string kind_filter;
+        std::string stage_filter;
+        std::string hook_filter;
+        std::string target_profile_filter;
+
+        if (const auto it = params.find("kind"); it != params.end()) {
+            kind_filter = to_lower_ascii(trim_ascii(it->second));
+        }
+        if (const auto it = params.find("stage"); it != params.end()) {
+            stage_filter = to_lower_ascii(trim_ascii(it->second));
+        }
+        if (const auto it = params.find("hook_scope"); it != params.end()) {
+            hook_filter = to_lower_ascii(trim_ascii(it->second));
+        }
+        if (const auto it = params.find("target_profile"); it != params.end()) {
+            target_profile_filter = to_lower_ascii(trim_ascii(it->second));
+        }
+
+        std::vector<ExtArtifactInventoryItem> inventory;
+        std::uint64_t updated_at_ms = 0;
+        std::uint64_t error_count = 0;
+        {
+            std::lock_guard<std::mutex> lock(ext_mutex_);
+            inventory = ext_inventory_cache_;
+            updated_at_ms = ext_inventory_updated_at_ms_;
+            error_count = ext_inventory_error_count_.load(std::memory_order_relaxed);
+        }
+
+        std::vector<ExtArtifactInventoryItem> filtered;
+        filtered.reserve(inventory.size());
+        for (const auto& item : inventory) {
+            if (!kind_filter.empty() && to_lower_ascii(item.kind) != kind_filter) {
+                continue;
+            }
+            if (!stage_filter.empty() && to_lower_ascii(item.stage) != stage_filter) {
+                continue;
+            }
+            if (!hook_filter.empty()) {
+                bool has_hook = false;
+                for (const auto& hook : item.hook_scope) {
+                    if (to_lower_ascii(hook) == hook_filter) {
+                        has_hook = true;
+                        break;
+                    }
+                }
+                if (!has_hook) {
+                    continue;
+                }
+            }
+            if (!target_profile_filter.empty()) {
+                bool has_profile = false;
+                for (const auto& profile : item.target_profiles) {
+                    if (to_lower_ascii(profile) == target_profile_filter) {
+                        has_profile = true;
+                        break;
+                    }
+                }
+                if (!has_profile) {
+                    continue;
+                }
+            }
+            filtered.push_back(item);
+        }
+
+        std::sort(filtered.begin(), filtered.end(), [](const auto& lhs, const auto& rhs) {
+            return lhs.artifact_id < rhs.artifact_id;
+        });
+
+        std::ostringstream data;
+        data << "{";
+        data << "\"items\":[";
+        for (std::size_t i = 0; i < filtered.size(); ++i) {
+            const auto& item = filtered[i];
+            if (i != 0) {
+                data << ",";
+            }
+            data << "{";
+            data << "\"artifact_id\":\"" << json_escape(item.artifact_id) << "\",";
+            data << "\"kind\":\"" << json_escape(item.kind) << "\",";
+            data << "\"name\":\"" << json_escape(item.name) << "\",";
+            data << "\"version\":\"" << json_escape(item.version) << "\",";
+            data << "\"hook_scope\":[";
+            for (std::size_t j = 0; j < item.hook_scope.size(); ++j) {
+                if (j != 0) {
+                    data << ",";
+                }
+                data << "\"" << json_escape(item.hook_scope[j]) << "\"";
+            }
+            data << "],";
+            data << "\"stage\":\"" << json_escape(item.stage) << "\",";
+            data << "\"priority\":" << item.priority << ",";
+            data << "\"exclusive_group\":\"" << json_escape(item.exclusive_group) << "\",";
+            data << "\"checksum\":\"" << json_escape(item.checksum) << "\",";
+            data << "\"target_profiles\":[";
+            for (std::size_t j = 0; j < item.target_profiles.size(); ++j) {
+                if (j != 0) {
+                    data << ",";
+                }
+                data << "\"" << json_escape(item.target_profiles[j]) << "\"";
+            }
+            data << "],";
+            data << "\"description\":\"" << json_escape(item.description) << "\",";
+            data << "\"owner\":\"" << json_escape(item.owner) << "\",";
+            data << "\"issues\":[";
+            for (std::size_t j = 0; j < item.issues.size(); ++j) {
+                if (j != 0) {
+                    data << ",";
+                }
+                data << "\"" << json_escape(item.issues[j]) << "\"";
+            }
+            data << "]";
+            data << "}";
+        }
+        data << "],";
+        data << "\"count\":" << filtered.size() << ",";
+        data << "\"inventory_errors\":" << error_count << ",";
+        data << "\"updated_at_ms\":" << updated_at_ms;
+        data << "}";
+
+        return json_ok(request_id, data.str());
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_ext_precheck(std::uint64_t request_id,
+                        const AuthContext& auth,
+                        const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+        const auto parsed = parse_ext_command_request(request, false);
+        if (!parsed.ok) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(request_id, "400 Bad Request", "BAD_REQUEST", parsed.error_message);
+        }
+
+        ExtPrecheckResult precheck;
+        {
+            std::lock_guard<std::mutex> lock(ext_mutex_);
+            if (ext_deployments_.find(parsed.command.command_id) != ext_deployments_.end()) {
+                ext_command_id_conflict_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "409 Conflict",
+                    "IDEMPOTENT_REJECTED",
+                    "command_id already exists and cannot be reused");
+            }
+
+            precheck = run_ext_precheck_locked(parsed.command);
+            ext_precheck_cache_[parsed.command.command_id] = ExtPrecheckRecord{
+                parsed.command,
+                precheck,
+                now_ms()};
+        }
+
+        if (!precheck.ok) {
+            ext_precheck_failed_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+
+            std::ostringstream details;
+            details << "{";
+            details << "\"command_id\":\"" << json_escape(parsed.command.command_id) << "\",";
+            details << "\"status\":\"failed\",";
+            details << "\"target_count\":" << precheck.target_count << ",";
+            details << "\"issues\":[";
+            for (std::size_t i = 0; i < precheck.issues.size(); ++i) {
+                if (i != 0) {
+                    details << ",";
+                }
+                details << "{";
+                details << "\"code\":\"" << json_escape(precheck.issues[i].code) << "\",";
+                details << "\"message\":\"" << json_escape(precheck.issues[i].message) << "\"";
+                details << "}";
+            }
+            details << "]";
+            details << "}";
+
+            return json_error(
+                request_id,
+                "409 Conflict",
+                "PRECHECK_FAILED",
+                "precheck failed; deployment blocked",
+                details.str());
+        }
+
+        std::ostringstream data;
+        data << "{";
+        data << "\"command_id\":\"" << json_escape(parsed.command.command_id) << "\",";
+        data << "\"status\":\"precheck_passed\",";
+        data << "\"target_count\":" << precheck.target_count << ",";
+        data << "\"issues\":[],";
+        data << "\"actor\":\"" << json_escape(auth.actor) << "\"";
+        data << "}";
+
+        return json_ok(request_id, data.str());
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_ext_deployment_submit(std::uint64_t request_id,
+                                 const AuthContext& auth,
+                                 const server::core::metrics::MetricsHttpServer::HttpRequest& request,
+                                 bool require_schedule_time) {
+        auto parsed = parse_ext_command_request(request, require_schedule_time);
+        if (!parsed.ok) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(request_id, "400 Bad Request", "BAD_REQUEST", parsed.error_message);
+        }
+
+        const std::uint64_t now = now_ms();
+        if (!require_schedule_time && parsed.command.run_at_utc.has_value()) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "400 Bad Request",
+                "BAD_REQUEST",
+                "run_at_utc must be null or omitted for deployments");
+        }
+        if (!require_schedule_time) {
+            parsed.command.run_at_utc = now;
+        }
+
+        ExtPrecheckResult precheck;
+        const ExtArtifactInventoryItem* artifact = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(ext_mutex_);
+
+            if (ext_deployments_.find(parsed.command.command_id) != ext_deployments_.end()) {
+                ext_command_id_conflict_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "409 Conflict",
+                    "IDEMPOTENT_REJECTED",
+                    "command_id already exists and cannot be reused");
+            }
+
+            precheck = run_ext_precheck_locked(parsed.command);
+            ext_precheck_cache_[parsed.command.command_id] = ExtPrecheckRecord{
+                parsed.command,
+                precheck,
+                now};
+
+            if (!precheck.ok) {
+                ext_precheck_failed_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+
+                std::ostringstream details;
+                details << "{";
+                details << "\"command_id\":\"" << json_escape(parsed.command.command_id) << "\",";
+                details << "\"status\":\"failed\",";
+                details << "\"issues\":[";
+                for (std::size_t i = 0; i < precheck.issues.size(); ++i) {
+                    if (i != 0) {
+                        details << ",";
+                    }
+                    details << "{";
+                    details << "\"code\":\"" << json_escape(precheck.issues[i].code) << "\",";
+                    details << "\"message\":\"" << json_escape(precheck.issues[i].message) << "\"";
+                    details << "}";
+                }
+                details << "]";
+                details << "}";
+
+                return json_error(
+                    request_id,
+                    "409 Conflict",
+                    "PRECHECK_FAILED",
+                    "precheck failed; deployment blocked",
+                    details.str());
+            }
+
+            artifact = find_ext_inventory_item_locked(parsed.command.artifact_id);
+            if (artifact == nullptr) {
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "409 Conflict",
+                    "PRECHECK_FAILED",
+                    "artifact_id not found in inventory");
+            }
+
+            ExtDeploymentRecord deployment;
+            deployment.command_id = parsed.command.command_id;
+            deployment.artifact_id = parsed.command.artifact_id;
+            deployment.actor = sanitize_single_line(auth.actor);
+            deployment.status = "pending";
+            deployment.selector = parsed.command.selector;
+            deployment.selector_specified = parsed.command.selector_specified;
+            deployment.run_at_utc = parsed.command.run_at_utc;
+            deployment.rollout = parsed.command.rollout;
+            deployment.kind = artifact->kind;
+            deployment.hook_scope = artifact->hook_scope;
+            deployment.stage = artifact->stage;
+            deployment.priority = artifact->priority;
+            deployment.exclusive_group = artifact->exclusive_group;
+            deployment.target_count = precheck.target_count;
+            deployment.applied_targets = 0;
+            deployment.created_at_ms = now;
+            deployment.updated_at_ms = now;
+
+            ext_deployments_[deployment.command_id] = std::move(deployment);
+            save_ext_deployments_locked();
+        }
+
+        std::ostringstream data;
+        data << "{";
+        data << "\"command_id\":\"" << json_escape(parsed.command.command_id) << "\",";
+        data << "\"status\":\"pending\",";
+        data << "\"target_count\":" << precheck.target_count << ",";
+        data << "\"rollout_strategy\":{";
+        data << "\"type\":\"" << json_escape(parsed.command.rollout.type) << "\",";
+        data << "\"waves\":[";
+        for (std::size_t i = 0; i < parsed.command.rollout.waves.size(); ++i) {
+            if (i != 0) {
+                data << ",";
+            }
+            data << parsed.command.rollout.waves[i];
+        }
+        data << "],";
+        data << "\"rollback_on_failure\":" << bool_json(parsed.command.rollout.rollback_on_failure);
+        data << "},";
+        data << "\"run_at_utc\":";
+        if (parsed.command.run_at_utc.has_value()) {
+            data << *parsed.command.run_at_utc;
+        } else {
+            data << "null";
+        }
+        data << "}";
+
+        return server::core::metrics::MetricsHttpServer::RouteResponse{
+            "202 Accepted",
+            "application/json; charset=utf-8",
+            json_ok(request_id, data.str()).body};
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_ext_deployments(std::uint64_t request_id,
+                           const QueryOptions& options,
+                           std::string_view query_string) {
+        const auto params = parse_query_string(query_string);
+        std::string command_id_filter;
+        std::string status_filter;
+        if (const auto it = params.find("command_id"); it != params.end()) {
+            command_id_filter = trim_ascii(it->second);
+        }
+        if (const auto it = params.find("status"); it != params.end()) {
+            status_filter = to_lower_ascii(trim_ascii(it->second));
+        }
+
+        std::vector<ExtDeploymentRecord> deployments;
+        {
+            std::lock_guard<std::mutex> lock(ext_mutex_);
+            deployments.reserve(ext_deployments_.size());
+            for (const auto& [_, deployment] : ext_deployments_) {
+                deployments.push_back(deployment);
+            }
+        }
+
+        std::sort(deployments.begin(), deployments.end(), [](const auto& lhs, const auto& rhs) {
+            if (lhs.created_at_ms == rhs.created_at_ms) {
+                return lhs.command_id < rhs.command_id;
+            }
+            return lhs.created_at_ms > rhs.created_at_ms;
+        });
+
+        std::vector<ExtDeploymentRecord> filtered;
+        filtered.reserve(deployments.size());
+        for (const auto& deployment : deployments) {
+            if (!command_id_filter.empty() && deployment.command_id != command_id_filter) {
+                continue;
+            }
+            if (!status_filter.empty() && to_lower_ascii(deployment.status) != status_filter) {
+                continue;
+            }
+            filtered.push_back(deployment);
+        }
+
+        std::size_t cursor_index = 0;
+        if (!options.cursor.empty()) {
+            std::uint32_t parsed_cursor = 0;
+            if (!parse_u32_strict(options.cursor, parsed_cursor)) {
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "400 Bad Request",
+                    "BAD_REQUEST",
+                    "cursor must be a non-negative integer",
+                    json_details("cursor", options.cursor));
+            }
+            cursor_index = static_cast<std::size_t>(parsed_cursor);
+            if (cursor_index > filtered.size()) {
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "400 Bad Request",
+                    "BAD_REQUEST",
+                    "cursor is out of range",
+                    json_details("cursor", options.cursor));
+            }
+        }
+
+        const std::size_t remaining = filtered.size() - cursor_index;
+        const std::size_t take = std::min<std::size_t>(remaining, static_cast<std::size_t>(options.limit));
+        const std::size_t end_index = cursor_index + take;
+
+        std::ostringstream data;
+        data << "{";
+        data << "\"items\":[";
+        for (std::size_t i = cursor_index; i < end_index; ++i) {
+            const auto& deployment = filtered[i];
+            if (i != cursor_index) {
+                data << ",";
+            }
+
+            data << "{";
+            data << "\"command_id\":\"" << json_escape(deployment.command_id) << "\",";
+            data << "\"artifact_id\":\"" << json_escape(deployment.artifact_id) << "\",";
+            data << "\"status\":\"" << json_escape(deployment.status) << "\",";
+            data << "\"status_reason\":\"" << json_escape(deployment.status_reason) << "\",";
+            data << "\"target_count\":" << deployment.target_count << ",";
+            data << "\"applied_targets\":" << deployment.applied_targets << ",";
+            data << "\"run_at_utc\":";
+            if (deployment.run_at_utc.has_value()) {
+                data << *deployment.run_at_utc;
+            } else {
+                data << "null";
+            }
+            data << ",";
+            data << "\"rollout_strategy\":{";
+            data << "\"type\":\"" << json_escape(deployment.rollout.type) << "\",";
+            data << "\"waves\":[";
+            for (std::size_t j = 0; j < deployment.rollout.waves.size(); ++j) {
+                if (j != 0) {
+                    data << ",";
+                }
+                data << deployment.rollout.waves[j];
+            }
+            data << "],";
+            data << "\"rollback_on_failure\":" << bool_json(deployment.rollout.rollback_on_failure);
+            data << "},";
+            data << "\"issues\":[";
+            for (std::size_t j = 0; j < deployment.issues.size(); ++j) {
+                if (j != 0) {
+                    data << ",";
+                }
+                data << "{";
+                data << "\"code\":\"" << json_escape(deployment.issues[j].code) << "\",";
+                data << "\"message\":\"" << json_escape(deployment.issues[j].message) << "\"";
+                data << "}";
+            }
+            data << "],";
+            data << "\"created_at_ms\":" << deployment.created_at_ms << ",";
+            data << "\"updated_at_ms\":" << deployment.updated_at_ms;
+            data << "}";
+        }
+        data << "],";
+        data << "\"paging\":{";
+        data << "\"limit\":" << options.limit << ",";
+        data << "\"cursor\":";
+        if (options.cursor.empty()) {
+            data << "null";
+        } else {
+            data << "\"" << json_escape(options.cursor) << "\"";
+        }
+        data << ",";
+        data << "\"next_cursor\":";
+        if (end_index < filtered.size()) {
+            data << "\"" << end_index << "\"";
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"total\":" << filtered.size();
         data << "}";
         data << "}";
 
@@ -2327,6 +4409,19 @@ private:
         }
 
         const auto params = parse_query_string(query_string);
+        const SelectorParseResult selector_parse = parse_instance_selector_query(query_string);
+        if (!selector_parse.ok) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "400 Bad Request",
+                "BAD_REQUEST",
+                selector_parse.error_message,
+                "{" +
+                    std::string("\"parameter\":\"") + json_escape(selector_parse.error_param) +
+                    "\",\"value\":\"" + json_escape(selector_parse.error_value) + "\"}");
+        }
+
         std::vector<std::string> targets;
         if (const auto it = params.find("client_id"); it != params.end()) {
             const std::string one = trim_ascii(it->second);
@@ -2398,6 +4493,7 @@ private:
         fields["request_id"] = "admin-" + std::to_string(request_id);
         fields["reason"] = sanitize_single_line(reason);
         fields["client_ids"] = join_csv(deduped);
+        append_selector_command_fields(fields, selector_parse);
 
         const auto message = build_signed_admin_message(std::move(fields), request_id);
         if (!message) {
@@ -2431,7 +4527,8 @@ private:
             }
             data << "\"" << json_escape(deduped[i]) << "\"";
         }
-        data << "]";
+        data << "],";
+        append_selector_response_json(data, selector_parse);
         data << "}";
 
         return json_ok(request_id, data.str());
@@ -2451,6 +4548,19 @@ private:
         }
 
         const auto params = parse_query_string(query_string);
+        const SelectorParseResult selector_parse = parse_instance_selector_query(query_string);
+        if (!selector_parse.ok) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "400 Bad Request",
+                "BAD_REQUEST",
+                selector_parse.error_message,
+                "{" +
+                    std::string("\"parameter\":\"") + json_escape(selector_parse.error_param) +
+                    "\",\"value\":\"" + json_escape(selector_parse.error_value) + "\"}");
+        }
+
         auto text_it = params.find("text");
         if (text_it == params.end()) {
             http_errors_total_.fetch_add(1, std::memory_order_relaxed);
@@ -2487,6 +4597,7 @@ private:
         fields["request_id"] = "admin-" + std::to_string(request_id);
         fields["priority"] = priority;
         fields["text"] = text;
+        append_selector_command_fields(fields, selector_parse);
 
         const auto message = build_signed_admin_message(std::move(fields), request_id);
         if (!message) {
@@ -2512,7 +4623,8 @@ private:
         data << "\"accepted\":true,";
         data << "\"channel\":\"" << json_escape(channel) << "\",";
         data << "\"priority\":\"" << json_escape(priority) << "\",";
-        data << "\"text\":\"" << json_escape(text) << "\"";
+        data << "\"text\":\"" << json_escape(text) << "\",";
+        append_selector_response_json(data, selector_parse);
         data << "}";
 
         return json_ok(request_id, data.str());
@@ -2532,6 +4644,19 @@ private:
         }
 
         const auto params = parse_query_string(query_string);
+        const SelectorParseResult selector_parse = parse_instance_selector_query(query_string);
+        if (!selector_parse.ok) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "400 Bad Request",
+                "BAD_REQUEST",
+                selector_parse.error_message,
+                "{" +
+                    std::string("\"parameter\":\"") + json_escape(selector_parse.error_param) +
+                    "\",\"value\":\"" + json_escape(selector_parse.error_value) + "\"}");
+        }
+
         const auto key_it = params.find("key");
         const auto value_it = params.find("value");
         if (key_it == params.end() || value_it == params.end()) {
@@ -2587,6 +4712,7 @@ private:
         fields["request_id"] = "admin-" + std::to_string(request_id);
         fields["key"] = sanitize_single_line(key);
         fields["value"] = std::to_string(parsed_value);
+        append_selector_command_fields(fields, selector_parse);
 
         const auto message = build_signed_admin_message(std::move(fields), request_id);
         if (!message) {
@@ -2612,7 +4738,8 @@ private:
         data << "\"accepted\":true,";
         data << "\"channel\":\"" << json_escape(channel) << "\",";
         data << "\"key\":\"" << json_escape(key) << "\",";
-        data << "\"value\":" << parsed_value;
+        data << "\"value\":" << parsed_value << ",";
+        append_selector_response_json(data, selector_parse);
         data << "}";
 
         return json_ok(request_id, data.str());
@@ -2633,6 +4760,19 @@ private:
         }
 
         const auto params = parse_query_string(query_string);
+        const SelectorParseResult selector_parse = parse_instance_selector_query(query_string);
+        if (!selector_parse.ok) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "400 Bad Request",
+                "BAD_REQUEST",
+                selector_parse.error_message,
+                "{" +
+                    std::string("\"parameter\":\"") + json_escape(selector_parse.error_param) +
+                    "\",\"value\":\"" + json_escape(selector_parse.error_value) + "\"}");
+        }
+
         std::vector<std::string> targets;
         if (const auto it = params.find("client_id"); it != params.end()) {
             const std::string one = trim_ascii(it->second);
@@ -2715,6 +4855,7 @@ private:
         fields["duration_sec"] = std::to_string(duration_sec);
         fields["reason"] = reason;
         fields["client_ids"] = join_csv(deduped);
+        append_selector_command_fields(fields, selector_parse);
 
         const auto message = build_signed_admin_message(std::move(fields), request_id);
         if (!message) {
@@ -2749,7 +4890,8 @@ private:
             }
             data << "\"" << json_escape(deduped[i]) << "\"";
         }
-        data << "]";
+        data << "],";
+        append_selector_response_json(data, selector_parse);
         data << "}";
         return json_ok(request_id, data.str());
     }
@@ -2894,6 +5036,13 @@ private:
     std::string admin_ui_html_;
     bool admin_read_only_{false};
     std::string admin_command_signing_secret_;
+    std::string ext_plugins_dir_;
+    std::string ext_plugins_fallback_dir_;
+    std::string ext_scripts_dir_;
+    std::string ext_scripts_fallback_dir_;
+    std::string ext_schedule_store_path_;
+    std::uint32_t ext_max_clock_skew_ms_{kDefaultExtMaxClockSkewMs};
+    std::uint32_t ext_force_fail_wave_index_{0};
 
     AdminAuthMode auth_mode_{AdminAuthMode::kOff};
     std::string auth_mode_raw_;
@@ -2911,12 +5060,18 @@ private:
     std::atomic<bool> poller_running_{false};
 
     mutable std::mutex cache_mutex_;
+    mutable std::mutex ext_mutex_;
     std::vector<server::state::InstanceRecord> instances_cache_;
     std::unordered_map<std::string, server::state::InstanceRecord> instances_index_;
     std::unordered_map<std::string, InstanceDetailSnapshot> instance_details_index_;
     std::uint64_t instances_updated_at_ms_{0};
     WorkerSnapshot worker_cache_;
     std::deque<AuditTrendPoint> audit_trend_points_;
+    std::vector<ExtArtifactInventoryItem> ext_inventory_cache_;
+    std::unordered_map<std::string, std::size_t> ext_inventory_index_;
+    std::unordered_map<std::string, ExtPrecheckRecord> ext_precheck_cache_;
+    std::unordered_map<std::string, ExtDeploymentRecord> ext_deployments_;
+    std::uint64_t ext_inventory_updated_at_ms_{0};
 
     std::atomic<bool> redis_available_{false};
     std::atomic<bool> worker_available_{false};
@@ -2929,6 +5084,8 @@ private:
     std::atomic<std::uint64_t> overview_requests_total_{0};
     std::atomic<std::uint64_t> auth_context_requests_total_{0};
     std::atomic<std::uint64_t> instances_requests_total_{0};
+    std::atomic<std::uint64_t> instances_selector_requests_total_{0};
+    std::atomic<std::uint64_t> instances_selector_mismatch_total_{0};
     std::atomic<std::uint64_t> session_lookup_requests_total_{0};
     std::atomic<std::uint64_t> users_requests_total_{0};
     std::atomic<std::uint64_t> disconnect_requests_total_{0};
@@ -2938,6 +5095,24 @@ private:
     std::atomic<std::uint64_t> worker_requests_total_{0};
     std::atomic<std::uint64_t> poll_errors_total_{0};
     std::atomic<std::uint64_t> command_signing_errors_total_{0};
+    std::atomic<std::uint64_t> ext_inventory_requests_total_{0};
+    std::atomic<std::uint64_t> ext_precheck_requests_total_{0};
+    std::atomic<std::uint64_t> ext_deployments_requests_total_{0};
+    std::atomic<std::uint64_t> ext_schedules_requests_total_{0};
+    std::atomic<std::uint64_t> ext_precheck_failed_total_{0};
+    std::atomic<std::uint64_t> ext_command_id_conflict_total_{0};
+    std::atomic<std::uint64_t> ext_scheduler_runs_total_{0};
+    std::atomic<std::uint64_t> ext_scheduler_due_total_{0};
+    std::atomic<std::uint64_t> ext_deployment_wave_total_{0};
+    std::atomic<std::uint64_t> ext_wave_failed_total_{0};
+    std::atomic<std::uint64_t> ext_rollbacks_total_{0};
+    std::atomic<std::uint64_t> ext_clock_skew_failed_total_{0};
+    std::atomic<std::uint64_t> ext_deployments_completed_total_{0};
+    std::atomic<std::uint64_t> ext_deployments_failed_total_{0};
+    std::atomic<std::uint64_t> ext_store_read_ok_total_{0};
+    std::atomic<std::uint64_t> ext_store_read_fail_total_{0};
+    std::atomic<std::uint64_t> ext_store_write_ok_total_{0};
+    std::atomic<std::uint64_t> ext_inventory_error_count_{0};
     std::atomic<std::uint64_t> request_seq_{0};
 };
 

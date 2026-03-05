@@ -18,6 +18,10 @@ InstanceRecord sample_record() {
     record.host = "127.0.0.1";
     record.port = 7000;
     record.role = "chat";
+    record.game_mode = "pvp";
+    record.region = "ap-northeast";
+    record.shard = "shard-01";
+    record.tags = {"canary", "vip"};
     record.capacity = 100;
     record.active_sessions = 12;
     record.ready = true;
@@ -155,6 +159,18 @@ TEST(InstanceRegistryJsonTests, ParsesExplicitReadyFalse) {
     EXPECT_FALSE(parsed->ready);
 }
 
+TEST(InstanceRegistryJsonTests, ParsesRegionShardAndTags) {
+    auto parsed = detail::deserialize_json(
+        "{\"instance_id\":\"s2\",\"host\":\"127.0.0.1\",\"port\":7000,\"role\":\"chat\",\"game_mode\":\"pvp\",\"region\":\"ap-northeast\",\"shard\":\"shard-01\",\"tags\":\"canary|vip\",\"capacity\":10,\"active_sessions\":1,\"ready\":true,\"last_heartbeat_ms\":123}");
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_EQ(parsed->game_mode, "pvp");
+    EXPECT_EQ(parsed->region, "ap-northeast");
+    EXPECT_EQ(parsed->shard, "shard-01");
+    ASSERT_EQ(parsed->tags.size(), 2u);
+    EXPECT_EQ(parsed->tags[0], "canary");
+    EXPECT_EQ(parsed->tags[1], "vip");
+}
+
 TEST(ConsulInstanceStateBackendTests, UsesCallbacks) {
     std::vector<std::string> put_paths;
     std::vector<std::string> delete_paths;
@@ -177,4 +193,96 @@ TEST(ConsulInstanceStateBackendTests, UsesCallbacks) {
 
     EXPECT_EQ(put_paths.size(), 2u);
     EXPECT_EQ(delete_paths.size(), 1u);
+}
+
+TEST(InstanceSelectorTests, MatchesAllWhenAllIsTrue) {
+    const auto record = sample_record();
+
+    InstanceSelector selector;
+    selector.all = true;
+
+    EXPECT_TRUE(matches_selector(record, selector));
+}
+
+TEST(InstanceSelectorTests, EmptySelectorMatchesNothing) {
+    const auto record = sample_record();
+    const InstanceSelector selector;
+
+    EXPECT_FALSE(matches_selector(record, selector));
+}
+
+TEST(InstanceSelectorTests, MatchesWithAndAcrossFields) {
+    const auto record = sample_record();
+
+    InstanceSelector selector;
+    selector.roles = {"chat"};
+    selector.game_modes = {"pvp"};
+    selector.regions = {"ap-northeast"};
+    selector.shards = {"shard-01"};
+    selector.tags = {"vip"};
+
+    EXPECT_TRUE(matches_selector(record, selector));
+
+    selector.shards = {"shard-02"};
+    EXPECT_FALSE(matches_selector(record, selector));
+}
+
+TEST(InstanceSelectorTests, MatchesServerIdsCaseInsensitiveTrimmed) {
+    const auto record = sample_record();
+
+    InstanceSelector selector;
+    selector.server_ids = {"  CORE-1  "};
+
+    EXPECT_TRUE(matches_selector(record, selector));
+}
+
+TEST(InstanceSelectorTests, SelectInstancesReturnsOnlyMatchesAndStats) {
+    auto a = sample_record();
+    a.instance_id = "core-1";
+    a.game_mode = "pvp";
+    a.region = "ap-northeast";
+    a.shard = "shard-01";
+    a.tags = {"canary", "vip"};
+
+    auto b = sample_record();
+    b.instance_id = "core-2";
+    b.game_mode = "pve";
+    b.region = "us-east";
+    b.shard = "shard-02";
+    b.tags = {"stable"};
+
+    const std::vector<InstanceRecord> instances{a, b};
+
+    InstanceSelector selector;
+    selector.game_modes = {"pvp"};
+    selector.regions = {"ap-northeast"};
+    selector.tags = {"canary"};
+
+    SelectorMatchStats stats;
+    const auto selected = select_instances(instances, selector, &stats);
+
+    ASSERT_EQ(selected.size(), 1u);
+    EXPECT_EQ(selected.front().instance_id, "core-1");
+    EXPECT_EQ(stats.scanned, 2u);
+    EXPECT_EQ(stats.matched, 1u);
+    EXPECT_EQ(stats.selector_mismatch, 1u);
+}
+
+TEST(InstanceSelectorTests, ClassifiesPolicyLayerBySpecificity) {
+    InstanceSelector selector;
+
+    EXPECT_EQ(classify_selector_policy_layer(selector), SelectorPolicyLayer::kGlobal);
+
+    selector.game_modes = {"pvp"};
+    EXPECT_EQ(classify_selector_policy_layer(selector), SelectorPolicyLayer::kGameMode);
+
+    selector.regions = {"ap-northeast"};
+    EXPECT_EQ(classify_selector_policy_layer(selector), SelectorPolicyLayer::kRegion);
+
+    selector.shards = {"shard-01"};
+    EXPECT_EQ(classify_selector_policy_layer(selector), SelectorPolicyLayer::kShard);
+
+    selector.server_ids = {"core-1"};
+    EXPECT_EQ(classify_selector_policy_layer(selector), SelectorPolicyLayer::kServer);
+    EXPECT_EQ(selector_policy_layer_name(SelectorPolicyLayer::kServer), "server");
 }

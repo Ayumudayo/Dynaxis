@@ -1,0 +1,26 @@
+{
+  "name": "sample_plugin",
+  "version": "0.1.0",
+  "kind": "native_plugin",
+  "hook_scope": [
+    "on_chat_send"
+  ],
+  "stage": "mutate",
+  "priority": 30,
+  "exclusive_group": "sample_plugin",
+  "checksum": "sha256:REPLACE_WITH_ARTIFACT_SHA256",
+  "compat": {
+    "abi": {
+      "min": 2,
+      "max": 2
+    },
+    "requires": [
+      "chat_hook_api_v2"
+    ]
+  },
+  "target_profiles": [
+    "all"
+  ],
+  "description": "TODO: describe plugin intent",
+  "owner": "TODO:owner"
+}

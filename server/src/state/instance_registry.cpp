@@ -4,6 +4,7 @@
 #include <string_view>
 #include <cctype>
 #include <sstream>
+#include <unordered_set>
 #include <utility>
 
 #include "server/storage/redis/client.hpp"
@@ -18,6 +19,75 @@ namespace server::state {
 
 namespace {
 constexpr const char* kContentTypeHeader = "application/json";
+
+std::string normalize_token(std::string_view value) {
+    std::size_t begin = 0;
+    while (begin < value.size() && std::isspace(static_cast<unsigned char>(value[begin])) != 0) {
+        ++begin;
+    }
+    std::size_t end = value.size();
+    while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
+        --end;
+    }
+
+    std::string out;
+    out.reserve(end - begin);
+    for (std::size_t i = begin; i < end; ++i) {
+        out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(value[i]))));
+    }
+    return out;
+}
+
+std::unordered_set<std::string> normalize_token_set(const std::vector<std::string>& values) {
+    std::unordered_set<std::string> out;
+    out.reserve(values.size());
+    for (const auto& value : values) {
+        std::string token = normalize_token(value);
+        if (!token.empty()) {
+            out.insert(std::move(token));
+        }
+    }
+    return out;
+}
+
+bool matches_field(std::string_view value, const std::vector<std::string>& filters) {
+    if (filters.empty()) {
+        return true;
+    }
+    const auto normalized_filters = normalize_token_set(filters);
+    if (normalized_filters.empty()) {
+        return false;
+    }
+    const std::string normalized_value = normalize_token(value);
+    return normalized_filters.find(normalized_value) != normalized_filters.end();
+}
+
+bool matches_tags(const std::vector<std::string>& record_tags, const std::vector<std::string>& selector_tags) {
+    if (selector_tags.empty()) {
+        return true;
+    }
+    const auto normalized_selector_tags = normalize_token_set(selector_tags);
+    if (normalized_selector_tags.empty()) {
+        return false;
+    }
+    for (const auto& tag : record_tags) {
+        const std::string normalized_tag = normalize_token(tag);
+        if (normalized_selector_tags.find(normalized_tag) != normalized_selector_tags.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool has_at_least_one_selector_field(const InstanceSelector& selector) {
+    return selector.all
+        || !selector.server_ids.empty()
+        || !selector.roles.empty()
+        || !selector.game_modes.empty()
+        || !selector.regions.empty()
+        || !selector.shards.empty()
+        || !selector.tags.empty();
+}
 } // namespace
 
 // -----------------------------------------------------------------------------
@@ -57,9 +127,147 @@ std::vector<InstanceRecord> InMemoryStateBackend::list_instances() const {
     return result;
 }
 
+bool matches_selector(const InstanceRecord& record, const InstanceSelector& selector) {
+    if (selector.all) {
+        return true;
+    }
+
+    if (!has_at_least_one_selector_field(selector)) {
+        return false;
+    }
+
+    if (!matches_field(record.instance_id, selector.server_ids)) {
+        return false;
+    }
+    if (!matches_field(record.role, selector.roles)) {
+        return false;
+    }
+    if (!matches_field(record.game_mode, selector.game_modes)) {
+        return false;
+    }
+    if (!matches_field(record.region, selector.regions)) {
+        return false;
+    }
+    if (!matches_field(record.shard, selector.shards)) {
+        return false;
+    }
+    if (!matches_tags(record.tags, selector.tags)) {
+        return false;
+    }
+    return true;
+}
+
+SelectorPolicyLayer classify_selector_policy_layer(const InstanceSelector& selector) {
+    if (selector.all) {
+        return SelectorPolicyLayer::kGlobal;
+    }
+    if (!selector.server_ids.empty()) {
+        return SelectorPolicyLayer::kServer;
+    }
+    if (!selector.shards.empty()) {
+        return SelectorPolicyLayer::kShard;
+    }
+    if (!selector.regions.empty()) {
+        return SelectorPolicyLayer::kRegion;
+    }
+    if (!selector.game_modes.empty()) {
+        return SelectorPolicyLayer::kGameMode;
+    }
+    return SelectorPolicyLayer::kGlobal;
+}
+
+std::string_view selector_policy_layer_name(SelectorPolicyLayer layer) {
+    switch (layer) {
+    case SelectorPolicyLayer::kGlobal:
+        return "global";
+    case SelectorPolicyLayer::kGameMode:
+        return "game_mode";
+    case SelectorPolicyLayer::kRegion:
+        return "region";
+    case SelectorPolicyLayer::kShard:
+        return "shard";
+    case SelectorPolicyLayer::kServer:
+        return "server";
+    }
+    return "global";
+}
+
+std::vector<InstanceRecord> select_instances(const std::vector<InstanceRecord>& instances,
+                                             const InstanceSelector& selector,
+                                             SelectorMatchStats* stats) {
+    SelectorMatchStats local_stats{};
+    std::vector<InstanceRecord> matched;
+    matched.reserve(instances.size());
+
+    for (const auto& record : instances) {
+        ++local_stats.scanned;
+        if (matches_selector(record, selector)) {
+            ++local_stats.matched;
+            matched.push_back(record);
+        } else {
+            ++local_stats.selector_mismatch;
+        }
+    }
+
+    if (stats != nullptr) {
+        *stats = local_stats;
+    }
+    return matched;
+}
+
 namespace detail {
 
 using JsonFieldSetter = void (*)(InstanceRecord&, std::string_view);
+
+std::string trim_ascii_copy(std::string_view view) {
+    std::size_t start = 0;
+    std::size_t end = view.size();
+    while (start < end && std::isspace(static_cast<unsigned char>(view[start])) != 0) {
+        ++start;
+    }
+    while (end > start && std::isspace(static_cast<unsigned char>(view[end - 1])) != 0) {
+        --end;
+    }
+    return std::string(view.substr(start, end - start));
+}
+
+std::vector<std::string> split_pipe_tokens(std::string_view value) {
+    std::vector<std::string> out;
+    std::size_t start = 0;
+    while (start <= value.size()) {
+        std::size_t end = value.find('|', start);
+        if (end == std::string_view::npos) {
+            end = value.size();
+        }
+
+        std::string token = trim_ascii_copy(value.substr(start, end - start));
+        if (!token.empty()) {
+            out.push_back(std::move(token));
+        }
+
+        if (end == value.size()) {
+            break;
+        }
+        start = end + 1;
+    }
+    return out;
+}
+
+std::string join_pipe_tokens(const std::vector<std::string>& values) {
+    std::ostringstream oss;
+    bool first = true;
+    for (const auto& value : values) {
+        if (value.empty()) {
+            continue;
+        }
+        if (!first) {
+            oss << '|';
+        }
+        oss << value;
+        first = false;
+    }
+    return oss.str();
+}
 
 void set_instance_id(InstanceRecord& record, std::string_view value) {
     record.instance_id = value;
@@ -71,6 +279,22 @@ void set_host(InstanceRecord& record, std::string_view value) {
 
 void set_role(InstanceRecord& record, std::string_view value) {
     record.role = value;
+}
+
+void set_game_mode(InstanceRecord& record, std::string_view value) {
+    record.game_mode = value;
+}
+
+void set_region(InstanceRecord& record, std::string_view value) {
+    record.region = value;
+}
+
+void set_shard(InstanceRecord& record, std::string_view value) {
+    record.shard = value;
+}
+
+void set_tags(InstanceRecord& record, std::string_view value) {
+    record.tags = split_pipe_tokens(value);
 }
 
 void set_port(InstanceRecord& record, std::string_view value) {
@@ -102,10 +326,14 @@ struct JsonFieldRule {
     JsonFieldSetter setter;
 };
 
-constexpr std::array<JsonFieldRule, 8> kJsonFieldRules{{
+constexpr std::array<JsonFieldRule, 12> kJsonFieldRules{{
     {"instance_id", &set_instance_id},
     {"host", &set_host},
     {"role", &set_role},
+    {"game_mode", &set_game_mode},
+    {"region", &set_region},
+    {"shard", &set_shard},
+    {"tags", &set_tags},
     {"port", &set_port},
     {"capacity", &set_capacity},
     {"active_sessions", &set_active_sessions},
@@ -127,11 +355,16 @@ const JsonFieldSetter find_json_field_setter(std::string_view key) {
 // 성능보다는 이식성과 의존성 최소화에 중점을 둔 구현입니다.
 std::string serialize_json(const InstanceRecord& record) {
     std::ostringstream oss;
+    const std::string tags = join_pipe_tokens(record.tags);
     oss << '{';
     oss << "\"instance_id\":\"" << record.instance_id << "\",";
     oss << "\"host\":\"" << record.host << "\",";
     oss << "\"port\":" << record.port << ',';
     oss << "\"role\":\"" << record.role << "\",";
+    oss << "\"game_mode\":\"" << record.game_mode << "\",";
+    oss << "\"region\":\"" << record.region << "\",";
+    oss << "\"shard\":\"" << record.shard << "\",";
+    oss << "\"tags\":\"" << tags << "\",";
     oss << "\"capacity\":" << record.capacity << ',';
     oss << "\"active_sessions\":" << record.active_sessions << ',';
     oss << "\"ready\":" << (record.ready ? "true" : "false") << ',';
@@ -151,18 +384,6 @@ std::optional<InstanceRecord> deserialize_json(std::string_view payload) {
             ch = ' ';
         }
     }
-    // 공백 제거 람다
-    auto trim_copy = [](std::string_view view) -> std::string {
-        std::size_t start = 0;
-        std::size_t end = view.size();
-        while (start < end && std::isspace(static_cast<unsigned char>(view[start]))) {
-            ++start;
-        }
-        while (end > start && std::isspace(static_cast<unsigned char>(view[end - 1]))) {
-            --end;
-        }
-        return std::string(view.substr(start, end - start));
-    };
     std::stringstream ss(json);
     std::string item;
     // 쉼표로 구분된 키-값 쌍을 파싱
@@ -171,8 +392,8 @@ std::optional<InstanceRecord> deserialize_json(std::string_view payload) {
         if (colon == std::string::npos) {
             continue;
         }
-        std::string key = trim_copy(std::string_view(item).substr(0, colon));
-        std::string value = trim_copy(std::string_view(item).substr(colon + 1));
+        std::string key = trim_ascii_copy(std::string_view(item).substr(0, colon));
+        std::string value = trim_ascii_copy(std::string_view(item).substr(colon + 1));
         // 따옴표 제거
         if (!key.empty() && key.front() == '"') { key.erase(0, 1); }
         if (!key.empty() && key.back() == '"') { key.pop_back(); }

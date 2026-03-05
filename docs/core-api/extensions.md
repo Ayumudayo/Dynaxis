@@ -26,7 +26,8 @@
   - `on_leave`
   - `on_session_event`
   - `on_admin_command`
-- 개별 hook 포인터는 `nullptr`가 허용되며, 이 경우 해당 hook은 `kPass`와 동일하게 취급됩니다.
+- `on_chat_send`는 현재 로더 validator에서 필수입니다.
+- 그 외 개별 hook 포인터는 `nullptr`가 허용되며, 이 경우 해당 hook은 `kPass`와 동일하게 취급됩니다.
 
 ### 결정(Decision) 규약
 - v2 결정 타입: `HookDecisionV2`
