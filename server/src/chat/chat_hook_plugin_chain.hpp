@@ -4,10 +4,13 @@
 #include "server/core/plugin/plugin_chain_host.hpp"
 
 #include <cstdint>
+#include <array>
 #include <filesystem>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace server::app::chat {
@@ -33,6 +36,9 @@ public:
 
         /** @brief 단일 플러그인 모드 lock/sentinel 경로(옵션)입니다. */
         std::optional<std::filesystem::path> single_lock_path;
+
+        /** @brief hook 호출 경고 예산(마이크로초, 0이면 비활성)입니다. */
+        std::uint64_t hook_warn_budget_us{0};
     };
 
     /** @brief on_chat_send 체인 실행 결과입니다. */
@@ -58,6 +64,15 @@ public:
 
     /** @brief 단일 플러그인 메트릭 스냅샷입니다. */
     struct PluginMetricsSnapshot {
+        struct HookMetricSnapshot {
+            std::string hook_name;
+            std::uint64_t calls_total{0};
+            std::uint64_t errors_total{0};
+            std::uint64_t duration_count{0};
+            std::uint64_t duration_sum_ns{0};
+            std::array<std::uint64_t, 12> duration_bucket_counts{};
+        };
+
         std::filesystem::path plugin_path;
         bool loaded{false};
         std::string name;
@@ -65,6 +80,7 @@ public:
         std::uint64_t reload_attempt_total{0};
         std::uint64_t reload_success_total{0};
         std::uint64_t reload_failure_total{0};
+        std::vector<HookMetricSnapshot> hook_metrics;
     };
 
     /** @brief 체인 상태 메트릭 스냅샷입니다. */
@@ -155,6 +171,30 @@ public:
     MetricsSnapshot metrics_snapshot() const;
 
 private:
+    struct HookCounters {
+        std::uint64_t calls_total{0};
+        std::uint64_t errors_total{0};
+        std::uint64_t duration_count{0};
+        std::uint64_t duration_sum_ns{0};
+        std::array<std::uint64_t, 12> duration_bucket_counts{};
+    };
+
+    static std::string normalize_plugin_metric_name(const std::string& api_name,
+                                                    const std::filesystem::path& plugin_path);
+
+    void record_plugin_hook_metric(const std::string& plugin_name,
+                                   std::string_view hook_name,
+                                   bool had_error,
+                                   std::uint64_t elapsed_ns) const;
+
+    void maybe_warn_budget_exceeded(const std::string& plugin_name,
+                                    std::string_view hook_name,
+                                    std::uint64_t elapsed_ns) const;
+
+    mutable std::unordered_map<std::string, std::unordered_map<std::string, HookCounters>> plugin_hook_metrics_;
+    mutable std::mutex plugin_hook_metrics_mu_;
+    std::uint64_t hook_warn_budget_us_{0};
+
     using Host = server::core::plugin::PluginHost<ChatHookApiV2>;
     using HostChain = server::core::plugin::PluginChainHost<ChatHookApiV2>;
 

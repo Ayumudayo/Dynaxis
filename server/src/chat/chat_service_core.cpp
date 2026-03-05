@@ -255,6 +255,13 @@ ChatService::ChatService(boost::asio::io_context& io,
     spam_mute_sec_ = parse_u32_bounded(std::getenv("CHAT_SPAM_MUTE_SEC"), 30, 5, 86400);
     spam_ban_sec_ = parse_u32_bounded(std::getenv("CHAT_SPAM_BAN_SEC"), 600, 10, 604800);
     spam_ban_violation_threshold_ = parse_u32_bounded(std::getenv("CHAT_SPAM_BAN_VIOLATIONS"), 3, 1, 20);
+    lua_auto_disable_threshold_ = parse_u32_bounded(std::getenv("LUA_AUTO_DISABLE_THRESHOLD"), 3, 1, 1'000'000);
+    lua_hook_warn_budget_us_ = parse_u32_bounded(std::getenv("LUA_HOOK_WARN_BUDGET_US"), 0, 0, 60'000'000);
+    const std::uint32_t chat_hook_warn_budget_us = parse_u32_bounded(
+        std::getenv("CHAT_HOOK_WARN_BUDGET_US"),
+        0,
+        0,
+        60'000'000);
 
     // 최근 대화 내역(History) 관련 설정
     if (const char* limit_env = read_env("RECENT_HISTORY_LIMIT", "SNAPSHOT_RECENT_LIMIT")) {
@@ -365,6 +372,7 @@ ChatService::ChatService(boost::asio::io_context& io,
         }
 
         if (enabled) {
+            cfg.hook_warn_budget_us = chat_hook_warn_budget_us;
             if (const char* cache = std::getenv("CHAT_HOOK_CACHE_DIR"); cache && *cache) {
                 cfg.cache_dir = cache;
             }
@@ -420,8 +428,131 @@ ChatService::ChatHookPluginsMetrics ChatService::chat_hook_plugins_metrics() con
         m.reload_attempt_total = p.reload_attempt_total;
         m.reload_success_total = p.reload_success_total;
         m.reload_failure_total = p.reload_failure_total;
+        m.hook_metrics.reserve(p.hook_metrics.size());
+        for (const auto& hm : p.hook_metrics) {
+            ChatHookPluginMetric::HookMetric metric{};
+            metric.hook_name = hm.hook_name;
+            metric.calls_total = hm.calls_total;
+            metric.errors_total = hm.errors_total;
+            metric.duration_count = hm.duration_count;
+            metric.duration_sum_ns = hm.duration_sum_ns;
+            metric.duration_bucket_counts = hm.duration_bucket_counts;
+            m.hook_metrics.push_back(std::move(metric));
+        }
         out.plugins.push_back(std::move(m));
     }
+    return out;
+}
+
+ChatService::LuaHooksMetrics ChatService::lua_hooks_metrics() const {
+    LuaHooksMetrics out{};
+    out.enabled = static_cast<bool>(lua_runtime_);
+    out.auto_disable_threshold = lua_auto_disable_threshold_;
+
+    if (!lua_runtime_) {
+        return out;
+    }
+
+    const auto runtime_snapshot = lua_runtime_->metrics_snapshot();
+    out.reload_epoch = runtime_snapshot.reload_epoch;
+    out.loaded_scripts = runtime_snapshot.loaded_scripts;
+    out.memory_used_bytes = runtime_snapshot.memory_used_bytes;
+    out.calls_total = runtime_snapshot.calls_total;
+    out.errors_total = runtime_snapshot.errors_total;
+    out.instruction_limit_hits = runtime_snapshot.instruction_limit_hits;
+    out.memory_limit_hits = runtime_snapshot.memory_limit_hits;
+
+    std::lock_guard<std::mutex> lock(lua_hook_metrics_mu_);
+    out.hooks.reserve(
+        lua_hook_consecutive_failures_.size()
+        + lua_hook_auto_disable_total_.size()
+        + lua_hook_calls_total_.size()
+        + lua_hook_errors_total_.size()
+        + lua_hook_instruction_limit_hits_.size()
+        + lua_hook_memory_limit_hits_.size()
+        + lua_hook_disabled_.size());
+
+    auto append_or_get = [&](const std::string& hook_name) -> LuaHookMetric& {
+        for (auto& metric : out.hooks) {
+            if (metric.hook_name == hook_name) {
+                return metric;
+            }
+        }
+        out.hooks.push_back(LuaHookMetric{hook_name, false, 0, 0});
+        return out.hooks.back();
+    };
+
+    for (const auto& [hook_name, failures] : lua_hook_consecutive_failures_) {
+        auto& metric = append_or_get(hook_name);
+        metric.consecutive_failures = failures;
+    }
+
+    for (const auto& [hook_name, total] : lua_hook_auto_disable_total_) {
+        auto& metric = append_or_get(hook_name);
+        metric.auto_disable_total = total;
+    }
+
+    for (const auto& [hook_name, total] : lua_hook_calls_total_) {
+        auto& metric = append_or_get(hook_name);
+        metric.calls_total = total;
+    }
+
+    for (const auto& [hook_name, total] : lua_hook_errors_total_) {
+        auto& metric = append_or_get(hook_name);
+        metric.errors_total = total;
+    }
+
+    for (const auto& [hook_name, total] : lua_hook_instruction_limit_hits_) {
+        auto& metric = append_or_get(hook_name);
+        metric.instruction_limit_hits = total;
+    }
+
+    for (const auto& [hook_name, total] : lua_hook_memory_limit_hits_) {
+        auto& metric = append_or_get(hook_name);
+        metric.memory_limit_hits = total;
+    }
+
+    for (const auto& hook_name : lua_hook_disabled_) {
+        auto& metric = append_or_get(hook_name);
+        metric.disabled = true;
+    }
+
+    auto append_or_get_script_metric = [&](const std::string& hook_name,
+                                           const std::string& script_name) -> LuaScriptCallMetric& {
+        for (auto& metric : out.script_calls) {
+            if (metric.hook_name == hook_name && metric.script_name == script_name) {
+                return metric;
+            }
+        }
+        out.script_calls.push_back(LuaScriptCallMetric{hook_name, script_name, 0, 0});
+        return out.script_calls.back();
+    };
+
+    for (const auto& [hook_name, script_map] : lua_hook_script_calls_total_) {
+        for (const auto& [script_name, total] : script_map) {
+            auto& metric = append_or_get_script_metric(hook_name, script_name);
+            metric.calls_total = total;
+        }
+    }
+
+    for (const auto& [hook_name, script_map] : lua_hook_script_errors_total_) {
+        for (const auto& [script_name, total] : script_map) {
+            auto& metric = append_or_get_script_metric(hook_name, script_name);
+            metric.errors_total = total;
+        }
+    }
+
+    std::sort(out.hooks.begin(), out.hooks.end(), [](const LuaHookMetric& lhs, const LuaHookMetric& rhs) {
+        return lhs.hook_name < rhs.hook_name;
+    });
+
+    std::sort(out.script_calls.begin(), out.script_calls.end(), [](const LuaScriptCallMetric& lhs, const LuaScriptCallMetric& rhs) {
+        if (lhs.hook_name == rhs.hook_name) {
+            return lhs.script_name < rhs.script_name;
+        }
+        return lhs.hook_name < rhs.hook_name;
+    });
+
     return out;
 }
 
@@ -1238,7 +1369,82 @@ ChatService::LuaColdHookOutcome ChatService::invoke_lua_cold_hook(std::string_vi
         return outcome;
     }
 
+    const auto runtime_metrics = lua_runtime_->metrics_snapshot();
+    {
+        std::lock_guard<std::mutex> lock(lua_hook_metrics_mu_);
+        if (runtime_metrics.reload_epoch != lua_reload_epoch_) {
+            lua_reload_epoch_ = runtime_metrics.reload_epoch;
+            lua_hook_consecutive_failures_.clear();
+            lua_hook_disabled_.clear();
+            corelog::info("lua cold hook state reset after script reload epoch=" + std::to_string(lua_reload_epoch_));
+        }
+
+        if (lua_hook_disabled_.count(std::string(hook_name)) > 0) {
+            return outcome;
+        }
+    }
+
+    const auto call_started_at = std::chrono::steady_clock::now();
     const auto call_result = lua_runtime_->call_all(std::string(hook_name));
+    const auto call_elapsed_ns = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - call_started_at)
+            .count());
+
+    const bool call_failed = (!call_result.error.empty() || call_result.failed != 0);
+    {
+        std::lock_guard<std::mutex> lock(lua_hook_metrics_mu_);
+        const std::string hook_key(hook_name);
+        lua_hook_calls_total_[hook_key] += call_result.attempted;
+        lua_hook_errors_total_[hook_key] += call_result.failed;
+
+        if (call_result.failed == 0 && !call_result.error.empty()) {
+            ++lua_hook_errors_total_[hook_key];
+        }
+
+        auto& script_calls = lua_hook_script_calls_total_[hook_key];
+        auto& script_errors = lua_hook_script_errors_total_[hook_key];
+        for (const auto& script_result : call_result.script_results) {
+            const std::string script_name = script_result.env_name.empty()
+                ? std::string("(unknown)")
+                : script_result.env_name;
+            ++script_calls[script_name];
+            if (script_result.failed) {
+                ++script_errors[script_name];
+            }
+
+            switch (script_result.failure_kind) {
+            case server::core::scripting::LuaRuntime::ScriptFailureKind::kInstructionLimit:
+                ++lua_hook_instruction_limit_hits_[hook_key];
+                break;
+            case server::core::scripting::LuaRuntime::ScriptFailureKind::kMemoryLimit:
+                ++lua_hook_memory_limit_hits_[hook_key];
+                break;
+            case server::core::scripting::LuaRuntime::ScriptFailureKind::kNone:
+            case server::core::scripting::LuaRuntime::ScriptFailureKind::kOther:
+            default:
+                break;
+            }
+        }
+
+        auto& consecutive = lua_hook_consecutive_failures_[hook_key];
+        if (call_failed) {
+            ++consecutive;
+            if (lua_auto_disable_threshold_ > 0
+                && consecutive >= lua_auto_disable_threshold_
+                && lua_hook_disabled_.count(hook_key) == 0) {
+                lua_hook_disabled_.insert(hook_key);
+                ++lua_hook_auto_disable_total_[hook_key];
+                corelog::warn(
+                    "lua cold hook auto-disabled hook=" + hook_key
+                    + " consecutive_failures=" + std::to_string(consecutive)
+                    + " threshold=" + std::to_string(lua_auto_disable_threshold_));
+            }
+        } else {
+            consecutive = 0;
+        }
+    }
+
     if (!call_result.error.empty()) {
         corelog::warn(
             "lua cold hook call failed hook=" + std::string(hook_name)
@@ -1249,6 +1455,13 @@ ChatService::LuaColdHookOutcome ChatService::invoke_lua_cold_hook(std::string_vi
         corelog::warn(
             "lua cold hook call had failures hook=" + std::string(hook_name)
             + " failed=" + std::to_string(call_result.failed));
+    }
+
+    if (lua_hook_warn_budget_us_ > 0 && call_elapsed_ns > lua_hook_warn_budget_us_ * 1'000ULL) {
+        corelog::warn(
+            "lua cold hook latency budget exceeded hook=" + std::string(hook_name)
+            + " elapsed_us=" + std::to_string(call_elapsed_ns / 1'000ULL)
+            + " budget_us=" + std::to_string(lua_hook_warn_budget_us_));
     }
 
     outcome.notices = call_result.notices;

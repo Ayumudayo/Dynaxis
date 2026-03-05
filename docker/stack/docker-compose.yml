@@ -125,6 +125,7 @@ services:
       CHAT_HOOK_RELOAD_INTERVAL_MS: "500"
       LUA_ENABLED: "${LUA_ENABLED:-1}"
       LUA_SCRIPTS_DIR: "/app/scripts"
+      LUA_FALLBACK_SCRIPTS_DIR: "/app/scripts_builtin"
       ADMIN_COMMAND_SIGNING_SECRET: "${ADMIN_COMMAND_SIGNING_SECRET:-dev-admin-command-secret}"
       ADMIN_COMMAND_TTL_MS: "${ADMIN_COMMAND_TTL_MS:-60000}"
       ADMIN_COMMAND_FUTURE_SKEW_MS: "${ADMIN_COMMAND_FUTURE_SKEW_MS:-5000}"
@@ -174,6 +175,7 @@ services:
       CHAT_HOOK_RELOAD_INTERVAL_MS: "500"
       LUA_ENABLED: "${LUA_ENABLED:-1}"
       LUA_SCRIPTS_DIR: "/app/scripts"
+      LUA_FALLBACK_SCRIPTS_DIR: "/app/scripts_builtin"
       ADMIN_COMMAND_SIGNING_SECRET: "${ADMIN_COMMAND_SIGNING_SECRET:-dev-admin-command-secret}"
       ADMIN_COMMAND_TTL_MS: "${ADMIN_COMMAND_TTL_MS:-60000}"
       ADMIN_COMMAND_FUTURE_SKEW_MS: "${ADMIN_COMMAND_FUTURE_SKEW_MS:-5000}"
@@ -236,6 +238,14 @@ services:
       GRAFANA_BASE_URL: "http://127.0.0.1:${GRAFANA_HOST_PORT:-33000}"
       PROMETHEUS_BASE_URL: "http://127.0.0.1:${PROMETHEUS_HOST_PORT:-39090}"
       ADMIN_COMMAND_SIGNING_SECRET: "${ADMIN_COMMAND_SIGNING_SECRET:-dev-admin-command-secret}"
+      CHAT_HOOK_PLUGINS_DIR: "/app/plugins"
+      CHAT_HOOK_FALLBACK_PLUGINS_DIR: "/app/plugins"
+      LUA_SCRIPTS_DIR: "/app/scripts"
+      LUA_FALLBACK_SCRIPTS_DIR: "/app/scripts"
+      ADMIN_EXT_FORCE_FAIL_WAVE_INDEX: "${ADMIN_EXT_FORCE_FAIL_WAVE_INDEX:-0}"
+    volumes:
+      - ./plugins:/app/plugins:ro
+      - ./scripts:/app/scripts:ro
     depends_on:
       redis:
         condition: service_healthy

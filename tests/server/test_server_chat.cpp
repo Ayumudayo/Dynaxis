@@ -31,6 +31,10 @@
 #define TEST_CHAT_HOOK_V2_ONLY_PATH ""
 #endif
 
+#ifndef TEST_CHAT_HOOK_THROWING_PATH
+#define TEST_CHAT_HOOK_THROWING_PATH ""
+#endif
+
 using namespace server::app::chat;
 using namespace server::core;
 using namespace server::core::storage;
@@ -1080,6 +1084,63 @@ TEST_F(ChatServiceTest, LeaveDeniedByV2HookPluginReturnsForbidden) {
     const auto error_code = WaitForErrorCode();
     ASSERT_TRUE(error_code.has_value());
     EXPECT_EQ(*error_code, core_proto::errc::FORBIDDEN);
+    chat_service_.reset();
+}
+
+TEST_F(ChatServiceTest, ThrowingChatHookExceptionDoesNotStopChatOrAdminSettingPath) {
+    if (std::string(TEST_CHAT_HOOK_THROWING_PATH).empty()) {
+        GTEST_SKIP() << "TEST_CHAT_HOOK_THROWING_PATH is not configured";
+    }
+
+    ScopedEnvVar env_single("CHAT_HOOK_PLUGIN_PATH", TEST_CHAT_HOOK_THROWING_PATH);
+    ScopedEnvVar env_paths("CHAT_HOOK_PLUGIN_PATHS", "");
+    ScopedEnvVar env_dir("CHAT_HOOK_PLUGINS_DIR", "");
+    ScopedTempDir cache_temp("knights_chat_service_throwing_hook_cache");
+    const auto cache_path = cache_temp.path().string();
+    const auto lock_path = (cache_temp.path() / "chat_hook.lock").string();
+    ScopedEnvVar env_lock("CHAT_HOOK_LOCK_PATH", lock_path.c_str());
+    ScopedEnvVar env_cache("CHAT_HOOK_CACHE_DIR", cache_path.c_str());
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    LoginAs("throwing_user");
+    JoinRoom("throwing_room");
+
+    SendChat("throwing_room", "throwing plugin first message");
+    EXPECT_TRUE(WaitForBroadcastText("throwing plugin first message"));
+
+    const auto plugin_metrics = chat_service_->chat_hook_plugins_metrics();
+    EXPECT_TRUE(plugin_metrics.enabled);
+    bool found_plugin = false;
+    for (const auto& plugin : plugin_metrics.plugins) {
+        if (plugin.name != "chat_hook_throwing") {
+            continue;
+        }
+        found_plugin = true;
+        EXPECT_TRUE(plugin.loaded);
+
+        bool found_chat_hook = false;
+        for (const auto& hook_metric : plugin.hook_metrics) {
+            if (hook_metric.hook_name != "on_chat_send") {
+                continue;
+            }
+            found_chat_hook = true;
+            EXPECT_GE(hook_metric.calls_total, 1u);
+            EXPECT_GE(hook_metric.errors_total, 1u);
+        }
+        EXPECT_TRUE(found_chat_hook);
+    }
+    EXPECT_TRUE(found_plugin);
+
+    const auto before = server::core::runtime_metrics::snapshot();
+    chat_service_->admin_apply_runtime_setting("chat_spam_threshold", "17");
+    ProcessJobs();
+    FlushSessionIO();
+    const auto after = server::core::runtime_metrics::snapshot();
+    EXPECT_EQ(after.runtime_setting_reload_attempt_total, before.runtime_setting_reload_attempt_total + 1);
+    EXPECT_EQ(after.runtime_setting_reload_success_total, before.runtime_setting_reload_success_total + 1);
+
+    SendChat("throwing_room", "throwing plugin second message");
+    EXPECT_TRUE(WaitForBroadcastText("throwing plugin second message"));
     chat_service_.reset();
 }
 

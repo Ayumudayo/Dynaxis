@@ -1,0 +1,20 @@
+{
+  "name": "on_login_welcome",
+  "version": "1.0.0",
+  "kind": "lua_script",
+  "hook_scope": [
+    "on_login"
+  ],
+  "stage": "side_effect",
+  "priority": 100,
+  "exclusive_group": "lua.on_login.welcome",
+  "checksum": "dev-local",
+  "target_profiles": [
+    "all"
+  ],
+  "allowed_decisions": [
+    "pass"
+  ],
+  "description": "Stack sample login welcome Lua hook",
+  "owner": "runtime-extensibility"
+}

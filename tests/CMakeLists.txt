@@ -170,6 +170,8 @@ if (BUILD_GTEST_TESTS)
         server/test_server_chat.cpp
         server/test_server_config.cpp
         server/test_chat_lua_bindings.cpp
+        server/test_lua_hook_integration.cpp
+        server/test_hook_auto_disable.cpp
         ${CMAKE_SOURCE_DIR}/server/src/app/config.cpp
         ${CMAKE_SOURCE_DIR}/server/src/scripting/chat_lua_bindings.cpp
         ${CMAKE_SOURCE_DIR}/server/src/chat/chat_service_core.cpp
@@ -214,9 +216,11 @@ if (BUILD_GTEST_TESTS)
 
         target_compile_definitions(server_general_tests PRIVATE
             TEST_CHAT_HOOK_V2_ONLY_PATH="$<TARGET_FILE:test_chat_hook_v2_only>"
+            TEST_CHAT_HOOK_THROWING_PATH="$<TARGET_FILE:test_chat_hook_throwing>"
         )
         add_dependencies(server_general_tests
             test_chat_hook_v2_only
+            test_chat_hook_throwing
         )
 
         add_library(test_chat_hook_dual_entrypoint MODULE
@@ -231,6 +235,20 @@ if (BUILD_GTEST_TESTS)
         set_target_properties(test_chat_hook_dual_entrypoint PROPERTIES
             PREFIX ""
             OUTPUT_NAME "10_chat_hook_dual_entrypoint"
+        )
+
+        add_library(test_chat_hook_throwing MODULE
+            server/chat_hook_throwing.cpp
+        )
+        target_include_directories(test_chat_hook_throwing PRIVATE
+            ${CMAKE_SOURCE_DIR}/server/include
+        )
+        target_compile_definitions(test_chat_hook_throwing PRIVATE
+            CHAT_HOOK_PLUGIN_BUILD
+        )
+        set_target_properties(test_chat_hook_throwing PROPERTIES
+            PREFIX ""
+            OUTPUT_NAME "10_chat_hook_throwing"
         )
 
         add_executable(server_plugin_chain_tests
@@ -272,6 +290,7 @@ if (BUILD_GTEST_TESTS)
             TEST_CHAT_HOOK_TAG_PATH="$<TARGET_FILE:chat_hook_tag>"
             TEST_CHAT_HOOK_V2_ONLY_PATH="$<TARGET_FILE:test_chat_hook_v2_only>"
             TEST_CHAT_HOOK_DUAL_PATH="$<TARGET_FILE:test_chat_hook_dual_entrypoint>"
+            TEST_CHAT_HOOK_THROWING_PATH="$<TARGET_FILE:test_chat_hook_throwing>"
         )
         target_link_libraries(server_plugin_chain_v2_tests PRIVATE
             GTest::gtest_main
@@ -283,6 +302,7 @@ if (BUILD_GTEST_TESTS)
             chat_hook_tag
             test_chat_hook_v2_only
             test_chat_hook_dual_entrypoint
+            test_chat_hook_throwing
         )
     endif()
 

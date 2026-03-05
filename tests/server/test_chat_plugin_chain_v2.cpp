@@ -24,6 +24,10 @@
 #define TEST_CHAT_HOOK_DUAL_PATH ""
 #endif
 
+#ifndef TEST_CHAT_HOOK_THROWING_PATH
+#define TEST_CHAT_HOOK_THROWING_PATH ""
+#endif
+
 namespace server::app::chat {
 namespace {
 
@@ -34,16 +38,19 @@ protected:
         tag_module_ = std::filesystem::path(TEST_CHAT_HOOK_TAG_PATH);
         v2_only_module_ = std::filesystem::path(TEST_CHAT_HOOK_V2_ONLY_PATH);
         dual_module_ = std::filesystem::path(TEST_CHAT_HOOK_DUAL_PATH);
+        throwing_module_ = std::filesystem::path(TEST_CHAT_HOOK_THROWING_PATH);
 
         ASSERT_FALSE(sample_v2_module_.empty());
         ASSERT_FALSE(tag_module_.empty());
         ASSERT_FALSE(v2_only_module_.empty());
         ASSERT_FALSE(dual_module_.empty());
+        ASSERT_FALSE(throwing_module_.empty());
 
         ASSERT_TRUE(std::filesystem::exists(sample_v2_module_));
         ASSERT_TRUE(std::filesystem::exists(tag_module_));
         ASSERT_TRUE(std::filesystem::exists(v2_only_module_));
         ASSERT_TRUE(std::filesystem::exists(dual_module_));
+        ASSERT_TRUE(std::filesystem::exists(throwing_module_));
 
         const auto nonce = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
         temp_dir_ = std::filesystem::temp_directory_path() / ("knights_chat_plugin_chain_v2_test_" + nonce);
@@ -128,6 +135,17 @@ protected:
         return nullptr;
     }
 
+    static const ChatHookPluginChain::PluginMetricsSnapshot::HookMetricSnapshot* find_hook_metric(
+        const ChatHookPluginChain::PluginMetricsSnapshot& plugin,
+        const std::string& hook_name) {
+        for (const auto& metric : plugin.hook_metrics) {
+            if (metric.hook_name == hook_name) {
+                return &metric;
+            }
+        }
+        return nullptr;
+    }
+
     std::filesystem::path temp_dir_;
     std::filesystem::path plugins_dir_;
     std::filesystem::path cache_dir_;
@@ -136,6 +154,7 @@ protected:
     std::filesystem::path tag_module_;
     std::filesystem::path v2_only_module_;
     std::filesystem::path dual_module_;
+    std::filesystem::path throwing_module_;
 
     std::unique_ptr<ChatHookPluginChain> chain_;
 };
@@ -172,6 +191,20 @@ TEST_F(ChatPluginChainV2Test, FallsBackToV1PluginWhenV2EntrypointMissing) {
     EXPECT_GE(tag->reload_success_total, 1u);
 }
 
+TEST_F(ChatPluginChainV2Test, OptionalHookMetricsSkipPluginsWithoutHookImplementation) {
+    build_chain({
+        {tag_module_, "10_chat_hook_tag"},
+    });
+
+    const auto out = chain_->on_login(240, "alice");
+    EXPECT_FALSE(out.stop_default);
+
+    const auto metrics = chain_->metrics_snapshot();
+    const auto* tag = find_plugin(metrics, "10_chat_hook_tag");
+    ASSERT_NE(tag, nullptr);
+    EXPECT_EQ(find_hook_metric(*tag, "on_login"), nullptr);
+}
+
 TEST_F(ChatPluginChainV2Test, PrefersV2EntrypointWhenBothSymbolsExist) {
     build_chain({
         {dual_module_, "10_chat_hook_dual_entrypoint"},
@@ -190,6 +223,31 @@ TEST_F(ChatPluginChainV2Test, PrefersV2EntrypointWhenBothSymbolsExist) {
     EXPECT_TRUE(dual->loaded);
     EXPECT_EQ(dual->name, "chat_hook_dual_entrypoint");
     EXPECT_EQ(dual->version, "v2-entrypoint");
+}
+
+TEST_F(ChatPluginChainV2Test, SwallowsPluginExceptionAndContinuesDefaultPath) {
+    build_chain({
+        {throwing_module_, "10_chat_hook_throwing"},
+    });
+
+    std::string text = "hello";
+    const auto out = chain_->on_chat_send(206, "lobby", "alice", text);
+
+    EXPECT_FALSE(out.stop_default);
+    EXPECT_TRUE(out.notices.empty());
+    EXPECT_EQ(text, "hello");
+
+    const auto metrics = chain_->metrics_snapshot();
+    const auto* plugin = find_plugin(metrics, "10_chat_hook_throwing");
+    ASSERT_NE(plugin, nullptr);
+    EXPECT_TRUE(plugin->loaded);
+    EXPECT_EQ(plugin->name, "chat_hook_throwing");
+    EXPECT_EQ(plugin->version, "v2");
+    const auto* hook_metric = find_hook_metric(*plugin, "on_chat_send");
+    ASSERT_NE(hook_metric, nullptr);
+    EXPECT_EQ(hook_metric->calls_total, 1u);
+    EXPECT_EQ(hook_metric->errors_total, 1u);
+    EXPECT_EQ(hook_metric->duration_count, 1u);
 }
 
 TEST_F(ChatPluginChainV2Test, MixedV2AndV1ChainAppliesInOrder) {

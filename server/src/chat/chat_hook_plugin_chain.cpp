@@ -3,6 +3,8 @@
 #include "server/core/util/log.hpp"
 
 #include <array>
+#include <chrono>
+#include <limits>
 #include <mutex>
 #include <unordered_map>
 
@@ -17,6 +19,30 @@ namespace server::app::chat {
 namespace corelog = server::core::log;
 
 namespace {
+
+constexpr std::array<std::uint64_t, 12> kHookDurationBucketUpperBoundsNs{{
+    1'000,      // 1us
+    2'000,      // 2us
+    5'000,      // 5us
+    10'000,     // 10us
+    25'000,     // 25us
+    50'000,     // 50us
+    100'000,    // 100us
+    250'000,    // 250us
+    500'000,    // 500us
+    1'000'000,  // 1ms
+    2'500'000,  // 2.5ms
+    5'000'000,  // 5ms
+}};
+
+std::size_t duration_bucket_index(const std::uint64_t elapsed_ns) {
+    for (std::size_t i = 0; i < kHookDurationBucketUpperBoundsNs.size(); ++i) {
+        if (elapsed_ns <= kHookDurationBucketUpperBoundsNs[i]) {
+            return i;
+        }
+    }
+    return kHookDurationBucketUpperBoundsNs.size();
+}
 
 using OnChatSendV2Fn = HookDecisionV2 (CHAT_HOOK_CALL*)(void*, const ChatHookChatSendV2*, ChatHookChatSendOutV2*);
 
@@ -145,12 +171,18 @@ struct ChainCallResult {
     HookDecisionV2 decision{HookDecisionV2::kPass};
     std::string notice;
     std::string replacement_text;
+    std::string plugin_name;
+    bool had_error{false};
+    bool executed{false};
 };
 
 struct GateCallResult {
     HookDecisionV2 decision{HookDecisionV2::kPass};
     std::string notice;
     std::string deny_reason;
+    std::string plugin_name;
+    bool had_error{false};
+    bool executed{false};
 };
 
 struct AdminCallResult {
@@ -158,6 +190,9 @@ struct AdminCallResult {
     std::string notice;
     std::string response_json;
     std::string deny_reason;
+    std::string plugin_name;
+    bool had_error{false};
+    bool executed{false};
 };
 
 ChainCallResult call_on_chat_send(
@@ -174,6 +209,9 @@ ChainCallResult call_on_chat_send(
     auto mod = host->current();
     if (!mod || !mod->api || !mod->api->on_chat_send) {
         return result;
+    }
+    if (mod->api->name) {
+        result.plugin_name = mod->api->name;
     }
 
     ChatHookChatSendV2 in{};
@@ -192,14 +230,17 @@ ChainCallResult call_on_chat_send(
     ChatHookChatSendOutV2 out{notice_out, replace_out};
 
     HookDecisionV2 decision = HookDecisionV2::kPass;
+    result.executed = true;
     try {
         decision = mod->api->on_chat_send(mod->instance, &in, &out);
     } catch (const std::exception& ex) {
         corelog::warn(std::string("chat_hook: exception: ") + ex.what());
         decision = HookDecisionV2::kPass;
+        result.had_error = true;
     } catch (...) {
         corelog::warn("chat_hook: unknown exception");
         decision = HookDecisionV2::kPass;
+        result.had_error = true;
     }
 
     result.decision = decision;
@@ -221,6 +262,9 @@ GateCallResult call_on_login(
     if (!mod || !mod->api || !mod->api->on_login) {
         return result;
     }
+    if (mod->api->name) {
+        result.plugin_name = mod->api->name;
+    }
 
     LoginEventV2 in{};
     in.session_id = session_id;
@@ -234,14 +278,17 @@ GateCallResult call_on_login(
     LoginEventOutV2 out{notice_out, deny_out};
 
     HookDecisionV2 decision = HookDecisionV2::kPass;
+    result.executed = true;
     try {
         decision = mod->api->on_login(mod->instance, &in, &out);
     } catch (const std::exception& ex) {
         corelog::warn(std::string("chat_hook(on_login): exception: ") + ex.what());
         decision = HookDecisionV2::kPass;
+        result.had_error = true;
     } catch (...) {
         corelog::warn("chat_hook(on_login): unknown exception");
         decision = HookDecisionV2::kPass;
+        result.had_error = true;
     }
 
     result.decision = decision;
@@ -264,6 +311,9 @@ GateCallResult call_on_join(
     if (!mod || !mod->api || !mod->api->on_join) {
         return result;
     }
+    if (mod->api->name) {
+        result.plugin_name = mod->api->name;
+    }
 
     JoinEventV2 in{};
     in.session_id = session_id;
@@ -279,14 +329,17 @@ GateCallResult call_on_join(
     JoinEventOutV2 out{notice_out, deny_out};
 
     HookDecisionV2 decision = HookDecisionV2::kPass;
+    result.executed = true;
     try {
         decision = mod->api->on_join(mod->instance, &in, &out);
     } catch (const std::exception& ex) {
         corelog::warn(std::string("chat_hook(on_join): exception: ") + ex.what());
         decision = HookDecisionV2::kPass;
+        result.had_error = true;
     } catch (...) {
         corelog::warn("chat_hook(on_join): unknown exception");
         decision = HookDecisionV2::kPass;
+        result.had_error = true;
     }
 
     result.decision = decision;
@@ -309,6 +362,9 @@ GateCallResult call_on_leave(
     if (!mod || !mod->api || !mod->api->on_leave) {
         return result;
     }
+    if (mod->api->name) {
+        result.plugin_name = mod->api->name;
+    }
 
     LeaveEventV2 in{};
     in.session_id = session_id;
@@ -318,14 +374,17 @@ GateCallResult call_on_leave(
     in.room = room_s.c_str();
 
     HookDecisionV2 decision = HookDecisionV2::kPass;
+    result.executed = true;
     try {
         decision = mod->api->on_leave(mod->instance, &in);
     } catch (const std::exception& ex) {
         corelog::warn(std::string("chat_hook(on_leave): exception: ") + ex.what());
         decision = HookDecisionV2::kPass;
+        result.had_error = true;
     } catch (...) {
         corelog::warn("chat_hook(on_leave): unknown exception");
         decision = HookDecisionV2::kPass;
+        result.had_error = true;
     }
 
     result.decision = decision;
@@ -347,6 +406,9 @@ GateCallResult call_on_session_event(
     if (!mod || !mod->api || !mod->api->on_session_event) {
         return result;
     }
+    if (mod->api->name) {
+        result.plugin_name = mod->api->name;
+    }
 
     SessionEventV2 in{};
     in.session_id = session_id;
@@ -357,14 +419,17 @@ GateCallResult call_on_session_event(
     in.reason = reason_s.c_str();
 
     HookDecisionV2 decision = HookDecisionV2::kPass;
+    result.executed = true;
     try {
         decision = mod->api->on_session_event(mod->instance, &in);
     } catch (const std::exception& ex) {
         corelog::warn(std::string("chat_hook(on_session_event): exception: ") + ex.what());
         decision = HookDecisionV2::kPass;
+        result.had_error = true;
     } catch (...) {
         corelog::warn("chat_hook(on_session_event): unknown exception");
         decision = HookDecisionV2::kPass;
+        result.had_error = true;
     }
 
     result.decision = decision;
@@ -385,6 +450,9 @@ AdminCallResult call_on_admin_command(
     if (!mod || !mod->api || !mod->api->on_admin_command) {
         return result;
     }
+    if (mod->api->name) {
+        result.plugin_name = mod->api->name;
+    }
 
     AdminCommandV2 in{};
     std::string command_s(command);
@@ -403,14 +471,17 @@ AdminCallResult call_on_admin_command(
     AdminCommandOutV2 out{notice_out, response_out, deny_out};
 
     HookDecisionV2 decision = HookDecisionV2::kPass;
+    result.executed = true;
     try {
         decision = mod->api->on_admin_command(mod->instance, &in, &out);
     } catch (const std::exception& ex) {
         corelog::warn(std::string("chat_hook(on_admin_command): exception: ") + ex.what());
         decision = HookDecisionV2::kPass;
+        result.had_error = true;
     } catch (...) {
         corelog::warn("chat_hook(on_admin_command): unknown exception");
         decision = HookDecisionV2::kPass;
+        result.had_error = true;
     }
 
     result.decision = decision;
@@ -423,7 +494,68 @@ AdminCallResult call_on_admin_command(
 } // namespace
 
 ChatHookPluginChain::ChatHookPluginChain(Config cfg)
-    : host_(make_chain_host_config(std::move(cfg))) {}
+    : hook_warn_budget_us_(cfg.hook_warn_budget_us),
+      host_(make_chain_host_config(std::move(cfg))) {}
+
+std::string ChatHookPluginChain::normalize_plugin_metric_name(const std::string& api_name,
+                                                              const std::filesystem::path& plugin_path) {
+    if (!api_name.empty()) {
+        return api_name;
+    }
+    const auto filename = plugin_path.filename().string();
+    if (!filename.empty()) {
+        return filename;
+    }
+    return plugin_path.string();
+}
+
+void ChatHookPluginChain::record_plugin_hook_metric(const std::string& plugin_name,
+                                                     std::string_view hook_name,
+                                                     bool had_error,
+                                                     std::uint64_t elapsed_ns) const {
+    if (plugin_name.empty() || hook_name.empty()) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(plugin_hook_metrics_mu_);
+    auto& counters = plugin_hook_metrics_[plugin_name][std::string(hook_name)];
+    ++counters.calls_total;
+    if (had_error) {
+        ++counters.errors_total;
+    }
+
+    ++counters.duration_count;
+    if (std::numeric_limits<std::uint64_t>::max() - counters.duration_sum_ns < elapsed_ns) {
+        counters.duration_sum_ns = std::numeric_limits<std::uint64_t>::max();
+    } else {
+        counters.duration_sum_ns += elapsed_ns;
+    }
+
+    const std::size_t bucket = duration_bucket_index(elapsed_ns);
+    if (bucket < counters.duration_bucket_counts.size()) {
+        ++counters.duration_bucket_counts[bucket];
+    }
+}
+
+void ChatHookPluginChain::maybe_warn_budget_exceeded(const std::string& plugin_name,
+                                                     std::string_view hook_name,
+                                                     std::uint64_t elapsed_ns) const {
+    if (hook_warn_budget_us_ == 0 || hook_name.empty()) {
+        return;
+    }
+
+    const std::uint64_t budget_ns = hook_warn_budget_us_ * 1'000ULL;
+    if (elapsed_ns <= budget_ns) {
+        return;
+    }
+
+    const std::string metric_plugin_name = plugin_name.empty() ? std::string("(unknown)") : plugin_name;
+    corelog::warn(
+        "chat_hook latency budget exceeded plugin=" + metric_plugin_name
+        + " hook=" + std::string(hook_name)
+        + " elapsed_us=" + std::to_string(elapsed_ns / 1'000ULL)
+        + " budget_us=" + std::to_string(hook_warn_budget_us_));
+}
 
 void ChatHookPluginChain::poll_reload() {
     host_.poll_reload();
@@ -441,7 +573,19 @@ ChatHookPluginChain::Outcome ChatHookPluginChain::on_chat_send(std::uint32_t ses
     }
 
     for (const auto& host : *ordered) {
+        const auto started_at = std::chrono::steady_clock::now();
         const auto r = call_on_chat_send(host, session_id, room, user, text);
+        const auto elapsed_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - started_at)
+                .count());
+        const auto plugin_name = normalize_plugin_metric_name(
+            r.plugin_name,
+            host ? host->metrics_snapshot().plugin_path : std::filesystem::path{});
+        if (r.executed) {
+            record_plugin_hook_metric(plugin_name, "on_chat_send", r.had_error, elapsed_ns);
+            maybe_warn_budget_exceeded(plugin_name, "on_chat_send", elapsed_ns);
+        }
         if (!r.notice.empty()) {
             out.notices.push_back(r.notice);
         }
@@ -479,7 +623,19 @@ ChatHookPluginChain::GateOutcome ChatHookPluginChain::on_login(std::uint32_t ses
     }
 
     for (const auto& host : *ordered) {
+        const auto started_at = std::chrono::steady_clock::now();
         const auto r = call_on_login(host, session_id, user);
+        const auto elapsed_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - started_at)
+                .count());
+        const auto plugin_name = normalize_plugin_metric_name(
+            r.plugin_name,
+            host ? host->metrics_snapshot().plugin_path : std::filesystem::path{});
+        if (r.executed) {
+            record_plugin_hook_metric(plugin_name, "on_login", r.had_error, elapsed_ns);
+            maybe_warn_budget_exceeded(plugin_name, "on_login", elapsed_ns);
+        }
         if (!r.notice.empty()) {
             out.notices.push_back(r.notice);
         }
@@ -516,7 +672,19 @@ ChatHookPluginChain::GateOutcome ChatHookPluginChain::on_join(std::uint32_t sess
     }
 
     for (const auto& host : *ordered) {
+        const auto started_at = std::chrono::steady_clock::now();
         const auto r = call_on_join(host, session_id, user, room);
+        const auto elapsed_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - started_at)
+                .count());
+        const auto plugin_name = normalize_plugin_metric_name(
+            r.plugin_name,
+            host ? host->metrics_snapshot().plugin_path : std::filesystem::path{});
+        if (r.executed) {
+            record_plugin_hook_metric(plugin_name, "on_join", r.had_error, elapsed_ns);
+            maybe_warn_budget_exceeded(plugin_name, "on_join", elapsed_ns);
+        }
         if (!r.notice.empty()) {
             out.notices.push_back(r.notice);
         }
@@ -553,7 +721,19 @@ ChatHookPluginChain::GateOutcome ChatHookPluginChain::on_leave(std::uint32_t ses
     }
 
     for (const auto& host : *ordered) {
+        const auto started_at = std::chrono::steady_clock::now();
         const auto r = call_on_leave(host, session_id, user, room);
+        const auto elapsed_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - started_at)
+                .count());
+        const auto plugin_name = normalize_plugin_metric_name(
+            r.plugin_name,
+            host ? host->metrics_snapshot().plugin_path : std::filesystem::path{});
+        if (r.executed) {
+            record_plugin_hook_metric(plugin_name, "on_leave", r.had_error, elapsed_ns);
+            maybe_warn_budget_exceeded(plugin_name, "on_leave", elapsed_ns);
+        }
         if (!r.notice.empty()) {
             out.notices.push_back(r.notice);
         }
@@ -590,7 +770,19 @@ ChatHookPluginChain::GateOutcome ChatHookPluginChain::on_session_event(std::uint
     }
 
     for (const auto& host : *ordered) {
+        const auto started_at = std::chrono::steady_clock::now();
         const auto r = call_on_session_event(host, session_id, kind, user, reason);
+        const auto elapsed_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - started_at)
+                .count());
+        const auto plugin_name = normalize_plugin_metric_name(
+            r.plugin_name,
+            host ? host->metrics_snapshot().plugin_path : std::filesystem::path{});
+        if (r.executed) {
+            record_plugin_hook_metric(plugin_name, "on_session_event", r.had_error, elapsed_ns);
+            maybe_warn_budget_exceeded(plugin_name, "on_session_event", elapsed_ns);
+        }
         if (!r.notice.empty()) {
             out.notices.push_back(r.notice);
         }
@@ -626,7 +818,19 @@ ChatHookPluginChain::AdminOutcome ChatHookPluginChain::on_admin_command(std::str
     }
 
     for (const auto& host : *ordered) {
+        const auto started_at = std::chrono::steady_clock::now();
         const auto r = call_on_admin_command(host, command, issuer, payload_json);
+        const auto elapsed_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - started_at)
+                .count());
+        const auto plugin_name = normalize_plugin_metric_name(
+            r.plugin_name,
+            host ? host->metrics_snapshot().plugin_path : std::filesystem::path{});
+        if (r.executed) {
+            record_plugin_hook_metric(plugin_name, "on_admin_command", r.had_error, elapsed_ns);
+            maybe_warn_budget_exceeded(plugin_name, "on_admin_command", elapsed_ns);
+        }
         if (!r.notice.empty()) {
             out.notices.push_back(r.notice);
         }
@@ -689,6 +893,24 @@ ChatHookPluginChain::MetricsSnapshot ChatHookPluginChain::metrics_snapshot() con
             }
             if (mod->api->version) {
                 snap.version = mod->api->version;
+            }
+        }
+
+        const auto plugin_metric_name = normalize_plugin_metric_name(snap.name, snap.plugin_path);
+        {
+            std::lock_guard<std::mutex> lock(plugin_hook_metrics_mu_);
+            if (const auto it = plugin_hook_metrics_.find(plugin_metric_name);
+                it != plugin_hook_metrics_.end()) {
+                for (const auto& [hook_name, counters] : it->second) {
+                    PluginMetricsSnapshot::HookMetricSnapshot hook_metric{};
+                    hook_metric.hook_name = hook_name;
+                    hook_metric.calls_total = counters.calls_total;
+                    hook_metric.errors_total = counters.errors_total;
+                    hook_metric.duration_count = counters.duration_count;
+                    hook_metric.duration_sum_ns = counters.duration_sum_ns;
+                    hook_metric.duration_bucket_counts = counters.duration_bucket_counts;
+                    snap.hook_metrics.push_back(std::move(hook_metric));
+                }
             }
         }
 

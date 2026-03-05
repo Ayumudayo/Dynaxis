@@ -107,10 +107,12 @@ TEST_F(LuaRuntimeTest, ReloadScriptsReplacesTrackedEnvironmentSet) {
     const auto first_reload = runtime.reload_scripts(scripts);
 
 #if KNIGHTS_BUILD_LUA_SCRIPTING
+    const auto epoch_before = runtime.metrics_snapshot().reload_epoch;
     EXPECT_TRUE(first_reload.error.empty());
     EXPECT_EQ(first_reload.loaded, 1u);
     EXPECT_EQ(first_reload.failed, 0u);
     EXPECT_EQ(runtime.metrics_snapshot().loaded_scripts, 1u);
+    EXPECT_EQ(runtime.metrics_snapshot().reload_epoch, epoch_before);
 
     scripts.clear();
     scripts.push_back(LuaRuntime::ScriptEntry{second_script, "env_second"});
@@ -120,6 +122,7 @@ TEST_F(LuaRuntimeTest, ReloadScriptsReplacesTrackedEnvironmentSet) {
     EXPECT_EQ(second_reload.loaded, 1u);
     EXPECT_EQ(second_reload.failed, 0u);
     EXPECT_EQ(runtime.metrics_snapshot().loaded_scripts, 1u);
+    EXPECT_EQ(runtime.metrics_snapshot().reload_epoch, epoch_before + 1u);
 
     const auto old_env = runtime.call("env_first", "on_login");
     EXPECT_TRUE(old_env.ok);
@@ -128,6 +131,23 @@ TEST_F(LuaRuntimeTest, ReloadScriptsReplacesTrackedEnvironmentSet) {
     EXPECT_FALSE(first_reload.error.empty());
     EXPECT_EQ(first_reload.loaded, 0u);
     EXPECT_EQ(first_reload.failed, 1u);
+#endif
+}
+
+TEST_F(LuaRuntimeTest, ResetClearsReloadEpoch) {
+    LuaRuntime runtime;
+
+    const auto script_path = temp_dir_ / "sample.lua";
+    write_text(script_path, "return 1\n");
+
+    std::vector<LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(LuaRuntime::ScriptEntry{script_path, "sample"});
+    (void)runtime.reload_scripts(scripts);
+
+    runtime.reset();
+
+#if KNIGHTS_BUILD_LUA_SCRIPTING
+    EXPECT_EQ(runtime.metrics_snapshot().reload_epoch, 0u);
 #endif
 }
 
@@ -273,6 +293,72 @@ TEST_F(LuaRuntimeTest, CallAllUsesDeterministicReasonAcrossMultipleDenyScripts) 
     EXPECT_EQ(result.decision, LuaHookDecision::kDeny);
     EXPECT_EQ(result.reason, "reason from env_a");
     EXPECT_TRUE(result.error.empty());
+#else
+    EXPECT_FALSE(reload.error.empty());
+    EXPECT_FALSE(result.error.empty());
+#endif
+}
+
+TEST_F(LuaRuntimeTest, CallAllInstructionLimitDirectiveIncrementsLimitHits) {
+    LuaRuntime runtime;
+
+    const auto script_path = temp_dir_ / "limit_instruction.lua";
+    write_text(script_path,
+               "-- hook=on_login limit=instruction\n"
+               "return 1\n");
+
+    std::vector<LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(LuaRuntime::ScriptEntry{script_path, "limit_instruction"});
+    const auto reload = runtime.reload_scripts(scripts);
+
+    const auto before = runtime.metrics_snapshot();
+    const auto result = runtime.call_all("on_login");
+    const auto after = runtime.metrics_snapshot();
+
+#if KNIGHTS_BUILD_LUA_SCRIPTING
+    EXPECT_TRUE(reload.error.empty());
+    EXPECT_EQ(result.attempted, 1u);
+    EXPECT_EQ(result.failed, 1u);
+    EXPECT_EQ(result.decision, LuaHookDecision::kPass);
+    EXPECT_NE(result.error.find("LUA_ERRRUN"), std::string::npos);
+    ASSERT_EQ(result.script_results.size(), 1u);
+    EXPECT_TRUE(result.script_results.front().failed);
+    EXPECT_EQ(result.script_results.front().failure_kind, LuaRuntime::ScriptFailureKind::kInstructionLimit);
+    EXPECT_EQ(after.instruction_limit_hits, before.instruction_limit_hits + 1u);
+    EXPECT_EQ(after.memory_limit_hits, before.memory_limit_hits);
+#else
+    EXPECT_FALSE(reload.error.empty());
+    EXPECT_FALSE(result.error.empty());
+#endif
+}
+
+TEST_F(LuaRuntimeTest, CallAllMemoryLimitDirectiveIncrementsLimitHits) {
+    LuaRuntime runtime;
+
+    const auto script_path = temp_dir_ / "limit_memory.lua";
+    write_text(script_path,
+               "-- hook=on_login limit=memory\n"
+               "return 1\n");
+
+    std::vector<LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(LuaRuntime::ScriptEntry{script_path, "limit_memory"});
+    const auto reload = runtime.reload_scripts(scripts);
+
+    const auto before = runtime.metrics_snapshot();
+    const auto result = runtime.call_all("on_login");
+    const auto after = runtime.metrics_snapshot();
+
+#if KNIGHTS_BUILD_LUA_SCRIPTING
+    EXPECT_TRUE(reload.error.empty());
+    EXPECT_EQ(result.attempted, 1u);
+    EXPECT_EQ(result.failed, 1u);
+    EXPECT_EQ(result.decision, LuaHookDecision::kPass);
+    EXPECT_NE(result.error.find("LUA_ERRMEM"), std::string::npos);
+    ASSERT_EQ(result.script_results.size(), 1u);
+    EXPECT_TRUE(result.script_results.front().failed);
+    EXPECT_EQ(result.script_results.front().failure_kind, LuaRuntime::ScriptFailureKind::kMemoryLimit);
+    EXPECT_EQ(after.memory_limit_hits, before.memory_limit_hits + 1u);
+    EXPECT_EQ(after.instruction_limit_hits, before.instruction_limit_hits);
 #else
     EXPECT_FALSE(reload.error.empty());
     EXPECT_FALSE(result.error.empty());

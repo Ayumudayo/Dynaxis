@@ -32,6 +32,13 @@ enum class LuaHookDecision {
  */
 class LuaRuntime {
 public:
+    enum class ScriptFailureKind {
+        kNone,
+        kInstructionLimit,
+        kMemoryLimit,
+        kOther,
+    };
+
     struct Config {
         std::uint64_t instruction_limit{100'000};
         std::size_t memory_limit_bytes{1 * 1024 * 1024};
@@ -56,12 +63,19 @@ public:
     };
 
     struct CallAllResult {
+        struct ScriptCallResult {
+            std::string env_name;
+            bool failed{false};
+            ScriptFailureKind failure_kind{ScriptFailureKind::kNone};
+        };
+
         std::size_t attempted{0};
         std::size_t failed{0};
         LuaHookDecision decision{LuaHookDecision::kPass};
         std::string reason;
         std::vector<std::string> notices;
         std::string error;
+        std::vector<ScriptCallResult> script_results;
     };
 
     struct ScriptEntry {
@@ -85,6 +99,7 @@ public:
         std::uint64_t errors_total{0};
         std::uint64_t instruction_limit_hits{0};
         std::uint64_t memory_limit_hits{0};
+        std::uint64_t reload_epoch{0};
     };
 
     LuaRuntime();
@@ -121,6 +136,7 @@ private:
     std::uint64_t errors_total_{0};
     std::uint64_t instruction_limit_hits_{0};
     std::uint64_t memory_limit_hits_{0};
+    std::uint64_t reload_epoch_{0};
 };
 
 } // namespace server::core::scripting

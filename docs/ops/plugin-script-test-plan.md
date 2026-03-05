@@ -71,8 +71,8 @@ L0 Unit (`tests/core/`):
 L0 Unit (`tests/core/`):
 - `S-L-001` LuaRuntime load/call/reset
 - `S-L-002` LuaSandbox 금지 라이브러리 차단
-- `S-L-003` instruction limit 초과 처리
-- `S-L-004` memory limit 초과 처리
+- `S-L-003` instruction limit 초과 처리 (scaffold directive `limit=instruction`)
+- `S-L-004` memory limit 초과 처리 (scaffold directive `limit=memory`)
 
 L1 Component (`tests/server/`):
 - `S-S-001` 네이티브 `kBlock/kDeny` 시 Lua 미호출
@@ -84,6 +84,7 @@ L2 Integration (`tests/python/` + docker stack):
 - `S-I-001` `.lua` 수정 후 hot-reload 반영
 - `S-I-002` 연속 실패 스크립트 자동 비활성화 + metrics
 - `S-I-003` 정상 스크립트 재배포 후 재활성화
+- `S-I-004` primary/fallback 스크립트 디렉터리 전환 감지 (`/app/scripts` <-> `/app/scripts_builtin`)
 
 ### C. Metrics/Perf/Resilience (Phase 4~6)
 
@@ -109,6 +110,7 @@ L2 Integration (`tests/python/` + docker stack):
 - `tests/python/verify_plugin_hot_reload.py`
 - `tests/python/verify_plugin_rollback.py`
 - `tests/python/verify_script_hot_reload.py`
+- `tests/python/verify_script_fallback_switch.py`
 - `tests/python/verify_lua_auto_disable.py`
 
 보강 대상:

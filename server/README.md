@@ -77,6 +77,10 @@ Windows에서 빌드된 실행 파일은 `build-windows/server/Debug/server_app.
 | `USE_REDIS_PUBSUB` | Redis Pub/Sub을 이용한 분산 채팅 활성화 여부 | `0` |
 | `SERVER_ADVERTISE_HOST` | 레지스트리에 등록할 호스트 주소 (게이트웨이가 접근 가능한 주소) | `127.0.0.1` |
 | `SERVER_ADVERTISE_PORT` | 레지스트리에 등록할 포트(옵션) | `5000` |
+| `SERVER_ROLE` | 서버 역할 메타데이터(제어면 selector에서 role 기준 필터링) | `server` |
+| `SERVER_REGION` | 서버 지역 메타데이터(예: `ap-northeast`) | `global` |
+| `SERVER_SHARD` | 서버 샤드 메타데이터(예: `shard-01`) | `default` |
+| `SERVER_TAGS` | 서버 태그 목록(CSV, 예: `canary,vip`) | (unset) |
 | `SERVER_REGISTRY_PREFIX` | Instance Registry 키 접두사 | `gateway/instances/` |
 | `SERVER_REGISTRY_TTL` | Instance Registry TTL(초) | `30` |
 | `METRICS_PORT` | 메트릭 수집을 위한 HTTP 포트 | `9090` |
@@ -92,13 +96,16 @@ Windows에서 빌드된 실행 파일은 `build-windows/server/Debug/server_app.
 | `CHAT_HOOK_CACHE_DIR` | 플러그인 캐시 디렉터리(원본을 cache-copy 후 로드) | `/tmp/chat_hook_cache` |
 | `CHAT_HOOK_LOCK_PATH` | (옵션) lock/sentinel 파일 경로(존재 시 reload 스킵, 단일 플러그인 모드에만 적용) | `<plugin_stem>_LOCK` |
 | `CHAT_HOOK_RELOAD_INTERVAL_MS` | reload 폴링 주기(ms) | `500` |
+| `CHAT_HOOK_WARN_BUDGET_US` | (실험) 플러그인 hook 호출 경고 예산(마이크로초). 0이면 비활성 | `0` |
 | `LUA_ENABLED` | (실험) Lua 스크립팅 활성화 (`1`: 활성화, `0`: 비활성화) | `0` |
 | `LUA_SCRIPTS_DIR` | (실험) Lua 스크립트 디렉터리 | `/app/scripts` |
+| `LUA_FALLBACK_SCRIPTS_DIR` | (실험) `LUA_SCRIPTS_DIR`가 비어 있거나 읽기 실패일 때 사용할 fallback 스크립트 디렉터리 | `/app/scripts_builtin` |
 | `LUA_LOCK_PATH` | (실험) Lua 리로드 lock/sentinel 파일 경로(존재 시 watcher poll/reload 스킵) | (unset) |
 | `LUA_RELOAD_INTERVAL_MS` | (실험) Lua 스크립트 리로드 폴링 주기(ms) | `1000` |
 | `LUA_INSTRUCTION_LIMIT` | (실험) Lua 호출 1회당 instruction 제한 | `100000` |
 | `LUA_MEMORY_LIMIT_BYTES` | (실험) Lua 런타임 메모리 상한(바이트) | `1048576` |
 | `LUA_AUTO_DISABLE_THRESHOLD` | (실험) 연속 오류 시 자동 비활성화 임계치 | `3` |
+| `LUA_HOOK_WARN_BUDGET_US` | (실험) Lua cold hook 호출 경고 예산(마이크로초). 0이면 비활성 | `0` |
 | `LOG_BUFFER_CAPACITY` | 메모리 내 로그 버퍼 크기 | `256` |
 | `CHAT_JOB_QUEUE_MAX` | 서버 로직 작업 큐 최대 길이(트래픽 스파이크 시 백프레셔/메모리 보호) | `8192` |
 | `CHAT_DB_JOB_QUEUE_MAX` | DB 작업 큐 최대 길이(DB 지연 시 백프레셔/메모리 보호) | `4096` |

@@ -4,6 +4,23 @@
 
 > 상태: 실행 중 (Stream A 완료, Stream B 대기)
 
+## 최근 구현 반영 (2026-03-05)
+
+- Phase 4.5 관측성:
+  - Grafana `chat-server-runtime` 대시보드에 `Extensibility` row를 추가했다.
+  - 패널: reload 성공률, hook 호출 빈도, hook 에러율, Lua 메모리 사용량, auto-disable 이벤트.
+- Phase 4.6 검증:
+  - `tests/server/test_hook_auto_disable.cpp`에 Lua limit 실패(instruction/memory) 시 관리자 경로가 계속 정상 동작함을 검증하는 테스트를 추가했다.
+  - auto-disable 임계 검증을 3회 연속 실패 기준으로 보강하고, reload 후 재활성화를 확인했다.
+  - `/metrics`에서 `chat_frame_total`, `hook_auto_disable_total`, `lua_script_calls_total`, `lua_memory_used_bytes` 노출을 확인했다.
+- 문서/온보딩:
+  - `docs/extensibility/plugin-quickstart.md`
+  - `docs/extensibility/lua-quickstart.md`
+  - `docs/extensibility/conflict-policy.md`
+  - `docs/extensibility/recipes.md`
+
+참고: 현재 Lua 경로에는 스캐폴드 기반 limit 시뮬레이션(`limit=instruction|memory`) 검증이 포함된다.
+
 ---
 
 ## 0. 미완료 항목 실행 계획

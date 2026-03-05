@@ -11,6 +11,7 @@
 #include <unordered_set>
 #include <vector>
 #include <cstdint>
+#include <array>
 #include <chrono>
 #include <deque>
 
@@ -233,6 +234,15 @@ public:
 
     /** @brief 단일 채팅 훅 플러그인의 런타임 메트릭 스냅샷입니다. */
     struct ChatHookPluginMetric {
+        struct HookMetric {
+            std::string hook_name;
+            std::uint64_t calls_total{0};
+            std::uint64_t errors_total{0};
+            std::uint64_t duration_count{0};
+            std::uint64_t duration_sum_ns{0};
+            std::array<std::uint64_t, 12> duration_bucket_counts{};
+        };
+
         std::string file;                        ///< 플러그인 파일 경로
         bool loaded{false};                      ///< 현재 로드 성공 여부
         std::string name;                        ///< 플러그인 이름
@@ -240,6 +250,7 @@ public:
         std::uint64_t reload_attempt_total{0};  ///< reload 시도 누적 횟수
         std::uint64_t reload_success_total{0};  ///< reload 성공 누적 횟수
         std::uint64_t reload_failure_total{0};  ///< reload 실패 누적 횟수
+        std::vector<HookMetric> hook_metrics;    ///< hook별 호출/에러 누적 횟수
     };
 
     /** @brief 채팅 훅 플러그인 체인의 집계 메트릭 스냅샷입니다. */
@@ -254,6 +265,40 @@ public:
      * @return 플러그인 활성화/모드/개별 reload 메트릭 집계
      */
     ChatHookPluginsMetrics chat_hook_plugins_metrics() const;
+
+    struct LuaHookMetric {
+        std::string hook_name;
+        bool disabled{false};
+        std::uint64_t consecutive_failures{0};
+        std::uint64_t auto_disable_total{0};
+        std::uint64_t calls_total{0};
+        std::uint64_t errors_total{0};
+        std::uint64_t instruction_limit_hits{0};
+        std::uint64_t memory_limit_hits{0};
+    };
+
+    struct LuaScriptCallMetric {
+        std::string hook_name;
+        std::string script_name;
+        std::uint64_t calls_total{0};
+        std::uint64_t errors_total{0};
+    };
+
+    struct LuaHooksMetrics {
+        bool enabled{false};
+        std::uint64_t auto_disable_threshold{0};
+        std::uint64_t reload_epoch{0};
+        std::size_t loaded_scripts{0};
+        std::size_t memory_used_bytes{0};
+        std::uint64_t calls_total{0};
+        std::uint64_t errors_total{0};
+        std::uint64_t instruction_limit_hits{0};
+        std::uint64_t memory_limit_hits{0};
+        std::vector<LuaHookMetric> hooks;
+        std::vector<LuaScriptCallMetric> script_calls;
+    };
+
+    LuaHooksMetrics lua_hooks_metrics() const;
 
 private:
     using Session = NetSession;
@@ -341,6 +386,19 @@ private:
     std::uint32_t spam_mute_sec_{30};
     std::uint32_t spam_ban_sec_{600};
     std::uint32_t spam_ban_violation_threshold_{3};
+    std::uint64_t lua_auto_disable_threshold_{3};
+    std::uint64_t lua_hook_warn_budget_us_{0};
+    mutable std::mutex lua_hook_metrics_mu_;
+    std::unordered_map<std::string, std::uint64_t> lua_hook_consecutive_failures_;
+    std::unordered_map<std::string, std::uint64_t> lua_hook_auto_disable_total_;
+    std::unordered_map<std::string, std::uint64_t> lua_hook_calls_total_;
+    std::unordered_map<std::string, std::uint64_t> lua_hook_errors_total_;
+    std::unordered_map<std::string, std::uint64_t> lua_hook_instruction_limit_hits_;
+    std::unordered_map<std::string, std::uint64_t> lua_hook_memory_limit_hits_;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::uint64_t>> lua_hook_script_calls_total_;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::uint64_t>> lua_hook_script_errors_total_;
+    std::unordered_set<std::string> lua_hook_disabled_;
+    std::uint64_t lua_reload_epoch_{0};
 
     std::unique_ptr<HookPluginState> hook_plugin_{};
     

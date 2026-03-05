@@ -13,6 +13,7 @@
 - 플러그인 디렉터리: `/app/plugins` (`docker/stack/plugins` read-only mount)
 - 플러그인 fallback 디렉터리: `/app/plugins_builtin` (`CHAT_HOOK_FALLBACK_PLUGINS_DIR`)
 - 스크립트 디렉터리: `/app/scripts` (`docker/stack/scripts` read-only mount)
+- 스크립트 fallback 디렉터리: `/app/scripts_builtin` (`LUA_FALLBACK_SCRIPTS_DIR`)
 - 기본 Lua 활성: `LUA_ENABLED=1`
 - 서버 컨테이너 예시: `knights-stack-server-1-1`, `knights-stack-server-2-1`
 
@@ -108,3 +109,6 @@ docker logs knights-stack-server-2-1 --since 5m
 5) 사후 조치
 - 실패 원인(손상 바이너리, 문법 오류, 정책 충돌) 기록
 - 재배포 전 스테이징 검증 추가
+
+추가 참고:
+- 서버는 poll 주기마다 `LUA_SCRIPTS_DIR`와 `LUA_FALLBACK_SCRIPTS_DIR`를 다시 평가한다. `docker/stack/scripts`가 비면 `/app/scripts_builtin`으로 자동 전환되고, 다시 `.lua`가 생기면 `/app/scripts`로 자동 복귀한다.
