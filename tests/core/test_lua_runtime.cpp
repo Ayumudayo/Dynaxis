@@ -57,6 +57,16 @@ TEST_F(LuaRuntimeTest, LoadScriptReflectsBuildToggle) {
 #endif
 }
 
+TEST_F(LuaRuntimeTest, EnabledReflectsBuildToggle) {
+    LuaRuntime runtime;
+
+#if KNIGHTS_BUILD_LUA_SCRIPTING
+    EXPECT_TRUE(runtime.enabled());
+#else
+    EXPECT_FALSE(runtime.enabled());
+#endif
+}
+
 TEST_F(LuaRuntimeTest, CallUnknownEnvironmentIsSkippableWhenEnabled) {
     LuaRuntime runtime;
 
@@ -179,6 +189,41 @@ TEST_F(LuaRuntimeTest, CallAllTracksLoadedScriptCountInScaffoldMode) {
 #else
     EXPECT_FALSE(reload.error.empty());
     EXPECT_FALSE(result.error.empty());
+#endif
+}
+
+TEST_F(LuaRuntimeTest, DisabledBuildCountsErrorsPerApiCall) {
+    LuaRuntime runtime;
+
+    const auto before = runtime.metrics_snapshot();
+
+    const auto script_path = temp_dir_ / "missing.lua";
+    std::vector<LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(LuaRuntime::ScriptEntry{script_path, "missing"});
+    const auto reload = runtime.reload_scripts(scripts);
+
+    const auto after_reload = runtime.metrics_snapshot();
+    const auto call = runtime.call("missing", "on_login");
+    const auto after_call = runtime.metrics_snapshot();
+    const auto call_all = runtime.call_all("on_login");
+    const auto after_call_all = runtime.metrics_snapshot();
+
+#if KNIGHTS_BUILD_LUA_SCRIPTING
+    EXPECT_TRUE(reload.error.empty());
+    EXPECT_TRUE(call.ok);
+    EXPECT_TRUE(call.error.empty());
+    EXPECT_TRUE(call_all.error.empty());
+    EXPECT_EQ(after_reload.errors_total, before.errors_total + 1u);
+    EXPECT_EQ(after_call.errors_total, after_reload.errors_total);
+    EXPECT_EQ(after_call_all.errors_total, after_call.errors_total);
+#else
+    EXPECT_FALSE(reload.error.empty());
+    EXPECT_FALSE(call.ok);
+    EXPECT_FALSE(call.error.empty());
+    EXPECT_FALSE(call_all.error.empty());
+    EXPECT_EQ(after_reload.errors_total, before.errors_total + 1u);
+    EXPECT_EQ(after_call.errors_total, after_reload.errors_total + 1u);
+    EXPECT_EQ(after_call_all.errors_total, after_call.errors_total + 1u);
 #endif
 }
 
