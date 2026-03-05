@@ -6,7 +6,7 @@
 
 ## 1. Goal
 
-- 네이티브 플러그인(chat hook)과 스크립팅(Lua 예정)의 기능/안정성/성능을 단계적으로 검증한다.
+- 네이티브 플러그인(chat hook)과 스크립팅(Lua scaffold 경로)의 기능/안정성/성능을 단계적으로 검증한다.
 - 현재 Docker 기반 smoke/E2E 검증은 유지하고, 빠른 회귀를 위한 core/server 단위 테스트를 보강한다.
 - CI에서 빠른 게이트와 운영형 통합 게이트를 분리한다.
 
@@ -15,9 +15,11 @@
 현재 자동 검증:
 - CI Docker stack 경로에서 ctest label(`plugin-script`) 기반 plugin/script smoke 실행
 - 개별 시나리오(`verify_plugin_hot_reload`, `verify_plugin_v2_fallback`, `verify_plugin_rollback`, `verify_script_hot_reload`, `verify_script_fallback_switch`, `verify_chat_hook_behavior`)를 하나의 게이트로 집계
+- `LuaRuntimeTest`/`ChatLuaBindingsTest`는 `BUILD_LUA_SCRIPTING=ON`과 `BUILD_LUA_SCRIPTING=OFF` 구성에서 모두 회귀 검증
 
 현재 공백:
 - stack 의존 Python 테스트는 `KNIGHTS_ENABLE_STACK_PYTHON_TESTS=1` 환경이 있어야 실행됨
+- OFF 구성은 현재 별도 빌드 디렉터리(`build-windows-lua-off`) 기준으로 실행하므로, CI/로컬 명령 표준화가 필요함
 
 ## 3. Test Layers
 
@@ -128,6 +130,23 @@ L2 Integration (`tests/python/` + docker stack):
 3) Matrix Gate
 - `BUILD_LUA_SCRIPTING=OFF` (기존 동작 불변)
 - `BUILD_LUA_SCRIPTING=ON` (Lua 경로 전용)
+
+권장 실행 명령(Windows):
+
+```powershell
+# ON 경로
+pwsh scripts/build.ps1 -Config Debug -Target core_plugin_runtime_tests
+ctest --test-dir build-windows -C Debug -R "LuaRuntimeTest\.|ChatLuaBindingsTest" --output-on-failure
+
+# OFF 경로
+cmake -S . -B build-windows-lua-off -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="build-windows/conan/build/generators/conan_toolchain.cmake" -DCMAKE_CONFIGURATION_TYPES=Debug -DBUILD_LUA_SCRIPTING=OFF
+cmake --build build-windows-lua-off --config Debug --target core_plugin_runtime_tests server_general_tests --parallel
+ctest --test-dir build-windows-lua-off -C Debug -R "LuaRuntimeTest\.|ChatLuaBindingsTest" --output-on-failure
+```
+
+4) Doxygen/문서 게이트
+- `python tools/check_doxygen_coverage.py`
+- `ctest --test-dir build-windows -C Debug -R DoxygenCoverageToolTests --output-on-failure`
 
 ## 7. Recommended Execution Order
 

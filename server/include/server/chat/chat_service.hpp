@@ -234,6 +234,7 @@ public:
 
     /** @brief 단일 채팅 훅 플러그인의 런타임 메트릭 스냅샷입니다. */
     struct ChatHookPluginMetric {
+        /** @brief Hook 단위 호출/에러/지연 집계 메트릭입니다. */
         struct HookMetric {
             std::string hook_name;
             std::uint64_t calls_total{0};
@@ -266,6 +267,7 @@ public:
      */
     ChatHookPluginsMetrics chat_hook_plugins_metrics() const;
 
+    /** @brief Lua hook 단위 상태/에러 누적 메트릭입니다. */
     struct LuaHookMetric {
         std::string hook_name;
         bool disabled{false};
@@ -277,6 +279,7 @@ public:
         std::uint64_t memory_limit_hits{0};
     };
 
+    /** @brief Lua hook+script 조합 호출 누적 메트릭입니다. */
     struct LuaScriptCallMetric {
         std::string hook_name;
         std::string script_name;
@@ -284,6 +287,7 @@ public:
         std::uint64_t errors_total{0};
     };
 
+    /** @brief Lua 런타임/훅 전체 집계 메트릭 스냅샷입니다. */
     struct LuaHooksMetrics {
         bool enabled{false};
         std::uint64_t auto_disable_threshold{0};
@@ -457,6 +461,7 @@ private:
                                          std::vector<server::wire::v1::StateSnapshot::SnapshotMessage>& out);
     void handle_refresh(std::shared_ptr<Session> session);
 
+    /** @brief Lua cold-hook 호출 결과를 기본 경로 제어용으로 정규화한 값입니다. */
     struct LuaColdHookOutcome {
         bool stop_default{false};
         std::string deny_reason;
