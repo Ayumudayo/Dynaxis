@@ -15,11 +15,11 @@
 현재 자동 검증:
 - CI Docker stack 경로에서 ctest label(`plugin-script`) 기반 plugin/script smoke 실행
 - 개별 시나리오(`verify_plugin_hot_reload`, `verify_plugin_v2_fallback`, `verify_plugin_rollback`, `verify_script_hot_reload`, `verify_script_fallback_switch`, `verify_chat_hook_behavior`)를 하나의 게이트로 집계
-- `LuaRuntimeTest`/`ChatLuaBindingsTest`는 `BUILD_LUA_SCRIPTING=ON`과 `BUILD_LUA_SCRIPTING=OFF` 구성에서 모두 회귀 검증
+- `LuaRuntimeTest`/`LuaSandboxTest`/`ChatLuaBindingsTest`는 기본 CI 경로(`BUILD_LUA_SCRIPTING=ON`)에서 회귀 검증
 
 현재 공백:
 - stack 의존 Python 테스트는 `KNIGHTS_ENABLE_STACK_PYTHON_TESTS=1` 환경이 있어야 실행됨
-- OFF 구성은 현재 별도 빌드 디렉터리(`build-windows-lua-off`) 기준으로 실행하므로, CI/로컬 명령 표준화가 필요함
+- `LUA_ENABLED` 런타임 토글(0/1) 운영 시나리오를 CI/L2 게이트에서 더 직접적으로 고정할 필요가 있음
 
 ## 3. Test Layers
 
@@ -120,36 +120,31 @@ L2 Integration (`tests/python/` + docker stack):
 ## 6. CI Plan
 
 1) Fast Gate (PR 기본)
-- Windows: `ctest --preset windows-test` + `windows-lua-off` 프리셋 기반 OFF 회귀(`LuaRuntimeTest|LuaSandboxTest|ChatLuaBindingsTest`) 포함
-- Linux: 계약/코드젠/문서 + 핵심 단위 테스트
+- Windows: `ctest --preset windows-test` + `tools/check_lua_build_toggle.py --expect on` + Lua 핵심 테스트군(`LuaRuntimeTest|LuaSandboxTest|ChatLuaBindingsTest`)
+- Linux: 계약/코드젠/문서 + 핵심 단위 테스트 + `BUILD_LUA_SCRIPTING=ON` checker 검증
 
 2) Integration Gate (PR/merge)
 - Docker stack + plugin hot-reload + metrics
 - (Phase3 이후) script hot-reload + sandbox + auto-disable
 
 3) Matrix Gate
-- `BUILD_LUA_SCRIPTING=OFF` (기존 동작 불변)
-- `BUILD_LUA_SCRIPTING=ON` (Lua 경로 전용)
-- OFF 경로는 configure cache(`BUILD_LUA_SCRIPTING:BOOL=OFF`)를 확인하고, 테스트 매치 0건은 `--no-tests=error`로 실패 처리
+- Capability Gate: 공식 아티팩트는 `BUILD_LUA_SCRIPTING=ON` 고정
+- Runtime Gate: `LUA_ENABLED=0`(우회) / `LUA_ENABLED=1`(활성) 시나리오 회귀
+- `BUILD_LUA_SCRIPTING=OFF`는 커스텀 호환성 점검 경로로 유지(기본 CI 게이트 아님)
 
 권장 실행 명령(Windows):
 
 ```powershell
-# ON 경로
+# capability ON 경로
 pwsh scripts/build.ps1 -Config Debug -Target core_plugin_runtime_tests
+python tools/check_lua_build_toggle.py --build-dir build-windows --expect on
 ctest --test-dir build-windows -C Debug -R "LuaRuntimeTest|LuaSandboxTest|ChatLuaBindingsTest" --output-on-failure --no-tests=error
-
-# OFF 경로
-cmake --preset windows-lua-off
-python tools/check_lua_build_toggle.py --build-dir build-windows-lua-off --expect off
-cmake --build --preset windows-lua-off-debug --target core_plugin_runtime_tests server_general_tests
-ctest --preset windows-lua-off-test -R "LuaRuntimeTest|LuaSandboxTest|ChatLuaBindingsTest" --output-on-failure --no-tests=error
 ```
 
 검증 규칙:
-- ON/OFF 명령은 모두 Lua 관련 테스트가 실제로 매치/실행되어야 하며, 0개 매치 시 `--no-tests=error`로 실패 처리한다.
-- ON/OFF 모두 동일 테스트군(`LuaRuntimeTest`, `LuaSandboxTest`, `ChatLuaBindingsTest`)을 실행하되, 기대값은 `KNIGHTS_BUILD_LUA_SCRIPTING` 분기(assertion)로 달라진다.
-- OFF 경로는 `tools/check_lua_build_toggle.py`로 cache 토글 상태(필수)와 source 선택(가능 시)을 먼저 검증한 뒤 테스트를 실행한다.
+- Lua 관련 테스트는 실제로 매치/실행되어야 하며, 0개 매치 시 `--no-tests=error`로 실패 처리한다.
+- 공식 빌드 경로는 `tools/check_lua_build_toggle.py --expect on`를 통과해야 한다.
+- 런타임 제어는 `LUA_ENABLED` on/off 시나리오에서 기능 우회/활성이 모두 확인되어야 한다.
 
 4) Doxygen/문서 게이트
 - `python tools/check_doxygen_coverage.py`
@@ -167,5 +162,5 @@ ctest --preset windows-lua-off-test -R "LuaRuntimeTest|LuaSandboxTest|ChatLuaBin
 
 - 네이티브 플러그인 로드/리로드/lock/sentinel/rollback/metrics 자동 검증
 - 스크립트 watcher/reload/sandbox/auto-disable 자동 검증
-- `BUILD_LUA_SCRIPTING` ON/OFF 양 경로 회귀 없음
+- 공식 빌드(`BUILD_LUA_SCRIPTING=ON`) + 런타임 토글(`LUA_ENABLED` 0/1) 회귀 없음
 - CI 실패 시 계층(L0~L4) 단위로 원인 구간 즉시 식별 가능

@@ -10,8 +10,8 @@
   - plugin/script Python smoke를 개별 step 나열 대신 ctest label(`plugin-script`) 기반으로 집계했다.
   - stack 의존 Python 테스트는 `KNIGHTS_ENABLE_STACK_PYTHON_TESTS=1`일 때만 실행되고, 미설정 시 skip code(77)로 처리한다.
   - `tools/check_lua_build_toggle.py`를 추가해 `BUILD_LUA_SCRIPTING` cache 토글과 Lua runtime source 선택(`lua_runtime.cpp` vs `lua_runtime_disabled.cpp`)을 자동 검증한다.
-  - Linux CI의 OFF 경로는 `--require-source-check`로 source 선택까지 강제하고, `ctest --no-tests=error`로 Lua 관련 테스트 매치 0건을 실패 처리한다.
-  - Windows fast-tests도 기존 unit-test step 내부에서 `windows-lua-off` 프리셋을 추가 실행해 동일 checker + Lua 관련 테스트(`LuaRuntimeTest|LuaSandboxTest|ChatLuaBindingsTest`)를 강제한다.
+  - Linux CI는 기본 경로를 `BUILD_LUA_SCRIPTING=ON`으로 고정하고, `--require-source-check` + `ctest --no-tests=error`로 Lua capability 포함/검증을 강제한다.
+  - Windows fast-tests도 기본 빌드(`build-windows`)에서 `tools/check_lua_build_toggle.py --expect on` + Lua 관련 테스트(`LuaRuntimeTest|LuaSandboxTest|ChatLuaBindingsTest`)를 강제한다.
 - Phase 3 build-toggle 경로 보강:
   - `core/CMakeLists.txt`에서 `BUILD_LUA_SCRIPTING` 값에 따라 `lua_runtime.cpp`(ON) 또는 `lua_runtime_disabled.cpp`(OFF)를 선택하도록 분리했다.
   - OFF 빌드에서 `LuaRuntime` API 시그니처는 유지하고, disabled-mode 결과를 반환하는 경로를 고정했다.
@@ -43,7 +43,7 @@
 | 우선순위 | 범위 | 완료 기준 |
 |---|---|---|
 | P0 | Phase 2 잔여 항목 마감 (ABI v2 운영 준비) | v2 샘플 플러그인 + deny reason 검증 + 문서 동기화 완료 |
-| P1 | Phase 3 기반 구축 (Lua 런타임/샌드박스) | `BUILD_LUA_SCRIPTING` on/off 모두 빌드/테스트 통과 |
+| P1 | Phase 3 기반 구축 (Lua 런타임/샌드박스) | 공식 빌드(`BUILD_LUA_SCRIPTING=ON`) + 런타임 토글(`LUA_ENABLED`) 회귀 통과 |
 | P2 | 서버 통합/리로드/운영 가시성 | cold path Lua 체인 + hot-reload + 메트릭 노출 완료 |
 | P3 | 운영화 (Docker/CI/문서/가이드) | Docker/CI 재현 가능 + 온보딩 문서 완비 |
 
@@ -500,7 +500,7 @@ public:
 |---|---|---|
 | 바인딩 | Sol2 (sol3) | C++20 네이티브 지원, zero-overhead 설계, `sol::protected_function`으로 에러 격리 |
 | 엔진 | LuaJIT 2.1 (1순위), PUC Lua 5.4 (대안) | LuaJIT: ~7x 성능, FFI. PUC: 5.4 기능(`<const>`, `<close>`) + ARM64 안정성 |
-| 빌드 통합 | CMake `option(BUILD_LUA_SCRIPTING)` | Lua가 없어도 서버 빌드 가능 (선택적 기능) |
+| 빌드 통합 | CMake `option(BUILD_LUA_SCRIPTING)` | 기본 배포는 ON(기능 포함), OFF는 호환성/최소 빌드 용도 |
 
 ### 5.2 LuaRuntime
 

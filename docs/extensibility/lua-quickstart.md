@@ -4,7 +4,7 @@
 
 참고:
 - 현재 저장소의 Lua 경로는 스캐폴드 모드(주석 directive/return table 파싱) 검증을 포함한다.
-- 로컬 기본 빌드는 `BUILD_LUA_SCRIPTING=OFF`일 수 있으므로, Lua 테스트/검증 시 Lua 빌드 경로를 사용한다.
+- 기본 배포/개발 빌드는 `BUILD_LUA_SCRIPTING=ON`을 전제로 하며, 실제 사용 여부는 `LUA_ENABLED` 런타임 토글로 제어한다.
 
 관련 문서:
 - `server/README.md`

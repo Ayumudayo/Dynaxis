@@ -416,11 +416,8 @@ jobs:
         shell: pwsh
         run: |
           ctest --preset windows-test --parallel 8 --output-on-failure
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup_conan.ps1 -Config Debug -Feature windows-dev -BuildDir build-windows-lua-off
-          cmake --preset windows-lua-off
-          python tools/check_lua_build_toggle.py --build-dir build-windows-lua-off --expect off
-          cmake --build --preset windows-lua-off-debug --target core_plugin_runtime_tests server_general_tests --parallel
-          ctest --preset windows-lua-off-test -R "LuaRuntimeTest|LuaSandboxTest|ChatLuaBindingsTest" --output-on-failure --no-tests=error
+          python tools/check_lua_build_toggle.py --build-dir build-windows --expect on
+          ctest --preset windows-test -R "LuaRuntimeTest|LuaSandboxTest|ChatLuaBindingsTest" --output-on-failure --no-tests=error
 
   linux-docker-stack:
     runs-on: ubuntu-latest
@@ -497,15 +494,15 @@ jobs:
             knights-base:latest \
             bash -lc "./build-linux/tests/protocol_fuzz_harness"
 
-      - name: Verify BUILD_LUA_SCRIPTING=OFF (Build + Core Lua Runtime Tests)
+      - name: Verify BUILD_LUA_SCRIPTING=ON (Build + Core Lua Runtime Tests)
         run: |
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/app" \
             -w /app \
             knights-base:latest \
             bash -lc "set -e; apt-get update && apt-get install -y ninja-build; \
-            cmake --preset linux -DBUILD_LUA_SCRIPTING=OFF -DBUILD_CONTRACT_TESTS=OFF; \
-            python3 tools/check_lua_build_toggle.py --build-dir build-linux --expect off --require-source-check; \
+            cmake --preset linux -DBUILD_LUA_SCRIPTING=ON -DBUILD_CONTRACT_TESTS=OFF; \
+            python3 tools/check_lua_build_toggle.py --build-dir build-linux --expect on --require-source-check; \
             cmake --build --preset linux-debug --target core_plugin_runtime_tests --parallel; \
             ctest --test-dir build-linux -R 'LuaRuntimeTest|LuaSandboxTest' --output-on-failure --no-tests=error"
 
