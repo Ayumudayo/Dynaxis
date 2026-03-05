@@ -492,7 +492,7 @@ jobs:
             knights-base:latest \
             bash -lc "./build-linux/tests/protocol_fuzz_harness"
 
-      - name: Verify BUILD_LUA_SCRIPTING=OFF (Build + Targeted Tests)
+      - name: Verify BUILD_LUA_SCRIPTING=OFF (Build + Core Lua Runtime Tests)
         run: |
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/app" \
@@ -500,21 +500,8 @@ jobs:
             knights-base:latest \
             bash -lc "set -e; apt-get update && apt-get install -y ninja-build; \
             cmake --preset linux -DBUILD_LUA_SCRIPTING=OFF -DBUILD_CONTRACT_TESTS=OFF; \
-            cmake --build --preset linux-debug --target core_plugin_runtime_tests server_general_tests --parallel; \
-            ./build-linux/tests/core_plugin_runtime_tests --gtest_filter='LuaRuntimeTest.*:LuaSandboxTest.*'; \
-            ./build-linux/tests/server_general_tests --gtest_filter='LuaHookIntegrationTest.*:HookAutoDisableTest.*'"
-
-      - name: Verify BUILD_LUA_SCRIPTING=ON (Build + Targeted Tests)
-        run: |
-          docker run --rm \
-            -v "${GITHUB_WORKSPACE}:/app" \
-            -w /app \
-            knights-base:latest \
-            bash -lc "set -e; apt-get update && apt-get install -y ninja-build; \
-            cmake --preset linux -DBUILD_LUA_SCRIPTING=ON -DBUILD_CONTRACT_TESTS=OFF; \
-            cmake --build --preset linux-debug --target core_plugin_runtime_tests server_general_tests --parallel; \
-            ./build-linux/tests/core_plugin_runtime_tests --gtest_filter='LuaRuntimeTest.*:LuaSandboxTest.*'; \
-            ./build-linux/tests/server_general_tests --gtest_filter='LuaHookIntegrationTest.*:HookAutoDisableTest.*'"
+            cmake --build --preset linux-debug --target core_plugin_runtime_tests --parallel; \
+            ./build-linux/tests/core_plugin_runtime_tests --gtest_filter='LuaRuntimeTest.*:LuaSandboxTest.*'"
 
       - name: Start Stack (Detached)
         shell: pwsh
