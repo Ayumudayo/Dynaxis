@@ -129,7 +129,7 @@ L2 Integration (`tests/python/` + docker stack):
 
 3) Matrix Gate
 - Capability Gate: 공식 아티팩트는 `BUILD_LUA_SCRIPTING=ON` 고정
-- Runtime Gate: `LUA_ENABLED=0`(우회) / `LUA_ENABLED=1`(활성) 시나리오 회귀
+- Runtime Gate: `CHAT_HOOK_ENABLED=0/1`, `LUA_ENABLED=0/1` 시나리오 회귀
 - `BUILD_LUA_SCRIPTING=OFF`는 커스텀 호환성 점검 경로로 유지(기본 CI 게이트 아님)
 
 권장 실행 명령(Windows):
@@ -144,7 +144,7 @@ ctest --test-dir build-windows -C Debug -R "LuaRuntimeTest|LuaSandboxTest|ChatLu
 검증 규칙:
 - Lua 관련 테스트는 실제로 매치/실행되어야 하며, 0개 매치 시 `--no-tests=error`로 실패 처리한다.
 - 공식 빌드 경로는 `tools/check_lua_build_toggle.py --expect on`를 통과해야 한다.
-- 런타임 제어는 `LUA_ENABLED` on/off 시나리오에서 기능 우회/활성이 모두 확인되어야 한다.
+- 런타임 제어는 `CHAT_HOOK_ENABLED`/`LUA_ENABLED` on/off 시나리오에서 기능 우회/활성이 모두 확인되어야 한다.
 
 4) Doxygen/문서 게이트
 - `python tools/check_doxygen_coverage.py`
@@ -162,5 +162,5 @@ ctest --test-dir build-windows -C Debug -R "LuaRuntimeTest|LuaSandboxTest|ChatLu
 
 - 네이티브 플러그인 로드/리로드/lock/sentinel/rollback/metrics 자동 검증
 - 스크립트 watcher/reload/sandbox/auto-disable 자동 검증
-- 공식 빌드(`BUILD_LUA_SCRIPTING=ON`) + 런타임 토글(`LUA_ENABLED` 0/1) 회귀 없음
+- 공식 빌드(`BUILD_LUA_SCRIPTING=ON`) + 런타임 토글(`CHAT_HOOK_ENABLED`, `LUA_ENABLED`) 회귀 없음
 - CI 실패 시 계층(L0~L4) 단위로 원인 구간 즉시 식별 가능

@@ -343,27 +343,43 @@ ChatService::ChatService(boost::asio::io_context& io,
             return out;
         };
 
-        bool enabled = false;
+        bool configured = false;
         bool plugins_dir_from_env = false;
         if (const char* list = std::getenv("CHAT_HOOK_PLUGIN_PATHS"); list && *list) {
             cfg.plugin_paths = split_paths(list);
-            enabled = !cfg.plugin_paths.empty();
+            configured = !cfg.plugin_paths.empty();
         }
 
-        if (!enabled) {
+        if (!configured) {
             if (const char* dir = std::getenv("CHAT_HOOK_PLUGINS_DIR"); dir && *dir) {
                 cfg.plugins_dir = std::filesystem::path(dir);
-                enabled = true;
+                configured = true;
                 plugins_dir_from_env = true;
             }
         }
 
-        if (!enabled) {
+        if (!configured) {
             if (const char* val = std::getenv("CHAT_HOOK_PLUGIN_PATH"); val && *val) {
                 cfg.plugin_paths.emplace_back(val);
-                enabled = true;
+                configured = true;
             }
         }
+
+        bool chat_hook_enabled = true;
+        bool chat_hook_enabled_overridden = false;
+        if (const char* hook_enabled = std::getenv("CHAT_HOOK_ENABLED"); hook_enabled && *hook_enabled) {
+            chat_hook_enabled_overridden = true;
+            chat_hook_enabled = (std::strcmp(hook_enabled, "0") != 0);
+        }
+
+        if (!chat_hook_enabled && configured) {
+            corelog::info("CHAT_HOOK_ENABLED=0; chat hook plugins are configured but runtime path is disabled");
+        }
+        if (chat_hook_enabled_overridden && chat_hook_enabled && !configured) {
+            corelog::warn("CHAT_HOOK_ENABLED=1 but no plugin path/directory is configured");
+        }
+
+        const bool enabled = configured && chat_hook_enabled;
 
         if (enabled && plugins_dir_from_env) {
             if (const char* fallback = std::getenv("CHAT_HOOK_FALLBACK_PLUGINS_DIR"); fallback && *fallback) {

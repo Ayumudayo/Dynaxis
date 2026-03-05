@@ -9,6 +9,7 @@
 - Phase 6.5 CI 단순화:
   - plugin/script Python smoke를 개별 step 나열 대신 ctest label(`plugin-script`) 기반으로 집계했다.
   - stack 의존 Python 테스트는 `KNIGHTS_ENABLE_STACK_PYTHON_TESTS=1`일 때만 실행되고, 미설정 시 skip code(77)로 처리한다.
+  - Docker stack 기본값은 `CHAT_HOOK_ENABLED=0`, `LUA_ENABLED=0`으로 두고, CI plugin/script smoke에서는 두 토글을 명시적으로 `1`로 설정해 활성 시나리오를 검증한다.
   - `tools/check_lua_build_toggle.py`를 추가해 `BUILD_LUA_SCRIPTING` cache 토글과 Lua runtime source 선택(`lua_runtime.cpp` vs `lua_runtime_disabled.cpp`)을 자동 검증한다.
   - Linux CI는 기본 경로를 `BUILD_LUA_SCRIPTING=ON`으로 고정하고, `--require-source-check` + `ctest --no-tests=error`로 Lua capability 포함/검증을 강제한다.
   - Windows fast-tests도 기본 빌드(`build-windows`)에서 `tools/check_lua_build_toggle.py --expect on` + Lua 관련 테스트(`LuaRuntimeTest|LuaSandboxTest|ChatLuaBindingsTest`)를 강제한다.

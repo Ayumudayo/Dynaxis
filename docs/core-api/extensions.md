@@ -72,3 +72,7 @@
 ## 이번 단계 비목표
 - 새 런타임 확장 메커니즘 구현 없음
 - 프로토콜 레벨 재설계 없음
+
+## 배포 정책 메모 (Plugin/Lua/Protocol)
+- 공식 배포 빌드는 plugin/Lua/protocol capability를 포함하는 구성을 기본으로 한다.
+- 사용 여부는 런타임 설정(예: `CHAT_HOOK_ENABLED`, `LUA_ENABLED`) 또는 요청 경로(opcode/wire dispatch)에 의해 결정한다.

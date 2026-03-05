@@ -14,7 +14,7 @@
 - 플러그인 fallback 디렉터리: `/app/plugins_builtin` (`CHAT_HOOK_FALLBACK_PLUGINS_DIR`)
 - 스크립트 디렉터리: `/app/scripts` (`docker/stack/scripts` read-only mount)
 - 스크립트 fallback 디렉터리: `/app/scripts_builtin` (`LUA_FALLBACK_SCRIPTS_DIR`)
-- 기본 Lua 활성: `LUA_ENABLED=1`
+- 기본 런타임 토글: `CHAT_HOOK_ENABLED=0`, `LUA_ENABLED=0`
 - 서버 컨테이너 예시: `knights-stack-server-1-1`, `knights-stack-server-2-1`
 
 기동/재기동:
@@ -86,8 +86,8 @@ docker logs knights-stack-server-2-1 --since 5m
 - Lua 전체 비활성화:
   - compose env에서 `LUA_ENABLED=0` 적용 후 서버 재기동
 - 플러그인 전체 우회:
-  - `CHAT_HOOK_PLUGINS_DIR`와 `CHAT_HOOK_FALLBACK_PLUGINS_DIR`를 모두 비어 있는 디렉터리(또는 존재하지 않는 경로)로 지정 후 재기동
-  - `CHAT_HOOK_FALLBACK_PLUGINS_DIR`가 설정돼 있으면 1차 디렉터리가 비어 있어도 fallback 플러그인이 계속 로드될 수 있음
+  - compose env에서 `CHAT_HOOK_ENABLED=0` 적용 후 서버 재기동
+  - (레거시 우회) 필요 시 `CHAT_HOOK_PLUGINS_DIR`/`CHAT_HOOK_FALLBACK_PLUGINS_DIR`를 비활성 경로로 재지정 가능
 
 ## 5. 장애 대응 체크리스트
 

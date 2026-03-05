@@ -93,6 +93,7 @@ Windows에서 빌드된 실행 파일은 `build-windows/server/Debug/server_app.
 | `CHAT_HOOK_FALLBACK_PLUGINS_DIR` | (실험) `CHAT_HOOK_PLUGINS_DIR`가 비어있거나 읽기 실패일 때 사용할 fallback 플러그인 디렉터리 | `/app/plugins_builtin` |
 | `CHAT_HOOK_PLUGIN_PATHS` | (실험) 플러그인 경로 목록(순서 고정, 구분자 `;` 또는 `,`) | `/app/plugins/10_chat_hook_sample.so;/app/plugins/20_chat_hook_tag.so` |
 | `CHAT_HOOK_PLUGIN_PATH` | (실험, 레거시) 단일 플러그인(.so/.dll) 경로 | `/app/plugins/10_chat_hook_sample.so` |
+| `CHAT_HOOK_ENABLED` | (실험) 플러그인 런타임 활성화 (`1`: 활성화, `0`: 비활성화) | `0` |
 | `CHAT_HOOK_CACHE_DIR` | 플러그인 캐시 디렉터리(원본을 cache-copy 후 로드) | `/tmp/chat_hook_cache` |
 | `CHAT_HOOK_LOCK_PATH` | (옵션) lock/sentinel 파일 경로(존재 시 reload 스킵, 단일 플러그인 모드에만 적용) | `<plugin_stem>_LOCK` |
 | `CHAT_HOOK_RELOAD_INTERVAL_MS` | reload 폴링 주기(ms) | `500` |
@@ -142,7 +143,7 @@ Windows에서 빌드된 실행 파일은 `build-windows/server/Debug/server_app.
   - `/app/plugins_builtin/10_chat_hook_sample.so`
   - `/app/plugins_builtin/20_chat_hook_tag.so`
   - `/app/plugins_builtin/staging/10_chat_hook_sample_v2.so` (swap 용)
-- Docker 스택 기본 설정: `docker/stack/docker-compose.yml`에서 `CHAT_HOOK_PLUGINS_DIR=/app/plugins`, `CHAT_HOOK_FALLBACK_PLUGINS_DIR=/app/plugins_builtin`
+- Docker 스택 기본 설정: `docker/stack/docker-compose.yml`에서 `CHAT_HOOK_ENABLED=0`(기본 비활성), `CHAT_HOOK_PLUGINS_DIR=/app/plugins`, `CHAT_HOOK_FALLBACK_PLUGINS_DIR=/app/plugins_builtin`
 - `/app/plugins`에 로드 가능한 모듈이 있으면 1차 디렉터리(`/app/plugins`)를 우선 사용하고, 비어 있으면 fallback(`/app/plugins_builtin`)을 사용한다.
 
 핫 리로드 예시:
