@@ -19,7 +19,7 @@
 
 현재 공백:
 - stack 의존 Python 테스트는 `KNIGHTS_ENABLE_STACK_PYTHON_TESTS=1` 환경이 있어야 실행됨
-- `LUA_ENABLED` 런타임 토글(0/1) 운영 시나리오를 CI/L2 게이트에서 더 직접적으로 고정할 필요가 있음
+- runtime toggle matrix는 CI baseline(OFF) + smoke(ON)에서 고정되지만, 향후 `CHAT_HOOK_ENABLED/LUA_ENABLED` 조합(4개) 전체를 자동화할 필요가 있음
 
 ## 3. Test Layers
 

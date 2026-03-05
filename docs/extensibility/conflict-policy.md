@@ -40,4 +40,4 @@
 ## 6) 현재 상태
 
 - 현재 저장소는 본 문서 규칙을 운영 규약으로 사용한다.
-- 관리 콘솔 precheck/API 강제 차단은 Phase 7 구현 항목이다.
+- 관리 콘솔 precheck/API 강제 차단은 구현 완료 상태이며, `/api/v1/ext/precheck`와 `/api/v1/ext/deployments`에서 충돌 정책을 강제한다.

@@ -1,7 +1,13 @@
-# Extensibility Control Plane API Contract (Phase 7 Design)
+# Extensibility Control Plane API Contract
 
 이 문서는 플러그인/스크립트 배포 제어면의 API 계약과 도메인 모델을 정의한다.
-구현 코드와 분리된 설계 기준 문서이며, Phase 7 서버 구현/콘솔 연동 시 본 계약을 기준으로 맞춘다.
+관리 콘솔/서버 구현과 정렬되는 운영 계약 문서이며, 현재 구현된 `/api/v1/ext/*` 경로 동작 기준을 정의한다.
+
+## 현재 구현 상태 (2026-03-06)
+
+- `tools/admin_app/main.cpp`에서 `inventory/precheck/deployments/schedules` 핵심 경로를 제공한다.
+- precheck 충돌 차단(`exclusive_group_conflict`)과 deployment 상태 전이(`pending/precheck_passed/executing/completed/failed`)를 admin-app 기준으로 처리한다.
+- 회귀 검증은 `tests/python/verify_admin_api.py`에서 주요 경로를 확인한다.
 
 ## 1) Base Path
 

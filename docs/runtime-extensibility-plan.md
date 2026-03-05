@@ -2,7 +2,7 @@
 
 > 목적: 서버 스택(server_app, gateway_app, wb_worker)이 런타임에 동적으로 동작을 변경할 수 있도록, **네이티브 플러그인(C ABI)**과 **Lua 스크립팅**을 하이브리드로 도입하는 구현 계획을 정의한다.
 
-> 상태: 실행 중 (Stream A 완료, Stream B 대기)
+> 상태: 실행 중 (Stream A 완료, Stream B scaffold 통합/운영화 진행 중)
 
 ## 최근 구현 반영 (2026-03-05)
 
@@ -45,7 +45,7 @@
 | 우선순위 | 범위 | 완료 기준 |
 |---|---|---|
 | P0 | Phase 2 잔여 항목 마감 (ABI v2 운영 준비) | v2 샘플 플러그인 + deny reason 검증 + 문서 동기화 완료 |
-| P1 | Phase 3 기반 구축 (Lua 런타임/샌드박스) | 공식 빌드(`BUILD_LUA_SCRIPTING=ON`) + 런타임 토글(`LUA_ENABLED`) 회귀 통과 |
+| P1 | Phase 3 기반 구축 (Lua 런타임/샌드박스) | 공식 빌드(`BUILD_LUA_SCRIPTING=ON`) + 런타임 토글(`CHAT_HOOK_ENABLED`, `LUA_ENABLED`) 회귀 통과 |
 | P2 | 서버 통합/리로드/운영 가시성 | cold path Lua 체인 + hot-reload + 메트릭 노출 완료 |
 | P3 | 운영화 (Docker/CI/문서/가이드) | Docker/CI 재현 가능 + 온보딩 문서 완비 |
 
@@ -108,7 +108,8 @@
    - `docker/stack/docker-compose.yml` mount/env 정리
    - 샘플 스크립트/플러그인 운영 시나리오 검증
 4. CI:
-   - `BUILD_LUA_SCRIPTING=OFF/ON` 경로 분리 검증
+   - 공식 capability 경로(`BUILD_LUA_SCRIPTING=ON`) 고정 검증
+   - runtime toggle matrix(`CHAT_HOOK_ENABLED`, `LUA_ENABLED`) OFF baseline + ON smoke 검증
    - 성능 회귀 게이트(특히 hot path) 추가
 
 ### 0.3 작업 단위 운영 규칙
