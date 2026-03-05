@@ -232,6 +232,14 @@ max_over_time(wb_pending[5m])
 
 플러그인/스크립팅 운영 시 최소 아래 규칙을 함께 본다.
 
+Grafana 기본 대시보드(`chat-server-runtime`)의 `Extensibility` row에는 다음 패널을 포함한다.
+
+- `Plugin Reload Success Rate`
+- `Plugin Hook Calls (/s)`
+- `Plugin Hook Error Rate`
+- `Lua Memory Used (bytes)`
+- `Hook Auto Disable Events (10m)`
+
 - `ChatHookPluginReloadFailureSpike` (경고)
   - 의도: 손상된 `.so` 배포 또는 swap 실패를 조기 감지
   - 예시 PromQL:
@@ -256,7 +264,23 @@ sum(increase(chat_hook_plugin_reload_failure_total[10m])) >= 3
 min_over_time(chat_hook_plugins_enabled[5m]) < 1
 ```
 
-Lua cold-hook은 현재 전용 Prometheus 카운터가 제한적이므로, 운영에서는 watcher/reload 로그(`Lua script watcher detected changes`, `Lua script reload complete`)와 `chat_dispatch_exception_total`/`chat_frame_error_total` 급증을 함께 본다.
+Lua cold-hook은 전용 Prometheus 카운터를 함께 본다. 특히 `lua_script_errors_total`, `lua_instruction_limit_hits_total`, `lua_memory_limit_hits_total`, `hook_auto_disable_total{source="lua"}` 급증은 스크립트 결함/정책 오작동 신호다.
+
+```promql
+sum(rate(lua_script_errors_total[5m])) > 0
+```
+
+```promql
+sum(increase(lua_instruction_limit_hits_total[10m])) > 0
+or
+sum(increase(lua_memory_limit_hits_total[10m])) > 0
+```
+
+```promql
+sum(increase(hook_auto_disable_total{source="lua"}[10m])) > 0
+```
+
+또한 watcher/reload 로그(`Lua script watcher detected changes`, `Lua script reload complete`)와 `chat_dispatch_exception_total`/`chat_frame_error_total` 급증을 함께 본다.
 
 ```promql
 sum(rate(chat_dispatch_exception_total[5m])) > 0
