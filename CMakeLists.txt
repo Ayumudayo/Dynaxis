@@ -20,18 +20,35 @@ option(BUILD_ADMIN_APP "Build admin management app" ON)
 option(BUILD_MIGRATIONS_RUNNER "Build migrations runner tool" ON)
 set(KNIGHTS_LUAJIT_SUBMODULE_DIR "${CMAKE_SOURCE_DIR}/external/luajit" CACHE PATH
     "Path to the upstream LuaJIT source submodule")
+set(KNIGHTS_SOL2_SUBMODULE_DIR "${CMAKE_SOURCE_DIR}/external/sol2" CACHE PATH
+    "Path to the sol2 header-only source submodule")
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(knights_luajit_submodule)
+include(knights_sol2_submodule)
 
 if (BUILD_LUA_SCRIPTING)
     if (NOT EXISTS "${KNIGHTS_LUAJIT_SUBMODULE_DIR}/src/lua.h")
         message(FATAL_ERROR
             "BUILD_LUA_SCRIPTING=ON requires upstream LuaJIT sources at: ${KNIGHTS_LUAJIT_SUBMODULE_DIR}. "
             "Run: git submodule update --init --recursive external/luajit")
+    endif()
+
+    file(STRINGS "${KNIGHTS_LUAJIT_SUBMODULE_DIR}/src/luajit_rolling.h" _KNIGHTS_LUAJIT_VERSION_LINE
+         REGEX "^#define[ \t]+LUAJIT_VERSION[ \t]+")
+    if (NOT _KNIGHTS_LUAJIT_VERSION_LINE)
+        message(FATAL_ERROR
+            "BUILD_LUA_SCRIPTING=ON expects LuaJIT headers at: ${KNIGHTS_LUAJIT_SUBMODULE_DIR}. "
+            "Detected Lua headers without LUAJIT_VERSION marker.")
+    endif()
+
+    if (NOT EXISTS "${KNIGHTS_SOL2_SUBMODULE_DIR}/include/sol/sol.hpp")
+        message(FATAL_ERROR
+            "BUILD_LUA_SCRIPTING=ON requires sol2 headers at: ${KNIGHTS_SOL2_SUBMODULE_DIR}. "
+            "Run: git submodule update --init --recursive external/sol2")
     endif()
 endif()
 

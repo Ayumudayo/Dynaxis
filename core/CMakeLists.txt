@@ -36,6 +36,7 @@ if (BUILD_LUA_SCRIPTING)
         src/scripting/lua_runtime.cpp
     )
     knights_configure_luajit_submodule(KNIGHTS_LUAJIT_VENDOR_TARGET)
+    knights_configure_sol2_submodule(KNIGHTS_SOL2_VENDOR_TARGET)
 else()
     target_sources(server_core PRIVATE
         src/scripting/lua_runtime_disabled.cpp
@@ -106,7 +107,11 @@ endif()
 target_link_libraries(server_core PUBLIC OpenSSL::SSL OpenSSL::Crypto lz4::lz4)
 
 if (BUILD_LUA_SCRIPTING AND KNIGHTS_LUAJIT_VENDOR_TARGET)
-    target_link_libraries(server_core PRIVATE ${KNIGHTS_LUAJIT_VENDOR_TARGET})
+    target_link_libraries(server_core PRIVATE $<BUILD_INTERFACE:${KNIGHTS_LUAJIT_VENDOR_TARGET}>)
+endif()
+
+if (BUILD_LUA_SCRIPTING AND KNIGHTS_SOL2_VENDOR_TARGET)
+    target_link_libraries(server_core PRIVATE $<BUILD_INTERFACE:${KNIGHTS_SOL2_VENDOR_TARGET}>)
 endif()
 
 target_include_directories(server_core PUBLIC

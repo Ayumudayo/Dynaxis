@@ -181,13 +181,17 @@ flowchart TB
 ```powershell
 git submodule sync --recursive
 git submodule update --init --recursive
+# Lua scripting 경로만 빠르게 초기화할 때
+git submodule update --init --recursive external/luajit external/sol2
 ```
 
 현재 필수 서브모듈:
 - `external/imgui` (client GUI)
 - `external/luajit` (upstream LuaJIT 2.1, scripting engine source)
+- `external/sol2` (sol2 header-only binding source, pinned to `v3.5.0`)
 
-`BUILD_LUA_SCRIPTING=ON` 빌드에서는 `external/luajit`를 기준으로 정적 LuaJIT 라이브러리를 생성해 링크합니다.
+`BUILD_LUA_SCRIPTING=ON` 빌드에서는 `external/luajit`를 기준으로 정적 LuaJIT 라이브러리를 생성하고,
+`external/sol2/include`를 바인딩 헤더 경로로 사용합니다.
 
 애플리케이션은 **OS 환경 변수**를 읽어 설정됩니다.
 로컬 개발에서는 `.env.example`를 복사해 `.env`를 만들고, 스크립트들이 이를 로드하도록 사용할 수 있습니다.

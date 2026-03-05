@@ -77,7 +77,7 @@
 #### Stream B - Lua 기반 인프라 (P1)
 
 1. 의존성/빌드 토글 정리:
-   - upstream LuaJIT 2.1(`external/luajit` submodule) + Sol2 도입
+   - upstream LuaJIT 2.1(`external/luajit` submodule) + Sol2(`external/sol2`, pinned `v3.5.0`) 도입
    - OpenResty LuaJIT2 분기는 기본 경로에 포함하지 않고 필요 시 실험 옵션으로만 취급
    - `BUILD_LUA_SCRIPTING` 옵션 추가
    - OFF 모드에서 Lua 코드 완전 비활성화 보장
@@ -497,7 +497,7 @@ public:
 
 > 예상 노력: 3~4일
 > 안정성: `[Transitional]`
-> 의존성: Sol2 (sol3) + upstream LuaJIT 2.1 (`external/luajit`, branch `v2.1`) + PUC Lua 5.4(fallback)
+> 의존성: Sol2 (sol3, `external/sol2`, pinned `v3.5.0`) + upstream LuaJIT 2.1 (`external/luajit`, branch `v2.1`) + PUC Lua 5.4(fallback)
 
 ### 5.1 기술 선택
 
@@ -505,7 +505,7 @@ public:
 |---|---|---|
 | 바인딩 | Sol2 (sol3) | C++20 네이티브 지원, zero-overhead 설계, `sol::protected_function`으로 에러 격리 |
 | 엔진 | upstream LuaJIT 2.1 (기본), PUC Lua 5.4 (대안) | 기본 경로는 단일 upstream LuaJIT submodule로 고정해 운영 일관성을 높이고, PUC는 호환/이식성 fallback으로 유지 |
-| 빌드 통합 | CMake `option(BUILD_LUA_SCRIPTING)` + `KNIGHTS_LUAJIT_SUBMODULE_DIR` | 기본 배포는 ON(기능 포함), LuaJIT 소스는 `external/luajit` submodule 기준으로 고정하고 `knights_luajit_vendor_build`로 정적 라이브러리를 생성 |
+| 빌드 통합 | CMake `option(BUILD_LUA_SCRIPTING)` + `KNIGHTS_LUAJIT_SUBMODULE_DIR` + `KNIGHTS_SOL2_SUBMODULE_DIR` | 기본 배포는 ON(기능 포함), LuaJIT는 `knights_luajit_vendor_build`로 정적 라이브러리를 생성하고 Sol2는 `external/sol2/include`를 header-only target으로 연결 |
 
 ### 5.2 LuaRuntime
 
