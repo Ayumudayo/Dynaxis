@@ -14,6 +14,7 @@
   - `tools/check_lua_build_toggle.py`를 추가해 `BUILD_LUA_SCRIPTING` cache 토글과 Lua runtime source 선택(`lua_runtime.cpp` vs `lua_runtime_disabled.cpp`)을 자동 검증한다.
   - Linux CI는 기본 경로를 `BUILD_LUA_SCRIPTING=ON`으로 고정하고, `--require-source-check` + `ctest --no-tests=error`로 Lua capability 포함/검증을 강제한다.
   - Windows fast-tests도 기본 빌드(`build-windows`)에서 `tools/check_lua_build_toggle.py --expect on` + Lua 관련 테스트(`LuaRuntimeTest|LuaSandboxTest|ChatLuaBindingsTest`)를 강제한다.
+  - baseline(OFF) 구간에서 `verify_pong.py`를 추가 실행해 plugin/script runtime 토글이 꺼진 상태에서도 기본 ping/pong 프로토콜 경로(MSG_PING -> MSG_PONG)가 유지됨을 고정 검증한다.
 - Phase 3 build-toggle 경로 보강:
   - `core/CMakeLists.txt`에서 `BUILD_LUA_SCRIPTING` 값에 따라 `lua_runtime.cpp`(ON) 또는 `lua_runtime_disabled.cpp`(OFF)를 선택하도록 분리했다.
   - OFF 빌드에서 `LuaRuntime` API 시그니처는 유지하고, disabled-mode 결과를 반환하는 경로를 고정했다.

@@ -535,6 +535,10 @@ jobs:
         run: |
           python3 tests/python/verify_runtime_toggle_metrics.py --expect-chat-hook-enabled 0 --expect-lua-enabled 0
 
+      - name: Smoke Test (PONG, Runtime Off Baseline)
+        run: |
+          python3 tests/python/verify_pong.py
+
       - name: Smoke Test (Chat, Runtime Off Baseline)
         run: |
           python3 tests/python/verify_chat.py

@@ -134,6 +134,7 @@ L2 Integration (`tests/python/` + docker stack):
 
 현재 CI 반영:
 - baseline(OFF): stack를 기본 env(`CHAT_HOOK_ENABLED=0`, `LUA_ENABLED=0`)로 기동 후 `verify_runtime_toggle_metrics.py`로 두 토글이 비활성 상태인지 확인
+- baseline(OFF) protocol continuity: `verify_pong.py` + `verify_chat.py`를 함께 실행해 토글 비활성 상태에서도 기본 프로토콜/채팅 경로가 유지되는지 확인
 - smoke(ON): stack를 `CHAT_HOOK_ENABLED=1`, `LUA_ENABLED=1`로 기동 후 동일 스크립트로 활성 상태 확인
 
 권장 실행 명령(Windows):
