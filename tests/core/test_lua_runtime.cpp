@@ -103,6 +103,29 @@ TEST_F(LuaRuntimeTest, CallLoadedEnvironmentIsSkippableInScaffoldMode) {
 #endif
 }
 
+TEST_F(LuaRuntimeTest, CallExecutesLuaFunctionWhenPresent) {
+    LuaRuntime runtime;
+
+    const auto script_path = temp_dir_ / "callable.lua";
+    write_text(script_path,
+               "function on_login()\n"
+               "  return 1\n"
+               "end\n");
+    (void)runtime.load_script(script_path, "callable");
+
+    const auto result = runtime.call("callable", "on_login");
+
+#if KNIGHTS_BUILD_LUA_SCRIPTING
+    EXPECT_TRUE(result.ok);
+    EXPECT_TRUE(result.executed);
+    EXPECT_TRUE(result.error.empty());
+#else
+    EXPECT_FALSE(result.ok);
+    EXPECT_FALSE(result.executed);
+    EXPECT_NE(result.error.find("disabled"), std::string::npos);
+#endif
+}
+
 TEST_F(LuaRuntimeTest, ReloadScriptsReplacesTrackedEnvironmentSet) {
     LuaRuntime runtime;
 
@@ -258,6 +281,33 @@ TEST_F(LuaRuntimeTest, CallAllParsesReturnTableDecisionForMatchingHook) {
     EXPECT_FALSE(reload.error.empty());
     EXPECT_FALSE(login_result.error.empty());
     EXPECT_FALSE(join_result.error.empty());
+#endif
+}
+
+TEST_F(LuaRuntimeTest, CallAllUsesFunctionReturnDecisionWhenHookExists) {
+    LuaRuntime runtime;
+
+    const auto script_path = temp_dir_ / "hook_table.lua";
+    write_text(script_path,
+               "function on_login()\n"
+               "  return { decision = \"deny\", reason = \"deny from function\", notice = \"function notice\" }\n"
+               "end\n");
+
+    std::vector<LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(LuaRuntime::ScriptEntry{script_path, "hook_table"});
+    const auto reload = runtime.reload_scripts(scripts);
+    const auto result = runtime.call_all("on_login");
+
+#if KNIGHTS_BUILD_LUA_SCRIPTING
+    EXPECT_TRUE(reload.error.empty());
+    EXPECT_EQ(result.decision, LuaHookDecision::kDeny);
+    EXPECT_EQ(result.reason, "deny from function");
+    ASSERT_EQ(result.notices.size(), 1u);
+    EXPECT_EQ(result.notices.front(), "function notice");
+    EXPECT_TRUE(result.error.empty());
+#else
+    EXPECT_FALSE(reload.error.empty());
+    EXPECT_FALSE(result.error.empty());
 #endif
 }
 

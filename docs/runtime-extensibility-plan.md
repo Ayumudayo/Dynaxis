@@ -507,6 +507,10 @@ public:
 | 엔진 | upstream LuaJIT 2.1 (기본), PUC Lua 5.4 (대안) | 기본 경로는 단일 upstream LuaJIT submodule로 고정해 운영 일관성을 높이고, PUC는 호환/이식성 fallback으로 유지 |
 | 빌드 통합 | CMake `option(BUILD_LUA_SCRIPTING)` + `KNIGHTS_LUAJIT_SUBMODULE_DIR` + `KNIGHTS_SOL2_SUBMODULE_DIR` | 기본 배포는 ON(기능 포함), LuaJIT는 `knights_luajit_vendor_build`로 정적 라이브러리를 생성하고 Sol2는 `external/sol2/include`를 header-only target으로 연결 |
 
+현재 구현 상태(2026-03-06):
+- `LuaRuntime::call`/`call_all`은 Sol2 `safe_script` + `protected_function` 경로를 사용해 스크립트/훅 함수를 실행한다.
+- 기존 directive(`decision=`, `limit=`) 기반 정책 오버라이드는 그대로 유지해 cold-hook 정책 회귀를 방지한다.
+
 ### 5.2 LuaRuntime
 
 **파일**: `core/include/server/core/scripting/lua_runtime.hpp`, `core/src/scripting/lua_runtime.cpp`

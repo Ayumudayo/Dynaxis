@@ -7,9 +7,13 @@
 #include <sstream>
 #include <system_error>
 
+#include <sol/sol.hpp>
+
 namespace server::core::scripting {
 
 namespace {
+
+using HostApiMap = std::unordered_map<std::string, LuaRuntime::HostCallback>;
 
 std::string make_disabled_error() {
     return "lua scripting is disabled at build time (BUILD_LUA_SCRIPTING=OFF)";
@@ -74,58 +78,6 @@ std::optional<std::string> extract_tail_value(std::string_view text,
     }
 
     return trim_ascii(text.substr(begin));
-}
-
-std::optional<std::string> extract_quoted_value_after_key(std::string_view text,
-                                                          std::string_view key) {
-    std::size_t key_pos = text.find(key);
-    while (key_pos != std::string_view::npos) {
-        const bool left_boundary = key_pos == 0
-            || (std::isalnum(static_cast<unsigned char>(text[key_pos - 1])) == 0
-                && text[key_pos - 1] != '_');
-        const std::size_t right_index = key_pos + key.size();
-        const bool right_boundary = right_index >= text.size()
-            || (std::isalnum(static_cast<unsigned char>(text[right_index])) == 0
-                && text[right_index] != '_');
-
-        if (left_boundary && right_boundary) {
-            break;
-        }
-
-        key_pos = text.find(key, key_pos + 1);
-    }
-
-    if (key_pos == std::string_view::npos) {
-        return std::nullopt;
-    }
-
-    const std::size_t eq_pos = text.find('=', key_pos + key.size());
-    if (eq_pos == std::string_view::npos) {
-        return std::nullopt;
-    }
-
-    std::size_t value_pos = eq_pos + 1;
-    while (value_pos < text.size()
-           && std::isspace(static_cast<unsigned char>(text[value_pos])) != 0) {
-        ++value_pos;
-    }
-
-    if (value_pos >= text.size()) {
-        return std::nullopt;
-    }
-
-    const char quote = text[value_pos];
-    if (quote != '\'' && quote != '"') {
-        return std::nullopt;
-    }
-
-    ++value_pos;
-    const std::size_t end_pos = text.find(quote, value_pos);
-    if (end_pos == std::string_view::npos || end_pos < value_pos) {
-        return std::nullopt;
-    }
-
-    return std::string(text.substr(value_pos, end_pos - value_pos));
 }
 
 bool parse_hook_decision(std::string_view token,
@@ -251,52 +203,257 @@ std::optional<LuaRuntime::ScriptFailureKind> parse_limit_failure_kind(std::strin
     return std::nullopt;
 }
 
-ScriptDecisionResult parse_return_table_scaffold(std::string_view script_text,
-                                                 std::string_view func_name) {
+void open_allowed_libraries(sol::state& state, const sandbox::Policy& policy) {
+    if (sandbox::is_library_allowed("base", policy)) {
+        state.open_libraries(sol::lib::base);
+    }
+    if (sandbox::is_library_allowed("string", policy)) {
+        state.open_libraries(sol::lib::string);
+    }
+    if (sandbox::is_library_allowed("table", policy)) {
+        state.open_libraries(sol::lib::table);
+    }
+    if (sandbox::is_library_allowed("math", policy)) {
+        state.open_libraries(sol::lib::math);
+    }
+    if (sandbox::is_library_allowed("utf8", policy)) {
+        state.open_libraries(sol::lib::utf8);
+    }
+    if (sandbox::is_library_allowed("coroutine", policy)) {
+        state.open_libraries(sol::lib::coroutine);
+    }
+
+    if (sandbox::is_symbol_forbidden("os", policy)) {
+        state["os"] = sol::nil;
+    }
+    if (sandbox::is_symbol_forbidden("io", policy)) {
+        state["io"] = sol::nil;
+    }
+    if (sandbox::is_symbol_forbidden("debug", policy)) {
+        state["debug"] = sol::nil;
+    }
+    if (sandbox::is_symbol_forbidden("package", policy)) {
+        state["package"] = sol::nil;
+    }
+    if (sandbox::is_symbol_forbidden("ffi", policy)) {
+        state["ffi"] = sol::nil;
+    }
+    if (sandbox::is_symbol_forbidden("dofile", policy)) {
+        state["dofile"] = sol::nil;
+    }
+    if (sandbox::is_symbol_forbidden("loadfile", policy)) {
+        state["loadfile"] = sol::nil;
+    }
+    if (sandbox::is_symbol_forbidden("require", policy)) {
+        state["require"] = sol::nil;
+    }
+}
+
+void bind_host_api_to_environment(sol::state& state,
+                                  sol::environment& env,
+                                  const HostApiMap& host_api) {
+    std::unordered_map<std::string, sol::table> table_cache;
+
+    for (const auto& [api_key, callback] : host_api) {
+        const std::size_t dot = api_key.find('.');
+        if (dot == std::string::npos || dot == 0 || (dot + 1) >= api_key.size()) {
+            continue;
+        }
+
+        const std::string table_name = api_key.substr(0, dot);
+        const std::string function_name = api_key.substr(dot + 1);
+
+        auto table_it = table_cache.find(table_name);
+        if (table_it == table_cache.end()) {
+            sol::table table = state.create_table();
+            env[table_name] = table;
+            table_it = table_cache.emplace(table_name, std::move(table)).first;
+        }
+
+        const LuaRuntime::HostCallback callback_copy = callback;
+        table_it->second.set_function(function_name, [callback_copy]() {
+            callback_copy();
+        });
+    }
+}
+
+ScriptDecisionResult parse_return_table_from_lua_object(const sol::object& return_object,
+                                                        std::string_view func_name) {
     ScriptDecisionResult out{};
-
-    if (script_text.find("return") == std::string_view::npos
-        || script_text.find('{') == std::string_view::npos
-        || script_text.find('}') == std::string_view::npos) {
+    if (!return_object.valid() || return_object.get_type() != sol::type::table) {
         return out;
     }
 
-    const auto decision_token = extract_quoted_value_after_key(script_text, "decision");
-    if (!decision_token.has_value() || decision_token->empty()) {
+    const sol::table decision_table = return_object.as<sol::table>();
+    const std::string decision_token = decision_table.get_or<std::string>("decision", "");
+    if (decision_token.empty()) {
         return out;
     }
 
-    if (!parse_hook_decision(*decision_token, out.decision)) {
+    if (!parse_hook_decision(decision_token, out.decision)) {
         out.valid = false;
-        out.error = "invalid decision token in return table: " + *decision_token;
+        out.failure_kind = LuaRuntime::ScriptFailureKind::kOther;
+        out.error = "invalid decision token in return table: " + decision_token;
         return out;
     }
 
-    if (const auto hook_token = extract_quoted_value_after_key(script_text, "hook");
-        hook_token.has_value() && !hook_token->empty()) {
-        const std::string token = to_lower_ascii(trim_ascii(*hook_token));
+    const std::string hook_token = to_lower_ascii(trim_ascii(
+        decision_table.get_or<std::string>("hook", "")));
+    if (!hook_token.empty()) {
         const std::string target = to_lower_ascii(std::string(func_name));
-        if (token != target) {
+        if (hook_token != target) {
             return ScriptDecisionResult{};
         }
     }
 
-    if (const auto reason_token = extract_quoted_value_after_key(script_text, "reason");
-        reason_token.has_value()) {
-        out.reason = *reason_token;
-    }
-
-    if (const auto notice_token = extract_quoted_value_after_key(script_text, "notice");
-        notice_token.has_value()) {
-        out.notice = *notice_token;
-    }
-
+    out.reason = decision_table.get_or<std::string>("reason", "");
+    out.notice = decision_table.get_or<std::string>("notice", "");
     return out;
+}
+
+struct SolHookCallResult {
+    bool ok{true};
+    bool executed{false};
+    std::string error;
+};
+
+SolHookCallResult execute_hook_call_with_sol2(std::string_view script_text,
+                                              std::string_view chunk_name,
+                                              std::string_view func_name,
+                                              const sandbox::Policy& policy,
+                                              const HostApiMap& host_api) {
+    SolHookCallResult out{};
+
+    try {
+        sol::state state;
+        open_allowed_libraries(state, policy);
+
+        sol::environment env(state, sol::create, state.globals());
+        bind_host_api_to_environment(state, env, host_api);
+
+        auto script_exec = state.safe_script(
+            script_text,
+            env,
+            sol::script_pass_on_error,
+            std::string(chunk_name),
+            sol::load_mode::text);
+        if (!script_exec.valid()) {
+            const sol::error err = script_exec;
+            out.ok = false;
+            out.error = err.what();
+            return out;
+        }
+
+        const sol::object hook_object = env[std::string(func_name)];
+        if (!hook_object.valid() || hook_object.get_type() != sol::type::function) {
+            return out;
+        }
+
+        const sol::protected_function hook = hook_object.as<sol::protected_function>();
+        auto hook_exec = hook();
+        out.executed = true;
+        if (!hook_exec.valid()) {
+            const sol::error err = hook_exec;
+            out.ok = false;
+            out.error = err.what();
+            return out;
+        }
+
+        return out;
+    } catch (const std::exception& ex) {
+        out.ok = false;
+        out.error = ex.what();
+        return out;
+    }
+}
+
+ScriptDecisionResult execute_hook_decision_with_sol2(std::string_view script_text,
+                                                     std::string_view chunk_name,
+                                                     std::string_view func_name,
+                                                     const sandbox::Policy& policy,
+                                                     const HostApiMap& host_api) {
+    ScriptDecisionResult out{};
+
+    try {
+        sol::state state;
+        open_allowed_libraries(state, policy);
+
+        sol::environment env(state, sol::create, state.globals());
+        bind_host_api_to_environment(state, env, host_api);
+
+        auto script_exec = state.safe_script(
+            script_text,
+            env,
+            sol::script_pass_on_error,
+            std::string(chunk_name),
+            sol::load_mode::text);
+        if (!script_exec.valid()) {
+            const sol::error err = script_exec;
+            out.valid = false;
+            out.failure_kind = LuaRuntime::ScriptFailureKind::kOther;
+            out.error = err.what();
+            return out;
+        }
+
+        if (script_exec.return_count() > 0) {
+            out = parse_return_table_from_lua_object(
+                script_exec.get<sol::object>(0),
+                func_name);
+        }
+
+        const sol::object hook_object = env[std::string(func_name)];
+        if (!hook_object.valid() || hook_object.get_type() != sol::type::function) {
+            return out;
+        }
+
+        const sol::protected_function hook = hook_object.as<sol::protected_function>();
+        auto hook_exec = hook();
+        if (!hook_exec.valid()) {
+            const sol::error err = hook_exec;
+            ScriptDecisionResult hook_error{};
+            hook_error.valid = false;
+            hook_error.failure_kind = LuaRuntime::ScriptFailureKind::kOther;
+            hook_error.error = err.what();
+            return hook_error;
+        }
+
+        if (hook_exec.return_count() == 0) {
+            return ScriptDecisionResult{};
+        }
+
+        return parse_return_table_from_lua_object(
+            hook_exec.get<sol::object>(0),
+            func_name);
+    } catch (const std::exception& ex) {
+        out.valid = false;
+        out.failure_kind = LuaRuntime::ScriptFailureKind::kOther;
+        out.error = ex.what();
+        return out;
+    }
+}
+
+std::optional<std::string> validate_script_with_sol2(const std::filesystem::path& path,
+                                                     const sandbox::Policy& policy) {
+    try {
+        sol::state state;
+        open_allowed_libraries(state, policy);
+        auto load_result = state.load_file(path.string(), sol::load_mode::text);
+        if (load_result.valid()) {
+            return std::nullopt;
+        }
+
+        const sol::error err = load_result;
+        return err.what();
+    } catch (const std::exception& ex) {
+        return std::string(ex.what());
+    }
 }
 
 ScriptDecisionResult read_script_scaffold_decision(
     const std::filesystem::path& path,
-    std::string_view func_name) {
+    std::string_view func_name,
+    const sandbox::Policy& policy,
+    const HostApiMap& host_api) {
     std::ifstream input(path, std::ios::binary);
     if (!input.good()) {
         ScriptDecisionResult out{};
@@ -361,7 +518,12 @@ ScriptDecisionResult read_script_scaffold_decision(
         return out;
     }
 
-    ScriptDecisionResult table_result = parse_return_table_scaffold(script_text, func_name);
+    ScriptDecisionResult table_result = execute_hook_decision_with_sol2(
+        script_text,
+        path.string(),
+        func_name,
+        policy,
+        host_api);
     if (!table_result.valid) {
         table_result.error += " path=" + path.string();
     }
@@ -407,6 +569,12 @@ LuaRuntime::LoadResult LuaRuntime::load_script(const std::filesystem::path& path
         return LoadResult{false, "script path is not a regular file"};
     }
 
+    if (const auto validation_error = validate_script_with_sol2(path, policy_);
+        validation_error.has_value()) {
+        ++errors_total_;
+        return LoadResult{false, *validation_error};
+    }
+
     loaded_scripts_[env_name] = path;
     return LoadResult{true, {}};
 }
@@ -437,6 +605,13 @@ LuaRuntime::ReloadResult LuaRuntime::reload_scripts(const std::vector<ScriptEntr
             continue;
         }
         if (!std::filesystem::is_regular_file(script.path, ec) || ec) {
+            ++errors_total_;
+            ++failed;
+            continue;
+        }
+
+        if (const auto validation_error = validate_script_with_sol2(script.path, policy_);
+            validation_error.has_value()) {
             ++errors_total_;
             ++failed;
             continue;
@@ -474,9 +649,30 @@ LuaRuntime::CallResult LuaRuntime::call(const std::string& env_name,
         return CallResult{true, false, {}};
     }
 
-    (void)it;
+    std::ifstream input(it->second, std::ios::binary);
+    if (!input.good()) {
+        ++errors_total_;
+        return CallResult{false, false, "failed to open script: " + it->second.string()};
+    }
+
+    const std::string script_text{
+        std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>()
+    };
+
+    const auto hook_call = execute_hook_call_with_sol2(
+        script_text,
+        it->second.string(),
+        func_name,
+        policy_,
+        host_api_);
+    if (!hook_call.ok) {
+        ++errors_total_;
+        return CallResult{false, hook_call.executed, hook_call.error};
+    }
+
     ++calls_total_;
-    return CallResult{true, false, {}};
+    return CallResult{true, hook_call.executed, {}};
 }
 
 LuaRuntime::CallAllResult LuaRuntime::call_all(const std::string& func_name) {
@@ -522,7 +718,11 @@ LuaRuntime::CallAllResult LuaRuntime::call_all(const std::string& func_name) {
         CallAllResult::ScriptCallResult script_call{};
         script_call.env_name = env_name;
 
-        const auto script_result = read_script_scaffold_decision(path, func_name);
+        const auto script_result = read_script_scaffold_decision(
+            path,
+            func_name,
+            policy_,
+            host_api_);
         if (!script_result.valid) {
             script_call.failed = true;
             switch (script_result.failure_kind) {

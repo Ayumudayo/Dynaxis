@@ -54,10 +54,12 @@ function(knights_configure_luajit_submodule out_target)
 
     add_custom_target(knights_luajit_vendor_build DEPENDS "${_luajit_output_lib}")
 
+    file(MAKE_DIRECTORY "${_luajit_build_src}")
+
     add_library(knights_luajit_vendor STATIC IMPORTED GLOBAL)
     set_target_properties(knights_luajit_vendor PROPERTIES
         IMPORTED_LOCATION "${_luajit_output_lib}"
-        INTERFACE_INCLUDE_DIRECTORIES "${_luajit_source_src}"
+        INTERFACE_INCLUDE_DIRECTORIES "${_luajit_build_src};${_luajit_source_src}"
     )
 
     if (UNIX AND NOT APPLE)
