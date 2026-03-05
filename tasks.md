@@ -1,5 +1,8 @@
 # 서버 코어 개선 TODO (상용 서버 엔진 비교 기반)
 
+> Status (2026-03-05): Archived snapshot. 실행 항목 완료.
+> Active tracking: `tasks/todo.md`, `tasks/runtime-extensibility-todo.md`
+
 기준 입력:
 
 - 임시 비교 문서 검토 결과
@@ -225,11 +228,12 @@
 
 ---
 
-## 6) 작업 단위 추적 템플릿 (반복 사용)
+## 6) 작업 단위 추적 템플릿 (참고 양식)
 
-각 항목은 아래 템플릿으로 분해한다.
+반복 실행 시 아래 양식으로 기록한다.
 
-- [ ] Task:
+- 템플릿:
+  - Task:
   - 영향 파일:
   - Docs to update:
   - 변경 이유:
@@ -688,7 +692,7 @@
 
 ### 진행 기록 (추가 갭 P2-4/P2-8/P2-9/P2-10, 1차)
 
-- 상태: 진행 중(핵심 경로 1차 반영)
+- 상태: 완료(핵심 경로 1차 반영 기록)
 - 코드 변경:
   - `core/src/runtime_metrics.cpp`: 신규 런타임 카운터(예외 분류/log async/http defense/runtime reload)의 `snapshot()` 누락 필드 반영.
   - `core/src/metrics/metrics.cpp`: `core_runtime_exception_*`, `core_runtime_log_async_*`, `core_runtime_http_*`, `core_runtime_setting_reload_*` 메트릭 노출 추가.
@@ -784,4 +788,4 @@
   - `1) 현재 상태 요약`의 갭 신호 5개를 각 대응 항목(P0-1/P0-2/P0-3/P1-1,P1-2/P2-1) 완료 근거로 정리해 완료 처리.
   - `5) 실행 순서 > Phase 완료 공통 게이트`의 작업/검증 체크를 `진행 기록 (P0-1..P2-9)` 누적 증적과 일치하도록 완료 처리.
 - 검증 결과:
-  - `tasks.md`의 미완 체크는 템플릿 항목(`6) 작업 단위 추적 템플릿`) 1건만 남고, 실행 항목 기준 미완 체크는 0건.
+  - `tasks.md` 실행 항목 기준 미완 체크는 0건이며, `6) 작업 단위 추적 템플릿`은 체크박스가 아닌 참고 양식으로 유지한다.
