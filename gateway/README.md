@@ -68,6 +68,13 @@ class TokenAuthenticator : public gateway::auth::IAuthenticator {
 | `GATEWAY_UDP_LISTEN` | UDP ingress listen 주소(`host:port`) | (unset) |
 | `GATEWAY_UDP_BIND_SECRET` | UDP bind ticket 서명 키 | (unset) |
 | `GATEWAY_UDP_BIND_TTL_MS` | UDP bind ticket TTL(ms) | `5000` |
+| `GATEWAY_UDP_BIND_FAIL_WINDOW_MS` | UDP bind 실패 누적 윈도우(ms) | `10000` |
+| `GATEWAY_UDP_BIND_FAIL_LIMIT` | UDP bind 실패 허용 횟수(윈도우 내) | `5` |
+| `GATEWAY_UDP_BIND_BLOCK_MS` | UDP bind endpoint block 시간(ms) | `60000` |
+| `GATEWAY_UDP_BIND_RETRY_BACKOFF_MS` | 세션별 bind 재시도 backoff 시작값(ms) | `200` |
+| `GATEWAY_UDP_BIND_RETRY_BACKOFF_MAX_MS` | 세션별 bind 재시도 backoff 상한(ms) | `2000` |
+| `GATEWAY_UDP_BIND_RETRY_MAX_ATTEMPTS` | 세션별 bind 재시도 backoff 지수 증가 상한 attempt | `6` |
+| `GATEWAY_UDP_OPCODE_ALLOWLIST` | UDP ingress 허용 opcode CSV(미설정/빈 값이면 `MSG_UDP_BIND_REQ`만 허용) | (unset) |
 | `GATEWAY_RUDP_ENABLE` | RUDP adapter 활성화(1/0, 기본 OFF) | `0` |
 | `GATEWAY_RUDP_CANARY_PERCENT` | 신규 세션 RUDP canary 비율(0~100) | `0` |
 | `GATEWAY_RUDP_OPCODE_ALLOWLIST` | RUDP 허용 opcode CSV(빈 값이면 비활성) | (empty) |
@@ -81,6 +88,7 @@ class TokenAuthenticator : public gateway::auth::IAuthenticator {
 - `gateway_backend_circuit_open_total`, `gateway_backend_circuit_reject_total`, `gateway_backend_circuit_open`
 - `gateway_backend_connect_retry_total`, `gateway_backend_retry_budget_exhausted_total`
 - `gateway_ingress_reject_not_ready_total`, `gateway_ingress_reject_rate_limit_total`, `gateway_ingress_reject_session_limit_total`, `gateway_ingress_reject_circuit_open_total`
+- `gateway_udp_bind_*`, `gateway_udp_opcode_allowlist_*`
 - `gateway_rudp_core_build_enabled`, `gateway_rudp_enabled`, `gateway_rudp_canary_percent`, `gateway_rudp_opcode_allowlist_size`
 - `gateway_rudp_packets_total`, `gateway_rudp_packets_reject_total`, `gateway_rudp_inner_forward_total`, `gateway_rudp_fallback_total`
 

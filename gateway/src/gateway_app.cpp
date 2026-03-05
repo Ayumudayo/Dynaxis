@@ -72,6 +72,10 @@ constexpr const char* kEnvGatewayUdpBindTtlMs = "GATEWAY_UDP_BIND_TTL_MS";
 constexpr const char* kEnvGatewayUdpBindFailWindowMs = "GATEWAY_UDP_BIND_FAIL_WINDOW_MS";
 constexpr const char* kEnvGatewayUdpBindFailLimit = "GATEWAY_UDP_BIND_FAIL_LIMIT";
 constexpr const char* kEnvGatewayUdpBindBlockMs = "GATEWAY_UDP_BIND_BLOCK_MS";
+constexpr const char* kEnvGatewayUdpBindRetryBackoffMs = "GATEWAY_UDP_BIND_RETRY_BACKOFF_MS";
+constexpr const char* kEnvGatewayUdpBindRetryBackoffMaxMs = "GATEWAY_UDP_BIND_RETRY_BACKOFF_MAX_MS";
+constexpr const char* kEnvGatewayUdpBindRetryMaxAttempts = "GATEWAY_UDP_BIND_RETRY_MAX_ATTEMPTS";
+constexpr const char* kEnvGatewayUdpOpcodeAllowlist = "GATEWAY_UDP_OPCODE_ALLOWLIST";
 constexpr const char* kEnvGatewayRudpEnable = "GATEWAY_RUDP_ENABLE";
 constexpr const char* kEnvGatewayRudpCanaryPercent = "GATEWAY_RUDP_CANARY_PERCENT";
 constexpr const char* kEnvGatewayRudpOpcodeAllowlist = "GATEWAY_RUDP_OPCODE_ALLOWLIST";
@@ -102,6 +106,9 @@ constexpr std::uint32_t kDefaultUdpBindTtlMs = 5000;
 constexpr std::uint32_t kDefaultUdpBindFailWindowMs = 10000;
 constexpr std::uint32_t kDefaultUdpBindFailLimit = 5;
 constexpr std::uint32_t kDefaultUdpBindBlockMs = 60000;
+constexpr std::uint32_t kDefaultUdpBindRetryBackoffMs = 200;
+constexpr std::uint32_t kDefaultUdpBindRetryBackoffMaxMs = 2000;
+constexpr std::uint32_t kDefaultUdpBindRetryMaxAttempts = 6;
 constexpr bool kDefaultGatewayRudpEnable = false;
 constexpr std::uint32_t kDefaultGatewayRudpCanaryPercent = 0;
 
@@ -820,6 +827,18 @@ GatewayApp::GatewayApp()
         stream << "gateway_udp_bind_rate_limit_reject_total "
                << udp_bind_rate_limit_reject_total_.load(std::memory_order_relaxed) << "\n";
 
+        stream << "# TYPE gateway_udp_bind_retry_backoff_total counter\n";
+        stream << "gateway_udp_bind_retry_backoff_total "
+               << udp_bind_retry_backoff_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE gateway_udp_bind_retry_reject_total counter\n";
+        stream << "gateway_udp_bind_retry_reject_total "
+               << udp_bind_retry_reject_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE gateway_udp_opcode_allowlist_reject_total counter\n";
+        stream << "gateway_udp_opcode_allowlist_reject_total "
+               << udp_opcode_allowlist_reject_total_.load(std::memory_order_relaxed) << "\n";
+
         stream << "# TYPE gateway_udp_bind_fail_window_ms gauge\n";
         stream << "gateway_udp_bind_fail_window_ms " << udp_bind_fail_window_ms_ << "\n";
 
@@ -828,6 +847,18 @@ GatewayApp::GatewayApp()
 
         stream << "# TYPE gateway_udp_bind_block_ms gauge\n";
         stream << "gateway_udp_bind_block_ms " << udp_bind_block_ms_ << "\n";
+
+        stream << "# TYPE gateway_udp_bind_retry_backoff_ms gauge\n";
+        stream << "gateway_udp_bind_retry_backoff_ms " << udp_bind_retry_backoff_ms_ << "\n";
+
+        stream << "# TYPE gateway_udp_bind_retry_backoff_max_ms gauge\n";
+        stream << "gateway_udp_bind_retry_backoff_max_ms " << udp_bind_retry_backoff_max_ms_ << "\n";
+
+        stream << "# TYPE gateway_udp_bind_retry_max_attempts gauge\n";
+        stream << "gateway_udp_bind_retry_max_attempts " << udp_bind_retry_max_attempts_ << "\n";
+
+        stream << "# TYPE gateway_udp_opcode_allowlist_size gauge\n";
+        stream << "gateway_udp_opcode_allowlist_size " << udp_opcode_allowlist_.size() << "\n";
 
         stream << "# TYPE gateway_udp_bind_ttl_ms gauge\n";
         stream << "gateway_udp_bind_ttl_ms " << udp_bind_ttl_ms_ << "\n";
@@ -1033,6 +1064,14 @@ std::chrono::milliseconds GatewayApp::backend_retry_delay(std::uint32_t attempt)
     return std::chrono::milliseconds{bounded_delay};
 }
 
+std::uint32_t GatewayApp::udp_bind_retry_delay_ms(std::uint32_t attempt) const {
+    const auto capped_attempt = std::min<std::uint32_t>(attempt, 8);
+    const auto factor = 1ull << (capped_attempt == 0 ? 0 : (capped_attempt - 1));
+    const auto base_delay = static_cast<std::uint64_t>(udp_bind_retry_backoff_ms_) * factor;
+    const auto bounded_delay = std::min<std::uint64_t>(base_delay, udp_bind_retry_backoff_max_ms_);
+    return static_cast<std::uint32_t>(bounded_delay);
+}
+
 void GatewayApp::start_infrastructure_probe() {
     if (infra_probe_thread_.joinable()) {
         return;
@@ -1132,7 +1171,7 @@ GatewayApp::BackendConnectionPtr GatewayApp::create_backend_connection(const std
 }
 
 void GatewayApp::close_backend_connection(const std::string& session_id) {
-    BackendConnectionPtr session;
+    GatewayApp::TransportSessionPtr session;
     {
         std::lock_guard<std::mutex> lock(session_mutex_);
         auto it = sessions_.find(session_id);
@@ -1242,6 +1281,8 @@ std::optional<std::vector<std::uint8_t>> GatewayApp::make_udp_bind_ticket_frame(
         it->second.udp_nonce = nonce;
         it->second.udp_expires_unix_ms = expires_unix_ms;
         it->second.udp_ticket_issued_unix_ms = issued_unix_ms;
+        it->second.udp_bind_fail_attempts = 0;
+        it->second.udp_bind_retry_after_unix_ms = 0;
         it->second.udp_token = token;
         it->second.udp_bound = false;
         it->second.udp_endpoint = {};
@@ -1306,6 +1347,7 @@ std::uint16_t GatewayApp::apply_udp_bind_request(const ParsedUdpBindRequest& req
                                                  std::string& message) {
     using server::core::protocol::errc::FORBIDDEN;
     using server::core::protocol::errc::INVALID_PAYLOAD;
+    using server::core::protocol::errc::SERVER_BUSY;
     using server::core::protocol::errc::UNAUTHORIZED;
 
     if (req.session_id.empty() || req.token.empty()) {
@@ -1315,11 +1357,6 @@ std::uint16_t GatewayApp::apply_udp_bind_request(const ParsedUdpBindRequest& req
 
     const auto now_ms = unix_time_ms();
 
-    if (req.expires_unix_ms < now_ms) {
-        message = "ticket expired";
-        return UNAUTHORIZED;
-    }
-
     std::lock_guard<std::mutex> lock(session_mutex_);
     auto it = sessions_.find(req.session_id);
     if (it == sessions_.end()) {
@@ -1328,28 +1365,55 @@ std::uint16_t GatewayApp::apply_udp_bind_request(const ParsedUdpBindRequest& req
     }
 
     auto& state = it->second;
+
+    const auto apply_retry_backoff = [&]() {
+        const auto next_attempt = std::min<std::uint32_t>(state.udp_bind_fail_attempts + 1u,
+                                                          udp_bind_retry_max_attempts_);
+        state.udp_bind_fail_attempts = next_attempt;
+        const auto delay_ms = udp_bind_retry_delay_ms(next_attempt);
+        state.udp_bind_retry_after_unix_ms = now_ms + static_cast<std::uint64_t>(delay_ms);
+        (void)udp_bind_retry_backoff_total_.fetch_add(1, std::memory_order_relaxed);
+    };
+
+    if (state.udp_bind_retry_after_unix_ms > now_ms) {
+        message = "bind retry backoff";
+        (void)udp_bind_retry_reject_total_.fetch_add(1, std::memory_order_relaxed);
+        return SERVER_BUSY;
+    }
+
     if (state.udp_expires_unix_ms == 0 || state.udp_nonce == 0 || state.udp_token.empty()) {
+        apply_retry_backoff();
         message = "bind ticket not issued";
         return UNAUTHORIZED;
     }
 
+    if (req.expires_unix_ms < now_ms) {
+        apply_retry_backoff();
+        message = "ticket expired";
+        return UNAUTHORIZED;
+    }
+
     if (state.udp_expires_unix_ms < now_ms) {
+        apply_retry_backoff();
         message = "ticket expired";
         return UNAUTHORIZED;
     }
 
     if (req.expires_unix_ms != state.udp_expires_unix_ms || req.nonce != state.udp_nonce) {
+        apply_retry_backoff();
         message = "ticket mismatch";
         return UNAUTHORIZED;
     }
 
     const std::string expected = make_udp_bind_token(req.session_id, req.nonce, req.expires_unix_ms);
     if (!secure_equals(req.token, state.udp_token) || !secure_equals(req.token, expected)) {
+        apply_retry_backoff();
         message = "invalid token";
         return UNAUTHORIZED;
     }
 
     if (state.udp_bound && state.udp_endpoint != endpoint) {
+        apply_retry_backoff();
         message = "session already bound";
         return FORBIDDEN;
     }
@@ -1357,6 +1421,8 @@ std::uint16_t GatewayApp::apply_udp_bind_request(const ParsedUdpBindRequest& req
     state.udp_bound = true;
     state.udp_endpoint = endpoint;
     state.udp_sequenced_metrics.reset();
+    state.udp_bind_fail_attempts = 0;
+    state.udp_bind_retry_after_unix_ms = 0;
     state.rudp_fallback_to_tcp = false;
     if (state.rudp_selected && !state.rudp_engine) {
         state.rudp_engine = std::make_unique<server::core::net::rudp::RudpEngine>(rudp_config_);
@@ -1615,6 +1681,43 @@ void GatewayApp::configure_gateway() {
         "GatewayApp invalid GATEWAY_UDP_BIND_BLOCK_MS; using default"
     );
 
+    udp_bind_retry_backoff_ms_ = parse_env_u32_bounded(
+        kEnvGatewayUdpBindRetryBackoffMs,
+        kDefaultUdpBindRetryBackoffMs,
+        10,
+        60000,
+        "GatewayApp invalid GATEWAY_UDP_BIND_RETRY_BACKOFF_MS; using default"
+    );
+
+    udp_bind_retry_backoff_max_ms_ = parse_env_u32_bounded(
+        kEnvGatewayUdpBindRetryBackoffMaxMs,
+        kDefaultUdpBindRetryBackoffMaxMs,
+        10,
+        300000,
+        "GatewayApp invalid GATEWAY_UDP_BIND_RETRY_BACKOFF_MAX_MS; using default"
+    );
+    if (udp_bind_retry_backoff_max_ms_ < udp_bind_retry_backoff_ms_) {
+        udp_bind_retry_backoff_max_ms_ = udp_bind_retry_backoff_ms_;
+    }
+
+    udp_bind_retry_max_attempts_ = parse_env_u32_bounded(
+        kEnvGatewayUdpBindRetryMaxAttempts,
+        kDefaultUdpBindRetryMaxAttempts,
+        1,
+        32,
+        "GatewayApp invalid GATEWAY_UDP_BIND_RETRY_MAX_ATTEMPTS; using default"
+    );
+
+    if (const char* udp_allowlist_env = std::getenv(kEnvGatewayUdpOpcodeAllowlist);
+        udp_allowlist_env && *udp_allowlist_env) {
+        udp_opcode_allowlist_ = gateway::parse_udp_opcode_allowlist(udp_allowlist_env);
+    } else {
+        udp_opcode_allowlist_.clear();
+    }
+    if (udp_opcode_allowlist_.empty()) {
+        udp_opcode_allowlist_.insert(server::protocol::MSG_UDP_BIND_REQ);
+    }
+
     rudp_rollout_policy_.enabled = parse_env_bool(
         kEnvGatewayRudpEnable,
         kDefaultGatewayRudpEnable
@@ -1718,6 +1821,10 @@ void GatewayApp::configure_gateway() {
         + " udp_bind_fail_window_ms=" + std::to_string(udp_bind_fail_window_ms_)
         + " udp_bind_fail_limit=" + std::to_string(udp_bind_fail_limit_)
         + " udp_bind_block_ms=" + std::to_string(udp_bind_block_ms_)
+        + " udp_bind_retry_backoff_ms=" + std::to_string(udp_bind_retry_backoff_ms_)
+        + " udp_bind_retry_backoff_max_ms=" + std::to_string(udp_bind_retry_backoff_max_ms_)
+        + " udp_bind_retry_max_attempts=" + std::to_string(udp_bind_retry_max_attempts_)
+        + " udp_opcode_allowlist_size=" + std::to_string(udp_opcode_allowlist_.size())
         + " udp_ingress_feature=" + std::string(kGatewayUdpIngressBuildEnabled ? "on" : "off")
         + " backend_connect_timeout_ms=" + std::to_string(backend_connect_timeout_ms_)
         + " backend_send_queue_max_bytes=" + std::to_string(backend_send_queue_max_bytes_)
@@ -1921,7 +2028,7 @@ void GatewayApp::do_udp_receive() {
             if (server::core::net::rudp::looks_like_rudp(incoming_datagram)) {
                 (void)rudp_packets_total_.fetch_add(1, std::memory_order_relaxed);
 
-                GatewayApp::BackendConnectionPtr bound_session;
+                GatewayApp::TransportSessionPtr bound_session;
                 std::string bound_session_id;
                 {
                     std::lock_guard<std::mutex> lock(session_mutex_);
@@ -2159,7 +2266,7 @@ void GatewayApp::do_udp_receive() {
                 return;
             }
 
-            GatewayApp::BackendConnectionPtr bound_session;
+            GatewayApp::TransportSessionPtr bound_session;
             std::string bound_session_id;
             {
                 std::lock_guard<std::mutex> lock(session_mutex_);
@@ -2199,6 +2306,23 @@ void GatewayApp::do_udp_receive() {
                     0,
                     std::string_view{},
                     "unknown udp msg_id",
+                    header.seq
+                );
+                send_udp_datagram(std::move(frame), udp_remote_endpoint_);
+                do_udp_receive();
+                return;
+            }
+
+            if (!udp_opcode_allowlist_.contains(header.msg_id)) {
+                (void)udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
+                (void)udp_opcode_allowlist_reject_total_.fetch_add(1, std::memory_order_relaxed);
+                auto frame = make_udp_bind_res_frame(
+                    server::core::protocol::errc::FORBIDDEN,
+                    std::string_view{},
+                    0,
+                    0,
+                    std::string_view{},
+                    "opcode not in udp allowlist",
                     header.seq
                 );
                 send_udp_datagram(std::move(frame), udp_remote_endpoint_);

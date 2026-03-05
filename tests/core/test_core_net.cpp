@@ -13,11 +13,13 @@
 #include <server/core/runtime_metrics.hpp>
 #include <server/core/util/service_registry.hpp>
 #include <server/protocol/game_opcodes.hpp>
+#include <gateway/gateway_app.hpp>
 
 #include <chrono>
 #include <memory>
 #include <optional>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 /**
@@ -26,6 +28,11 @@
 using namespace server::core;
 using namespace server::core::net;
 namespace services = server::core::util::services;
+
+TEST(GatewayTransportAbstractionTest, BackendConnectionImplementsTransportSession) {
+    EXPECT_TRUE((std::is_base_of_v<gateway::GatewayApp::ITransportSession,
+                                   gateway::GatewayApp::BackendConnection>));
+}
 
 TEST(DispatcherTest, RegisterAndDispatch) {
     boost::asio::io_context io;
@@ -122,6 +129,37 @@ TEST(DispatcherTest, BlocksHandlerWhenTransportNotAllowed) {
 
     EXPECT_TRUE(dispatcher.dispatch(msg_id, session, payload, server::core::protocol::TransportKind::kUdp));
     EXPECT_TRUE(called);
+}
+
+TEST(DispatcherTest, AllowsHandlerWhenTransportAllowsBothTcpAndUdp) {
+    boost::asio::io_context io;
+    Dispatcher dispatcher;
+    BufferManager buffer_manager(2048, 8);
+    auto options = std::make_shared<SessionOptions>();
+    auto state = std::make_shared<server::core::net::ConnectionRuntimeState>();
+
+    Session session(
+        boost::asio::ip::tcp::socket(io),
+        dispatcher,
+        buffer_manager,
+        options,
+        state
+    );
+
+    std::size_t called = 0;
+    server::core::protocol::OpcodePolicy policy{};
+    policy.transport = server::core::protocol::TransportMask::kBoth;
+
+    const std::uint16_t msg_id = 2003;
+    dispatcher.register_handler(msg_id, [&](Session&, std::span<const std::uint8_t>) {
+        ++called;
+    }, policy);
+
+    const std::vector<std::uint8_t> payload{7, 7, 7};
+
+    EXPECT_TRUE(dispatcher.dispatch(msg_id, session, payload));
+    EXPECT_TRUE(dispatcher.dispatch(msg_id, session, payload, server::core::protocol::TransportKind::kUdp));
+    EXPECT_EQ(called, 2u);
 }
 
 TEST(DispatcherTest, WorkerProcessingPlaceQueuesAndRunsViaJobQueue) {
