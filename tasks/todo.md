@@ -807,3 +807,8 @@
   - cache 관찰: 최신 `CI` run(22766581460)의 Windows Conan restore는 exact key hit(`restore_hit=true`, 약 345MB restore)였고, 최신 Linux runs(22766581484/22766581474)에서는 `knights-base-Linux` gha cache manifest import + layer `CACHED`가 확인됐다.
   - cache 관찰: 새 `CI Prewarm` workflow는 아직 default branch에 없어 GitHub가 workflow로 인식하지 않으므로, 전용 prewarm run 효과는 merge 후 schedule 또는 수동 실행으로 별도 확인이 필요하다.
   - 후속 운영 작업: GitHub branch protection의 required check 이름을 새 workflow 이름 기준으로 갱신해야 한다.
+- 진행 메모 (2026-03-06, merge 후 hardening follow-up):
+  - `main` push run의 `CI Hardening`이 `ninja: error: unknown target 'core_plugin_runtime_tests'`로 실패했다.
+  - 원인: 같은 `build-linux` 디렉터리에서 `linux-asan -DBUILD_GTEST_TESTS=OFF` 이후 일반 `linux` preset을 다시 configure하면서 `BUILD_GTEST_TESTS=OFF` cache가 남아 test target이 생성되지 않았다.
+  - 추가 확인: target 생성 문제를 복구한 뒤에는 `knights-base` 안에 GTest dev 패키지가 없어 `find_package(GTest)`에서 멈춘다.
+  - 조치: `ci-hardening.yml`의 두 번째 configure에서 `-DBUILD_GTEST_TESTS=ON`을 명시하고, hardening step의 컨테이너 패키지 설치에 `libgtest-dev`를 추가해 runtime test target 생성/링크 경로를 복구한다.

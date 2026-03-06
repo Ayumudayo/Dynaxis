@@ -57,10 +57,10 @@ jobs:
             -v "${GITHUB_WORKSPACE}:/app" \
             -w /app \
             knights-base:latest \
-            bash -lc "set -e; apt-get update && apt-get install -y ninja-build; \
+            bash -lc "set -e; apt-get update && apt-get install -y ninja-build libgtest-dev; \
             cmake --preset linux-asan -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=OFF; \
             cmake --build --preset linux-asan --target server_app protocol_fuzz_harness --parallel; \
-            cmake --preset linux -DBUILD_CONTRACT_TESTS=OFF; \
+            cmake --preset linux -DBUILD_GTEST_TESTS=ON -DBUILD_CONTRACT_TESTS=OFF; \
             cmake --build --preset linux-debug --target core_plugin_runtime_tests --parallel; \
             ctest --test-dir build-linux -R 'LuaRuntimeTest|LuaSandboxTest' --output-on-failure --no-tests=error"
 
