@@ -264,6 +264,7 @@ required PR gate는 다음 성격만 남긴다.
 - 남은 운영 작업:
   - GitHub branch protection / required check 이름을 새 workflow 이름 기준으로 재설정
   - path filter 범위와 required 여부를 실제 CI telemetry 기준으로 추가 미세조정
+  - 원칙: path-gated workflow(`CI API Governance`, `CI Extensibility`)는 기본 required check로 두지 않는다.
 
 ### Phase D - 검증 재정의
 
@@ -318,6 +319,7 @@ required PR gate는 다음 성격만 남긴다.
 - `KNIGHTS_BUILD_LUA_SCRIPTING` 호환 매크로와 dead test branch를 제거해 Lua 테스트를 항상-capability 기준으로 단순화했다.
 - Windows fast CI의 중복 Lua ctest 재실행을 제거했다.
 - 기존 단일 `ci.yml`을 `ci-fast`, `ci-api-governance`, `ci-stack`, `ci-extensibility`, `ci-hardening`, `ci-prewarm`으로 분리하고 역할별 trigger를 재설정했다.
+- `CI Fast`는 branch protection 안전성을 위해 path filter 없이 항상 실행되도록 두고, path-gated workflow는 선택적/보조 gate로 분리했다.
 - prewarm 성격 job은 PR gate에서 분리하고 schedule / `workflow_dispatch` 전용 workflow로 옮겼다.
 - hardening 성격 검증(ASan/fuzz/soak)은 PR 기본 gate에서 분리하고 `main` / `merge_group` / nightly 경로로 이동했다.
 - 검증:

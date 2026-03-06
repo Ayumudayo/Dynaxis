@@ -801,5 +801,6 @@
   - 기존 `.github/workflows/ci.yml`를 제거하고 `ci-fast.yml`, `ci-api-governance.yml`, `ci-stack.yml`, `ci-extensibility.yml`, `ci-hardening.yml`, `ci-prewarm.yml`로 분리했다.
   - PR 기본 gate는 fast/api/stack 중심으로 남기고, hardening은 `main`/`merge_group`/nightly, prewarm은 `schedule`/`workflow_dispatch` 전용으로 이동했다.
   - `ci-extensibility.yml`은 plugin/script 관련 path에서만 동작하도록 path filter를 추가했다.
+  - branch protection에서 required check로 쓰기 안전하도록 `ci-fast.yml`은 항상 실행되게 두고, path-gated workflow는 기본 required 대상에서 제외한다는 원칙을 문서에 명시했다.
   - 정적 검증: `python -c "import pathlib,yaml; ..."`로 `.github/workflows/*.yml` 전부 YAML parse 성공을 확인했다.
   - 후속 운영 작업: GitHub branch protection의 required check 이름을 새 workflow 이름 기준으로 갱신해야 한다.
