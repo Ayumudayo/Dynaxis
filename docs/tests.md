@@ -68,5 +68,6 @@ scripts/smoke_wb.ps1 -Config Debug -BuildDir build-windows
 ## 8. Loadgen Plan
 
 - 설계 문서: [loadgen-plan.md](tests/loadgen-plan.md)
+- 다음 세션 handoff: [loadgen-next-steps.md](tests/loadgen-next-steps.md)
 - 실행 가이드: [README.md](../tools/loadgen/README.md)
 - 목적: 기존 `haproxy -> gateway_app -> server_app` 경로를 대상으로 단일 loadgen harness로 soak/latency/throughput을 재현 가능하게 측정

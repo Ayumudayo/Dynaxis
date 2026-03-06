@@ -152,9 +152,12 @@
 
 ## 6) Unified Load Generator
 
-- [ ] 장기 과제로 richer scenario language 검토 항목을 남긴다.
+- [x] 장기 과제로 richer scenario language 검토 항목을 남긴다.
   - 현재는 JSON schema 유지
   - 분기 / 반복 / 장애 주입 / 복합 transport 제어가 커지면 별도 scenario language 평가
+- [x] 다음 세션 handoff용 next-steps 문서를 유지한다.
+  - 문서: `docs/tests/loadgen-next-steps.md`
+  - 목적: UDP/RUDP transport phase와 scenario/schema hardening 순서를 세션 간에 이어받기 쉽게 유지
 - [x] 단일 loadgen binary 기준의 1차 통합 계획을 문서/체크리스트로 고정한다.
   - 목적: transport별 별도 프로그램 추가 대신 공통 harness 유지
   - 비범위: 이번 턴에 UDP/RUDP 구현까지 확장하지 않음
@@ -180,9 +183,13 @@
   - report/summary에 `transports=tcp`를 노출한다.
 - docs
   - `docs/tests/loadgen-plan.md`
+  - `docs/tests/loadgen-next-steps.md`
   - `docs/tests.md`
   - `tools/loadgen/README.md`
   - 결과: 단일 `stack_loadgen` 기준으로 문서 정리 완료
+- handoff intent
+  - `docs/tests/loadgen-next-steps.md`에 Phase A/B/C, 추천 파일 분해, 검증 전략, known pitfalls, 시작 명령을 기록했다.
+  - 다른 세션이 “무엇을 먼저 하고 무엇을 미루는지” 바로 이어받을 수 있는 수준으로 정리했다.
 - runtime validation
   - `build-windows\\Release\\stack_loadgen.exe --host 127.0.0.1 --port 6000 --scenario tools/loadgen/scenarios/steady_chat.json --report build/loadgen/steady_chat.json`
   - `build-windows\\Release\\stack_loadgen.exe --host 127.0.0.1 --port 6000 --scenario tools/loadgen/scenarios/mixed_session_soak.json --report build/loadgen/mixed_session_soak.json`
