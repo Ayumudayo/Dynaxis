@@ -38,13 +38,15 @@ LuaRuntime::ReloadResult LuaRuntime::reload_scripts(const std::vector<ScriptEntr
 }
 
 LuaRuntime::CallResult LuaRuntime::call(const std::string&,
-                                        const std::string&) {
+                                        const std::string&,
+                                        const LuaHookContext&) {
     std::lock_guard<std::mutex> lock(mu_);
     ++errors_total_;
     return CallResult{false, false, make_disabled_error()};
 }
 
-LuaRuntime::CallAllResult LuaRuntime::call_all(const std::string&) {
+LuaRuntime::CallAllResult LuaRuntime::call_all(const std::string&,
+                                               const LuaHookContext&) {
     std::lock_guard<std::mutex> lock(mu_);
     ++errors_total_;
     return CallAllResult{
@@ -71,6 +73,7 @@ void LuaRuntime::reset() {
 
     loaded_scripts_.clear();
     host_api_.clear();
+    memory_used_bytes_ = 0;
     calls_total_ = 0;
     errors_total_ = 0;
     instruction_limit_hits_ = 0;
@@ -88,7 +91,7 @@ LuaRuntime::MetricsSnapshot LuaRuntime::metrics_snapshot() const {
     MetricsSnapshot snapshot{};
     snapshot.loaded_scripts = loaded_scripts_.size();
     snapshot.registered_host_api = host_api_.size();
-    snapshot.memory_used_bytes = 0;
+    snapshot.memory_used_bytes = memory_used_bytes_;
     snapshot.calls_total = calls_total_;
     snapshot.errors_total = errors_total_;
     snapshot.instruction_limit_hits = instruction_limit_hits_;

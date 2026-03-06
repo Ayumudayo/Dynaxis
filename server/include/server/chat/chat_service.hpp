@@ -21,11 +21,15 @@
 #include "server/core/protocol/system_opcodes.hpp"
 #include "server/protocol/game_opcodes.hpp"
 #include "server/chat/chat_hook_plugin_abi.hpp"
+#include "server/scripting/chat_lua_bindings.hpp"
 #include "wire.pb.h"
 
 namespace server::core { class JobQueue; }
 namespace server::core::storage { class IConnectionPool; }
-namespace server::core::scripting { class LuaRuntime; }
+namespace server::core::scripting {
+class LuaRuntime;
+struct LuaHookContext;
+}
 namespace server::storage::redis { class IRedisClient; }
 
 namespace server::app::chat {
@@ -47,7 +51,7 @@ namespace server::app::chat {
  * - 모든 상태 변경은 `job_queue_`를 통해 단일 스레드(또는 Strand)에서 순차적으로 처리되거나,
  *   내부 `mutex`를 통해 보호받아야 합니다.
  */
-class ChatService {
+class ChatService : public server::app::scripting::ChatLuaHost {
 public:
     using NetSession = server::core::net::Session;
 
@@ -232,6 +236,26 @@ public:
                                      std::uint32_t duration_sec,
                                      const std::string& reason);
 
+    std::optional<std::string> lua_get_user_name(std::uint32_t session_id) override;
+    std::optional<std::string> lua_get_user_room(std::uint32_t session_id) override;
+    std::vector<std::string> lua_get_room_users(std::string_view room_name) override;
+    std::vector<std::string> lua_get_room_list() override;
+    std::optional<std::string> lua_get_room_owner(std::string_view room_name) override;
+    bool lua_is_user_muted(std::string_view nickname) override;
+    bool lua_is_user_banned(std::string_view nickname) override;
+    std::size_t lua_get_online_count() override;
+    std::size_t lua_get_room_count() override;
+    bool lua_send_notice(std::uint32_t session_id, std::string_view text) override;
+    bool lua_broadcast_room(std::string_view room_name, std::string_view text) override;
+    bool lua_broadcast_all(std::string_view text) override;
+    bool lua_kick_user(std::uint32_t session_id, std::string_view reason) override;
+    bool lua_mute_user(std::string_view nickname,
+                       std::uint32_t duration_sec,
+                       std::string_view reason) override;
+    bool lua_ban_user(std::string_view nickname,
+                      std::uint32_t duration_sec,
+                      std::string_view reason) override;
+
     /** @brief 단일 채팅 훅 플러그인의 런타임 메트릭 스냅샷입니다. */
     struct ChatHookPluginMetric {
         /** @brief Hook 단위 호출/에러/지연 집계 메트릭입니다. */
@@ -366,6 +390,7 @@ private:
 
         // 닉네임 역참조 (중복 로그인 방지 및 귓속말용)
         std::unordered_map<std::string, RoomSet> by_user;        // 닉네임 -> 세션 목록 (다중 접속 허용 시 여러 개일 수 있음)
+        std::unordered_map<std::uint32_t, WeakSession> by_session_id; // 세션 ID -> 세션 weak 참조
 
         // 제재/스팸 관리
         std::unordered_map<std::string, TimedPenalty> muted_users; // 유저 -> 뮤트 만료/사유
@@ -382,6 +407,7 @@ private:
     std::shared_ptr<server::core::storage::IConnectionPool> db_pool_{};
     std::shared_ptr<server::storage::redis::IRedisClient> redis_{};
     std::shared_ptr<server::core::scripting::LuaRuntime> lua_runtime_{};
+    std::shared_ptr<Strand> lua_execution_strand_{};
     std::string gateway_id_{"gw-default"};
     bool redis_pubsub_enabled_{false};
     std::unordered_set<std::string> admin_users_{};
@@ -468,7 +494,9 @@ private:
         std::vector<std::string> notices;
     };
 
-    LuaColdHookOutcome invoke_lua_cold_hook(std::string_view hook_name);
+    LuaColdHookOutcome invoke_lua_cold_hook(
+        std::string_view hook_name,
+        const server::core::scripting::LuaHookContext& context);
 
     // 플러그인이 메시지를 처리/차단했으면 true를 반환합니다(기본 로직은 중단).
     // 필요 시 텍스트를 변경(replace)하거나 시스템 공지를 전송할 수 있습니다.
@@ -487,11 +515,19 @@ private:
     bool maybe_handle_admin_command_hook(std::string_view command,
                                          std::string_view issuer,
                                          std::string_view payload_json,
+                                         std::string_view args,
                                          std::string& deny_reason);
 
     friend struct ChatServiceHistoryTester;
 
     static void collect_room_sessions(RoomSet& set, std::vector<std::shared_ptr<Session>>& out);
+    std::shared_ptr<Session> find_session_by_id_locked(std::uint32_t session_id);
+    std::vector<std::uint8_t> make_system_chat_body(std::string_view room, std::string_view text) const;
+    bool broadcast_notice_to_all_sessions(std::string notice);
+    bool apply_user_moderation_without_hook(const std::string& op,
+                                            const std::vector<std::string>& users,
+                                            std::uint32_t duration_sec,
+                                            const std::string& reason);
     unsigned int presence_ttl() const;
     std::string make_presence_key(std::string_view category, const std::string& id) const;
     void touch_user_presence(const std::string& uid);

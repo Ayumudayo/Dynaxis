@@ -58,6 +58,7 @@
 ### 테스트 기준
 - 코어: `tests/core/test_lua_runtime.cpp` (build-toggle 및 error counter 분기 포함)
 - 서버 바인딩: `tests/server/test_chat_lua_bindings.cpp`
+- OFF 호환성 프리셋: `windows-lua-off`, `linux-lua-off`
 
 ## 확장 ABI 거버넌스 규칙
 - 확장 ABI 변경은 PR 설명에서 호환/파괴 변경으로 분류해야 합니다.
@@ -76,3 +77,4 @@
 ## 배포 정책 메모 (Plugin/Lua/Protocol)
 - 공식 배포 빌드는 plugin/Lua/protocol capability를 포함하는 구성을 기본으로 한다.
 - 사용 여부는 런타임 설정(예: `CHAT_HOOK_ENABLED`, `LUA_ENABLED`) 또는 요청 경로(opcode/wire dispatch)에 의해 결정한다.
+- Lua 샘플/온보딩 문서는 function-style hook + `ctx`를 기본 모델로 삼고, directive/return-table은 fallback/testing aid로만 취급한다.

@@ -326,7 +326,10 @@ TEST_F(HookAutoDisableTest, LuaInstructionLimitFailureDoesNotStopAdminSettingPat
     {
         std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
         ASSERT_TRUE(out.good());
-        out << "-- hook=on_admin_command limit=instruction\n";
+        out << "function on_admin_command(ctx)\n"
+               "  while true do\n"
+               "  end\n"
+               "end\n";
     }
 
     std::vector<server::core::scripting::LuaRuntime::ScriptEntry> scripts;
@@ -376,7 +379,13 @@ TEST_F(HookAutoDisableTest, LuaMemoryLimitFailureDoesNotStopAdminSettingPath) {
     {
         std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
         ASSERT_TRUE(out.good());
-        out << "-- hook=on_admin_command limit=memory\n";
+        out << "function on_admin_command(ctx)\n"
+               "  local values = {}\n"
+               "  for i = 1, 4096 do\n"
+               "    values[i] = tostring(i) .. string.rep('x', 1024)\n"
+               "  end\n"
+               "  return { decision = 'pass' }\n"
+               "end\n";
     }
 
     std::vector<server::core::scripting::LuaRuntime::ScriptEntry> scripts;

@@ -56,6 +56,7 @@ if (BUILD_GTEST_TESTS)
 
     add_executable(chat_history_tests
         chat_history_tests.cpp
+        ${CMAKE_SOURCE_DIR}/server/src/scripting/chat_lua_bindings.cpp
         ${CMAKE_SOURCE_DIR}/server/src/chat/chat_service_core.cpp
         ${CMAKE_SOURCE_DIR}/server/src/chat/chat_hook_plugin_manager.cpp
         ${CMAKE_SOURCE_DIR}/server/src/chat/chat_hook_plugin_chain.cpp

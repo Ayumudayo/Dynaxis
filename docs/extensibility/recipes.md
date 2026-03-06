@@ -7,22 +7,49 @@
 목표: 로그인 시 공지 1줄을 빠르게 추가.
 
 1. `LUA_ENABLED=1` 확인
-2. `LUA_SCRIPTS_DIR`에 아래 파일 추가
+2. shared sample이면 `server/scripts/on_login_welcome.lua`와 `docker/stack/scripts/on_login_welcome.lua`를 같은 내용으로 유지
+3. `LUA_SCRIPTS_DIR`에 아래 파일 추가
 
 ```lua
-return {
-  hook = "on_login",
-  decision = "pass",
-  notice = "welcome to Knights"
-}
+function on_login(ctx)
+  if not ctx or not ctx.session_id then
+    return { decision = "pass" }
+  end
+
+  server.send_notice(ctx.session_id, "welcome to Knights")
+  return { decision = "pass" }
+end
 ```
 
-3. watcher/reload 로그 확인
-4. 로그인 스모크로 notice 수신 확인
+4. watcher/reload 로그 확인
+5. 로그인 스모크로 notice 수신 확인
 
-## Recipe 2: on_join 차단 정책 (Lua 스캐폴드)
+## Recipe 2: on_join 차단 정책 (Lua with ctx)
 
 목표: on_join 경로에서 deny 동작/클라이언트 reason 전달을 빠르게 검증.
+
+```lua
+local RESTRICTED_ROOMS = {
+  vip_lounge = true,
+}
+
+function on_join(ctx)
+  if not ctx or not RESTRICTED_ROOMS[ctx.room] then
+    return { decision = "pass" }
+  end
+
+  return {
+    decision = "deny",
+    reason = "vip room requires approval",
+  }
+end
+```
+
+검증: `MSG_ERR(FORBIDDEN)` + reason 전달 확인.
+
+## Recipe 3: fallback decision probe (return-table/directive)
+
+목표: host API rollout 전후에 reload/decision plumbing만 빠르게 점검.
 
 ```lua
 return {
@@ -32,11 +59,15 @@ return {
 }
 ```
 
-검증: `MSG_ERR(FORBIDDEN)` + reason 전달 확인.
+또는:
 
-참고: 현재 스캐폴드 모드에서는 room/user 입력 기반 분기 대신 고정 정책 검증이 중심이다.
+```lua
+-- hook=on_join decision=deny reason=vip room requires approval
+```
 
-## Recipe 3: 고빈도 채팅 필터 (Native Plugin)
+참고: 이 형식은 function-style hook의 대체재가 아니라 fallback/testing aid다.
+
+## Recipe 4: 고빈도 채팅 필터 (Native Plugin)
 
 목표: hot path에서 금칙어/스팸 필터를 낮은 지연으로 처리.
 
@@ -47,7 +78,7 @@ return {
    - `plugin_hook_errors_total`
    - `plugin_hook_duration_seconds`
 
-## Recipe 4: auto-disable 장애 완화
+## Recipe 5: auto-disable 장애 완화
 
 목표: 스크립트 오류 급증 시 안전하게 완화.
 
@@ -56,14 +87,14 @@ return {
 3. reload 완료 로그 확인
 4. 필요 시 `LUA_ENABLED=0`로 전체 우회
 
-## Recipe 5: 플러그인 swap + 롤백
+## Recipe 6: 플러그인 swap + 롤백
 
 1. 새 바이너리를 staging에 준비
 2. 동일 파일명으로 교체
 3. reload success 메트릭 확인
 4. 이상 시 이전 바이너리로 즉시 복구
 
-## Recipe 6: 관측성 점검 루틴
+## Recipe 7: 관측성 점검 루틴
 
 배포 직후 5분 점검:
 
@@ -74,7 +105,7 @@ return {
 
 대시보드: `chat-server-runtime`의 `Extensibility` row를 사용한다.
 
-## Recipe 7: 배포 전 manifest precheck
+## Recipe 8: 배포 전 manifest precheck
 
 목표: 배포 전에 manifest 필드 누락/형식 오류를 빠르게 차단.
 

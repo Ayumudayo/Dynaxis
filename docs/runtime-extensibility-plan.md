@@ -2,9 +2,15 @@
 
 > 목적: 서버 스택(server_app, gateway_app, wb_worker)이 런타임에 동적으로 동작을 변경할 수 있도록, **네이티브 플러그인(C ABI)**과 **Lua 스크립팅**을 하이브리드로 도입하는 구현 계획을 정의한다.
 
-> 상태: 실행 중 (Stream A 완료, Stream B scaffold 통합/운영화 진행 중)
+> 상태: Phase 16 backlog 구현 완료 (Lua host API, serialized executor, real sandbox, function-style 문서/샘플 정렬 반영)
 
-## 최근 구현 반영 (2026-03-05)
+## 최근 구현 반영 (2026-03-06)
+
+- Phase 16 backlog 마감:
+  - `LuaRuntime`가 `ctx`/host callback 인자-반환 경로를 지원하고, 실제 `lua_sethook` instruction limit + allocator 기반 memory limit를 적용한다.
+  - `ChatService`가 read-only/action/log/meta host API를 실제 상태/브로드캐스트/moderation 경로에 연결하고, cold hook와 reload를 동일 strand에서 직렬화한다.
+  - `server/scripts`와 `docker/stack/scripts` 샘플, `server/README.md`, `docs/extensibility/lua-quickstart.md`, `docs/extensibility/recipes.md`를 function-style `function on_<hook>(ctx)` 우선 모델로 정리했다.
+  - `CMakePresets.json`에 `linux-lua-off` 경로를 추가하고, CI/Windows 게이트에 Lua source-selection regression 및 `windows-test` 전체 회귀를 고정했다.
 
 - Phase 6.5 CI 단순화:
   - plugin/script Python smoke를 개별 step 나열 대신 ctest label(`plugin-script`) 기반으로 집계했다.
@@ -33,7 +39,7 @@
   - `docs/extensibility/conflict-policy.md`
   - `docs/extensibility/recipes.md`
 
-참고: 현재 Lua 경로에는 스캐폴드 기반 limit 시뮬레이션(`limit=instruction|memory`) 검증이 포함된다.
+참고: directive/return-table 기반 override와 `limit=instruction|memory` marker는 fallback/testing aid로만 유지되며, 기본 회귀 검증은 실제 VM limit 경로를 사용한다.
 
 ---
 
@@ -122,6 +128,33 @@
   2. 관련 테스트 실행 로그
   3. `ctest --preset windows-test` 결과(또는 예외 사유)
 - hot path 성능에 영향이 있는 변경은 Lua 경로가 비활성화된 baseline과 비교해 수치로 보고한다.
+
+### 0.4 Phase 16 이후 기준: 기본 plugin/script 시스템 마감 backlog
+
+Phase 16 기준으로 네이티브 플러그인 체인, ABI v2, hot-reload, 메트릭, 관리 콘솔 롤아웃 경로는 기본 골격이 갖춰졌다.
+이제 "기본적인 플러그인/스크립트 시스템을 제대로 갖췄다"고 말하려면, 남은 작업은 주로 Lua 운영 경계와 cross-platform 패키징 마감에 집중해야 한다.
+
+| 우선순위 | 작업 묶음 | 현재 근거 | 완료 기준 |
+|---|---|---|---|
+| P0 | 서버 Lua host API 실체화 | `server/src/scripting/chat_lua_bindings.cpp`는 20개 심볼을 등록하지만, 현재 구현은 모두 no-op lambda다. | read-only/action/log/meta API가 실제 동작하고, 적어도 1개 샘플 스크립트가 function-style hook으로 이를 사용하며 통합 테스트가 통과 |
+| P1 | Lua 실행 스레드 경계 마감 | `server/src/app/bootstrap.cpp`는 reload용 `lua_reload_strand`만 만들고, `server/src/chat/chat_service_core.cpp`는 `lua_runtime_->call_all()`을 직접 호출한다. | cold hook 실행과 reload가 동일한 serialized executor/strand 규칙을 따르고, action API가 그 제약을 문서/테스트로 보장 |
+| P1 | 실 sandbox enforcement | `core/src/scripting/lua_sandbox.cpp`는 정책 토큰 검사만 제공하고 VM hook/allocator 제한이 없다. | safe environment helper + real instruction/memory limit + 악성 스크립트 회귀 테스트를 갖춘다 |
+| P2 | Linux/Docker Lua capability 마감 | Windows LuaJIT 경로는 정리됐지만, Linux/Docker LuaJIT build/packaging backlog가 남아 있다. | Linux/Docker에서 submodule LuaJIT 빌드, `BUILD_LUA_SCRIPTING=OFF` 회귀, runtime image/compose 경로 검증이 모두 통과 |
+| P3 | 작성자 경험/문서 정리 | 현재 샘플/README는 scaffold 설명 비중이 높고 function-style hook 예시가 부족하다. | 문서가 `function hook 우선 + directive fallback/testing aid` 기준으로 정리되고 quickstart/sample/tests가 같은 모델을 사용 |
+
+권장 실행 순서:
+
+1. 서버 Lua host API와 hook context를 실제 구현으로 연결한다.
+2. cold hook 호출과 reload를 동일한 serialized executor 규칙으로 정리한다.
+3. 최소 1개의 샘플 스크립트를 function-style hook으로 전환하고 통합 테스트를 추가한다.
+4. Lua sandbox를 실제 VM 제한 경로로 강화한다.
+5. Linux/Docker LuaJIT 경로와 OFF-build 회귀를 닫고, 최종 문서/quickstart를 정리한다.
+
+문서/샘플 정렬 원칙:
+
+- function-style `function on_<hook>(ctx)`를 Lua 작성 기본 모델로 둔다.
+- directive/return-table은 fallback/testing aid로만 남긴다.
+- runtime image builtin sample은 `server/scripts/`, Docker stack override sample은 `docker/stack/scripts/`를 기준으로 하며, 겹치는 샘플은 같은 내용을 유지한다.
 
 ---
 
@@ -509,7 +542,7 @@ public:
 
 현재 구현 상태(2026-03-06):
 - `LuaRuntime::call`/`call_all`은 Sol2 `safe_script` + `protected_function` 경로를 사용해 스크립트/훅 함수를 실행한다.
-- 기존 directive(`decision=`, `limit=`) 기반 정책 오버라이드는 그대로 유지해 cold-hook 정책 회귀를 방지한다.
+- function-style hook + `ctx`를 기본 작성 모델로 두고, 기존 directive/return-table(`decision=`, `limit=`) 기반 정책 오버라이드는 fallback/testing aid로 유지해 cold-hook 정책 회귀를 방지한다.
 
 ### 5.2 LuaRuntime
 

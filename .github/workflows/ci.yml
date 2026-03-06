@@ -506,6 +506,17 @@ jobs:
             cmake --build --preset linux-debug --target core_plugin_runtime_tests --parallel; \
             ctest --test-dir build-linux -R 'LuaRuntimeTest|LuaSandboxTest' --output-on-failure --no-tests=error"
 
+      - name: Verify BUILD_LUA_SCRIPTING=OFF (Source Selection Regression)
+        run: |
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/app" \
+            -w /app \
+            knights-base:latest \
+            bash -lc "set -e; apt-get update && apt-get install -y ninja-build; \
+            cmake --preset linux-lua-off -DBUILD_CONTRACT_TESTS=OFF; \
+            python3 tools/check_lua_build_toggle.py --build-dir build-linux-lua-off --expect off --require-source-check; \
+            cmake --build --preset linux-lua-off-debug --target core_plugin_runtime_tests --parallel"
+
       - name: Start Stack Baseline (Runtime Off)
         shell: pwsh
         env:

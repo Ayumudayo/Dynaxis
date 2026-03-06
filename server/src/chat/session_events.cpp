@@ -44,6 +44,7 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
 
         {
             std::lock_guard<std::mutex> lk(state_.mu);
+            state_.by_session_id.erase(s->session_id());
             if (auto itname = state_.user.find(s.get()); itname != state_.user.end()) {
                 name = itname->second;
             } else {

@@ -8,13 +8,24 @@
   "stage": "side_effect",
   "priority": 100,
   "exclusive_group": "lua.on_login.welcome",
-  "checksum": "dev-local",
+  "checksum": "sha256:REPLACE_ON_LOGIN_WELCOME",
+  "compat": {
+    "lua_mode": "function_hook_ctx_primary",
+    "fallback_modes": [
+      "return_table",
+      "directive_testing"
+    ],
+    "requires": [
+      "BUILD_LUA_SCRIPTING=ON",
+      "LUA_ENABLED=1"
+    ]
+  },
   "target_profiles": [
     "all"
   ],
   "allowed_decisions": [
     "pass"
   ],
-  "description": "Sample login welcome Lua hook",
+  "description": "Sample function-style login welcome Lua hook",
   "owner": "runtime-extensibility"
 }

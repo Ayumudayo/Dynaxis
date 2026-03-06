@@ -135,6 +135,16 @@
       "description": "Linux configuration using Ninja (Debug)"
     },
     {
+      "name": "linux-lua-off",
+      "inherits": "linux-base",
+      "displayName": "Linux Lua OFF (Ninja)",
+      "description": "Linux configuration with BUILD_LUA_SCRIPTING=OFF",
+      "binaryDir": "${sourceDir}/build-linux-lua-off",
+      "cacheVariables": {
+        "BUILD_LUA_SCRIPTING": "OFF"
+      }
+    },
+    {
       "name": "linux-release",
       "inherits": "linux-base",
       "displayName": "Linux Release (Ninja)",
@@ -287,6 +297,12 @@
       "displayName": "Linux Debug"
     },
     {
+      "name": "linux-lua-off-debug",
+      "configurePreset": "linux-lua-off",
+      "configuration": "Debug",
+      "displayName": "Linux Lua OFF Debug"
+    },
+    {
       "name": "linux-release",
       "configurePreset": "linux-release",
       "configuration": "Release",
@@ -361,6 +377,16 @@
     {
       "name": "linux-test",
       "configurePreset": "linux",
+      "execution": {
+        "jobs": 8
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-lua-off-test",
+      "configurePreset": "linux-lua-off",
       "execution": {
         "jobs": 8
       },

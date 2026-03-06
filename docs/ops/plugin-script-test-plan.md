@@ -6,7 +6,7 @@
 
 ## 1. Goal
 
-- 네이티브 플러그인(chat hook)과 스크립팅(Lua scaffold 경로)의 기능/안정성/성능을 단계적으로 검증한다.
+- 네이티브 플러그인(chat hook)과 스크립팅(Lua cold-hook)의 기능/안정성/성능을 단계적으로 검증한다.
 - 현재 Docker 기반 smoke/E2E 검증은 유지하고, 빠른 회귀를 위한 core/server 단위 테스트를 보강한다.
 - CI에서 빠른 게이트와 운영형 통합 게이트를 분리한다.
 
@@ -16,6 +16,7 @@
 - CI Docker stack 경로에서 ctest label(`plugin-script`) 기반 plugin/script smoke 실행
 - 개별 시나리오(`verify_plugin_hot_reload`, `verify_plugin_v2_fallback`, `verify_plugin_rollback`, `verify_script_hot_reload`, `verify_script_fallback_switch`, `verify_chat_hook_behavior`)를 하나의 게이트로 집계
 - `LuaRuntimeTest`/`LuaSandboxTest`/`ChatLuaBindingsTest`는 기본 CI 경로(`BUILD_LUA_SCRIPTING=ON`)에서 회귀 검증
+- 문서/샘플 기준 작성 모델은 function-style hook + `ctx`이며, directive/return-table은 fallback/testing aid로만 유지
 
 현재 공백:
 - stack 의존 Python 테스트는 `KNIGHTS_ENABLE_STACK_PYTHON_TESTS=1` 환경이 있어야 실행됨
@@ -71,8 +72,8 @@ L0 Unit (`tests/core/`):
 L0 Unit (`tests/core/`):
 - `S-L-001` LuaRuntime load/call/reset
 - `S-L-002` LuaSandbox 금지 라이브러리 차단
-- `S-L-003` instruction limit 초과 처리 (scaffold directive `limit=instruction`)
-- `S-L-004` memory limit 초과 처리 (scaffold directive `limit=memory`)
+- `S-L-003` instruction limit 초과 처리 (현재 fallback directive `limit=instruction` 기반)
+- `S-L-004` memory limit 초과 처리 (현재 fallback directive `limit=memory` 기반)
 
 L1 Component (`tests/server/`):
 - `S-S-001` 네이티브 `kBlock/kDeny` 시 Lua 미호출
@@ -122,6 +123,7 @@ L2 Integration (`tests/python/` + docker stack):
 1) Fast Gate (PR 기본)
 - Windows: `ctest --preset windows-test` + `tools/check_lua_build_toggle.py --expect on` + Lua 핵심 테스트군(`LuaRuntimeTest|LuaSandboxTest|ChatLuaBindingsTest`)
 - Linux: 계약/코드젠/문서 + 핵심 단위 테스트 + `BUILD_LUA_SCRIPTING=ON` checker 검증 + stack baseline/runtime 토글 검증
+- Linux OFF 호환성은 `linux-lua-off` preset + source-selection checker로 별도 회귀 확인
 
 2) Integration Gate (PR/merge)
 - Docker stack + plugin hot-reload + metrics
@@ -130,7 +132,7 @@ L2 Integration (`tests/python/` + docker stack):
 3) Matrix Gate
 - Capability Gate: 공식 아티팩트는 `BUILD_LUA_SCRIPTING=ON` 고정
 - Runtime Gate: `CHAT_HOOK_ENABLED=0/1`, `LUA_ENABLED=0/1` 시나리오 회귀
-- `BUILD_LUA_SCRIPTING=OFF`는 커스텀 호환성 점검 경로로 유지(기본 CI 게이트 아님)
+- `BUILD_LUA_SCRIPTING=OFF`는 커스텀 호환성 점검 경로로 유지하되, source-selection regression은 별도 경량 체크로 유지한다.
 
 현재 CI 반영:
 - baseline(OFF): stack를 기본 env(`CHAT_HOOK_ENABLED=0`, `LUA_ENABLED=0`)로 기동 후 `verify_runtime_toggle_metrics.py`로 두 토글이 비활성 상태인지 확인

@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #ifndef KNIGHTS_BUILD_LUA_SCRIPTING
@@ -17,6 +18,20 @@
 #endif
 
 namespace server::core::scripting {
+
+/** @brief Hook invocation metadata exposed to Lua functions and host callbacks. */
+struct LuaHookContext {
+    std::uint32_t session_id{0};
+    std::string user;
+    std::string room;
+    std::string text;
+    std::string command;
+    std::string args;
+    std::string issuer;
+    std::string reason;
+    std::string payload_json;
+    std::string event;
+};
 
 enum class LuaHookDecision {
     kPass,
@@ -93,6 +108,38 @@ public:
         std::string env_name;
     };
 
+    /** @brief Host API value exchanged between Lua and C++ binding callbacks. */
+    struct HostValue {
+        using StringList = std::vector<std::string>;
+        using Storage = std::variant<std::monostate, bool, std::int64_t, std::string, StringList>;
+
+        Storage value{};
+
+        HostValue() = default;
+        HostValue(bool v) : value(v) {}
+        HostValue(std::int64_t v) : value(v) {}
+        HostValue(std::string v) : value(std::move(v)) {}
+        HostValue(const char* v) : value(std::string(v ? v : "")) {}
+        HostValue(StringList v) : value(std::move(v)) {}
+
+        [[nodiscard]] bool is_nil() const {
+            return std::holds_alternative<std::monostate>(value);
+        }
+    };
+
+    /** @brief Per-host-call metadata with runtime/script annotations. */
+    struct HostCallContext {
+        std::string hook_name;
+        std::string script_name;
+        LuaHookContext hook;
+    };
+
+    /** @brief Host callback return payload or error. */
+    struct HostCallResult {
+        HostValue value{};
+        std::string error;
+    };
+
     /** @brief Result of replacing active runtime scripts. */
     struct ReloadResult {
         std::size_t loaded{0};
@@ -100,7 +147,8 @@ public:
         std::string error;
     };
 
-    using HostCallback = std::function<void()>;
+    using HostArgs = std::vector<HostValue>;
+    using HostCallback = std::function<HostCallResult(const HostArgs&, const HostCallContext&)>;
 
     /** @brief Point-in-time runtime counters and gauges. */
     struct MetricsSnapshot {
@@ -114,73 +162,21 @@ public:
         std::uint64_t reload_epoch{0};
     };
 
-    /**
-     * @brief Construct a runtime with default configuration.
-     */
     LuaRuntime();
-
-    /**
-     * @brief Construct a runtime with custom configuration.
-     * @param cfg Runtime configuration values applied to sandbox policy and limits.
-     */
     explicit LuaRuntime(Config cfg);
 
-    /**
-     * @brief Load one script into a named runtime environment.
-     * @param path Script file path.
-     * @param env_name Logical environment key for later dispatch.
-     * @return Load status and optional error message.
-     */
     LoadResult load_script(const std::filesystem::path& path, const std::string& env_name);
-
-    /**
-     * @brief Replace tracked script set with the provided entries.
-     * @param scripts Script entries to load as the new active set.
-     * @return Reload summary including loaded/failed counts and optional error message.
-     */
     ReloadResult reload_scripts(const std::vector<ScriptEntry>& scripts);
-
-    /**
-     * @brief Call one hook function for a specific environment.
-     * @param env_name Environment key.
-     * @param func_name Hook function name.
-     * @return Call result with execution status and optional error message.
-     */
-    CallResult call(const std::string& env_name, const std::string& func_name);
-
-    /**
-     * @brief Call one hook function for all currently loaded environments.
-     * @param func_name Hook function name.
-     * @return Aggregated multi-script call result.
-     */
-    CallAllResult call_all(const std::string& func_name);
-
-    /**
-     * @brief Register a host callback under `table_name.func_name`.
-     * @param table_name Host table namespace.
-     * @param func_name Function name within the host table.
-     * @param callback Callback invoked from runtime integration points.
-     * @return `true` when registration succeeds, otherwise `false`.
-     */
+    CallResult call(const std::string& env_name,
+                    const std::string& func_name,
+                    const LuaHookContext& ctx = {});
+    CallAllResult call_all(const std::string& func_name,
+                           const LuaHookContext& ctx = {});
     bool register_host_api(const std::string& table_name,
                            const std::string& func_name,
                            HostCallback callback);
-
-    /**
-     * @brief Reset runtime state and counters.
-     */
     void reset();
-
-    /**
-     * @brief Report whether runtime scripting execution is enabled for this build.
-     * @return `true` when scripting path is enabled, otherwise `false`.
-     */
     bool enabled() const;
-
-    /**
-     * @brief Return a point-in-time snapshot of runtime metrics.
-     * @return Current runtime metrics snapshot.
-     */
     MetricsSnapshot metrics_snapshot() const;
 
 private:
@@ -191,6 +187,7 @@ private:
     sandbox::Policy policy_;
     std::unordered_map<std::string, std::filesystem::path> loaded_scripts_;
     std::unordered_map<std::string, HostCallback> host_api_;
+    std::size_t memory_used_bytes_{0};
     std::uint64_t calls_total_{0};
     std::uint64_t errors_total_{0};
     std::uint64_t instruction_limit_hits_{0};

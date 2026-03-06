@@ -1226,7 +1226,12 @@ TEST_F(ChatServiceTest, LuaColdHookPassSendsLoginWelcomeNotice) {
     {
         std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
         ASSERT_TRUE(out.good());
-        out << "return { hook = \"on_login\", decision = \"pass\", notice = \"welcome from lua scaffold\" }\n";
+        out << "function on_login(ctx)\n"
+               "  local name = server.get_user_name(ctx.session_id)\n"
+               "  local online = server.get_online_count()\n"
+               "  server.send_notice(ctx.session_id, 'welcome ' .. name .. ' online=' .. tostring(online))\n"
+               "  return { decision = 'pass' }\n"
+               "end\n";
         out.flush();
         ASSERT_TRUE(out.good());
     }
@@ -1248,7 +1253,45 @@ TEST_F(ChatServiceTest, LuaColdHookPassSendsLoginWelcomeNotice) {
     ProcessJobs();
     FlushSessionIO();
 
-    EXPECT_TRUE(WaitForBroadcastText("welcome from lua scaffold"));
+    EXPECT_TRUE(WaitForBroadcastText("welcome lua_notice_user online=0"));
+#endif
+}
+
+TEST_F(ChatServiceTest, LuaAdminHookCanUseArgsAndBroadcastAll) {
+#if !KNIGHTS_BUILD_LUA_SCRIPTING
+    GTEST_SKIP() << "Lua scripting build flag is disabled";
+#else
+    ScopedTempDir script_temp("knights_chat_lua_admin_announce");
+    const auto script_path = script_temp.path() / "policy.lua";
+    {
+        std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(out.good());
+        out << "function on_admin_command(ctx)\n"
+               "  if ctx.command ~= 'announce' then\n"
+               "    return { decision = 'pass' }\n"
+               "  end\n"
+               "  server.broadcast_all('[announce] ' .. ctx.args)\n"
+               "  return { decision = 'handled' }\n"
+               "end\n";
+        out.flush();
+        ASSERT_TRUE(out.good());
+    }
+
+    auto lua_runtime = std::make_shared<server::core::scripting::LuaRuntime>();
+    std::vector<server::core::scripting::LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(server::core::scripting::LuaRuntime::ScriptEntry{script_path, "policy"});
+    const auto reload_result = lua_runtime->reload_scripts(scripts);
+    ASSERT_TRUE(reload_result.error.empty());
+
+    services::set(lua_runtime);
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    LoginAs("announce_listener");
+    chat_service_->admin_broadcast_notice("server maintenance");
+    ProcessJobs();
+    FlushSessionIO();
+
+    EXPECT_TRUE(WaitForBroadcastText("[announce] server maintenance"));
 #endif
 }
 

@@ -7,6 +7,7 @@
 #include "gateway/gateway_app.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/protocol/packet.hpp"
+#include "server/core/protocol/system_opcodes.hpp"
 #include "server/protocol/game_opcodes.hpp"
 
 /**
@@ -17,6 +18,28 @@
  */
 namespace gateway {
 namespace game_proto = server::protocol;
+namespace core_proto = server::core::protocol;
+
+namespace {
+
+std::vector<std::uint8_t> make_control_frame(const core_proto::PacketHeader& header,
+                                             std::uint16_t msg_id,
+                                             std::span<const std::uint8_t> payload = {}) {
+    std::vector<std::uint8_t> frame(core_proto::k_header_bytes + payload.size());
+    core_proto::PacketHeader response{};
+    response.length = static_cast<std::uint16_t>(payload.size());
+    response.msg_id = msg_id;
+    response.flags = header.flags;
+    response.seq = header.seq;
+    response.utc_ts_ms32 = header.utc_ts_ms32;
+    core_proto::encode_header(response, frame.data());
+    if (!payload.empty()) {
+        std::memcpy(frame.data() + core_proto::k_header_bytes, payload.data(), payload.size());
+    }
+    return frame;
+}
+
+} // namespace
 
 GatewayConnection::GatewayConnection(std::shared_ptr<server::core::net::Hive> hive,
                                      std::shared_ptr<auth::IAuthenticator> authenticator,
@@ -153,116 +176,135 @@ void GatewayConnection::start_handshake_deadline() {
 }
 
 bool GatewayConnection::try_finish_handshake() {
-    namespace proto = server::core::protocol;
     constexpr std::size_t kMaxLoginPayloadBytes = 32 * 1024;
 
     if (phase_ != Phase::kWaitingForLogin) {
         return true;
     }
-    if (prebuffer_.size() < proto::k_header_bytes) {
-        return false;
-    }
+    while (phase_ == Phase::kWaitingForLogin) {
+        if (prebuffer_.size() < core_proto::k_header_bytes) {
+            return false;
+        }
 
-    proto::PacketHeader header{};
-    proto::decode_header(prebuffer_.data(), header);
+        core_proto::PacketHeader header{};
+        core_proto::decode_header(prebuffer_.data(), header);
 
-    if (header.length > kMaxLoginPayloadBytes) {
-        server::core::log::warn("GatewayConnection login payload too large; closing");
-        stop();
-        return true;
-    }
-
-    const std::size_t frame_bytes = proto::k_header_bytes + static_cast<std::size_t>(header.length);
-    if (prebuffer_.size() < frame_bytes) {
-        return false;
-    }
-
-    const auto segment_type = proto::classify_segment_type(header.msg_id);
-    if (segment_type != proto::SegmentType::kApplicationPayload) {
-        server::core::log::warn(
-            std::string("GatewayConnection expected application payload at handshake; got system msg_id=")
-            + std::to_string(header.msg_id)
-        );
-        stop();
-        return true;
-    }
-
-    if (header.msg_id != game_proto::MSG_LOGIN_REQ) {
-        server::core::log::warn(
-            std::string("GatewayConnection expected MSG_LOGIN_REQ first; got msg_id=") + std::to_string(header.msg_id)
-        );
-        stop();
-        return true;
-    }
-
-    auto payload = std::span<const std::uint8_t>(
-        prebuffer_.data() + proto::k_header_bytes,
-        static_cast<std::size_t>(header.length)
-    );
-
-    std::string user;
-    std::string token;
-    if (!proto::read_lp_utf8(payload, user) || !proto::read_lp_utf8(payload, token)) {
-        server::core::log::warn("GatewayConnection invalid login payload; closing");
-        stop();
-        return true;
-    }
-
-    auth::AuthRequest request{};
-    request.client_id = user;
-    request.token = token;
-    request.remote_address = remote_ip_;
-
-    if (authenticator_) {
-        last_auth_result_ = authenticator_->authenticate(request);
-    } else {
-        last_auth_result_.success = true;
-        last_auth_result_.subject = request.client_id.empty() ? "anonymous" : request.client_id;
-        last_auth_result_.failure_reason.clear();
-    }
-
-    if (!last_auth_result_.success) {
-        server::core::log::warn(std::string("GatewayConnection authentication failed: ") + last_auth_result_.failure_reason);
-        stop();
-        return true;
-    }
-
-    std::string routing_key = !request.client_id.empty() ? request.client_id : last_auth_result_.subject;
-    if (routing_key.empty() || routing_key == "guest") {
-        routing_key = "anonymous";
-    }
-
-    if (!app_.allow_anonymous()) {
-        if (request.token.empty()) {
-            server::core::log::warn("GatewayConnection anonymous login disabled: token required");
+        if (header.length > kMaxLoginPayloadBytes) {
+            server::core::log::warn("GatewayConnection login payload too large; closing");
             stop();
             return true;
         }
-        if (routing_key == "anonymous") {
-            server::core::log::warn("GatewayConnection anonymous login disabled");
+
+        const std::size_t frame_bytes =
+            core_proto::k_header_bytes + static_cast<std::size_t>(header.length);
+        if (prebuffer_.size() < frame_bytes) {
+            return false;
+        }
+
+        const auto segment_type = core_proto::classify_segment_type(header.msg_id);
+        if (segment_type != core_proto::SegmentType::kApplicationPayload) {
+            if (header.msg_id == core_proto::MSG_PING) {
+                const auto payload = std::span<const std::uint8_t>(
+                    prebuffer_.data() + core_proto::k_header_bytes,
+                    static_cast<std::size_t>(header.length));
+                async_send(make_control_frame(header, core_proto::MSG_PONG, payload));
+                prebuffer_.erase(prebuffer_.begin(), prebuffer_.begin() + static_cast<std::ptrdiff_t>(frame_bytes));
+                continue;
+            }
+            if (header.msg_id == core_proto::MSG_PONG) {
+                prebuffer_.erase(prebuffer_.begin(), prebuffer_.begin() + static_cast<std::ptrdiff_t>(frame_bytes));
+                continue;
+            }
+
+            server::core::log::warn(
+                std::string("GatewayConnection expected application payload at handshake; got system msg_id=")
+                + std::to_string(header.msg_id)
+            );
             stop();
             return true;
         }
-    }
 
-    client_id_ = std::move(routing_key);
+        if (header.msg_id != game_proto::MSG_LOGIN_REQ) {
+            server::core::log::warn(
+                std::string("GatewayConnection expected MSG_LOGIN_REQ first; got msg_id=")
+                + std::to_string(header.msg_id)
+            );
+            stop();
+            return true;
+        }
 
-    open_backend_connection();
-    if (!backend_connection_) {
-        stop();
+        auto payload = std::span<const std::uint8_t>(
+            prebuffer_.data() + core_proto::k_header_bytes,
+            static_cast<std::size_t>(header.length)
+        );
+
+        std::string user;
+        std::string token;
+        if (!core_proto::read_lp_utf8(payload, user) || !core_proto::read_lp_utf8(payload, token)) {
+            server::core::log::warn("GatewayConnection invalid login payload; closing");
+            stop();
+            return true;
+        }
+
+        auth::AuthRequest request{};
+        request.client_id = user;
+        request.token = token;
+        request.remote_address = remote_ip_;
+
+        if (authenticator_) {
+            last_auth_result_ = authenticator_->authenticate(request);
+        } else {
+            last_auth_result_.success = true;
+            last_auth_result_.subject = request.client_id.empty() ? "anonymous" : request.client_id;
+            last_auth_result_.failure_reason.clear();
+        }
+
+        if (!last_auth_result_.success) {
+            server::core::log::warn(
+                std::string("GatewayConnection authentication failed: ") + last_auth_result_.failure_reason
+            );
+            stop();
+            return true;
+        }
+
+        std::string routing_key = !request.client_id.empty() ? request.client_id : last_auth_result_.subject;
+        if (routing_key.empty() || routing_key == "guest") {
+            routing_key = "anonymous";
+        }
+
+        if (!app_.allow_anonymous()) {
+            if (request.token.empty()) {
+                server::core::log::warn("GatewayConnection anonymous login disabled: token required");
+                stop();
+                return true;
+            }
+            if (routing_key == "anonymous") {
+                server::core::log::warn("GatewayConnection anonymous login disabled");
+                stop();
+                return true;
+            }
+        }
+
+        client_id_ = std::move(routing_key);
+
+        open_backend_connection();
+        if (!backend_connection_) {
+            stop();
+            return true;
+        }
+
+        if (auto udp_bind_ticket = app_.make_udp_bind_ticket_frame(session_id_)) {
+            async_send(std::move(*udp_bind_ticket));
+        }
+
+        (void)handshake_timer_.cancel();
+
+        // Forward the raw bytes exactly as received (transparent proxy).
+        send_to_backend(std::move(prebuffer_));
+        phase_ = Phase::kBridging;
         return true;
     }
-
-    if (auto udp_bind_ticket = app_.make_udp_bind_ticket_frame(session_id_)) {
-        async_send(std::move(*udp_bind_ticket));
-    }
-
-    (void)handshake_timer_.cancel();
-
-    // Forward the raw bytes exactly as received (transparent proxy).
-    send_to_backend(std::move(prebuffer_));
-    phase_ = Phase::kBridging;
-    return true;
+    return false;
 }
 
 void GatewayConnection::open_backend_connection() {

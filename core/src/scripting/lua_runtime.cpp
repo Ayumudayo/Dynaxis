@@ -2,12 +2,18 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <fstream>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <system_error>
+#include <utility>
 
+#include <lua.hpp>
 #include <sol/sol.hpp>
+
+#include "luajit_rolling.h"
 
 namespace server::core::scripting {
 
@@ -15,9 +21,44 @@ namespace {
 
 using HostApiMap = std::unordered_map<std::string, LuaRuntime::HostCallback>;
 
-std::string make_disabled_error() {
-    return "lua scripting is disabled at build time (BUILD_LUA_SCRIPTING=OFF)";
-}
+constexpr int kInstructionHookGranularity = 100;
+
+struct VmExecutionBudget {
+    std::size_t memory_limit_bytes{0};
+    std::size_t used_bytes{0};
+    std::size_t peak_bytes{0};
+    std::uint64_t instruction_limit{0};
+    std::uint64_t executed_instructions{0};
+    bool memory_limit_hit{false};
+    bool instruction_limit_hit{false};
+};
+
+struct ScriptDecisionResult {
+    bool valid{true};
+    bool executed{false};
+    LuaHookDecision decision{LuaHookDecision::kPass};
+    LuaRuntime::ScriptFailureKind failure_kind{LuaRuntime::ScriptFailureKind::kNone};
+    std::string reason;
+    std::string notice;
+    std::string error;
+    std::size_t peak_memory_bytes{0};
+};
+
+struct ParsedDirective {
+    bool present{false};
+    std::string hook_name;
+    std::string decision_token;
+    std::string limit_token;
+    std::string reason;
+};
+
+struct LuaStateCloser {
+    void operator()(lua_State* state) const {
+        if (state != nullptr) {
+            lua_close(state);
+        }
+    }
+};
 
 std::string trim_ascii(std::string_view value) {
     std::size_t begin = 0;
@@ -40,6 +81,19 @@ std::string to_lower_ascii(std::string value) {
         return static_cast<char>(std::tolower(ch));
     });
     return value;
+}
+
+std::optional<std::string> read_script_text(const std::filesystem::path& path, std::string& error) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input.good()) {
+        error = "failed to open script: " + path.string();
+        return std::nullopt;
+    }
+
+    return std::string{
+        std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>()
+    };
 }
 
 std::optional<std::string> extract_word_value(std::string_view text,
@@ -79,61 +133,6 @@ std::optional<std::string> extract_tail_value(std::string_view text,
 
     return trim_ascii(text.substr(begin));
 }
-
-bool parse_hook_decision(std::string_view token,
-                         LuaHookDecision& out_decision) {
-    const std::string lowered = to_lower_ascii(trim_ascii(token));
-    if (lowered == "pass") {
-        out_decision = LuaHookDecision::kPass;
-        return true;
-    }
-    if (lowered == "handled") {
-        out_decision = LuaHookDecision::kHandled;
-        return true;
-    }
-    if (lowered == "block") {
-        out_decision = LuaHookDecision::kBlock;
-        return true;
-    }
-    if (lowered == "modify") {
-        out_decision = LuaHookDecision::kModify;
-        return true;
-    }
-    if (lowered == "allow") {
-        out_decision = LuaHookDecision::kAllow;
-        return true;
-    }
-    if (lowered == "deny") {
-        out_decision = LuaHookDecision::kDeny;
-        return true;
-    }
-
-    return false;
-}
-
-int hook_decision_rank(LuaHookDecision decision) {
-    switch (decision) {
-    case LuaHookDecision::kBlock:
-    case LuaHookDecision::kDeny:
-        return 3;
-    case LuaHookDecision::kHandled:
-        return 2;
-    case LuaHookDecision::kModify:
-        return 1;
-    case LuaHookDecision::kPass:
-    case LuaHookDecision::kAllow:
-    default:
-        return 0;
-    }
-}
-
-struct ParsedDirective {
-    bool present{false};
-    std::string hook_name;
-    std::string decision_token;
-    std::string limit_token;
-    std::string reason;
-};
 
 ParsedDirective parse_directive_line(std::string_view line) {
     ParsedDirective out{};
@@ -179,14 +178,56 @@ ParsedDirective parse_directive_line(std::string_view line) {
     return out;
 }
 
-struct ScriptDecisionResult {
-    bool valid{true};
-    LuaHookDecision decision{LuaHookDecision::kPass};
-    LuaRuntime::ScriptFailureKind failure_kind{LuaRuntime::ScriptFailureKind::kNone};
-    std::string reason;
-    std::string notice;
-    std::string error;
-};
+std::optional<ParsedDirective> find_matching_directive(std::string_view script_text,
+                                                       std::string_view func_name) {
+    const std::string target_hook = to_lower_ascii(std::string(func_name));
+
+    std::istringstream lines{std::string(script_text)};
+    std::string line;
+    while (std::getline(lines, line)) {
+        const ParsedDirective directive = parse_directive_line(line);
+        if (!directive.present) {
+            continue;
+        }
+        if (!directive.hook_name.empty() && directive.hook_name != target_hook) {
+            continue;
+        }
+        return directive;
+    }
+
+    return std::nullopt;
+}
+
+bool parse_hook_decision(std::string_view token,
+                         LuaHookDecision& out_decision) {
+    const std::string lowered = to_lower_ascii(trim_ascii(token));
+    if (lowered == "pass") {
+        out_decision = LuaHookDecision::kPass;
+        return true;
+    }
+    if (lowered == "handled") {
+        out_decision = LuaHookDecision::kHandled;
+        return true;
+    }
+    if (lowered == "block") {
+        out_decision = LuaHookDecision::kBlock;
+        return true;
+    }
+    if (lowered == "modify") {
+        out_decision = LuaHookDecision::kModify;
+        return true;
+    }
+    if (lowered == "allow") {
+        out_decision = LuaHookDecision::kAllow;
+        return true;
+    }
+    if (lowered == "deny") {
+        out_decision = LuaHookDecision::kDeny;
+        return true;
+    }
+
+    return false;
+}
 
 std::optional<LuaRuntime::ScriptFailureKind> parse_limit_failure_kind(std::string_view token) {
     const std::string lowered = to_lower_ascii(trim_ascii(token));
@@ -203,7 +244,94 @@ std::optional<LuaRuntime::ScriptFailureKind> parse_limit_failure_kind(std::strin
     return std::nullopt;
 }
 
-void open_allowed_libraries(sol::state& state, const sandbox::Policy& policy) {
+int hook_decision_rank(LuaHookDecision decision) {
+    switch (decision) {
+    case LuaHookDecision::kBlock:
+    case LuaHookDecision::kDeny:
+        return 3;
+    case LuaHookDecision::kHandled:
+        return 2;
+    case LuaHookDecision::kModify:
+        return 1;
+    case LuaHookDecision::kPass:
+    case LuaHookDecision::kAllow:
+    default:
+        return 0;
+    }
+}
+
+void* budgeted_lua_alloc(void* ud, void* ptr, std::size_t, std::size_t nsize) {
+    auto& budget = *static_cast<VmExecutionBudget*>(ud);
+
+    if (nsize == 0) {
+        if (ptr != nullptr) {
+            auto* raw = static_cast<std::size_t*>(ptr) - 1;
+            budget.used_bytes -= *raw;
+            std::free(raw);
+        }
+        return nullptr;
+    }
+
+    const std::size_t old_size = ptr == nullptr ? 0 : *(static_cast<std::size_t*>(ptr) - 1);
+    if (budget.memory_limit_bytes > 0) {
+        const std::size_t used_without_old = budget.used_bytes - old_size;
+        if (nsize > budget.memory_limit_bytes
+            || used_without_old > (budget.memory_limit_bytes - nsize)) {
+            budget.memory_limit_hit = true;
+            return nullptr;
+        }
+    }
+
+    void* raw = nullptr;
+    if (ptr == nullptr) {
+        raw = std::malloc(sizeof(std::size_t) + nsize);
+    } else {
+        raw = std::realloc(static_cast<std::size_t*>(ptr) - 1, sizeof(std::size_t) + nsize);
+    }
+
+    if (raw == nullptr) {
+        return nullptr;
+    }
+
+    auto* sized = static_cast<std::size_t*>(raw);
+    sized[0] = nsize;
+    budget.used_bytes = budget.used_bytes - old_size + nsize;
+    budget.peak_bytes = std::max(budget.peak_bytes, budget.used_bytes);
+    return sized + 1;
+}
+
+void instruction_limit_hook(lua_State* state, lua_Debug*) {
+    void* ud = nullptr;
+    (void)lua_getallocf(state, &ud);
+    auto& budget = *static_cast<VmExecutionBudget*>(ud);
+
+    budget.executed_instructions += kInstructionHookGranularity;
+    if (budget.instruction_limit > 0
+        && budget.executed_instructions > budget.instruction_limit) {
+        budget.instruction_limit_hit = true;
+        luaL_error(state, "instruction limit exceeded");
+    }
+}
+
+std::unique_ptr<lua_State, LuaStateCloser> create_state(VmExecutionBudget& budget,
+                                                        const sandbox::Policy& policy) {
+    lua_State* raw = lua_newstate(&budgeted_lua_alloc, &budget);
+    if (raw == nullptr) {
+        return {};
+    }
+
+    if (policy.instruction_limit > 0) {
+        lua_sethook(raw,
+                    &instruction_limit_hook,
+                    LUA_MASKCOUNT,
+                    kInstructionHookGranularity);
+    }
+
+    (void)luaJIT_setmode(raw, 0, LUAJIT_MODE_ENGINE | LUAJIT_MODE_OFF);
+    return std::unique_ptr<lua_State, LuaStateCloser>(raw);
+}
+
+void open_allowed_libraries(sol::state_view& state, const sandbox::Policy& policy) {
     if (sandbox::is_library_allowed("base", policy)) {
         state.open_libraries(sol::lib::base);
     }
@@ -249,9 +377,103 @@ void open_allowed_libraries(sol::state& state, const sandbox::Policy& policy) {
     }
 }
 
-void bind_host_api_to_environment(sol::state& state,
+LuaRuntime::HostValue host_value_from_lua_object(const sol::object& object, std::string& error) {
+    switch (object.get_type()) {
+    case sol::type::none:
+    case sol::type::lua_nil:
+        return {};
+    case sol::type::boolean:
+        return LuaRuntime::HostValue{object.as<bool>()};
+    case sol::type::number:
+        return LuaRuntime::HostValue{static_cast<std::int64_t>(object.as<lua_Integer>())};
+    case sol::type::string:
+        return LuaRuntime::HostValue{object.as<std::string>()};
+    case sol::type::table: {
+        LuaRuntime::HostValue::StringList values;
+        const sol::table table = object.as<sol::table>();
+        const std::size_t size = table.size();
+        values.reserve(size);
+        for (std::size_t index = 1; index <= size; ++index) {
+            const sol::object item = table.get<sol::object>(index);
+            if (!item.valid() || item.get_type() != sol::type::string) {
+                error = "only string arrays are supported for table arguments";
+                return {};
+            }
+            values.push_back(item.as<std::string>());
+        }
+        return LuaRuntime::HostValue{std::move(values)};
+    }
+    default:
+        error = "unsupported Lua argument type";
+        return {};
+    }
+}
+
+sol::object host_value_to_lua_object(sol::state_view& state,
+                                     const LuaRuntime::HostValue& value) {
+    if (std::holds_alternative<std::monostate>(value.value)) {
+        return sol::make_object(state, sol::nil);
+    }
+    if (const auto* boolean = std::get_if<bool>(&value.value)) {
+        return sol::make_object(state, *boolean);
+    }
+    if (const auto* integer = std::get_if<std::int64_t>(&value.value)) {
+        return sol::make_object(state, *integer);
+    }
+    if (const auto* string = std::get_if<std::string>(&value.value)) {
+        return sol::make_object(state, *string);
+    }
+    if (const auto* list = std::get_if<LuaRuntime::HostValue::StringList>(&value.value)) {
+        sol::table table = state.create_table();
+        std::size_t index = 1;
+        for (const auto& item : *list) {
+            table[index++] = item;
+        }
+        return sol::make_object(state, table);
+    }
+    return sol::make_object(state, sol::nil);
+}
+
+sol::table build_context_table(sol::state_view& state,
+                               const LuaHookContext& ctx) {
+    sol::table table = state.create_table();
+    if (ctx.session_id != 0) {
+        table["session_id"] = ctx.session_id;
+    }
+    if (!ctx.user.empty()) {
+        table["user"] = ctx.user;
+    }
+    if (!ctx.room.empty()) {
+        table["room"] = ctx.room;
+    }
+    if (!ctx.text.empty()) {
+        table["text"] = ctx.text;
+    }
+    if (!ctx.command.empty()) {
+        table["command"] = ctx.command;
+    }
+    if (!ctx.args.empty()) {
+        table["args"] = ctx.args;
+    }
+    if (!ctx.issuer.empty()) {
+        table["issuer"] = ctx.issuer;
+    }
+    if (!ctx.reason.empty()) {
+        table["reason"] = ctx.reason;
+    }
+    if (!ctx.payload_json.empty()) {
+        table["payload_json"] = ctx.payload_json;
+    }
+    if (!ctx.event.empty()) {
+        table["event"] = ctx.event;
+    }
+    return table;
+}
+
+void bind_host_api_to_environment(sol::state_view& state,
                                   sol::environment& env,
-                                  const HostApiMap& host_api) {
+                                  const HostApiMap& host_api,
+                                  const LuaRuntime::HostCallContext& context) {
     std::unordered_map<std::string, sol::table> table_cache;
 
     for (const auto& [api_key, callback] : host_api) {
@@ -271,10 +493,83 @@ void bind_host_api_to_environment(sol::state& state,
         }
 
         const LuaRuntime::HostCallback callback_copy = callback;
-        table_it->second.set_function(function_name, [callback_copy]() {
-            callback_copy();
-        });
+        const LuaRuntime::HostCallContext context_copy = context;
+        table_it->second.set_function(
+            function_name,
+            [callback_copy, context_copy](sol::this_state this_state, sol::variadic_args values) -> sol::object {
+                sol::state_view state(this_state);
+                LuaRuntime::HostArgs args;
+                for (auto value : values) {
+                    std::string error;
+                    const LuaRuntime::HostValue converted = host_value_from_lua_object(value, error);
+                    if (!error.empty()) {
+                        luaL_error(state.lua_state(), "%s", error.c_str());
+                        return sol::make_object(state, sol::nil);
+                    }
+                    args.push_back(converted);
+                }
+
+                const LuaRuntime::HostCallResult result = callback_copy(args, context_copy);
+                if (!result.error.empty()) {
+                    luaL_error(state.lua_state(), "%s", result.error.c_str());
+                    return sol::make_object(state, sol::nil);
+                }
+                return host_value_to_lua_object(state, result.value);
+            });
     }
+}
+
+std::optional<LuaRuntime::ScriptFailureKind> classify_failure(const VmExecutionBudget& budget) {
+    if (budget.instruction_limit_hit) {
+        return LuaRuntime::ScriptFailureKind::kInstructionLimit;
+    }
+    if (budget.memory_limit_hit) {
+        return LuaRuntime::ScriptFailureKind::kMemoryLimit;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> validate_script_with_lua(const std::filesystem::path& path,
+                                                    const sandbox::Policy& policy,
+                                                    std::size_t& peak_memory_bytes) {
+    std::string error;
+    const auto script_text = read_script_text(path, error);
+    if (!script_text.has_value()) {
+        return error;
+    }
+
+    VmExecutionBudget budget{};
+    budget.memory_limit_bytes = policy.memory_limit_bytes;
+    budget.instruction_limit = policy.instruction_limit;
+
+    auto state_owner = create_state(budget, policy);
+    if (!state_owner) {
+        peak_memory_bytes = budget.peak_bytes;
+        return std::string("failed to create lua state");
+    }
+
+    const int status = luaL_loadbufferx(
+        state_owner.get(),
+        script_text->data(),
+        script_text->size(),
+        path.string().c_str(),
+        "t");
+    peak_memory_bytes = budget.peak_bytes;
+    if (status == LUA_OK) {
+        lua_pop(state_owner.get(), 1);
+        return std::nullopt;
+    }
+
+    std::string message = lua_tostring(state_owner.get(), -1);
+    lua_pop(state_owner.get(), 1);
+
+    if (const auto failure_kind = classify_failure(budget); failure_kind.has_value()) {
+        if (*failure_kind == LuaRuntime::ScriptFailureKind::kInstructionLimit) {
+            return std::string("instruction limit exceeded while validating: ") + path.string();
+        }
+        return std::string("memory limit exceeded while validating: ") + path.string();
+    }
+    return message;
 }
 
 ScriptDecisionResult parse_return_table_from_lua_object(const sol::object& return_object,
@@ -311,223 +606,141 @@ ScriptDecisionResult parse_return_table_from_lua_object(const sol::object& retur
     return out;
 }
 
-struct SolHookCallResult {
-    bool ok{true};
-    bool executed{false};
-    std::string error;
-};
+ScriptDecisionResult execute_script(std::string_view script_text,
+                                    std::string_view chunk_name,
+                                    std::string_view env_name,
+                                    std::string_view func_name,
+                                    const LuaHookContext& hook_context,
+                                    const sandbox::Policy& policy,
+                                    const HostApiMap& host_api) {
+    ScriptDecisionResult out{};
 
-SolHookCallResult execute_hook_call_with_sol2(std::string_view script_text,
-                                              std::string_view chunk_name,
-                                              std::string_view func_name,
-                                              const sandbox::Policy& policy,
-                                              const HostApiMap& host_api) {
-    SolHookCallResult out{};
-
-    try {
-        sol::state state;
-        open_allowed_libraries(state, policy);
-
-        sol::environment env(state, sol::create, state.globals());
-        bind_host_api_to_environment(state, env, host_api);
-
-        auto script_exec = state.safe_script(
-            script_text,
-            env,
-            sol::script_pass_on_error,
-            std::string(chunk_name),
-            sol::load_mode::text);
-        if (!script_exec.valid()) {
-            const sol::error err = script_exec;
-            out.ok = false;
-            out.error = err.what();
+    if (const auto directive = find_matching_directive(script_text, func_name);
+        directive.has_value() && !directive->limit_token.empty()) {
+        const auto limit_kind = parse_limit_failure_kind(directive->limit_token);
+        if (!limit_kind.has_value()) {
+            out.valid = false;
+            out.failure_kind = LuaRuntime::ScriptFailureKind::kOther;
+            out.error = "invalid limit token: " + directive->limit_token;
             return out;
         }
 
-        const sol::object hook_object = env[std::string(func_name)];
-        if (!hook_object.valid() || hook_object.get_type() != sol::type::function) {
-            return out;
-        }
+        out.valid = false;
+        out.failure_kind = *limit_kind;
+        out.error = (*limit_kind == LuaRuntime::ScriptFailureKind::kInstructionLimit)
+            ? "LUA_ERRRUN: instruction limit exceeded"
+            : "LUA_ERRMEM: memory limit exceeded";
+        return out;
+    }
 
+    VmExecutionBudget budget{};
+    budget.memory_limit_bytes = policy.memory_limit_bytes;
+    budget.instruction_limit = policy.instruction_limit;
+
+    auto state_owner = create_state(budget, policy);
+    if (!state_owner) {
+        out.valid = false;
+        out.failure_kind = LuaRuntime::ScriptFailureKind::kOther;
+        out.error = "failed to create lua state";
+        return out;
+    }
+
+    sol::state_view state(state_owner.get());
+    open_allowed_libraries(state, policy);
+
+    sol::environment env(state, sol::create, state.globals());
+    const LuaRuntime::HostCallContext host_context{
+        std::string(func_name),
+        std::string(env_name),
+        hook_context,
+    };
+    bind_host_api_to_environment(state, env, host_api, host_context);
+
+    sol::table ctx_table = build_context_table(state, hook_context);
+    env["ctx"] = ctx_table;
+
+    auto script_exec = state.safe_script(
+        script_text,
+        env,
+        sol::script_pass_on_error,
+        std::string(chunk_name),
+        sol::load_mode::text);
+    out.peak_memory_bytes = budget.peak_bytes;
+    if (!script_exec.valid()) {
+        const sol::error err = script_exec;
+        out.valid = false;
+        out.failure_kind = classify_failure(budget).value_or(LuaRuntime::ScriptFailureKind::kOther);
+        out.error = err.what();
+        return out;
+    }
+
+    ScriptDecisionResult top_level_result{};
+    if (script_exec.return_count() > 0) {
+        top_level_result = parse_return_table_from_lua_object(
+            script_exec.get<sol::object>(0),
+            func_name);
+        if (!top_level_result.valid) {
+            top_level_result.peak_memory_bytes = budget.peak_bytes;
+            return top_level_result;
+        }
+    }
+
+    const sol::object hook_object = env[std::string(func_name)];
+    if (hook_object.valid() && hook_object.get_type() == sol::type::function) {
         const sol::protected_function hook = hook_object.as<sol::protected_function>();
-        auto hook_exec = hook();
+        auto hook_exec = hook(ctx_table);
+        out.peak_memory_bytes = budget.peak_bytes;
         out.executed = true;
         if (!hook_exec.valid()) {
             const sol::error err = hook_exec;
-            out.ok = false;
-            out.error = err.what();
-            return out;
-        }
-
-        return out;
-    } catch (const std::exception& ex) {
-        out.ok = false;
-        out.error = ex.what();
-        return out;
-    }
-}
-
-ScriptDecisionResult execute_hook_decision_with_sol2(std::string_view script_text,
-                                                     std::string_view chunk_name,
-                                                     std::string_view func_name,
-                                                     const sandbox::Policy& policy,
-                                                     const HostApiMap& host_api) {
-    ScriptDecisionResult out{};
-
-    try {
-        sol::state state;
-        open_allowed_libraries(state, policy);
-
-        sol::environment env(state, sol::create, state.globals());
-        bind_host_api_to_environment(state, env, host_api);
-
-        auto script_exec = state.safe_script(
-            script_text,
-            env,
-            sol::script_pass_on_error,
-            std::string(chunk_name),
-            sol::load_mode::text);
-        if (!script_exec.valid()) {
-            const sol::error err = script_exec;
             out.valid = false;
-            out.failure_kind = LuaRuntime::ScriptFailureKind::kOther;
+            out.failure_kind = classify_failure(budget).value_or(LuaRuntime::ScriptFailureKind::kOther);
             out.error = err.what();
             return out;
         }
 
-        if (script_exec.return_count() > 0) {
-            out = parse_return_table_from_lua_object(
-                script_exec.get<sol::object>(0),
+        if (hook_exec.return_count() > 0) {
+            const ScriptDecisionResult hook_result = parse_return_table_from_lua_object(
+                hook_exec.get<sol::object>(0),
                 func_name);
-        }
-
-        const sol::object hook_object = env[std::string(func_name)];
-        if (!hook_object.valid() || hook_object.get_type() != sol::type::function) {
-            return out;
-        }
-
-        const sol::protected_function hook = hook_object.as<sol::protected_function>();
-        auto hook_exec = hook();
-        if (!hook_exec.valid()) {
-            const sol::error err = hook_exec;
-            ScriptDecisionResult hook_error{};
-            hook_error.valid = false;
-            hook_error.failure_kind = LuaRuntime::ScriptFailureKind::kOther;
-            hook_error.error = err.what();
-            return hook_error;
-        }
-
-        if (hook_exec.return_count() == 0) {
-            return ScriptDecisionResult{};
-        }
-
-        return parse_return_table_from_lua_object(
-            hook_exec.get<sol::object>(0),
-            func_name);
-    } catch (const std::exception& ex) {
-        out.valid = false;
-        out.failure_kind = LuaRuntime::ScriptFailureKind::kOther;
-        out.error = ex.what();
-        return out;
-    }
-}
-
-std::optional<std::string> validate_script_with_sol2(const std::filesystem::path& path,
-                                                     const sandbox::Policy& policy) {
-    try {
-        sol::state state;
-        open_allowed_libraries(state, policy);
-        auto load_result = state.load_file(path.string(), sol::load_mode::text);
-        if (load_result.valid()) {
-            return std::nullopt;
-        }
-
-        const sol::error err = load_result;
-        return err.what();
-    } catch (const std::exception& ex) {
-        return std::string(ex.what());
-    }
-}
-
-ScriptDecisionResult read_script_scaffold_decision(
-    const std::filesystem::path& path,
-    std::string_view func_name,
-    const sandbox::Policy& policy,
-    const HostApiMap& host_api) {
-    std::ifstream input(path, std::ios::binary);
-    if (!input.good()) {
-        ScriptDecisionResult out{};
-        out.valid = false;
-        out.error = "failed to open script: " + path.string();
-        return out;
-    }
-
-    const std::string script_text{
-        std::istreambuf_iterator<char>(input),
-        std::istreambuf_iterator<char>()
-    };
-
-    const std::string target_hook = to_lower_ascii(std::string(func_name));
-    std::istringstream lines(script_text);
-    std::string line;
-    while (std::getline(lines, line)) {
-        const ParsedDirective directive = parse_directive_line(line);
-        if (!directive.present) {
-            continue;
-        }
-
-        if (!directive.hook_name.empty() && directive.hook_name != target_hook) {
-            continue;
-        }
-
-        if (!directive.limit_token.empty()) {
-            const auto limit_kind = parse_limit_failure_kind(directive.limit_token);
-            ScriptDecisionResult out{};
-            out.valid = false;
-            if (!limit_kind.has_value()) {
-                out.failure_kind = LuaRuntime::ScriptFailureKind::kOther;
-                out.error = "invalid limit token: " + directive.limit_token + " path=" + path.string();
-                return out;
+            if (!hook_result.valid) {
+                ScriptDecisionResult failed = hook_result;
+                failed.peak_memory_bytes = budget.peak_bytes;
+                failed.executed = true;
+                return failed;
             }
 
-            out.failure_kind = *limit_kind;
-            if (*limit_kind == LuaRuntime::ScriptFailureKind::kInstructionLimit) {
-                out.error = "LUA_ERRRUN: instruction limit exceeded path=" + path.string();
-            } else {
-                out.error = "LUA_ERRMEM: memory limit exceeded path=" + path.string();
-            }
+            out.decision = hook_result.decision;
+            out.reason = hook_result.reason;
+            out.notice = hook_result.notice;
             return out;
         }
+    }
 
-        if (directive.decision_token.empty()) {
-            continue;
-        }
+    if (top_level_result.valid) {
+        out.decision = top_level_result.decision;
+        out.reason = top_level_result.reason;
+        out.notice = top_level_result.notice;
+    }
 
-        LuaHookDecision decision = LuaHookDecision::kPass;
-        if (!parse_hook_decision(directive.decision_token, decision)) {
-            ScriptDecisionResult out{};
+    if (const auto directive = find_matching_directive(script_text, func_name);
+        directive.has_value() && !directive->decision_token.empty()) {
+        LuaHookDecision directive_decision = LuaHookDecision::kPass;
+        if (!parse_hook_decision(directive->decision_token, directive_decision)) {
             out.valid = false;
             out.failure_kind = LuaRuntime::ScriptFailureKind::kOther;
-            out.error = "invalid decision token: " + directive.decision_token + " path=" + path.string();
+            out.error = "invalid decision token: " + directive->decision_token;
             return out;
         }
 
-        ScriptDecisionResult out{};
-        out.decision = decision;
-        out.reason = directive.reason;
-        return out;
+        if (hook_decision_rank(out.decision) == hook_decision_rank(LuaHookDecision::kPass)
+            && out.reason.empty() && out.notice.empty()) {
+            out.decision = directive_decision;
+            out.reason = directive->reason;
+        }
     }
 
-    ScriptDecisionResult table_result = execute_hook_decision_with_sol2(
-        script_text,
-        path.string(),
-        func_name,
-        policy,
-        host_api);
-    if (!table_result.valid) {
-        table_result.error += " path=" + path.string();
-    }
-    return table_result;
+    return out;
 }
 
 } // namespace
@@ -550,7 +763,7 @@ LuaRuntime::LoadResult LuaRuntime::load_script(const std::filesystem::path& path
 
     if (!enabled()) {
         ++errors_total_;
-        return LoadResult{false, make_disabled_error()};
+        return LoadResult{false, "lua scripting is disabled at build time (BUILD_LUA_SCRIPTING=OFF)"};
     }
 
     if (env_name.empty()) {
@@ -563,18 +776,20 @@ LuaRuntime::LoadResult LuaRuntime::load_script(const std::filesystem::path& path
         ++errors_total_;
         return LoadResult{false, "script file does not exist"};
     }
-
     if (!std::filesystem::is_regular_file(path, ec) || ec) {
         ++errors_total_;
         return LoadResult{false, "script path is not a regular file"};
     }
 
-    if (const auto validation_error = validate_script_with_sol2(path, policy_);
+    std::size_t peak_memory_bytes = 0;
+    if (const auto validation_error = validate_script_with_lua(path, policy_, peak_memory_bytes);
         validation_error.has_value()) {
+        memory_used_bytes_ = peak_memory_bytes;
         ++errors_total_;
         return LoadResult{false, *validation_error};
     }
 
+    memory_used_bytes_ = peak_memory_bytes;
     loaded_scripts_[env_name] = path;
     return LoadResult{true, {}};
 }
@@ -584,13 +799,14 @@ LuaRuntime::ReloadResult LuaRuntime::reload_scripts(const std::vector<ScriptEntr
 
     if (!enabled()) {
         ++errors_total_;
-        return ReloadResult{0, scripts.size(), make_disabled_error()};
+        return ReloadResult{0, scripts.size(), "lua scripting is disabled at build time (BUILD_LUA_SCRIPTING=OFF)"};
     }
 
     std::unordered_map<std::string, std::filesystem::path> reloaded;
     reloaded.reserve(scripts.size());
 
     std::size_t failed = 0;
+    std::size_t peak_memory_bytes = 0;
     for (const auto& script : scripts) {
         if (script.env_name.empty()) {
             ++errors_total_;
@@ -610,13 +826,16 @@ LuaRuntime::ReloadResult LuaRuntime::reload_scripts(const std::vector<ScriptEntr
             continue;
         }
 
-        if (const auto validation_error = validate_script_with_sol2(script.path, policy_);
+        std::size_t script_peak_memory = 0;
+        if (const auto validation_error = validate_script_with_lua(script.path, policy_, script_peak_memory);
             validation_error.has_value()) {
+            peak_memory_bytes = std::max(peak_memory_bytes, script_peak_memory);
             ++errors_total_;
             ++failed;
             continue;
         }
 
+        peak_memory_bytes = std::max(peak_memory_bytes, script_peak_memory);
         auto [it, inserted] = reloaded.emplace(script.env_name, script.path);
         if (!inserted) {
             ++errors_total_;
@@ -625,18 +844,20 @@ LuaRuntime::ReloadResult LuaRuntime::reload_scripts(const std::vector<ScriptEntr
         }
     }
 
+    memory_used_bytes_ = peak_memory_bytes;
     loaded_scripts_ = std::move(reloaded);
     ++reload_epoch_;
     return ReloadResult{loaded_scripts_.size(), failed, {}};
 }
 
 LuaRuntime::CallResult LuaRuntime::call(const std::string& env_name,
-                                        const std::string& func_name) {
+                                        const std::string& func_name,
+                                        const LuaHookContext& ctx) {
     std::lock_guard<std::mutex> lock(mu_);
 
     if (!enabled()) {
         ++errors_total_;
-        return CallResult{false, false, make_disabled_error()};
+        return CallResult{false, false, "lua scripting is disabled at build time (BUILD_LUA_SCRIPTING=OFF)"};
     }
 
     if (func_name.empty()) {
@@ -649,33 +870,45 @@ LuaRuntime::CallResult LuaRuntime::call(const std::string& env_name,
         return CallResult{true, false, {}};
     }
 
-    std::ifstream input(it->second, std::ios::binary);
-    if (!input.good()) {
+    std::string read_error;
+    const auto script_text = read_script_text(it->second, read_error);
+    if (!script_text.has_value()) {
         ++errors_total_;
-        return CallResult{false, false, "failed to open script: " + it->second.string()};
+        return CallResult{false, false, read_error};
     }
 
-    const std::string script_text{
-        std::istreambuf_iterator<char>(input),
-        std::istreambuf_iterator<char>()
-    };
-
-    const auto hook_call = execute_hook_call_with_sol2(
-        script_text,
+    const ScriptDecisionResult result = execute_script(
+        *script_text,
         it->second.string(),
+        env_name,
         func_name,
+        ctx,
         policy_,
         host_api_);
-    if (!hook_call.ok) {
+    memory_used_bytes_ = result.peak_memory_bytes;
+    if (!result.valid) {
+        switch (result.failure_kind) {
+        case ScriptFailureKind::kInstructionLimit:
+            ++instruction_limit_hits_;
+            break;
+        case ScriptFailureKind::kMemoryLimit:
+            ++memory_limit_hits_;
+            break;
+        case ScriptFailureKind::kNone:
+        case ScriptFailureKind::kOther:
+        default:
+            break;
+        }
         ++errors_total_;
-        return CallResult{false, hook_call.executed, hook_call.error};
+        return CallResult{false, result.executed, result.error};
     }
 
     ++calls_total_;
-    return CallResult{true, hook_call.executed, {}};
+    return CallResult{true, result.executed, {}};
 }
 
-LuaRuntime::CallAllResult LuaRuntime::call_all(const std::string& func_name) {
+LuaRuntime::CallAllResult LuaRuntime::call_all(const std::string& func_name,
+                                               const LuaHookContext& ctx) {
     std::lock_guard<std::mutex> lock(mu_);
 
     if (!enabled()) {
@@ -686,7 +919,7 @@ LuaRuntime::CallAllResult LuaRuntime::call_all(const std::string& func_name) {
             LuaHookDecision::kPass,
             {},
             {},
-            make_disabled_error(),
+            "lua scripting is disabled at build time (BUILD_LUA_SCRIPTING=OFF)",
             {},
         };
     }
@@ -714,33 +947,52 @@ LuaRuntime::CallAllResult LuaRuntime::call_all(const std::string& func_name) {
         return lhs.first < rhs.first;
     });
 
+    std::size_t peak_memory_bytes = 0;
     for (const auto& [env_name, path] : ordered_scripts) {
         CallAllResult::ScriptCallResult script_call{};
         script_call.env_name = env_name;
 
-        const auto script_result = read_script_scaffold_decision(
-            path,
+        std::string read_error;
+        const auto script_text = read_script_text(path, read_error);
+        if (!script_text.has_value()) {
+            script_call.failed = true;
+            script_call.failure_kind = ScriptFailureKind::kOther;
+            script_results.push_back(std::move(script_call));
+            ++failed;
+            ++errors_total_;
+            if (first_error.empty()) {
+                first_error = read_error;
+            }
+            continue;
+        }
+
+        const ScriptDecisionResult script_result = execute_script(
+            *script_text,
+            path.string(),
+            env_name,
             func_name,
+            ctx,
             policy_,
             host_api_);
+        peak_memory_bytes = std::max(peak_memory_bytes, script_result.peak_memory_bytes);
+
         if (!script_result.valid) {
             script_call.failed = true;
+            script_call.failure_kind = script_result.failure_kind;
+            script_results.push_back(std::move(script_call));
+
             switch (script_result.failure_kind) {
-            case LuaRuntime::ScriptFailureKind::kInstructionLimit:
-                script_call.failure_kind = LuaRuntime::ScriptFailureKind::kInstructionLimit;
+            case ScriptFailureKind::kInstructionLimit:
                 ++instruction_limit_hits_;
                 break;
-            case LuaRuntime::ScriptFailureKind::kMemoryLimit:
-                script_call.failure_kind = LuaRuntime::ScriptFailureKind::kMemoryLimit;
+            case ScriptFailureKind::kMemoryLimit:
                 ++memory_limit_hits_;
                 break;
-            case LuaRuntime::ScriptFailureKind::kNone:
-            case LuaRuntime::ScriptFailureKind::kOther:
+            case ScriptFailureKind::kNone:
+            case ScriptFailureKind::kOther:
             default:
-                script_call.failure_kind = LuaRuntime::ScriptFailureKind::kOther;
                 break;
             }
-            script_results.push_back(std::move(script_call));
 
             ++failed;
             ++errors_total_;
@@ -764,13 +1016,14 @@ LuaRuntime::CallAllResult LuaRuntime::call_all(const std::string& func_name) {
         }
     }
 
+    memory_used_bytes_ = peak_memory_bytes;
     calls_total_ += attempted;
     return CallAllResult{
         attempted,
         failed,
         aggregated_decision,
         aggregated_reason,
-        aggregated_notices,
+        std::move(aggregated_notices),
         first_error,
         std::move(script_results),
     };
@@ -800,6 +1053,7 @@ void LuaRuntime::reset() {
 
     loaded_scripts_.clear();
     host_api_.clear();
+    memory_used_bytes_ = 0;
     calls_total_ = 0;
     errors_total_ = 0;
     instruction_limit_hits_ = 0;
@@ -821,7 +1075,7 @@ LuaRuntime::MetricsSnapshot LuaRuntime::metrics_snapshot() const {
     MetricsSnapshot snapshot{};
     snapshot.loaded_scripts = loaded_scripts_.size();
     snapshot.registered_host_api = host_api_.size();
-    snapshot.memory_used_bytes = 0;
+    snapshot.memory_used_bytes = memory_used_bytes_;
     snapshot.calls_total = calls_total_;
     snapshot.errors_total = errors_total_;
     snapshot.instruction_limit_hits = instruction_limit_hits_;

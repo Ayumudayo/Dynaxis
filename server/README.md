@@ -159,19 +159,50 @@ docker exec knights-stack-server-1-1 cp /app/plugins_builtin/staging/10_chat_hoo
 docker exec knights-stack-server-1-1 rm -f /app/plugins_builtin/10_chat_hook_sample_LOCK
 ```
 
-## Lua cold-hook scaffold (실험)
+## Lua cold-hook authoring model (실험)
 
-현재 Lua 런타임은 cold path에서 스캐폴드 모드로 동작하며, 스크립트 주석 directive를 통해 훅 결정을 시뮬레이션할 수 있다.
+Phase 16 backlog 기준으로 Lua 스크립트의 기본 작성 모델은 function-style hook + `ctx`다.
+공식 빌드/런타임 이미지는 `BUILD_LUA_SCRIPTING=ON`을 전제로 하고, 실제 활성화는 `LUA_ENABLED=1`에서만 일어난다.
 
-- directive 형식(예): `-- hook=on_login decision=deny reason=login denied by lua scaffold`
-- return-table 형식(예): `return { hook = "on_login", decision = "pass", notice = "welcome" }`
-- 지원 decision: `pass`, `allow`, `modify`, `handled`, `block`, `deny`
-- 지원 필드: `hook`, `decision`, `reason`, `notice` (모두 optional, `decision`은 사용 시 유효 토큰 필요)
-- 우선순위: `block/deny > handled > modify > pass/allow`
+권장 형태:
+
+```lua
+function on_login(ctx)
+  if not ctx or not ctx.session_id then
+    return { decision = "pass" }
+  end
+
+  local name = server.get_user_name(ctx.session_id)
+  if name and name ~= "" then
+    server.send_notice(ctx.session_id, "welcome back, " .. name)
+  end
+
+  return { decision = "pass" }
+end
+```
+
+핵심 규약:
+
+- 기본 형태: `function on_<hook>(ctx) ... end`
+- 입력: `ctx.session_id`, `ctx.user`, `ctx.room`, `ctx.command`, `ctx.args` 등 hook별 스냅샷 필드
+- 호스트 API: `server.get_*`, `server.send_notice`, `server.broadcast_*`, `server.log_*`, `server.hook_name`, `server.script_name`
 - 적용 경로: native 훅 체인 결과가 `kPass`일 때만 Lua cold hook 호출
 - native 훅이 `kBlock/kDeny`를 반환하면 Lua는 호출되지 않는다
 
-샘플 스크립트:
+호환성 fallback/testing aid:
+
+- return-table 형식(예): `return { hook = "on_login", decision = "pass", notice = "welcome" }`
+- directive 형식(예): `-- hook=on_login decision=deny reason=login denied by lua scaffold`
+- limit 시뮬레이션: `-- hook=on_admin_command limit=instruction|memory`
+- 위 형식들은 샘플 bring-up, auto-disable, limit-path 테스트를 위한 보조 수단으로 유지한다.
+
+샘플 경로:
+
+- `server/scripts/*.lua`는 런타임 이미지의 builtin fallback(`/app/scripts_builtin`) 소스다.
+- `docker/stack/scripts/*.lua`는 compose mount(`/app/scripts`) 샘플이다.
+- 겹치는 샘플 이름은 builtin과 stack 동작이 어긋나지 않도록 같은 내용으로 유지한다.
+
+기본 샘플:
 
 - `server/scripts/on_login_welcome.lua`
 - `server/scripts/on_join_policy.lua`

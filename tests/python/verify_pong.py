@@ -16,7 +16,7 @@ def verify_pong(host: str, port: int, timeout_sec: float) -> int:
             flags = 0
             seq = 1
             timestamp = 0
-            header = struct.pack(">HHHH", length, msg_id, flags, seq) + struct.pack(
+            header = struct.pack(">HHHI", length, msg_id, flags, seq) + struct.pack(
                 ">I", timestamp
             )
 

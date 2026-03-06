@@ -10,8 +10,13 @@
   "exclusive_group": "on_join_policy",
   "checksum": "sha256:REPLACE_WITH_SCRIPT_SHA256",
   "compat": {
-    "lua_mode": "cold_hook_scaffold",
+    "lua_mode": "function_hook_ctx_primary",
+    "fallback_modes": [
+      "return_table",
+      "directive_testing"
+    ],
     "requires": [
+      "BUILD_LUA_SCRIPTING=ON",
       "LUA_ENABLED=1"
     ]
   },

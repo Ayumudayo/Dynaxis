@@ -14,6 +14,8 @@
 - 플러그인 fallback 디렉터리: `/app/plugins_builtin` (`CHAT_HOOK_FALLBACK_PLUGINS_DIR`)
 - 스크립트 디렉터리: `/app/scripts` (`docker/stack/scripts` read-only mount)
 - 스크립트 fallback 디렉터리: `/app/scripts_builtin` (`LUA_FALLBACK_SCRIPTS_DIR`)
+- built-in fallback 이미지는 `server/scripts/`를 복사해 만든다.
+- 겹치는 샘플 이름은 `server/scripts/`와 `docker/stack/scripts/`에서 같은 내용으로 유지해 mount/fallback 드리프트를 줄인다.
 - 기본 런타임 토글: `CHAT_HOOK_ENABLED=0`, `LUA_ENABLED=0`
 - 서버 컨테이너 예시: `knights-stack-server-1-1`, `knights-stack-server-2-1`
 
@@ -54,7 +56,8 @@ docker logs knights-stack-server-2-1 --since 5m
 ## 3. Lua 스크립트 교체 절차 (hot-reload)
 
 1) 호스트 스크립트 수정
-- `docker/stack/scripts/*.lua` 파일을 수정/배포한다.
+- 공용 샘플이면 `server/scripts/*.lua`와 `docker/stack/scripts/*.lua`를 함께 갱신한다.
+- 우선 작성 모델은 function-style hook + `ctx`이며, directive/return-table은 fallback 테스트에만 사용한다.
 
 2) watcher 감지/재로드 확인
 - 기대 로그:

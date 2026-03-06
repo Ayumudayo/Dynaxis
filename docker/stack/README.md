@@ -62,5 +62,6 @@ pwsh scripts/deploy_docker.ps1 -Action down
 
 ## 참고
 - `server_app`은 (실험) chat hook 플러그인을 사용할 수 있다. 기본 스택은 `CHAT_HOOK_ENABLED=0`(비활성)이며, 필요 시 `CHAT_HOOK_ENABLED=1`로 활성화한다. 활성화 시 `CHAT_HOOK_PLUGINS_DIR=/app/plugins`를 우선 사용하고, 디렉터리가 비어 있으면 `CHAT_HOOK_FALLBACK_PLUGINS_DIR=/app/plugins_builtin`으로 이미지 내 샘플 플러그인을 로드한다. (`server/README.md` 참고)
-- Lua cold-hook 샘플 스크립트는 이미지에 `/app/scripts_builtin`으로 포함되며, 기본 스택은 `LUA_ENABLED=0`(비활성)이다. 필요 시 `LUA_ENABLED=1`로 활성화하면 `docker/stack/scripts/*.lua`를 `/app/scripts`로 read-only 마운트해 우선 로드하고, `/app/scripts`가 비어 있거나 읽기 실패면 `LUA_FALLBACK_SCRIPTS_DIR=/app/scripts_builtin`으로 fallback한다.
+- Lua cold-hook 샘플 스크립트는 `server/scripts/`에서 runtime image `/app/scripts_builtin`으로 복사된다. 기본 스택은 `LUA_ENABLED=0`(비활성)이며, 필요 시 `LUA_ENABLED=1`로 활성화하면 `docker/stack/scripts/*.lua`를 `/app/scripts`로 read-only 마운트해 우선 로드하고, `/app/scripts`가 비어 있거나 읽기 실패면 `LUA_FALLBACK_SCRIPTS_DIR=/app/scripts_builtin`으로 fallback한다.
+- 겹치는 샘플 이름은 `server/scripts/`와 `docker/stack/scripts/`에서 같은 function-style hook 내용을 유지하는 것을 기준으로 한다. directive/return-table은 fallback/testing aid로만 남긴다.
 - 기본 `haproxy.cfg`는 로컬 검증용 TCP 구성이며, 운영 TLS baseline은 `docker/stack/haproxy/haproxy.tls13.cfg` 템플릿(TLS 1.3 기본 + 레거시 예외 분리 + 내부 mTLS)을 참고한다.

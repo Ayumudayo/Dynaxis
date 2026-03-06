@@ -8,6 +8,7 @@
 #include <chrono>
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <optional>
 #include <cctype>
 #include <unordered_map>
@@ -39,7 +40,6 @@
 #include "server/core/scripting/lua_runtime.hpp"
 #include "server/core/scripting/script_watcher.hpp"
 #include "server/chat/chat_service.hpp"
-#include "server/scripting/chat_lua_bindings.hpp"
 // Protobuf (수신 payload ts_ms 파싱용)
 #include "wire.pb.h"
 // 캐시/팬아웃: Redis 클라이언트(스켈레톤)
@@ -354,14 +354,7 @@ int run_server(int argc, char** argv) {
 
             lua_runtime = std::make_shared<core::scripting::LuaRuntime>(std::move(lua_cfg));
             services::set(lua_runtime);
-            const auto binding_result = server::app::scripting::register_chat_lua_bindings(*lua_runtime);
-            corelog::info(
-                "Lua runtime scaffold initialised and registered"
-                " bindings_registered=" + std::to_string(binding_result.registered)
-                + "/" + std::to_string(binding_result.attempted));
-            if (binding_result.registered != binding_result.attempted) {
-                corelog::warn("Lua host API binding registration is partial");
-            }
+            corelog::info("Lua runtime scaffold initialised");
         }
 #endif
 
@@ -398,6 +391,11 @@ int run_server(int argc, char** argv) {
         core_internal::register_connection_runtime_state_service(state);
         services::set(make_ref(scheduler));
         services::set(make_ref(app_host));
+#if KNIGHTS_BUILD_LUA_SCRIPTING
+        if (lua_reload_strand) {
+            services::set(lua_reload_strand);
+        }
+#endif
 
         // 스케줄러 타이머 설정
         scheduler_timer = std::make_shared<asio::steady_timer>(io);
@@ -552,7 +550,28 @@ int run_server(int argc, char** argv) {
                     });
                 };
 
-                (*reload_all_lua_scripts)();
+                const auto run_lua_reload_sync = [lua_reload_strand, reload_all_lua_scripts, &io]() {
+                    if (!lua_reload_strand) {
+                        (*reload_all_lua_scripts)();
+                        return;
+                    }
+
+                    auto promise = std::make_shared<std::promise<void>>();
+                    auto future = promise->get_future();
+                    asio::post(*lua_reload_strand, [reload_all_lua_scripts, promise]() {
+                        (*reload_all_lua_scripts)();
+                        promise->set_value();
+                    });
+
+                    while (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+                        if (io.poll_one() == 0) {
+                            std::this_thread::yield();
+                        }
+                    }
+                    future.get();
+                };
+
+                run_lua_reload_sync();
 
                 const auto poll_lua_scripts = [&lua_script_watcher,
                                                ensure_lua_watcher,

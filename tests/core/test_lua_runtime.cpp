@@ -311,6 +311,57 @@ TEST_F(LuaRuntimeTest, CallAllUsesFunctionReturnDecisionWhenHookExists) {
 #endif
 }
 
+TEST_F(LuaRuntimeTest, CallAllPassesHookContextIntoLuaAndHostCallbacks) {
+    LuaRuntime runtime;
+
+    const auto script_path = temp_dir_ / "host_api.lua";
+    write_text(script_path,
+               "function on_login(ctx)\n"
+               "  return { decision = \"deny\", reason = server.describe_user(ctx.user, ctx.session_id) }\n"
+               "end\n");
+
+    std::vector<LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(LuaRuntime::ScriptEntry{script_path, "host_api"});
+    const auto reload = runtime.reload_scripts(scripts);
+
+    LuaRuntime::HostCallContext observed_context{};
+    LuaRuntime::HostArgs observed_args;
+    const bool registered = runtime.register_host_api(
+        "server",
+        "describe_user",
+        [&observed_context, &observed_args](const LuaRuntime::HostArgs& args,
+                                            const LuaRuntime::HostCallContext& context) {
+            observed_args = args;
+            observed_context = context;
+            return LuaRuntime::HostCallResult{
+                LuaRuntime::HostValue{"session " + std::to_string(context.hook.session_id) + " for " + context.hook.user},
+                {}
+            };
+        });
+
+    LuaHookContext ctx{};
+    ctx.session_id = 77;
+    ctx.user = "alice";
+    const auto result = runtime.call_all("on_login", ctx);
+
+#if KNIGHTS_BUILD_LUA_SCRIPTING
+    EXPECT_TRUE(reload.error.empty());
+    EXPECT_TRUE(registered);
+    EXPECT_EQ(result.decision, LuaHookDecision::kDeny);
+    EXPECT_EQ(result.reason, "session 77 for alice");
+    ASSERT_EQ(observed_args.size(), 2u);
+    EXPECT_EQ(std::get<std::string>(observed_args[0].value), "alice");
+    EXPECT_EQ(std::get<std::int64_t>(observed_args[1].value), 77);
+    EXPECT_EQ(observed_context.hook_name, "on_login");
+    EXPECT_EQ(observed_context.script_name, "host_api");
+    EXPECT_EQ(observed_context.hook.user, "alice");
+#else
+    EXPECT_FALSE(reload.error.empty());
+    EXPECT_FALSE(registered);
+    EXPECT_FALSE(result.error.empty());
+#endif
+}
+
 TEST_F(LuaRuntimeTest, CallAllAggregatesNoticesAcrossScripts) {
     LuaRuntime runtime;
 
@@ -394,13 +445,17 @@ TEST_F(LuaRuntimeTest, CallAllUsesDeterministicReasonAcrossMultipleDenyScripts) 
 #endif
 }
 
-TEST_F(LuaRuntimeTest, CallAllInstructionLimitDirectiveIncrementsLimitHits) {
-    LuaRuntime runtime;
+TEST_F(LuaRuntimeTest, CallAllInstructionLimitIncrementsLimitHits) {
+    LuaRuntime::Config cfg{};
+    cfg.instruction_limit = 1'000;
+    LuaRuntime runtime(cfg);
 
     const auto script_path = temp_dir_ / "limit_instruction.lua";
     write_text(script_path,
-               "-- hook=on_login limit=instruction\n"
-               "return 1\n");
+               "function on_login(ctx)\n"
+               "  while true do\n"
+               "  end\n"
+               "end\n");
 
     std::vector<LuaRuntime::ScriptEntry> scripts;
     scripts.push_back(LuaRuntime::ScriptEntry{script_path, "limit_instruction"});
@@ -415,7 +470,7 @@ TEST_F(LuaRuntimeTest, CallAllInstructionLimitDirectiveIncrementsLimitHits) {
     EXPECT_EQ(result.attempted, 1u);
     EXPECT_EQ(result.failed, 1u);
     EXPECT_EQ(result.decision, LuaHookDecision::kPass);
-    EXPECT_NE(result.error.find("LUA_ERRRUN"), std::string::npos);
+    EXPECT_NE(result.error.find("instruction limit exceeded"), std::string::npos);
     ASSERT_EQ(result.script_results.size(), 1u);
     EXPECT_TRUE(result.script_results.front().failed);
     EXPECT_EQ(result.script_results.front().failure_kind, LuaRuntime::ScriptFailureKind::kInstructionLimit);
@@ -427,13 +482,20 @@ TEST_F(LuaRuntimeTest, CallAllInstructionLimitDirectiveIncrementsLimitHits) {
 #endif
 }
 
-TEST_F(LuaRuntimeTest, CallAllMemoryLimitDirectiveIncrementsLimitHits) {
-    LuaRuntime runtime;
+TEST_F(LuaRuntimeTest, CallAllMemoryLimitIncrementsLimitHits) {
+    LuaRuntime::Config cfg{};
+    cfg.memory_limit_bytes = 256 * 1024;
+    LuaRuntime runtime(cfg);
 
     const auto script_path = temp_dir_ / "limit_memory.lua";
     write_text(script_path,
-               "-- hook=on_login limit=memory\n"
-               "return 1\n");
+               "function on_login(ctx)\n"
+               "  local values = {}\n"
+               "  for i = 1, 4096 do\n"
+               "    values[i] = tostring(i) .. string.rep('x', 1024)\n"
+               "  end\n"
+               "  return { decision = 'pass' }\n"
+               "end\n");
 
     std::vector<LuaRuntime::ScriptEntry> scripts;
     scripts.push_back(LuaRuntime::ScriptEntry{script_path, "limit_memory"});
@@ -448,7 +510,7 @@ TEST_F(LuaRuntimeTest, CallAllMemoryLimitDirectiveIncrementsLimitHits) {
     EXPECT_EQ(result.attempted, 1u);
     EXPECT_EQ(result.failed, 1u);
     EXPECT_EQ(result.decision, LuaHookDecision::kPass);
-    EXPECT_NE(result.error.find("LUA_ERRMEM"), std::string::npos);
+    EXPECT_FALSE(result.error.empty());
     ASSERT_EQ(result.script_results.size(), 1u);
     EXPECT_TRUE(result.script_results.front().failed);
     EXPECT_EQ(result.script_results.front().failure_kind, LuaRuntime::ScriptFailureKind::kMemoryLimit);
@@ -466,7 +528,12 @@ TEST_F(LuaRuntimeTest, ResetClearsRuntimeState) {
     const auto script_path = temp_dir_ / "sample.lua";
     write_text(script_path, "return 1\n");
 
-    (void)runtime.register_host_api("server", "log_info", []() {});
+    (void)runtime.register_host_api(
+        "server",
+        "log_info",
+        [](const LuaRuntime::HostArgs&, const LuaRuntime::HostCallContext&) {
+            return LuaRuntime::HostCallResult{};
+        });
     (void)runtime.load_script(script_path, "sample");
     (void)runtime.call("sample", "on_login");
 
