@@ -1,0 +1,131 @@
+name: CI Fast
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "README.md"
+      - "docs/**"
+      - "**/*.md"
+  pull_request:
+    paths-ignore:
+      - "README.md"
+      - "docs/**"
+      - "**/*.md"
+  merge_group:
+    types:
+      - checks_requested
+
+env:
+  PYTHONIOENCODING: utf-8
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-fast-tests:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CONAN_HOME: ${{ github.workspace }}-conan2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Mark Conan cache restore start (Windows)
+        shell: pwsh
+        run: |
+          "CONAN_CACHE_RESTORE_START=$(Get-Date -AsUTC -Format o)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Restore Conan cache (Windows)
+        id: conan_cache_restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CONAN_HOME }}
+          key: ${{ runner.os }}-conan2-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/**', 'scripts/setup_conan.ps1', 'scripts/build.ps1') }}
+          restore-keys: |
+            ${{ runner.os }}-conan2-
+
+      - name: Summarize Conan cache restore (Windows)
+        shell: pwsh
+        run: |
+          $start = [DateTime]::Parse($env:CONAN_CACHE_RESTORE_START)
+          $elapsed = [Math]::Round(((Get-Date).ToUniversalTime() - $start).TotalSeconds, 2)
+          $hit = '${{ steps.conan_cache_restore.outputs.cache-hit }}'
+          if ([string]::IsNullOrWhiteSpace($hit)) { $hit = 'false' }
+          $matchedKey = '${{ steps.conan_cache_restore.outputs.cache-matched-key }}'
+          if ([string]::IsNullOrWhiteSpace($matchedKey)) { $matchedKey = 'N/A' }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '### conan cache telemetry (Windows fast gate)'
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_hit: {0}" -f $hit)
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_elapsed_sec: {0}" -f $elapsed)
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_key: {0}" -f $matchedKey)
+
+      - name: Ensure Conan cache directory
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "${{ env.CONAN_HOME }}" | Out-Null
+
+      - name: Ensure lockfile exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "conan.lock")) {
+            throw "conan.lock is required for reproducible Conan CI runs"
+          }
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan2
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install "conan>=2.0,<3"
+          conan --version
+
+      - name: Enable MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Validate Opcode Specs
+        shell: pwsh
+        run: |
+          python tools/gen_opcode_docs.py --check
+
+      - name: Validate Generated Opcode Headers
+        shell: pwsh
+        run: |
+          python tools/gen_opcodes.py core/protocol/system_opcodes.json core/include/server/core/protocol/system_opcodes.hpp
+          python tools/gen_opcodes.py server/protocol/game_opcodes.json server/include/server/protocol/game_opcodes.hpp
+          git diff --exit-code -- core/include/server/core/protocol/system_opcodes.hpp server/include/server/protocol/game_opcodes.hpp
+
+      - name: Validate Doxygen Coverage
+        shell: pwsh
+        run: |
+          python tools/check_doxygen_coverage.py
+
+      - name: Run Doxygen Tool Unit Tests
+        shell: pwsh
+        run: |
+          python tests/python/test_check_doxygen_coverage.py
+
+      - name: Validate Wire Codec Specs
+        shell: pwsh
+        run: |
+          python tools/gen_wire_codec.py protocol/wire_map.json core/include/server/wire/codec.hpp
+          git diff --exit-code -- core/include/server/wire/codec.hpp
+
+      - name: Build (Release)
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Release
+
+      - name: Run Windows Unit Tests (ctest)
+        shell: pwsh
+        run: |
+          ctest --preset windows-test --parallel 8 --output-on-failure

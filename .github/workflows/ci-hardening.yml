@@ -1,0 +1,117 @@
+name: CI Hardening
+
+on:
+  push:
+    branches:
+      - main
+  merge_group:
+    types:
+      - checks_requested
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+env:
+  PYTHONIOENCODING: utf-8
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-hardening:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker Info
+        run: |
+          docker version
+          docker compose version
+
+      - name: Build Base Image (knights-base) with cache
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.base
+          tags: knights-base:latest
+          load: true
+          cache-from: type=gha,scope=knights-base-${{ runner.os }}
+          cache-to: type=gha,mode=max,scope=knights-base-${{ runner.os }}
+          provenance: false
+
+      - name: Verify Local Base Image
+        run: |
+          docker image inspect knights-base:latest > /dev/null
+
+      - name: ASan/UBSan Build (server_app) + Core Lua runtime gate
+        run: |
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/app" \
+            -w /app \
+            knights-base:latest \
+            bash -lc "set -e; apt-get update && apt-get install -y ninja-build; \
+            cmake --preset linux-asan -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=OFF; \
+            cmake --build --preset linux-asan --target server_app protocol_fuzz_harness --parallel; \
+            cmake --preset linux -DBUILD_CONTRACT_TESTS=OFF; \
+            cmake --build --preset linux-debug --target core_plugin_runtime_tests --parallel; \
+            ctest --test-dir build-linux -R 'LuaRuntimeTest|LuaSandboxTest' --output-on-failure --no-tests=error"
+
+      - name: ASan Protocol Fuzz Harness
+        run: |
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/app" \
+            -w /app \
+            -e FUZZ_ITERATIONS=200000 \
+            knights-base:latest \
+            bash -lc "./build-linux/tests/protocol_fuzz_harness"
+
+      - name: Start Stack (Detached, Runtime On)
+        shell: pwsh
+        env:
+          DOCKER_BUILDKIT: "0"
+          CHAT_HOOK_ENABLED: "1"
+          LUA_ENABLED: "1"
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/deploy_docker.ps1 -Action up -Detached -Build
+
+      - name: Wait For HAProxy
+        run: |
+          python3 - <<'PY'
+          import socket, time
+          host, port = '127.0.0.1', 6000
+          deadline = time.time() + 60
+          last_err = None
+          while time.time() < deadline:
+              try:
+                  with socket.create_connection((host, port), timeout=1.0):
+                      print('HAProxy is ready')
+                      raise SystemExit(0)
+              except Exception as e:
+                  last_err = e
+                  time.sleep(1)
+          raise SystemExit(f'HAProxy not ready: {last_err}')
+          PY
+
+      - name: Soak + Performance Regression Gate
+        run: |
+          PERF_P95_MAX_MS=300 PERF_P99_MAX_MS=700 PERF_MIN_THROUGHPUT_RPS=10 python3 tests/python/verify_soak_perf_gate.py
+
+      - name: Dump Stack Logs (On Failure)
+        if: failure()
+        run: |
+          docker compose --project-name knights-stack --project-directory docker/stack -f docker/stack/docker-compose.yml ps
+          docker compose --project-name knights-stack --project-directory docker/stack -f docker/stack/docker-compose.yml logs --no-color --tail 200
+
+      - name: Stop Stack
+        if: always()
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/deploy_docker.ps1 -Action down

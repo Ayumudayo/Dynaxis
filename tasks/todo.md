@@ -763,11 +763,17 @@
   - [x] `gateway_app`에서 UDP ingress capability 항상 포함 경로로 정리
   - [x] `lua_runtime_disabled.cpp`, lua-off preset, source-selection checker 제거 범위 확정
   - [x] 관련 CMake/프리셋/도커 빌드 경로 영향 파일 목록 정리
-- [ ] Phase C - CI 구조 재편
+- [x] Phase C - CI 구조 재편
   - [x] `.github/workflows/ci.yml`의 현재 job/step을 목적별로 분류한다 (fast/api/stack/extensibility/hardening/prewarm)
-  - [ ] required PR gate와 `main`/nightly gate를 분리하는 새 workflow 구조를 설계한다
+  - [x] required PR gate와 `main`/nightly gate를 분리하는 새 workflow 구조를 설계한다
+  - [x] `ci-fast.yml`로 Windows fast gate를 분리하고 기존 `ci.yml`의 fast 책임을 이전한다
+  - [x] `ci-api-governance.yml`로 core API consumer/governance gate를 분리한다
+  - [x] `ci-stack.yml`로 baseline/off + runtime-on 기본 stack smoke를 분리한다
+  - [x] `ci-extensibility.yml`로 plugin/script stack smoke를 path-gated workflow로 분리한다
+  - [x] `ci-hardening.yml`로 ASan/fuzz/soak를 main/merge_group/nightly 전용으로 분리한다
+  - [x] `ci-prewarm.yml`로 Conan/base-image prewarm을 schedule/dispatch 전용으로 분리한다
   - [x] build-variant 검증을 runtime-off/runtime-on 검증으로 치환하는 계획을 확정한다
-  - [ ] cache prewarm/PoC 성격 workflow를 required gate에서 분리하는 계획을 확정한다
+  - [x] cache prewarm/PoC 성격 workflow를 required gate에서 분리하는 계획을 확정한다
 - [x] Phase D - 이행/검증 계획
   - [x] 단계별 롤아웃 순서와 각 단계의 성공/롤백 기준을 정의한다
   - [x] 최소 검증 세트(PR 기본), 확장 검증 세트(main/nightly), path-gated 검증 세트를 정의한다
@@ -791,3 +797,9 @@
   - 검증(Docker, clean build): `scripts/deploy_docker.ps1 -Action up -Detached -Build` 후 baseline/off `verify_runtime_toggle_metrics.py --expect-chat-hook-enabled 0 --expect-lua-enabled 0`, `verify_pong.py`, `verify_chat.py` 통과.
   - 검증(Docker, runtime on): `CHAT_HOOK_ENABLED=1`, `LUA_ENABLED=1`로 재기동 후 `verify_runtime_toggle_metrics.py --expect-chat-hook-enabled 1 --expect-lua-enabled 1`, `verify_script_hot_reload.py`, `verify_chat_hook_behavior.py`, `verify_plugin_hot_reload.py --check-only` 통과.
   - 잔여 작업은 workflow 파일 분리와 required/main/nightly gate 재분류 같은 Phase C 구조 리팩터링으로 좁혀졌다.
+- 진행 메모 (2026-03-06, CI split 구현 완료):
+  - 기존 `.github/workflows/ci.yml`를 제거하고 `ci-fast.yml`, `ci-api-governance.yml`, `ci-stack.yml`, `ci-extensibility.yml`, `ci-hardening.yml`, `ci-prewarm.yml`로 분리했다.
+  - PR 기본 gate는 fast/api/stack 중심으로 남기고, hardening은 `main`/`merge_group`/nightly, prewarm은 `schedule`/`workflow_dispatch` 전용으로 이동했다.
+  - `ci-extensibility.yml`은 plugin/script 관련 path에서만 동작하도록 path filter를 추가했다.
+  - 정적 검증: `python -c "import pathlib,yaml; ..."`로 `.github/workflows/*.yml` 전부 YAML parse 성공을 확인했다.
+  - 후속 운영 작업: GitHub branch protection의 required check 이름을 새 workflow 이름 기준으로 갱신해야 한다.

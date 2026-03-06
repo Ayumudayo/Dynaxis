@@ -1,6 +1,6 @@
 # CI / Runtime Capability Simplification Plan
 
-상태: Phase A/B 완료, Phase C workflow split 설계 진행 중
+상태: Phase A/B 완료, Phase C 1차 workflow split 구현 완료
 
 작성일: 2026-03-06
 
@@ -250,6 +250,21 @@ required PR gate는 다음 성격만 남긴다.
 
 - PR required workflow 수와 책임이 명확하고, 실패 원인 계층이 바로 드러난다.
 
+진행 상태:
+
+- 1차 구현 완료 (2026-03-06)
+- 분리 결과:
+  - `ci-fast.yml`
+  - `ci-api-governance.yml`
+  - `ci-stack.yml`
+  - `ci-extensibility.yml`
+  - `ci-hardening.yml`
+  - `ci-prewarm.yml`
+- 기존 단일 `.github/workflows/ci.yml`는 제거했다.
+- 남은 운영 작업:
+  - GitHub branch protection / required check 이름을 새 workflow 이름 기준으로 재설정
+  - path filter 범위와 required 여부를 실제 CI telemetry 기준으로 추가 미세조정
+
 ### Phase D - 검증 재정의
 
 작업:
@@ -302,12 +317,16 @@ required PR gate는 다음 성격만 남긴다.
 - LuaJIT/sol2 vendor helper는 capability-always-on 모델로 수정해, 깨끗한 configure에서도 Lua vendor target이 항상 생성되도록 정리했다.
 - `KNIGHTS_BUILD_LUA_SCRIPTING` 호환 매크로와 dead test branch를 제거해 Lua 테스트를 항상-capability 기준으로 단순화했다.
 - Windows fast CI의 중복 Lua ctest 재실행을 제거했다.
+- 기존 단일 `ci.yml`을 `ci-fast`, `ci-api-governance`, `ci-stack`, `ci-extensibility`, `ci-hardening`, `ci-prewarm`으로 분리하고 역할별 trigger를 재설정했다.
+- prewarm 성격 job은 PR gate에서 분리하고 schedule / `workflow_dispatch` 전용 workflow로 옮겼다.
+- hardening 성격 검증(ASan/fuzz/soak)은 PR 기본 gate에서 분리하고 `main` / `merge_group` / nightly 경로로 이동했다.
 - 검증:
   - `pwsh scripts/build.ps1 -Config Release`
   - `ctest --preset windows-test --output-on-failure`
   - `scripts/deploy_docker.ps1 -Action up -Detached -Build`
   - baseline/off: `verify_runtime_toggle_metrics.py`, `verify_pong.py`, `verify_chat.py`
   - runtime on: `verify_runtime_toggle_metrics.py`, `verify_script_hot_reload.py`, `verify_chat_hook_behavior.py`, `verify_plugin_hot_reload.py --check-only`
+  - workflow YAML parse: `.github/workflows/*.yml`
 
 ## 8. 리스크와 완화
 
@@ -325,6 +344,13 @@ required PR gate는 다음 성격만 남긴다.
 - workflow 분리는 "실행 내용 유지, 파일/경계만 먼저 분리" 순서로 진행한다.
 - merge 전 일정 기간 old/new workflow를 병행하거나, 최소한 main/nightly에 hardening gate를 유지한다.
 
+### 리스크 2.1 - branch protection drift
+
+완화:
+
+- 기존 required check가 `CI` 단일 workflow 이름에 묶여 있었다면, 새 workflow 이름(`CI Fast`, `CI API Governance`, `CI Stack` 등) 기준으로 GitHub repository settings를 갱신한다.
+- merge 전 실제 PR check list에서 required/optional 구성이 의도대로 보이는지 확인한다.
+
 ### 리스크 3 - plugin/script 검증의 path filter 누락
 
 완화:
@@ -338,6 +364,7 @@ required PR gate는 다음 성격만 남긴다.
 - required PR gate의 실패 원인 구분이 이전보다 더 어려워질 때
 - runtime-only gating 전환 후 실제 capability 누락/packaging 누락이 발견될 때
 - workflow 분리 후 execution gap 때문에 main에서 회귀가 발생할 때
+- branch protection이 새 workflow 이름으로 갱신되지 않아 merge gate가 깨질 때
 
 ## 10. Open Questions
 
