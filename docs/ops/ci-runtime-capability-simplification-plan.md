@@ -320,6 +320,7 @@ required PR gate는 다음 성격만 남긴다.
 - Windows fast CI의 중복 Lua ctest 재실행을 제거했다.
 - 기존 단일 `ci.yml`을 `ci`, `ci-api-governance`, `ci-stack`, `ci-extensibility`, `ci-hardening`, `ci-prewarm`으로 분리하고 역할별 trigger를 재설정했다.
 - `CI`는 branch protection 안전성을 위해 path filter 없이 항상 실행되도록 두고, path-gated workflow는 선택적/보조 gate로 분리했다.
+- `CI`에 workflow YAML parse 검증을 추가하고, path-gated workflow에서는 `.github/workflows/**` trigger를 제거해 CI-only 변경이 governance/stack/extensibility gate를 불필요하게 깨우지 않도록 조정했다.
 - prewarm 성격 job은 PR gate에서 분리하고 schedule / `workflow_dispatch` 전용 workflow로 옮겼다.
 - hardening 성격 검증(ASan/fuzz/soak)은 PR 기본 gate에서 분리하고 `main` / `merge_group` / nightly 경로로 이동했다.
 - 검증:

@@ -802,5 +802,8 @@
   - PR 기본 gate는 fast/api/stack 중심으로 남기고, hardening은 `main`/`merge_group`/nightly, prewarm은 `schedule`/`workflow_dispatch` 전용으로 이동했다.
   - `ci-extensibility.yml`은 plugin/script 관련 path에서만 동작하도록 path filter를 추가했다.
   - branch protection에서 required check로 쓰기 안전하도록 `ci.yml`은 항상 실행되게 두고, path-gated workflow는 기본 required 대상에서 제외한다는 원칙을 문서에 명시했다.
+  - 후속 조정: `ci.yml`에 workflow YAML parse 검증을 추가하고, `ci-api-governance.yml`/`ci-stack.yml`/`ci-extensibility.yml`에서는 `.github/workflows/**` trigger를 제거해 CI-only 변경이 path-gated workflow를 깨우지 않도록 조정했다.
   - 정적 검증: `python -c "import pathlib,yaml; ..."`로 `.github/workflows/*.yml` 전부 YAML parse 성공을 확인했다.
+  - cache 관찰: 최신 `CI` run(22766581460)의 Windows Conan restore는 exact key hit(`restore_hit=true`, 약 345MB restore)였고, 최신 Linux runs(22766581484/22766581474)에서는 `knights-base-Linux` gha cache manifest import + layer `CACHED`가 확인됐다.
+  - cache 관찰: 새 `CI Prewarm` workflow는 아직 default branch에 없어 GitHub가 workflow로 인식하지 않으므로, 전용 prewarm run 효과는 merge 후 schedule 또는 수동 실행으로 별도 확인이 필요하다.
   - 후속 운영 작업: GitHub branch protection의 required check 이름을 새 workflow 이름 기준으로 갱신해야 한다.
