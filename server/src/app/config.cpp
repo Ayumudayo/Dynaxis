@@ -2,9 +2,11 @@
 #include "server/core/util/log.hpp"
 #include <cstdlib>
 #include <cstring>
-#include <iostream>
+#include <cctype>
 #include <string>
+#include <string_view>
 #include <chrono>
+#include <vector>
 
 /**
  * @brief server_app 환경 변수 기반 설정 로더 구현입니다.
@@ -15,6 +17,44 @@
 namespace server::app {
 
 namespace corelog = server::core::log;
+
+namespace {
+
+std::string trim_ascii(std::string_view value) {
+    std::size_t begin = 0;
+    while (begin < value.size() && std::isspace(static_cast<unsigned char>(value[begin])) != 0) {
+        ++begin;
+    }
+    std::size_t end = value.size();
+    while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
+        --end;
+    }
+    return std::string(value.substr(begin, end - begin));
+}
+
+std::vector<std::string> split_csv(std::string_view input) {
+    std::vector<std::string> out;
+    std::size_t start = 0;
+    while (start <= input.size()) {
+        std::size_t end = input.find(',', start);
+        if (end == std::string_view::npos) {
+            end = input.size();
+        }
+
+        std::string token = trim_ascii(input.substr(start, end - start));
+        if (!token.empty()) {
+            out.push_back(std::move(token));
+        }
+
+        if (end == input.size()) {
+            break;
+        }
+        start = end + 1;
+    }
+    return out;
+}
+
+} // namespace
 
 // 서버 설정을 로드하는 함수
 // 우선순위:
@@ -83,6 +123,21 @@ bool ServerConfig::load(int argc, char** argv) {
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count());
     }
+    if (const char* val = std::getenv("SERVER_ROLE"); val && *val) {
+        server_role = val;
+    }
+    if (const char* val = std::getenv("SERVER_GAME_MODE"); val && *val) {
+        server_game_mode = val;
+    }
+    if (const char* val = std::getenv("SERVER_REGION"); val && *val) {
+        server_region = val;
+    }
+    if (const char* val = std::getenv("SERVER_SHARD"); val && *val) {
+        server_shard = val;
+    }
+    if (const char* val = std::getenv("SERVER_TAGS"); val && *val) {
+        server_tags = split_csv(val);
+    }
 
     // 4. DB 설정
     if (const char* val = std::getenv("DB_URI"); val && *val) db_uri = val;
@@ -127,7 +182,45 @@ bool ServerConfig::load(int argc, char** argv) {
         admin_command_future_skew_ms = parsed;
     }
 
-    // 6. 메트릭 설정
+    // 6. Lua 스크립팅 설정 (Stream B scaffold)
+    if (const char* val = std::getenv("LUA_ENABLED"); val && *val) {
+        lua_enabled = (std::strcmp(val, "0") != 0);
+    }
+    if (const char* val = std::getenv("LUA_SCRIPTS_DIR"); val && *val) {
+        lua_scripts_dir = val;
+    }
+    if (const char* val = std::getenv("LUA_FALLBACK_SCRIPTS_DIR"); val && *val) {
+        lua_fallback_scripts_dir = val;
+    }
+    if (const char* val = std::getenv("LUA_LOCK_PATH"); val && *val) {
+        lua_lock_path = val;
+    }
+    if (const char* val = std::getenv("LUA_RELOAD_INTERVAL_MS"); val && *val) {
+        auto parsed = std::strtoull(val, nullptr, 10);
+        if (parsed > 0 && parsed <= 600'000) {
+            lua_reload_interval_ms = parsed;
+        }
+    }
+    if (const char* val = std::getenv("LUA_INSTRUCTION_LIMIT"); val && *val) {
+        auto parsed = std::strtoull(val, nullptr, 10);
+        if (parsed > 0) {
+            lua_instruction_limit = parsed;
+        }
+    }
+    if (const char* val = std::getenv("LUA_MEMORY_LIMIT_BYTES"); val && *val) {
+        auto parsed = std::strtoull(val, nullptr, 10);
+        if (parsed > 0) {
+            lua_memory_limit_bytes = parsed;
+        }
+    }
+    if (const char* val = std::getenv("LUA_AUTO_DISABLE_THRESHOLD"); val && *val) {
+        auto parsed = std::strtoull(val, nullptr, 10);
+        if (parsed > 0) {
+            lua_auto_disable_threshold = parsed;
+        }
+    }
+
+    // 7. 메트릭 설정
     if (const char* val = std::getenv("METRICS_PORT"); val && *val) {
         unsigned long v = std::strtoul(val, nullptr, 10);
         if (v > 0 && v < 65536) metrics_port = static_cast<unsigned short>(v);

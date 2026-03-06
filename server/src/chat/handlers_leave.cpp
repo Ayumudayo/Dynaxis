@@ -70,6 +70,11 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
                 auto it2 = state_.user.find(session_sp.get());
                 sender_name = (it2 != state_.user.end()) ? it2->second : std::string("guest");
                 if (auto it_uuid = state_.user_uuid.find(session_sp.get()); it_uuid != state_.user_uuid.end()) { user_uuid = it_uuid->second; }
+
+                if (maybe_handle_leave_hook(*session_sp, sender_name, room_to_leave)) {
+                    return;
+                }
+
                 const bool was_owner =
                     (room_to_leave != "lobby") &&
                     (state_.room_owners.find(room_to_leave) != state_.room_owners.end()) &&

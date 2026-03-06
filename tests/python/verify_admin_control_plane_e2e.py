@@ -14,6 +14,7 @@ ADMIN_BASE = "http://127.0.0.1:39200"
 MSG_PONG = 0x0003
 MSG_LOGIN_REQ = 0x0010
 MSG_LOGIN_RES = 0x0011
+MSG_CHAT_SEND = 0x0100
 MSG_JOIN_ROOM = 0x0102
 MSG_CHAT_BROADCAST = 0x0101
 
@@ -154,6 +155,24 @@ def wait_for_announcement(client: ChatClient, text: str, timeout_sec: float):
             return True, seen
 
 
+def wait_for_self_chat(client: ChatClient, text: str, timeout_sec: float):
+    expected = text.encode("utf-8")
+    deadline = time.monotonic() + timeout_sec
+    seen = []
+    while True:
+        remain = deadline - time.monotonic()
+        if remain <= 0:
+            return False, seen
+        try:
+            msg_id, payload = client.recv_frame(remain)
+        except socket.timeout:
+            return False, seen
+
+        seen.append(msg_id)
+        if msg_id == MSG_CHAT_BROADCAST and expected in payload:
+            return True, seen
+
+
 def wait_disconnected(client: ChatClient, timeout_sec: float) -> bool:
     deadline = time.monotonic() + timeout_sec
     client.sock.settimeout(0.5)
@@ -181,7 +200,7 @@ def expect_accepted(path: str, method: str):
 
 def main() -> int:
     stamp = int(time.time())
-    room = f"admin-e2e-room-{stamp}"
+    room = "lobby"
     user_a = f"admin_e2e_a_{stamp}"
     user_b = f"admin_e2e_b_{stamp}"
     announce_text = f"admin-e2e-announcement-{stamp}"
@@ -212,6 +231,19 @@ def main() -> int:
         c2_seen = c2.drain(1.0)
         print(f"drain {user_a} seen={c1_seen}")
         print(f"drain {user_b} seen={c2_seen}")
+
+        ready_msg_a = f"admin-e2e-ready-a-{stamp}"
+        ready_msg_b = f"admin-e2e-ready-b-{stamp}"
+
+        c1.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8(ready_msg_a))
+        ok_a, seen_a = wait_for_self_chat(c1, ready_msg_a, timeout_sec=5.0)
+        if not ok_a:
+            raise RuntimeError(f"self chat warm-up failed for {user_a}; seen={seen_a}")
+
+        c2.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8(ready_msg_b))
+        ok_b, seen_b = wait_for_self_chat(c2, ready_msg_b, timeout_sec=5.0)
+        if not ok_b:
+            raise RuntimeError(f"self chat warm-up failed for {user_b}; seen={seen_b}")
 
         announce_path = (
             "/api/v1/announcements?text="

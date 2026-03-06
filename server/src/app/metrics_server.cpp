@@ -11,6 +11,7 @@
 #include "server/protocol/game_opcodes.hpp"
 
 #include <atomic>
+#include <array>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -40,6 +41,7 @@ extern std::atomic<std::uint64_t> g_admin_command_verify_future_total;
 extern std::atomic<std::uint64_t> g_admin_command_verify_missing_field_total;
 extern std::atomic<std::uint64_t> g_admin_command_verify_invalid_issued_at_total;
 extern std::atomic<std::uint64_t> g_admin_command_verify_secret_not_configured_total;
+extern std::atomic<std::uint64_t> g_admin_command_target_mismatch_total;
 extern std::atomic<std::uint64_t> g_shutdown_drain_completed_total;
 extern std::atomic<std::uint64_t> g_shutdown_drain_timeout_total;
 extern std::atomic<std::uint64_t> g_shutdown_drain_forced_close_total;
@@ -48,6 +50,21 @@ extern std::atomic<long long> g_shutdown_drain_elapsed_ms;
 extern std::atomic<long long> g_shutdown_drain_timeout_ms;
 
 namespace {
+
+constexpr std::array<std::uint64_t, 12> kPluginHookDurationBucketUpperBoundsNs{{
+    1'000,      // 1us
+    2'000,      // 2us
+    5'000,      // 5us
+    10'000,     // 10us
+    25'000,     // 25us
+    50'000,     // 50us
+    100'000,    // 100us
+    250'000,    // 250us
+    500'000,    // 500us
+    1'000'000,  // 1ms
+    2'500'000,  // 2.5ms
+    5'000'000,  // 5ms
+}};
 
 bool health_ok() {
     if (auto host = services::get<server::core::app::AppHost>()) {
@@ -111,6 +128,9 @@ std::string render_metrics() {
     append_counter(
         "chat_admin_command_verify_secret_not_configured_total",
         g_admin_command_verify_secret_not_configured_total.load());
+    append_counter(
+        "chat_admin_command_target_mismatch_total",
+        g_admin_command_target_mismatch_total.load());
     append_counter("chat_shutdown_drain_completed_total", g_shutdown_drain_completed_total.load());
     append_counter("chat_shutdown_drain_timeout_total", g_shutdown_drain_timeout_total.load());
     append_counter("chat_shutdown_drain_forced_close_total", g_shutdown_drain_forced_close_total.load());
@@ -323,6 +343,12 @@ std::string render_metrics() {
             stream << "# TYPE chat_hook_plugin_reload_attempt_total counter\n";
             stream << "# TYPE chat_hook_plugin_reload_success_total counter\n";
             stream << "# TYPE chat_hook_plugin_reload_failure_total counter\n";
+            stream << "# TYPE plugin_reload_attempt_total counter\n";
+            stream << "# TYPE plugin_reload_success_total counter\n";
+            stream << "# TYPE plugin_reload_failure_total counter\n";
+            stream << "# TYPE plugin_hook_calls_total counter\n";
+            stream << "# TYPE plugin_hook_errors_total counter\n";
+            stream << "# TYPE plugin_hook_duration_seconds histogram\n";
 
             for (std::size_t i = 0; i < pm.plugins.size(); ++i) {
                 const auto& p = pm.plugins[i];
@@ -340,12 +366,127 @@ std::string render_metrics() {
                 append_counter_labeled("chat_hook_plugin_reload_success_total", labels, p.reload_success_total);
                 append_counter_labeled("chat_hook_plugin_reload_failure_total", labels, p.reload_failure_total);
 
+                std::string plugin_name = p.name;
+                if (plugin_name.empty()) {
+                    plugin_name = p.file;
+                }
+                const std::string plugin_labels =
+                    std::string("plugin_name=\"") + escape_label_value(plugin_name) + "\"";
+                append_counter_labeled("plugin_reload_attempt_total", plugin_labels, p.reload_attempt_total);
+                append_counter_labeled("plugin_reload_success_total", plugin_labels, p.reload_success_total);
+                append_counter_labeled("plugin_reload_failure_total", plugin_labels, p.reload_failure_total);
+
+                for (const auto& hook_metric : p.hook_metrics) {
+                    std::string hook_labels = std::string("hook_name=\"")
+                                              + escape_label_value(hook_metric.hook_name)
+                                              + "\",plugin_name=\""
+                                              + escape_label_value(plugin_name)
+                                              + "\"";
+                    append_counter_labeled("plugin_hook_calls_total", hook_labels, hook_metric.calls_total);
+                    append_counter_labeled("plugin_hook_errors_total", hook_labels, hook_metric.errors_total);
+
+                    std::uint64_t bucket_cumulative = 0;
+                    for (std::size_t bucket_index = 0;
+                         bucket_index < kPluginHookDurationBucketUpperBoundsNs.size();
+                         ++bucket_index) {
+                        bucket_cumulative += hook_metric.duration_bucket_counts[bucket_index];
+                        const long double le_seconds = static_cast<long double>(
+                            kPluginHookDurationBucketUpperBoundsNs[bucket_index]) / 1'000'000'000.0L;
+
+                        stream << "plugin_hook_duration_seconds_bucket{" << hook_labels << ",le=\"";
+                        stream << std::fixed << std::setprecision(9) << le_seconds;
+                        stream << "\"} " << bucket_cumulative << "\n";
+                        stream << std::defaultfloat << std::setprecision(6);
+                    }
+
+                    stream << "plugin_hook_duration_seconds_bucket{" << hook_labels << ",le=\"+Inf\"} "
+                           << hook_metric.duration_count << "\n";
+
+                    const long double duration_sum_seconds =
+                        static_cast<long double>(hook_metric.duration_sum_ns) / 1'000'000'000.0L;
+                    stream << "plugin_hook_duration_seconds_sum{" << hook_labels << "} ";
+                    stream << std::fixed << std::setprecision(9) << duration_sum_seconds << "\n";
+                    stream << std::defaultfloat << std::setprecision(6);
+                    stream << "plugin_hook_duration_seconds_count{" << hook_labels << "} "
+                           << hook_metric.duration_count << "\n";
+                }
+
                 if (p.loaded) {
                     std::string info_labels = labels;
                     info_labels += ",name=\"" + escape_label_value(p.name) + "\"";
                     info_labels += ",version=\"" + escape_label_value(p.version) + "\"";
                     append_gauge_labeled("chat_hook_plugin_info", info_labels, 1.0L);
                 }
+            }
+        }
+    }
+
+    // Lua cold hook auto-disable metrics
+    {
+        const auto escape_label_value = [](std::string_view s) {
+            std::string out;
+            out.reserve(s.size());
+            for (const char c : s) {
+                switch (c) {
+                case '\\': out += "\\\\"; break;
+                case '"': out += "\\\""; break;
+                case '\n': out += "\\n"; break;
+                default: out.push_back(c); break;
+                }
+            }
+            return out;
+        };
+
+        stream << "# TYPE hook_auto_disable_total counter\n";
+        stream << "# TYPE chat_lua_hooks_enabled gauge\n";
+        stream << "# TYPE chat_lua_hook_disabled gauge\n";
+        stream << "# TYPE chat_lua_hook_consecutive_failures gauge\n";
+        stream << "# TYPE chat_lua_hook_auto_disable_threshold gauge\n";
+        stream << "# TYPE lua_loaded_scripts gauge\n";
+        stream << "# TYPE lua_memory_used_bytes gauge\n";
+        stream << "# TYPE lua_script_calls_total counter\n";
+        stream << "# TYPE lua_script_errors_total counter\n";
+        stream << "# TYPE lua_instruction_limit_hits_total counter\n";
+        stream << "# TYPE lua_memory_limit_hits_total counter\n";
+
+        server::app::chat::ChatService::LuaHooksMetrics lua_metrics;
+        bool have_lua_metrics = false;
+        if (auto chat = services::get<server::app::chat::ChatService>()) {
+            lua_metrics = chat->lua_hooks_metrics();
+            have_lua_metrics = true;
+        }
+
+        stream << "chat_lua_hook_auto_disable_threshold "
+               << static_cast<long double>(lua_metrics.auto_disable_threshold) << "\n";
+        stream << "chat_lua_hooks_enabled " << (lua_metrics.enabled ? 1 : 0) << "\n";
+        stream << "lua_loaded_scripts "
+               << static_cast<long double>(lua_metrics.loaded_scripts) << "\n";
+        stream << "lua_memory_used_bytes "
+               << static_cast<long double>(lua_metrics.memory_used_bytes) << "\n";
+
+        if (have_lua_metrics) {
+            for (const auto& hook : lua_metrics.hooks) {
+                const auto hook_name = escape_label_value(hook.hook_name);
+                const std::string labels = std::string("hook_name=\"") + hook_name + "\",source=\"lua\"";
+                stream << "hook_auto_disable_total{" << labels << "} " << hook.auto_disable_total << "\n";
+                stream << "chat_lua_hook_disabled{" << labels << "} " << (hook.disabled ? 1 : 0) << "\n";
+                stream << "chat_lua_hook_consecutive_failures{" << labels << "} "
+                       << static_cast<long double>(hook.consecutive_failures) << "\n";
+                stream << "lua_instruction_limit_hits_total{hook_name=\"" << hook_name << "\"} "
+                       << hook.instruction_limit_hits << "\n";
+                stream << "lua_memory_limit_hits_total{hook_name=\"" << hook_name << "\"} "
+                       << hook.memory_limit_hits << "\n";
+            }
+
+            for (const auto& script_call : lua_metrics.script_calls) {
+                const auto hook_name = escape_label_value(script_call.hook_name);
+                const auto script_name = escape_label_value(script_call.script_name);
+                stream << "lua_script_calls_total{hook_name=\"" << hook_name
+                       << "\",script_name=\"" << script_name << "\"} "
+                       << script_call.calls_total << "\n";
+                stream << "lua_script_errors_total{hook_name=\"" << hook_name
+                       << "\",script_name=\"" << script_name << "\"} "
+                       << script_call.errors_total << "\n";
             }
         }
     }

@@ -4,11 +4,13 @@
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/runtime_metrics.hpp"
+#include "server/core/scripting/lua_runtime.hpp"
 #include "server/core/trace/context.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/util/service_registry.hpp"
 #include "server/core/concurrent/task_scheduler.hpp"
 #include "server/core/concurrent/job_queue.hpp"
+#include "server/scripting/chat_lua_bindings.hpp"
 #include "server/wire/codec.hpp"
 #include "chat_hook_plugin_chain.hpp"
 #include "wire.pb.h"
@@ -24,8 +26,11 @@
 #include <cctype>
 #include <cstring>
 #include <cstdlib>
+#include <filesystem>
+#include <future>
 #include <limits>
 #include <sstream>
+#include <thread>
 #include <utility>
 #include <unordered_set>
 using namespace server::core;
@@ -80,6 +85,61 @@ bool has_room_password_hash_prefix(std::string_view value) {
     return value.rfind(kRoomPasswordHashPrefix, 0) == 0;
 }
 
+std::string json_escape(std::string_view value) {
+    std::string out;
+    out.reserve(value.size() + 8);
+    for (const unsigned char ch : value) {
+        switch (ch) {
+        case '\\':
+            out += "\\\\";
+            break;
+        case '"':
+            out += "\\\"";
+            break;
+        case '\n':
+            out += "\\n";
+            break;
+        case '\r':
+            out += "\\r";
+            break;
+        case '\t':
+            out += "\\t";
+            break;
+        default:
+            out.push_back(static_cast<char>(ch));
+            break;
+        }
+    }
+    return out;
+}
+
+std::string json_array_of_strings(const std::vector<std::string>& values) {
+    std::string out = "[";
+    bool first = true;
+    for (const auto& value : values) {
+        if (!first) {
+            out += ',';
+        }
+        first = false;
+        out += '"';
+        out += json_escape(value);
+        out += '"';
+    }
+    out += ']';
+    return out;
+}
+
+std::string lua_session_event_name(SessionEventKindV2 kind) {
+    switch (kind) {
+    case SessionEventKindV2::kOpen:
+        return "open";
+    case SessionEventKindV2::kClose:
+        return "close";
+    default:
+        return "unknown";
+    }
+}
+
 } // namespace
 
 // ChatService 생성자: 주요 의존성을 주입받고 환경 변수로부터 설정을 로드합니다.
@@ -95,6 +155,17 @@ ChatService::ChatService(boost::asio::io_context& io,
     }
     if (!redis_) {
         redis_ = services::get<server::storage::redis::IRedisClient>();
+    }
+    lua_runtime_ = services::get<server::core::scripting::LuaRuntime>();
+    lua_execution_strand_ = services::get<Strand>();
+    if (!lua_execution_strand_ && lua_runtime_ && io_) {
+        lua_execution_strand_ = std::make_shared<Strand>(boost::asio::make_strand(*io_));
+    }
+    if (lua_runtime_) {
+        const auto bindings = server::app::scripting::register_chat_lua_bindings(*lua_runtime_, *this);
+        corelog::info("Lua host bindings initialised attempted="
+                      + std::to_string(bindings.attempted)
+                      + " registered=" + std::to_string(bindings.registered));
     }
 
     // 게이트웨이 ID 설정 (분산 환경 식별용)
@@ -208,6 +279,13 @@ ChatService::ChatService(boost::asio::io_context& io,
     spam_mute_sec_ = parse_u32_bounded(std::getenv("CHAT_SPAM_MUTE_SEC"), 30, 5, 86400);
     spam_ban_sec_ = parse_u32_bounded(std::getenv("CHAT_SPAM_BAN_SEC"), 600, 10, 604800);
     spam_ban_violation_threshold_ = parse_u32_bounded(std::getenv("CHAT_SPAM_BAN_VIOLATIONS"), 3, 1, 20);
+    lua_auto_disable_threshold_ = parse_u32_bounded(std::getenv("LUA_AUTO_DISABLE_THRESHOLD"), 3, 1, 1'000'000);
+    lua_hook_warn_budget_us_ = parse_u32_bounded(std::getenv("LUA_HOOK_WARN_BUDGET_US"), 0, 0, 60'000'000);
+    const std::uint32_t chat_hook_warn_budget_us = parse_u32_bounded(
+        std::getenv("CHAT_HOOK_WARN_BUDGET_US"),
+        0,
+        0,
+        60'000'000);
 
     // 최근 대화 내역(History) 관련 설정
     if (const char* limit_env = read_env("RECENT_HISTORY_LIMIT", "SNAPSHOT_RECENT_LIMIT")) {
@@ -289,27 +367,52 @@ ChatService::ChatService(boost::asio::io_context& io,
             return out;
         };
 
-        bool enabled = false;
+        bool configured = false;
+        bool plugins_dir_from_env = false;
         if (const char* list = std::getenv("CHAT_HOOK_PLUGIN_PATHS"); list && *list) {
             cfg.plugin_paths = split_paths(list);
-            enabled = !cfg.plugin_paths.empty();
+            configured = !cfg.plugin_paths.empty();
         }
 
-        if (!enabled) {
+        if (!configured) {
             if (const char* dir = std::getenv("CHAT_HOOK_PLUGINS_DIR"); dir && *dir) {
                 cfg.plugins_dir = std::filesystem::path(dir);
-                enabled = true;
+                configured = true;
+                plugins_dir_from_env = true;
             }
         }
 
-        if (!enabled) {
+        if (!configured) {
             if (const char* val = std::getenv("CHAT_HOOK_PLUGIN_PATH"); val && *val) {
                 cfg.plugin_paths.emplace_back(val);
-                enabled = true;
+                configured = true;
+            }
+        }
+
+        bool chat_hook_enabled = true;
+        bool chat_hook_enabled_overridden = false;
+        if (const char* hook_enabled = std::getenv("CHAT_HOOK_ENABLED"); hook_enabled && *hook_enabled) {
+            chat_hook_enabled_overridden = true;
+            chat_hook_enabled = (std::strcmp(hook_enabled, "0") != 0);
+        }
+
+        if (!chat_hook_enabled && configured) {
+            corelog::info("CHAT_HOOK_ENABLED=0; chat hook plugins are configured but runtime path is disabled");
+        }
+        if (chat_hook_enabled_overridden && chat_hook_enabled && !configured) {
+            corelog::warn("CHAT_HOOK_ENABLED=1 but no plugin path/directory is configured");
+        }
+
+        const bool enabled = configured && chat_hook_enabled;
+
+        if (enabled && plugins_dir_from_env) {
+            if (const char* fallback = std::getenv("CHAT_HOOK_FALLBACK_PLUGINS_DIR"); fallback && *fallback) {
+                cfg.fallback_plugins_dir = std::filesystem::path(fallback);
             }
         }
 
         if (enabled) {
+            cfg.hook_warn_budget_us = chat_hook_warn_budget_us;
             if (const char* cache = std::getenv("CHAT_HOOK_CACHE_DIR"); cache && *cache) {
                 cfg.cache_dir = cache;
             }
@@ -365,8 +468,131 @@ ChatService::ChatHookPluginsMetrics ChatService::chat_hook_plugins_metrics() con
         m.reload_attempt_total = p.reload_attempt_total;
         m.reload_success_total = p.reload_success_total;
         m.reload_failure_total = p.reload_failure_total;
+        m.hook_metrics.reserve(p.hook_metrics.size());
+        for (const auto& hm : p.hook_metrics) {
+            ChatHookPluginMetric::HookMetric metric{};
+            metric.hook_name = hm.hook_name;
+            metric.calls_total = hm.calls_total;
+            metric.errors_total = hm.errors_total;
+            metric.duration_count = hm.duration_count;
+            metric.duration_sum_ns = hm.duration_sum_ns;
+            metric.duration_bucket_counts = hm.duration_bucket_counts;
+            m.hook_metrics.push_back(std::move(metric));
+        }
         out.plugins.push_back(std::move(m));
     }
+    return out;
+}
+
+ChatService::LuaHooksMetrics ChatService::lua_hooks_metrics() const {
+    LuaHooksMetrics out{};
+    out.enabled = static_cast<bool>(lua_runtime_);
+    out.auto_disable_threshold = lua_auto_disable_threshold_;
+
+    if (!lua_runtime_) {
+        return out;
+    }
+
+    const auto runtime_snapshot = lua_runtime_->metrics_snapshot();
+    out.reload_epoch = runtime_snapshot.reload_epoch;
+    out.loaded_scripts = runtime_snapshot.loaded_scripts;
+    out.memory_used_bytes = runtime_snapshot.memory_used_bytes;
+    out.calls_total = runtime_snapshot.calls_total;
+    out.errors_total = runtime_snapshot.errors_total;
+    out.instruction_limit_hits = runtime_snapshot.instruction_limit_hits;
+    out.memory_limit_hits = runtime_snapshot.memory_limit_hits;
+
+    std::lock_guard<std::mutex> lock(lua_hook_metrics_mu_);
+    out.hooks.reserve(
+        lua_hook_consecutive_failures_.size()
+        + lua_hook_auto_disable_total_.size()
+        + lua_hook_calls_total_.size()
+        + lua_hook_errors_total_.size()
+        + lua_hook_instruction_limit_hits_.size()
+        + lua_hook_memory_limit_hits_.size()
+        + lua_hook_disabled_.size());
+
+    auto append_or_get = [&](const std::string& hook_name) -> LuaHookMetric& {
+        for (auto& metric : out.hooks) {
+            if (metric.hook_name == hook_name) {
+                return metric;
+            }
+        }
+        out.hooks.push_back(LuaHookMetric{hook_name, false, 0, 0});
+        return out.hooks.back();
+    };
+
+    for (const auto& [hook_name, failures] : lua_hook_consecutive_failures_) {
+        auto& metric = append_or_get(hook_name);
+        metric.consecutive_failures = failures;
+    }
+
+    for (const auto& [hook_name, total] : lua_hook_auto_disable_total_) {
+        auto& metric = append_or_get(hook_name);
+        metric.auto_disable_total = total;
+    }
+
+    for (const auto& [hook_name, total] : lua_hook_calls_total_) {
+        auto& metric = append_or_get(hook_name);
+        metric.calls_total = total;
+    }
+
+    for (const auto& [hook_name, total] : lua_hook_errors_total_) {
+        auto& metric = append_or_get(hook_name);
+        metric.errors_total = total;
+    }
+
+    for (const auto& [hook_name, total] : lua_hook_instruction_limit_hits_) {
+        auto& metric = append_or_get(hook_name);
+        metric.instruction_limit_hits = total;
+    }
+
+    for (const auto& [hook_name, total] : lua_hook_memory_limit_hits_) {
+        auto& metric = append_or_get(hook_name);
+        metric.memory_limit_hits = total;
+    }
+
+    for (const auto& hook_name : lua_hook_disabled_) {
+        auto& metric = append_or_get(hook_name);
+        metric.disabled = true;
+    }
+
+    auto append_or_get_script_metric = [&](const std::string& hook_name,
+                                           const std::string& script_name) -> LuaScriptCallMetric& {
+        for (auto& metric : out.script_calls) {
+            if (metric.hook_name == hook_name && metric.script_name == script_name) {
+                return metric;
+            }
+        }
+        out.script_calls.push_back(LuaScriptCallMetric{hook_name, script_name, 0, 0});
+        return out.script_calls.back();
+    };
+
+    for (const auto& [hook_name, script_map] : lua_hook_script_calls_total_) {
+        for (const auto& [script_name, total] : script_map) {
+            auto& metric = append_or_get_script_metric(hook_name, script_name);
+            metric.calls_total = total;
+        }
+    }
+
+    for (const auto& [hook_name, script_map] : lua_hook_script_errors_total_) {
+        for (const auto& [script_name, total] : script_map) {
+            auto& metric = append_or_get_script_metric(hook_name, script_name);
+            metric.errors_total = total;
+        }
+    }
+
+    std::sort(out.hooks.begin(), out.hooks.end(), [](const LuaHookMetric& lhs, const LuaHookMetric& rhs) {
+        return lhs.hook_name < rhs.hook_name;
+    });
+
+    std::sort(out.script_calls.begin(), out.script_calls.end(), [](const LuaScriptCallMetric& lhs, const LuaScriptCallMetric& rhs) {
+        if (lhs.hook_name == rhs.hook_name) {
+            return lhs.script_name < rhs.script_name;
+        }
+        return lhs.hook_name < rhs.hook_name;
+    });
+
     return out;
 }
 
@@ -1177,6 +1403,147 @@ void ChatService::send_system_notice(Session& s, const std::string& text) {
     s.async_send(game_proto::MSG_CHAT_BROADCAST, body, 0);
 }
 
+ChatService::LuaColdHookOutcome ChatService::invoke_lua_cold_hook(
+    std::string_view hook_name,
+    const server::core::scripting::LuaHookContext& context) {
+    LuaColdHookOutcome outcome{};
+    if (!lua_runtime_) {
+        return outcome;
+    }
+
+    const auto runtime_metrics = lua_runtime_->metrics_snapshot();
+    {
+        std::lock_guard<std::mutex> lock(lua_hook_metrics_mu_);
+        if (runtime_metrics.reload_epoch != lua_reload_epoch_) {
+            lua_reload_epoch_ = runtime_metrics.reload_epoch;
+            lua_hook_consecutive_failures_.clear();
+            lua_hook_disabled_.clear();
+            corelog::info("lua cold hook state reset after script reload epoch=" + std::to_string(lua_reload_epoch_));
+        }
+
+        if (lua_hook_disabled_.count(std::string(hook_name)) > 0) {
+            return outcome;
+        }
+    }
+
+    const auto call_started_at = std::chrono::steady_clock::now();
+    server::core::scripting::LuaRuntime::CallAllResult call_result{};
+    if (lua_execution_strand_ && !lua_execution_strand_->running_in_this_thread()) {
+        auto promise = std::make_shared<std::promise<server::core::scripting::LuaRuntime::CallAllResult>>();
+        auto future = promise->get_future();
+        asio::post(*lua_execution_strand_, [this,
+                                            hook = std::string(hook_name),
+                                            context,
+                                            promise]() mutable {
+            promise->set_value(lua_runtime_->call_all(hook, context));
+        });
+        while (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+            if (io_ == nullptr || io_->poll_one() == 0) {
+                std::this_thread::yield();
+            }
+        }
+        call_result = future.get();
+    } else {
+        call_result = lua_runtime_->call_all(std::string(hook_name), context);
+    }
+    const auto call_elapsed_ns = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - call_started_at)
+            .count());
+
+    const bool call_failed = (!call_result.error.empty() || call_result.failed != 0);
+    {
+        std::lock_guard<std::mutex> lock(lua_hook_metrics_mu_);
+        const std::string hook_key(hook_name);
+        lua_hook_calls_total_[hook_key] += call_result.attempted;
+        lua_hook_errors_total_[hook_key] += call_result.failed;
+
+        if (call_result.failed == 0 && !call_result.error.empty()) {
+            ++lua_hook_errors_total_[hook_key];
+        }
+
+        auto& script_calls = lua_hook_script_calls_total_[hook_key];
+        auto& script_errors = lua_hook_script_errors_total_[hook_key];
+        for (const auto& script_result : call_result.script_results) {
+            const std::string script_name = script_result.env_name.empty()
+                ? std::string("(unknown)")
+                : script_result.env_name;
+            ++script_calls[script_name];
+            if (script_result.failed) {
+                ++script_errors[script_name];
+            }
+
+            switch (script_result.failure_kind) {
+            case server::core::scripting::LuaRuntime::ScriptFailureKind::kInstructionLimit:
+                ++lua_hook_instruction_limit_hits_[hook_key];
+                break;
+            case server::core::scripting::LuaRuntime::ScriptFailureKind::kMemoryLimit:
+                ++lua_hook_memory_limit_hits_[hook_key];
+                break;
+            case server::core::scripting::LuaRuntime::ScriptFailureKind::kNone:
+            case server::core::scripting::LuaRuntime::ScriptFailureKind::kOther:
+            default:
+                break;
+            }
+        }
+
+        auto& consecutive = lua_hook_consecutive_failures_[hook_key];
+        if (call_failed) {
+            ++consecutive;
+            if (lua_auto_disable_threshold_ > 0
+                && consecutive >= lua_auto_disable_threshold_
+                && lua_hook_disabled_.count(hook_key) == 0) {
+                lua_hook_disabled_.insert(hook_key);
+                ++lua_hook_auto_disable_total_[hook_key];
+                corelog::warn(
+                    "lua cold hook auto-disabled hook=" + hook_key
+                    + " consecutive_failures=" + std::to_string(consecutive)
+                    + " threshold=" + std::to_string(lua_auto_disable_threshold_));
+            }
+        } else {
+            consecutive = 0;
+        }
+    }
+
+    if (!call_result.error.empty()) {
+        corelog::warn(
+            "lua cold hook call failed hook=" + std::string(hook_name)
+            + " reason=" + call_result.error);
+    }
+
+    if (call_result.failed != 0) {
+        corelog::warn(
+            "lua cold hook call had failures hook=" + std::string(hook_name)
+            + " failed=" + std::to_string(call_result.failed));
+    }
+
+    if (lua_hook_warn_budget_us_ > 0 && call_elapsed_ns > lua_hook_warn_budget_us_ * 1'000ULL) {
+        corelog::warn(
+            "lua cold hook latency budget exceeded hook=" + std::string(hook_name)
+            + " elapsed_us=" + std::to_string(call_elapsed_ns / 1'000ULL)
+            + " budget_us=" + std::to_string(lua_hook_warn_budget_us_));
+    }
+
+    outcome.notices = call_result.notices;
+
+    switch (call_result.decision) {
+    case server::core::scripting::LuaHookDecision::kPass:
+    case server::core::scripting::LuaHookDecision::kAllow:
+    case server::core::scripting::LuaHookDecision::kModify:
+    case server::core::scripting::LuaHookDecision::kHandled:
+        break;
+    case server::core::scripting::LuaHookDecision::kBlock:
+    case server::core::scripting::LuaHookDecision::kDeny:
+        outcome.stop_default = true;
+        outcome.deny_reason = call_result.reason;
+        break;
+    default:
+        break;
+    }
+
+    return outcome;
+}
+
 bool ChatService::maybe_handle_chat_hook_plugin(Session& s,
                                                 const std::string& room,
                                                 const std::string& sender,
@@ -1194,6 +1561,256 @@ bool ChatService::maybe_handle_chat_hook_plugin(Session& s,
     return out.stop_default;
 }
 
+bool ChatService::maybe_handle_login_hook(Session& s, const std::string& user) {
+    server::core::scripting::LuaHookContext ctx{};
+    ctx.session_id = s.session_id();
+    ctx.user = user;
+
+    if (!hook_plugin_) {
+        const auto lua_out = invoke_lua_cold_hook("on_login", ctx);
+        for (const auto& notice : lua_out.notices) {
+            if (!notice.empty()) {
+                send_system_notice(s, notice);
+            }
+        }
+        if (!lua_out.stop_default) {
+            return false;
+        }
+
+        const std::string reason = lua_out.deny_reason.empty() ? "login denied by lua script" : lua_out.deny_reason;
+        s.send_error(proto::errc::FORBIDDEN, reason);
+        return true;
+    }
+
+    const auto out = hook_plugin_->chain.on_login(s.session_id(), user);
+    for (const auto& notice : out.notices) {
+        if (!notice.empty()) {
+            send_system_notice(s, notice);
+        }
+    }
+
+    if (!out.stop_default) {
+        const auto lua_out = invoke_lua_cold_hook("on_login", ctx);
+        for (const auto& notice : lua_out.notices) {
+            if (!notice.empty()) {
+                send_system_notice(s, notice);
+            }
+        }
+        if (!lua_out.stop_default) {
+            return false;
+        }
+
+        const std::string reason = lua_out.deny_reason.empty() ? "login denied by lua script" : lua_out.deny_reason;
+        s.send_error(proto::errc::FORBIDDEN, reason);
+        return true;
+    }
+
+    const std::string reason = out.deny_reason.empty() ? "login denied by plugin" : out.deny_reason;
+    s.send_error(proto::errc::FORBIDDEN, reason);
+    return true;
+}
+
+bool ChatService::maybe_handle_join_hook(Session& s, const std::string& user, const std::string& room) {
+    server::core::scripting::LuaHookContext ctx{};
+    ctx.session_id = s.session_id();
+    ctx.user = user;
+    ctx.room = room;
+
+    if (!hook_plugin_) {
+        const auto lua_out = invoke_lua_cold_hook("on_join", ctx);
+        for (const auto& notice : lua_out.notices) {
+            if (!notice.empty()) {
+                send_system_notice(s, notice);
+            }
+        }
+        if (!lua_out.stop_default) {
+            return false;
+        }
+
+        const std::string reason = lua_out.deny_reason.empty() ? "join denied by lua script" : lua_out.deny_reason;
+        s.send_error(proto::errc::FORBIDDEN, reason);
+        return true;
+    }
+
+    const auto out = hook_plugin_->chain.on_join(s.session_id(), user, room);
+    for (const auto& notice : out.notices) {
+        if (!notice.empty()) {
+            send_system_notice(s, notice);
+        }
+    }
+
+    if (!out.stop_default) {
+        const auto lua_out = invoke_lua_cold_hook("on_join", ctx);
+        for (const auto& notice : lua_out.notices) {
+            if (!notice.empty()) {
+                send_system_notice(s, notice);
+            }
+        }
+        if (!lua_out.stop_default) {
+            return false;
+        }
+
+        const std::string reason = lua_out.deny_reason.empty() ? "join denied by lua script" : lua_out.deny_reason;
+        s.send_error(proto::errc::FORBIDDEN, reason);
+        return true;
+    }
+
+    const std::string reason = out.deny_reason.empty() ? "join denied by plugin" : out.deny_reason;
+    s.send_error(proto::errc::FORBIDDEN, reason);
+    return true;
+}
+
+bool ChatService::maybe_handle_leave_hook(Session& s, const std::string& user, const std::string& room) {
+    server::core::scripting::LuaHookContext ctx{};
+    ctx.session_id = s.session_id();
+    ctx.user = user;
+    ctx.room = room;
+
+    if (!hook_plugin_) {
+        const auto lua_out = invoke_lua_cold_hook("on_leave", ctx);
+        for (const auto& notice : lua_out.notices) {
+            if (!notice.empty()) {
+                send_system_notice(s, notice);
+            }
+        }
+        if (!lua_out.stop_default) {
+            return false;
+        }
+
+        const std::string reason = lua_out.deny_reason.empty() ? "leave denied by lua script" : lua_out.deny_reason;
+        s.send_error(proto::errc::FORBIDDEN, reason);
+        return true;
+    }
+
+    const auto out = hook_plugin_->chain.on_leave(s.session_id(), user, room);
+    for (const auto& notice : out.notices) {
+        if (!notice.empty()) {
+            send_system_notice(s, notice);
+        }
+    }
+
+    if (!out.stop_default) {
+        const auto lua_out = invoke_lua_cold_hook("on_leave", ctx);
+        for (const auto& notice : lua_out.notices) {
+            if (!notice.empty()) {
+                send_system_notice(s, notice);
+            }
+        }
+        if (!lua_out.stop_default) {
+            return false;
+        }
+
+        const std::string reason = lua_out.deny_reason.empty() ? "leave denied by lua script" : lua_out.deny_reason;
+        s.send_error(proto::errc::FORBIDDEN, reason);
+        return true;
+    }
+
+    const std::string reason = out.deny_reason.empty() ? "leave denied by plugin" : out.deny_reason;
+    s.send_error(proto::errc::FORBIDDEN, reason);
+    return true;
+}
+
+void ChatService::notify_session_event_hook(std::uint32_t session_id,
+                                            SessionEventKindV2 kind,
+                                            const std::string& user,
+                                            const std::string& reason) {
+    server::core::scripting::LuaHookContext ctx{};
+    ctx.session_id = session_id;
+    ctx.user = user;
+    ctx.reason = reason;
+    ctx.event = lua_session_event_name(kind);
+
+    if (!hook_plugin_) {
+        const auto lua_out = invoke_lua_cold_hook("on_session_event", ctx);
+        for (const auto& notice : lua_out.notices) {
+            if (!notice.empty()) {
+                corelog::info("lua session_event notice: " + notice);
+            }
+        }
+        if (lua_out.stop_default) {
+            corelog::warn("lua on_session_event requested stop_default; ignored for cleanup safety");
+        }
+        return;
+    }
+
+    const auto out = hook_plugin_->chain.on_session_event(session_id, kind, user, reason);
+    for (const auto& notice : out.notices) {
+        if (!notice.empty()) {
+            corelog::info("chat_hook session_event notice: " + notice);
+        }
+    }
+    if (out.stop_default) {
+        corelog::warn("chat_hook session_event requested stop_default; skipping lua cold hook because native did not pass");
+        return;
+    }
+
+    const auto lua_out = invoke_lua_cold_hook("on_session_event", ctx);
+    for (const auto& notice : lua_out.notices) {
+        if (!notice.empty()) {
+            corelog::info("lua session_event notice: " + notice);
+        }
+    }
+    if (lua_out.stop_default) {
+        corelog::warn("lua on_session_event requested stop_default; ignored for cleanup safety");
+    }
+}
+
+bool ChatService::maybe_handle_admin_command_hook(std::string_view command,
+                                                  std::string_view issuer,
+                                                  std::string_view payload_json,
+                                                  std::string_view args,
+                                                  std::string& deny_reason) {
+    deny_reason.clear();
+    server::core::scripting::LuaHookContext ctx{};
+    ctx.command = std::string(command);
+    ctx.issuer = std::string(issuer);
+    ctx.payload_json = std::string(payload_json);
+    ctx.args = std::string(args);
+
+    if (!hook_plugin_) {
+        const auto lua_out = invoke_lua_cold_hook("on_admin_command", ctx);
+        for (const auto& notice : lua_out.notices) {
+            if (!notice.empty()) {
+                corelog::info("lua admin notice: " + notice);
+            }
+        }
+        if (!lua_out.stop_default) {
+            return false;
+        }
+
+        deny_reason = lua_out.deny_reason.empty() ? "admin command denied by lua script" : lua_out.deny_reason;
+        return true;
+    }
+
+    const auto out = hook_plugin_->chain.on_admin_command(command, issuer, payload_json);
+    for (const auto& notice : out.notices) {
+        if (!notice.empty()) {
+            corelog::info("chat_hook admin notice: " + notice);
+        }
+    }
+    if (!out.response_json.empty()) {
+        corelog::info("chat_hook admin response_json: " + out.response_json);
+    }
+
+    if (!out.stop_default) {
+        const auto lua_out = invoke_lua_cold_hook("on_admin_command", ctx);
+        for (const auto& notice : lua_out.notices) {
+            if (!notice.empty()) {
+                corelog::info("lua admin notice: " + notice);
+            }
+        }
+        if (!lua_out.stop_default) {
+            return false;
+        }
+
+        deny_reason = lua_out.deny_reason.empty() ? "admin command denied by lua script" : lua_out.deny_reason;
+        return true;
+    }
+
+    deny_reason = out.deny_reason.empty() ? "admin command denied by plugin" : out.deny_reason;
+    return true;
+}
+
 void ChatService::admin_disconnect_users(const std::vector<std::string>& users, const std::string& reason) {
     if (users.empty()) {
         return;
@@ -1208,6 +1825,17 @@ void ChatService::admin_disconnect_users(const std::vector<std::string>& users, 
     }
     if (targets.empty()) {
         return;
+    }
+
+    {
+        std::string deny_reason;
+        const std::string payload_json =
+            std::string("{\"users\":") + json_array_of_strings(targets) +
+            ",\"reason\":\"" + json_escape(reason) + "\"}";
+        if (maybe_handle_admin_command_hook("disconnect_users", "control-plane", payload_json, {}, deny_reason)) {
+            corelog::warn("admin disconnect denied by plugin: " + deny_reason);
+            return;
+        }
     }
 
     const std::string notice = reason;
@@ -1259,6 +1887,16 @@ void ChatService::admin_broadcast_notice(const std::string& text) {
         return;
     }
 
+    {
+        std::string deny_reason;
+        const std::string payload_json =
+            std::string("{\"text\":\"") + json_escape(text) + "\"}";
+        if (maybe_handle_admin_command_hook("announce", "control-plane", payload_json, text, deny_reason)) {
+            corelog::warn("admin broadcast denied by plugin: " + deny_reason);
+            return;
+        }
+    }
+
     const std::string notice = text;
     if (!job_queue_.TryPush([this, notice]() {
         std::vector<std::shared_ptr<Session>> sessions;
@@ -1297,6 +1935,18 @@ void ChatService::admin_broadcast_notice(const std::string& text) {
 void ChatService::admin_apply_runtime_setting(const std::string& key, const std::string& value) {
     if (key.empty() || value.empty()) {
         return;
+    }
+
+    {
+        std::string deny_reason;
+        const std::string payload_json =
+            std::string("{\"key\":\"") + json_escape(key) +
+            "\",\"value\":\"" + json_escape(value) + "\"}";
+        const std::string args = key + "=" + value;
+        if (maybe_handle_admin_command_hook("apply_runtime_setting", "control-plane", payload_json, args, deny_reason)) {
+            corelog::warn("admin runtime setting denied by plugin: " + deny_reason);
+            return;
+        }
     }
 
     const auto request_started_at = std::chrono::steady_clock::now();
@@ -1461,6 +2111,19 @@ void ChatService::admin_apply_user_moderation(const std::string& op,
         return;
     }
 
+    {
+        std::string deny_reason;
+        const std::string payload_json =
+            std::string("{\"op\":\"") + json_escape(op) +
+            "\",\"users\":" + json_array_of_strings(targets) +
+            ",\"duration_sec\":" + std::to_string(duration_sec) +
+            ",\"reason\":\"" + json_escape(reason) + "\"}";
+        if (maybe_handle_admin_command_hook("apply_user_moderation", "control-plane", payload_json, op, deny_reason)) {
+            corelog::warn("admin moderation denied by plugin: " + deny_reason);
+            return;
+        }
+    }
+
     std::string normalized_op = to_lower_ascii_local(trim_ascii_local(op));
     std::string normalized_reason = trim_ascii_local(reason);
 
@@ -1542,6 +2205,426 @@ void ChatService::admin_apply_user_moderation(const std::string& op,
     })) {
         corelog::warn("admin moderation dropped: job queue full");
     }
+}
+
+std::shared_ptr<ChatService::Session> ChatService::find_session_by_id_locked(std::uint32_t session_id) {
+    if (session_id == 0) {
+        return {};
+    }
+
+    const auto it = state_.by_session_id.find(session_id);
+    if (it == state_.by_session_id.end()) {
+        return {};
+    }
+
+    auto session = it->second.lock();
+    if (!session) {
+        state_.by_session_id.erase(it);
+    }
+    return session;
+}
+
+std::vector<std::uint8_t> ChatService::make_system_chat_body(std::string_view room, std::string_view text) const {
+    server::wire::v1::ChatBroadcast pb;
+    pb.set_room(std::string(room));
+    pb.set_sender("(system)");
+    pb.set_text(std::string(text));
+    pb.set_sender_sid(0);
+    const auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    pb.set_ts_ms(static_cast<std::uint64_t>(now64));
+
+    std::string bytes;
+    pb.SerializeToString(&bytes);
+    return std::vector<std::uint8_t>(bytes.begin(), bytes.end());
+}
+
+bool ChatService::broadcast_notice_to_all_sessions(std::string notice) {
+    if (notice.empty()) {
+        return false;
+    }
+
+    if (!job_queue_.TryPush([this, notice = std::move(notice)]() {
+        std::vector<std::shared_ptr<Session>> sessions;
+        std::unordered_set<Session*> seen;
+
+        {
+            std::lock_guard<std::mutex> lk(state_.mu);
+            for (auto& [_, room_set] : state_.rooms) {
+                for (auto it = room_set.begin(); it != room_set.end();) {
+                    if (auto session = it->lock()) {
+                        if (!state_.authed.count(session.get()) || state_.guest.count(session.get())) {
+                            ++it;
+                            continue;
+                        }
+                        if (seen.insert(session.get()).second) {
+                            sessions.push_back(std::move(session));
+                        }
+                        ++it;
+                    } else {
+                        it = room_set.erase(it);
+                    }
+                }
+            }
+        }
+
+        for (auto& session : sessions) {
+            send_system_notice(*session, notice);
+        }
+    })) {
+        corelog::warn("lua broadcast_all dropped: job queue full");
+        return false;
+    }
+    return true;
+}
+
+bool ChatService::apply_user_moderation_without_hook(const std::string& op,
+                                                     const std::vector<std::string>& users,
+                                                     std::uint32_t duration_sec,
+                                                     const std::string& reason) {
+    if (op.empty() || users.empty()) {
+        return false;
+    }
+
+    const auto trim_ascii_local = [](std::string_view input) {
+        std::size_t begin = 0;
+        while (begin < input.size() && std::isspace(static_cast<unsigned char>(input[begin])) != 0) {
+            ++begin;
+        }
+        std::size_t end = input.size();
+        while (end > begin && std::isspace(static_cast<unsigned char>(input[end - 1])) != 0) {
+            --end;
+        }
+        return std::string(input.substr(begin, end - begin));
+    };
+
+    const auto to_lower_ascii_local = [](std::string_view input) {
+        std::string out(input);
+        std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return out;
+    };
+
+    std::vector<std::string> targets;
+    targets.reserve(users.size());
+    for (const auto& user : users) {
+        const std::string trimmed = trim_ascii_local(user);
+        if (!trimmed.empty()) {
+            targets.push_back(trimmed);
+        }
+    }
+    if (targets.empty()) {
+        return false;
+    }
+
+    std::string normalized_op = to_lower_ascii_local(trim_ascii_local(op));
+    std::string normalized_reason = trim_ascii_local(reason);
+
+    if (!job_queue_.TryPush([this,
+                             normalized_op = std::move(normalized_op),
+                             targets = std::move(targets),
+                             duration_sec,
+                             normalized_reason = std::move(normalized_reason)]() {
+        const auto now = std::chrono::steady_clock::now();
+        std::vector<std::shared_ptr<Session>> affected_sessions;
+        std::unordered_set<Session*> seen;
+
+        auto add_user_sessions = [&](const std::string& user) {
+            auto itset = state_.by_user.find(user);
+            if (itset == state_.by_user.end()) {
+                return;
+            }
+            for (auto wit = itset->second.begin(); wit != itset->second.end();) {
+                if (auto session = wit->lock()) {
+                    if (seen.insert(session.get()).second) {
+                        affected_sessions.push_back(std::move(session));
+                    }
+                    ++wit;
+                } else {
+                    wit = itset->second.erase(wit);
+                }
+            }
+        };
+
+        {
+            std::lock_guard<std::mutex> lk(state_.mu);
+            for (const auto& user : targets) {
+                if (normalized_op == "mute") {
+                    const std::uint32_t seconds = duration_sec > 0 ? duration_sec : spam_mute_sec_;
+                    const std::string applied_reason = normalized_reason.empty() ? "muted by administrator" : normalized_reason;
+                    state_.muted_users[user] = {now + std::chrono::seconds(seconds), applied_reason};
+                } else if (normalized_op == "unmute") {
+                    state_.muted_users.erase(user);
+                } else if (normalized_op == "ban") {
+                    const std::uint32_t seconds = duration_sec > 0 ? duration_sec : spam_ban_sec_;
+                    const auto expires_at = now + std::chrono::seconds(seconds);
+                    const std::string applied_reason = normalized_reason.empty() ? "banned by administrator" : normalized_reason;
+                    state_.banned_users[user] = {expires_at, applied_reason};
+
+                    if (auto ip_it = state_.user_last_ip.find(user); ip_it != state_.user_last_ip.end() && !ip_it->second.empty()) {
+                        state_.banned_ips[ip_it->second] = expires_at;
+                    }
+                    if (auto hwid_it = state_.user_last_hwid_hash.find(user); hwid_it != state_.user_last_hwid_hash.end() && !hwid_it->second.empty()) {
+                        state_.banned_hwid_hashes[hwid_it->second] = expires_at;
+                    }
+                    add_user_sessions(user);
+                } else if (normalized_op == "unban") {
+                    state_.banned_users.erase(user);
+                    if (auto ip_it = state_.user_last_ip.find(user); ip_it != state_.user_last_ip.end() && !ip_it->second.empty()) {
+                        state_.banned_ips.erase(ip_it->second);
+                    }
+                    if (auto hwid_it = state_.user_last_hwid_hash.find(user); hwid_it != state_.user_last_hwid_hash.end() && !hwid_it->second.empty()) {
+                        state_.banned_hwid_hashes.erase(hwid_it->second);
+                    }
+                } else if (normalized_op == "kick") {
+                    add_user_sessions(user);
+                }
+            }
+        }
+
+        if (normalized_op == "ban" || normalized_op == "kick") {
+            const std::string notice = normalized_reason.empty()
+                ? (normalized_op == "ban" ? "temporarily banned" : "disconnected by administrator")
+                : normalized_reason;
+            for (auto& session : affected_sessions) {
+                send_system_notice(*session, notice);
+                session->stop();
+            }
+        }
+    })) {
+        corelog::warn("lua moderation dropped: job queue full");
+        return false;
+    }
+    return true;
+}
+
+std::optional<std::string> ChatService::lua_get_user_name(std::uint32_t session_id) {
+    std::lock_guard<std::mutex> lk(state_.mu);
+    auto session = find_session_by_id_locked(session_id);
+    if (!session) {
+        return std::nullopt;
+    }
+
+    const auto it = state_.user.find(session.get());
+    if (it == state_.user.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+std::optional<std::string> ChatService::lua_get_user_room(std::uint32_t session_id) {
+    std::lock_guard<std::mutex> lk(state_.mu);
+    auto session = find_session_by_id_locked(session_id);
+    if (!session) {
+        return std::nullopt;
+    }
+
+    const auto it = state_.cur_room.find(session.get());
+    if (it == state_.cur_room.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+std::vector<std::string> ChatService::lua_get_room_users(std::string_view room_name) {
+    std::vector<std::string> users;
+    if (room_name.empty()) {
+        return users;
+    }
+
+    std::lock_guard<std::mutex> lk(state_.mu);
+    const auto it = state_.rooms.find(std::string(room_name));
+    if (it == state_.rooms.end()) {
+        return users;
+    }
+
+    for (auto wit = it->second.begin(); wit != it->second.end();) {
+        if (auto session = wit->lock()) {
+            if (state_.authed.count(session.get()) > 0 && state_.guest.count(session.get()) == 0) {
+                if (const auto user_it = state_.user.find(session.get()); user_it != state_.user.end()) {
+                    users.push_back(user_it->second);
+                }
+            }
+            ++wit;
+        } else {
+            wit = it->second.erase(wit);
+        }
+    }
+
+    std::sort(users.begin(), users.end());
+    users.erase(std::unique(users.begin(), users.end()), users.end());
+    return users;
+}
+
+std::vector<std::string> ChatService::lua_get_room_list() {
+    std::vector<std::string> rooms;
+    std::lock_guard<std::mutex> lk(state_.mu);
+    rooms.reserve(state_.rooms.size());
+    for (const auto& [room_name, _] : state_.rooms) {
+        rooms.push_back(room_name);
+    }
+    std::sort(rooms.begin(), rooms.end());
+    return rooms;
+}
+
+std::optional<std::string> ChatService::lua_get_room_owner(std::string_view room_name) {
+    if (room_name.empty()) {
+        return std::nullopt;
+    }
+
+    std::lock_guard<std::mutex> lk(state_.mu);
+    const auto it = state_.room_owners.find(std::string(room_name));
+    if (it == state_.room_owners.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+bool ChatService::lua_is_user_muted(std::string_view nickname) {
+    if (nickname.empty()) {
+        return false;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lk(state_.mu);
+    const auto it = state_.muted_users.find(std::string(nickname));
+    if (it == state_.muted_users.end()) {
+        return false;
+    }
+    if (it->second.expires_at <= now) {
+        state_.muted_users.erase(it);
+        return false;
+    }
+    return true;
+}
+
+bool ChatService::lua_is_user_banned(std::string_view nickname) {
+    if (nickname.empty()) {
+        return false;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lk(state_.mu);
+    const auto it = state_.banned_users.find(std::string(nickname));
+    if (it == state_.banned_users.end()) {
+        return false;
+    }
+    if (it->second.expires_at <= now) {
+        state_.banned_users.erase(it);
+        return false;
+    }
+    return true;
+}
+
+std::size_t ChatService::lua_get_online_count() {
+    std::unordered_set<std::string> names;
+    std::lock_guard<std::mutex> lk(state_.mu);
+    for (const auto& [session, user] : state_.user) {
+        if (state_.authed.count(session) == 0 || state_.guest.count(session) > 0) {
+            continue;
+        }
+        if (!user.empty()) {
+            names.insert(user);
+        }
+    }
+    return names.size();
+}
+
+std::size_t ChatService::lua_get_room_count() {
+    std::lock_guard<std::mutex> lk(state_.mu);
+    return state_.rooms.size();
+}
+
+bool ChatService::lua_send_notice(std::uint32_t session_id, std::string_view text) {
+    if (session_id == 0 || text.empty()) {
+        return false;
+    }
+
+    std::shared_ptr<Session> session;
+    {
+        std::lock_guard<std::mutex> lk(state_.mu);
+        session = find_session_by_id_locked(session_id);
+    }
+    if (!session) {
+        return false;
+    }
+
+    send_system_notice(*session, std::string(text));
+    return true;
+}
+
+bool ChatService::lua_broadcast_room(std::string_view room_name, std::string_view text) {
+    if (room_name.empty() || text.empty()) {
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(state_.mu);
+        if (state_.rooms.find(std::string(room_name)) == state_.rooms.end()) {
+            return false;
+        }
+    }
+
+    broadcast_room(std::string(room_name), make_system_chat_body(room_name, text), nullptr);
+    return true;
+}
+
+bool ChatService::lua_broadcast_all(std::string_view text) {
+    if (text.empty()) {
+        return false;
+    }
+
+    return broadcast_notice_to_all_sessions(std::string(text));
+}
+
+bool ChatService::lua_kick_user(std::uint32_t session_id, std::string_view reason) {
+    if (session_id == 0) {
+        return false;
+    }
+
+    std::shared_ptr<Session> session;
+    {
+        std::lock_guard<std::mutex> lk(state_.mu);
+        session = find_session_by_id_locked(session_id);
+    }
+    if (!session) {
+        return false;
+    }
+
+    if (!reason.empty()) {
+        send_system_notice(*session, std::string(reason));
+    }
+    session->stop();
+    return true;
+}
+
+bool ChatService::lua_mute_user(std::string_view nickname,
+                                std::uint32_t duration_sec,
+                                std::string_view reason) {
+    if (nickname.empty()) {
+        return false;
+    }
+
+    return apply_user_moderation_without_hook(
+        "mute",
+        {std::string(nickname)},
+        duration_sec,
+        std::string(reason));
+}
+
+bool ChatService::lua_ban_user(std::string_view nickname,
+                               std::uint32_t duration_sec,
+                               std::string_view reason) {
+    if (nickname.empty()) {
+        return false;
+    }
+
+    return apply_user_moderation_without_hook(
+        "ban",
+        {std::string(nickname)},
+        duration_sec,
+        std::string(reason));
 }
 
 // 귓속말 전송 결과를 클라이언트에게 알립니다.

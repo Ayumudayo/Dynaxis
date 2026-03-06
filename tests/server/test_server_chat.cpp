@@ -12,6 +12,8 @@
 #include <server/core/protocol/packet.hpp>
 #include <server/core/protocol/version.hpp>
 #include <server/core/runtime_metrics.hpp>
+#include <server/core/scripting/lua_runtime.hpp>
+#include <server/core/util/service_registry.hpp>
 #include <server/protocol/game_opcodes.hpp>
 #include "wire.pb.h"
 #include <boost/asio.hpp>
@@ -20,8 +22,18 @@
 #include <vector>
 #include <array>
 #include <optional>
+#include <filesystem>
+#include <fstream>
 #include <cstdlib>
 #include <iostream>
+
+#ifndef TEST_CHAT_HOOK_V2_ONLY_PATH
+#define TEST_CHAT_HOOK_V2_ONLY_PATH ""
+#endif
+
+#ifndef TEST_CHAT_HOOK_THROWING_PATH
+#define TEST_CHAT_HOOK_THROWING_PATH ""
+#endif
 
 using namespace server::app::chat;
 using namespace server::core;
@@ -29,6 +41,7 @@ using namespace server::core::storage;
 using namespace server::storage::redis;
 namespace game_proto = server::protocol;
 namespace core_proto = server::core::protocol;
+namespace services = server::core::util::services;
 
 /**
  * @brief ChatService 주요 경로(로그인/입장/채팅/리프레시) 통합 동작을 검증합니다.
@@ -51,6 +64,73 @@ inline void write_lp_utf8(std::vector<std::uint8_t>& out, std::string_view str) 
         std::memcpy(out.data() + offset + 2, str.data(), len);
     }
 }
+
+class ScopedEnvVar {
+public:
+    ScopedEnvVar(std::string key, const char* value)
+        : key_(std::move(key)) {
+        if (const char* old = std::getenv(key_.c_str()); old != nullptr) {
+            had_old_ = true;
+            old_value_ = old;
+        }
+        set(value);
+    }
+
+    ~ScopedEnvVar() {
+#if defined(_WIN32)
+        if (had_old_) {
+            _putenv_s(key_.c_str(), old_value_.c_str());
+        } else {
+            _putenv_s(key_.c_str(), "");
+        }
+#else
+        if (had_old_) {
+            setenv(key_.c_str(), old_value_.c_str(), 1);
+        } else {
+            unsetenv(key_.c_str());
+        }
+#endif
+    }
+
+private:
+    void set(const char* value) const {
+#if defined(_WIN32)
+        _putenv_s(key_.c_str(), value ? value : "");
+#else
+        if (value) {
+            setenv(key_.c_str(), value, 1);
+        } else {
+            unsetenv(key_.c_str());
+        }
+#endif
+    }
+
+    std::string key_;
+    bool had_old_{false};
+    std::string old_value_;
+};
+
+class ScopedTempDir {
+public:
+    explicit ScopedTempDir(std::string_view prefix) {
+        const auto nonce = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+        path_ = std::filesystem::temp_directory_path() / (std::string(prefix) + "_" + nonce);
+        std::error_code ec;
+        (void)std::filesystem::create_directories(path_, ec);
+    }
+
+    ~ScopedTempDir() {
+        std::error_code ec;
+        std::filesystem::remove_all(path_, ec);
+    }
+
+    const std::filesystem::path& path() const {
+        return path_;
+    }
+
+private:
+    std::filesystem::path path_;
+};
 
 // --- Mocks ---
 // MockConnectionPool moved to bottom
@@ -197,6 +277,11 @@ public:
 
 class ChatServiceTest : public ::testing::Test {
 protected:
+    struct ErrorFrame {
+        std::uint16_t code{0};
+        std::string message;
+    };
+
     boost::asio::io_context io_;
     JobQueue job_queue_;
     std::shared_ptr<MockConnectionPool> db_pool_;
@@ -213,6 +298,7 @@ protected:
     boost::asio::ip::tcp::socket peer_socket_;
 
     void SetUp() override {
+        services::clear();
         db_pool_ = std::make_shared<MockConnectionPool>();
         redis_ = std::make_shared<MockRedisClient>();
         chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
@@ -234,6 +320,11 @@ protected:
             std::move(socket), dispatcher_, buffer_manager_, session_options_, shared_state_
         );
         session_->start(); 
+    }
+
+    void TearDown() override {
+        chat_service_.reset();
+        services::clear();
     }
 
     ChatServiceTest() : acceptor_(io_), peer_socket_(io_) {}
@@ -361,7 +452,7 @@ protected:
         return true;
     }
 
-    std::optional<std::uint16_t> WaitForErrorCode(int timeout_ms = 300) {
+    std::optional<ErrorFrame> WaitForError(int timeout_ms = 300) {
         auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
         while (std::chrono::steady_clock::now() < deadline) {
             std::uint16_t msg_id = 0;
@@ -372,12 +463,31 @@ protected:
             if (msg_id != core_proto::MSG_ERR) {
                 continue;
             }
-            if (payload.size() < 2) {
+
+            if (payload.size() < 4) {
                 return std::nullopt;
             }
-            return static_cast<std::uint16_t>((static_cast<std::uint16_t>(payload[0]) << 8) | payload[1]);
+
+            ErrorFrame out{};
+            out.code = static_cast<std::uint16_t>((static_cast<std::uint16_t>(payload[0]) << 8) | payload[1]);
+
+            const auto msg_len = static_cast<std::uint16_t>((static_cast<std::uint16_t>(payload[2]) << 8) | payload[3]);
+            if (payload.size() < 4u + static_cast<std::size_t>(msg_len)) {
+                return std::nullopt;
+            }
+
+            out.message.assign(reinterpret_cast<const char*>(payload.data() + 4), msg_len);
+            return out;
         }
         return std::nullopt;
+    }
+
+    std::optional<std::uint16_t> WaitForErrorCode(int timeout_ms = 300) {
+        const auto err = WaitForError(timeout_ms);
+        if (!err.has_value()) {
+            return std::nullopt;
+        }
+        return err->code;
     }
 
     bool WaitForBroadcastText(const std::string& expected_substring, int timeout_ms = 500) {
@@ -877,6 +987,555 @@ TEST_F(ChatServiceTest, RuntimeSettingRejectsUnsupportedKeyAndInvalidValue) {
     EXPECT_EQ(after.runtime_setting_reload_attempt_total, before.runtime_setting_reload_attempt_total + 2);
     EXPECT_EQ(after.runtime_setting_reload_success_total, before.runtime_setting_reload_success_total);
     EXPECT_EQ(after.runtime_setting_reload_failure_total, before.runtime_setting_reload_failure_total + 2);
+}
+
+TEST_F(ChatServiceTest, LoginDeniedByV2HookPluginReturnsForbidden) {
+    if (std::string(TEST_CHAT_HOOK_V2_ONLY_PATH).empty()) {
+        GTEST_SKIP() << "TEST_CHAT_HOOK_V2_ONLY_PATH is not configured";
+    }
+
+    ScopedEnvVar env_single("CHAT_HOOK_PLUGIN_PATH", TEST_CHAT_HOOK_V2_ONLY_PATH);
+    ScopedEnvVar env_paths("CHAT_HOOK_PLUGIN_PATHS", "");
+    ScopedEnvVar env_dir("CHAT_HOOK_PLUGINS_DIR", "");
+    ScopedTempDir cache_temp("knights_chat_service_hook_cache");
+    const auto cache_path = cache_temp.path().string();
+    const auto lock_path = (cache_temp.path() / "chat_hook.lock").string();
+    ScopedEnvVar env_lock("CHAT_HOOK_LOCK_PATH", lock_path.c_str());
+    ScopedEnvVar env_cache("CHAT_HOOK_CACHE_DIR", cache_path.c_str());
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    std::vector<std::uint8_t> payload;
+    write_lp_utf8(payload, "deny_login");
+    write_lp_utf8(payload, "test_token");
+
+    chat_service_->on_login(*session_, payload);
+    ProcessJobs();
+    FlushSessionIO();
+
+    const auto error = WaitForError();
+    ASSERT_TRUE(error.has_value());
+    EXPECT_EQ(error->code, core_proto::errc::FORBIDDEN);
+    EXPECT_EQ(error->message, "login blocked by v2-only test plugin");
+    chat_service_.reset();
+}
+
+TEST_F(ChatServiceTest, JoinDeniedByV2HookPluginReturnsForbidden) {
+    if (std::string(TEST_CHAT_HOOK_V2_ONLY_PATH).empty()) {
+        GTEST_SKIP() << "TEST_CHAT_HOOK_V2_ONLY_PATH is not configured";
+    }
+
+    ScopedEnvVar env_single("CHAT_HOOK_PLUGIN_PATH", TEST_CHAT_HOOK_V2_ONLY_PATH);
+    ScopedEnvVar env_paths("CHAT_HOOK_PLUGIN_PATHS", "");
+    ScopedEnvVar env_dir("CHAT_HOOK_PLUGINS_DIR", "");
+    ScopedTempDir cache_temp("knights_chat_service_hook_cache");
+    const auto cache_path = cache_temp.path().string();
+    const auto lock_path = (cache_temp.path() / "chat_hook.lock").string();
+    ScopedEnvVar env_lock("CHAT_HOOK_LOCK_PATH", lock_path.c_str());
+    ScopedEnvVar env_cache("CHAT_HOOK_CACHE_DIR", cache_path.c_str());
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    LoginAs("allow_user");
+
+    std::vector<std::uint8_t> join_payload;
+    write_lp_utf8(join_payload, "forbidden_room");
+    write_lp_utf8(join_payload, "");
+
+    chat_service_->on_join(*session_, join_payload);
+    ProcessJobs();
+    FlushSessionIO();
+
+    const auto error = WaitForError();
+    ASSERT_TRUE(error.has_value());
+    EXPECT_EQ(error->code, core_proto::errc::FORBIDDEN);
+    EXPECT_EQ(error->message, "join blocked by v2-only test plugin");
+    chat_service_.reset();
+}
+
+TEST_F(ChatServiceTest, LeaveDeniedByV2HookPluginReturnsForbidden) {
+    if (std::string(TEST_CHAT_HOOK_V2_ONLY_PATH).empty()) {
+        GTEST_SKIP() << "TEST_CHAT_HOOK_V2_ONLY_PATH is not configured";
+    }
+
+    ScopedEnvVar env_single("CHAT_HOOK_PLUGIN_PATH", TEST_CHAT_HOOK_V2_ONLY_PATH);
+    ScopedEnvVar env_paths("CHAT_HOOK_PLUGIN_PATHS", "");
+    ScopedEnvVar env_dir("CHAT_HOOK_PLUGINS_DIR", "");
+    ScopedTempDir cache_temp("knights_chat_service_hook_cache");
+    const auto cache_path = cache_temp.path().string();
+    const auto lock_path = (cache_temp.path() / "chat_hook.lock").string();
+    ScopedEnvVar env_lock("CHAT_HOOK_LOCK_PATH", lock_path.c_str());
+    ScopedEnvVar env_cache("CHAT_HOOK_CACHE_DIR", cache_path.c_str());
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    LoginAs("allow_user");
+
+    std::vector<std::uint8_t> join_payload;
+    write_lp_utf8(join_payload, "locked_leave");
+    write_lp_utf8(join_payload, "");
+    chat_service_->on_join(*session_, join_payload);
+    ProcessJobs();
+    FlushSessionIO();
+
+    std::vector<std::uint8_t> leave_payload;
+    write_lp_utf8(leave_payload, "locked_leave");
+    chat_service_->on_leave(*session_, leave_payload);
+    ProcessJobs();
+    FlushSessionIO();
+
+    const auto error_code = WaitForErrorCode();
+    ASSERT_TRUE(error_code.has_value());
+    EXPECT_EQ(*error_code, core_proto::errc::FORBIDDEN);
+    chat_service_.reset();
+}
+
+TEST_F(ChatServiceTest, ThrowingChatHookExceptionDoesNotStopChatOrAdminSettingPath) {
+    if (std::string(TEST_CHAT_HOOK_THROWING_PATH).empty()) {
+        GTEST_SKIP() << "TEST_CHAT_HOOK_THROWING_PATH is not configured";
+    }
+
+    ScopedEnvVar env_single("CHAT_HOOK_PLUGIN_PATH", TEST_CHAT_HOOK_THROWING_PATH);
+    ScopedEnvVar env_paths("CHAT_HOOK_PLUGIN_PATHS", "");
+    ScopedEnvVar env_dir("CHAT_HOOK_PLUGINS_DIR", "");
+    ScopedTempDir cache_temp("knights_chat_service_throwing_hook_cache");
+    const auto cache_path = cache_temp.path().string();
+    const auto lock_path = (cache_temp.path() / "chat_hook.lock").string();
+    ScopedEnvVar env_lock("CHAT_HOOK_LOCK_PATH", lock_path.c_str());
+    ScopedEnvVar env_cache("CHAT_HOOK_CACHE_DIR", cache_path.c_str());
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    LoginAs("throwing_user");
+    JoinRoom("throwing_room");
+
+    SendChat("throwing_room", "throwing plugin first message");
+    EXPECT_TRUE(WaitForBroadcastText("throwing plugin first message"));
+
+    const auto plugin_metrics = chat_service_->chat_hook_plugins_metrics();
+    EXPECT_TRUE(plugin_metrics.enabled);
+    bool found_plugin = false;
+    for (const auto& plugin : plugin_metrics.plugins) {
+        if (plugin.name != "chat_hook_throwing") {
+            continue;
+        }
+        found_plugin = true;
+        EXPECT_TRUE(plugin.loaded);
+
+        bool found_chat_hook = false;
+        for (const auto& hook_metric : plugin.hook_metrics) {
+            if (hook_metric.hook_name != "on_chat_send") {
+                continue;
+            }
+            found_chat_hook = true;
+            EXPECT_GE(hook_metric.calls_total, 1u);
+            EXPECT_GE(hook_metric.errors_total, 1u);
+        }
+        EXPECT_TRUE(found_chat_hook);
+    }
+    EXPECT_TRUE(found_plugin);
+
+    const auto before = server::core::runtime_metrics::snapshot();
+    chat_service_->admin_apply_runtime_setting("chat_spam_threshold", "17");
+    ProcessJobs();
+    FlushSessionIO();
+    const auto after = server::core::runtime_metrics::snapshot();
+    EXPECT_EQ(after.runtime_setting_reload_attempt_total, before.runtime_setting_reload_attempt_total + 1);
+    EXPECT_EQ(after.runtime_setting_reload_success_total, before.runtime_setting_reload_success_total + 1);
+
+    SendChat("throwing_room", "throwing plugin second message");
+    EXPECT_TRUE(WaitForBroadcastText("throwing plugin second message"));
+    chat_service_.reset();
+}
+
+TEST_F(ChatServiceTest, LuaColdHooksRunForLoginAndJoinButNotChatSend) {
+    ScopedTempDir script_temp("knights_chat_lua_cold_hook");
+    const auto script_path = script_temp.path() / "on_login.lua";
+    {
+        std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(out.good());
+        out << "return 1\n";
+        out.flush();
+        ASSERT_TRUE(out.good());
+    }
+
+    auto lua_runtime = std::make_shared<server::core::scripting::LuaRuntime>();
+    std::vector<server::core::scripting::LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(server::core::scripting::LuaRuntime::ScriptEntry{script_path, "on_login"});
+    const auto reload_result = lua_runtime->reload_scripts(scripts);
+    ASSERT_TRUE(reload_result.error.empty());
+    ASSERT_EQ(reload_result.loaded, 1u);
+
+    services::set(lua_runtime);
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    const auto before = lua_runtime->metrics_snapshot();
+
+    LoginAs("lua_user");
+    JoinRoom("lua_room");
+    SendChat("lua_room", "hello from hot path");
+
+    const auto after = lua_runtime->metrics_snapshot();
+    EXPECT_EQ(after.calls_total, before.calls_total + 2u);
+}
+
+TEST_F(ChatServiceTest, LuaColdHookDenyStopsLoginWhenNativePathPasses) {
+    ScopedTempDir script_temp("knights_chat_lua_login_deny");
+    const auto script_path = script_temp.path() / "policy.lua";
+    {
+        std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(out.good());
+        out << "return { hook = \"on_login\", decision = \"deny\", reason = \"login denied by lua scaffold\" }\n";
+        out.flush();
+        ASSERT_TRUE(out.good());
+    }
+
+    auto lua_runtime = std::make_shared<server::core::scripting::LuaRuntime>();
+    std::vector<server::core::scripting::LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(server::core::scripting::LuaRuntime::ScriptEntry{script_path, "policy"});
+    const auto reload_result = lua_runtime->reload_scripts(scripts);
+    ASSERT_TRUE(reload_result.error.empty());
+    ASSERT_EQ(reload_result.loaded, 1u);
+
+    services::set(lua_runtime);
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    std::vector<std::uint8_t> payload;
+    write_lp_utf8(payload, "lua_deny_user");
+    write_lp_utf8(payload, "test_token");
+    chat_service_->on_login(*session_, payload);
+    ProcessJobs();
+    FlushSessionIO();
+
+    const auto error = WaitForError();
+    ASSERT_TRUE(error.has_value());
+    EXPECT_EQ(error->code, core_proto::errc::FORBIDDEN);
+    EXPECT_EQ(error->message, "login denied by lua scaffold");
+}
+
+TEST_F(ChatServiceTest, LuaColdHookPassSendsLoginWelcomeNotice) {
+    ScopedTempDir script_temp("knights_chat_lua_login_notice");
+    const auto script_path = script_temp.path() / "policy.lua";
+    {
+        std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(out.good());
+        out << "function on_login(ctx)\n"
+               "  local name = server.get_user_name(ctx.session_id)\n"
+               "  local online = server.get_online_count()\n"
+               "  server.send_notice(ctx.session_id, 'welcome ' .. name .. ' online=' .. tostring(online))\n"
+               "  return { decision = 'pass' }\n"
+               "end\n";
+        out.flush();
+        ASSERT_TRUE(out.good());
+    }
+
+    auto lua_runtime = std::make_shared<server::core::scripting::LuaRuntime>();
+    std::vector<server::core::scripting::LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(server::core::scripting::LuaRuntime::ScriptEntry{script_path, "policy"});
+    const auto reload_result = lua_runtime->reload_scripts(scripts);
+    ASSERT_TRUE(reload_result.error.empty());
+    ASSERT_EQ(reload_result.loaded, 1u);
+
+    services::set(lua_runtime);
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    std::vector<std::uint8_t> payload;
+    write_lp_utf8(payload, "lua_notice_user");
+    write_lp_utf8(payload, "test_token");
+    chat_service_->on_login(*session_, payload);
+    ProcessJobs();
+    FlushSessionIO();
+
+    EXPECT_TRUE(WaitForBroadcastText("welcome lua_notice_user online=0"));
+}
+
+TEST_F(ChatServiceTest, LuaAdminHookCanUseArgsAndBroadcastAll) {
+    ScopedTempDir script_temp("knights_chat_lua_admin_announce");
+    const auto script_path = script_temp.path() / "policy.lua";
+    {
+        std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(out.good());
+        out << "function on_admin_command(ctx)\n"
+               "  if ctx.command ~= 'announce' then\n"
+               "    return { decision = 'pass' }\n"
+               "  end\n"
+               "  server.broadcast_all('[announce] ' .. ctx.args)\n"
+               "  return { decision = 'handled' }\n"
+               "end\n";
+        out.flush();
+        ASSERT_TRUE(out.good());
+    }
+
+    auto lua_runtime = std::make_shared<server::core::scripting::LuaRuntime>();
+    std::vector<server::core::scripting::LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(server::core::scripting::LuaRuntime::ScriptEntry{script_path, "policy"});
+    const auto reload_result = lua_runtime->reload_scripts(scripts);
+    ASSERT_TRUE(reload_result.error.empty());
+
+    services::set(lua_runtime);
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    LoginAs("announce_listener");
+    chat_service_->admin_broadcast_notice("server maintenance");
+    ProcessJobs();
+    FlushSessionIO();
+
+    EXPECT_TRUE(WaitForBroadcastText("[announce] server maintenance"));
+}
+
+TEST_F(ChatServiceTest, LuaColdHookDenyStopsJoinWhenNativePathPasses) {
+    ScopedTempDir script_temp("knights_chat_lua_join_deny");
+    const auto script_path = script_temp.path() / "policy.lua";
+    {
+        std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(out.good());
+        out << "return { hook = \"on_join\", decision = \"deny\", reason = \"join denied by lua scaffold\" }\n";
+        out.flush();
+        ASSERT_TRUE(out.good());
+    }
+
+    auto lua_runtime = std::make_shared<server::core::scripting::LuaRuntime>();
+    std::vector<server::core::scripting::LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(server::core::scripting::LuaRuntime::ScriptEntry{script_path, "policy"});
+    const auto reload_result = lua_runtime->reload_scripts(scripts);
+    ASSERT_TRUE(reload_result.error.empty());
+    ASSERT_EQ(reload_result.loaded, 1u);
+
+    services::set(lua_runtime);
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    LoginAs("lua_join_user");
+
+    std::vector<std::uint8_t> join_payload;
+    write_lp_utf8(join_payload, "lua_forbidden_room");
+    write_lp_utf8(join_payload, "");
+    chat_service_->on_join(*session_, join_payload);
+    ProcessJobs();
+    FlushSessionIO();
+
+    const auto error = WaitForError();
+    ASSERT_TRUE(error.has_value());
+    EXPECT_EQ(error->code, core_proto::errc::FORBIDDEN);
+    EXPECT_EQ(error->message, "join denied by lua scaffold");
+}
+
+TEST_F(ChatServiceTest, LuaColdHookJoinVipPolicyCanDenyAccess) {
+    ScopedTempDir script_temp("knights_chat_lua_join_vip_policy");
+    const auto script_path = script_temp.path() / "policy.lua";
+    {
+        std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(out.good());
+        out << "return { hook = \"on_join\", decision = \"deny\", reason = \"vip room requires policy approval\" }\n";
+        out.flush();
+        ASSERT_TRUE(out.good());
+    }
+
+    auto lua_runtime = std::make_shared<server::core::scripting::LuaRuntime>();
+    std::vector<server::core::scripting::LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(server::core::scripting::LuaRuntime::ScriptEntry{script_path, "policy"});
+    const auto reload_result = lua_runtime->reload_scripts(scripts);
+    ASSERT_TRUE(reload_result.error.empty());
+    ASSERT_EQ(reload_result.loaded, 1u);
+
+    services::set(lua_runtime);
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    LoginAs("vip_candidate");
+
+    std::vector<std::uint8_t> join_payload;
+    write_lp_utf8(join_payload, "vip_lounge");
+    write_lp_utf8(join_payload, "");
+    chat_service_->on_join(*session_, join_payload);
+    ProcessJobs();
+    FlushSessionIO();
+
+    const auto error = WaitForError();
+    ASSERT_TRUE(error.has_value());
+    EXPECT_EQ(error->code, core_proto::errc::FORBIDDEN);
+    EXPECT_EQ(error->message, "vip room requires policy approval");
+}
+
+TEST_F(ChatServiceTest, LuaColdHookDenySkipsAdminRuntimeSettingReload) {
+    ScopedTempDir script_temp("knights_chat_lua_admin_deny");
+    const auto script_path = script_temp.path() / "policy.lua";
+    {
+        std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(out.good());
+        out << "return { hook = \"on_admin_command\", decision = \"deny\", reason = \"admin denied by lua scaffold\" }\n";
+        out.flush();
+        ASSERT_TRUE(out.good());
+    }
+
+    auto lua_runtime = std::make_shared<server::core::scripting::LuaRuntime>();
+    std::vector<server::core::scripting::LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(server::core::scripting::LuaRuntime::ScriptEntry{script_path, "policy"});
+    const auto reload_result = lua_runtime->reload_scripts(scripts);
+    ASSERT_TRUE(reload_result.error.empty());
+    ASSERT_EQ(reload_result.loaded, 1u);
+
+    services::set(lua_runtime);
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    const auto before = server::core::runtime_metrics::snapshot().runtime_setting_reload_attempt_total;
+
+    chat_service_->admin_apply_runtime_setting("chat_spam_threshold", "7");
+    ProcessJobs();
+    FlushSessionIO();
+
+    const auto after = server::core::runtime_metrics::snapshot().runtime_setting_reload_attempt_total;
+    EXPECT_EQ(after, before);
+}
+
+TEST_F(ChatServiceTest, LuaColdHookCanDenyAfterNativePluginPassesLogin) {
+    if (std::string(TEST_CHAT_HOOK_V2_ONLY_PATH).empty()) {
+        GTEST_SKIP() << "TEST_CHAT_HOOK_V2_ONLY_PATH is not configured";
+    }
+
+    ScopedTempDir script_temp("knights_chat_lua_after_native_pass");
+    const auto script_path = script_temp.path() / "policy.lua";
+    {
+        std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(out.good());
+        out << "return { hook = \"on_login\", decision = \"deny\", reason = \"login denied after native pass\" }\n";
+        out.flush();
+        ASSERT_TRUE(out.good());
+    }
+
+    auto lua_runtime = std::make_shared<server::core::scripting::LuaRuntime>();
+    std::vector<server::core::scripting::LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(server::core::scripting::LuaRuntime::ScriptEntry{script_path, "policy"});
+    const auto reload_result = lua_runtime->reload_scripts(scripts);
+    ASSERT_TRUE(reload_result.error.empty());
+    services::set(lua_runtime);
+
+    ScopedEnvVar env_single("CHAT_HOOK_PLUGIN_PATH", TEST_CHAT_HOOK_V2_ONLY_PATH);
+    ScopedEnvVar env_paths("CHAT_HOOK_PLUGIN_PATHS", "");
+    ScopedEnvVar env_dir("CHAT_HOOK_PLUGINS_DIR", "");
+    ScopedTempDir cache_temp("knights_chat_service_hook_cache_pass");
+    const auto cache_path = cache_temp.path().string();
+    const auto lock_path = (cache_temp.path() / "chat_hook.lock").string();
+    ScopedEnvVar env_lock("CHAT_HOOK_LOCK_PATH", lock_path.c_str());
+    ScopedEnvVar env_cache("CHAT_HOOK_CACHE_DIR", cache_path.c_str());
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    const auto before = lua_runtime->metrics_snapshot();
+
+    std::vector<std::uint8_t> payload;
+    write_lp_utf8(payload, "allow_user");
+    write_lp_utf8(payload, "test_token");
+    chat_service_->on_login(*session_, payload);
+    ProcessJobs();
+    FlushSessionIO();
+
+    const auto error = WaitForError();
+    ASSERT_TRUE(error.has_value());
+    EXPECT_EQ(error->code, core_proto::errc::FORBIDDEN);
+    EXPECT_EQ(error->message, "login denied after native pass");
+
+    const auto after = lua_runtime->metrics_snapshot();
+    EXPECT_EQ(after.calls_total, before.calls_total + 1u);
+}
+
+TEST_F(ChatServiceTest, LuaColdHookSkippedWhenNativePluginBlocksLogin) {
+    if (std::string(TEST_CHAT_HOOK_V2_ONLY_PATH).empty()) {
+        GTEST_SKIP() << "TEST_CHAT_HOOK_V2_ONLY_PATH is not configured";
+    }
+
+    ScopedTempDir script_temp("knights_chat_lua_plugin_block");
+    const auto script_path = script_temp.path() / "on_login.lua";
+    {
+        std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(out.good());
+        out << "return 1\n";
+        out.flush();
+        ASSERT_TRUE(out.good());
+    }
+
+    auto lua_runtime = std::make_shared<server::core::scripting::LuaRuntime>();
+    std::vector<server::core::scripting::LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(server::core::scripting::LuaRuntime::ScriptEntry{script_path, "on_login"});
+    const auto reload_result = lua_runtime->reload_scripts(scripts);
+    ASSERT_TRUE(reload_result.error.empty());
+    services::set(lua_runtime);
+
+    ScopedEnvVar env_single("CHAT_HOOK_PLUGIN_PATH", TEST_CHAT_HOOK_V2_ONLY_PATH);
+    ScopedEnvVar env_paths("CHAT_HOOK_PLUGIN_PATHS", "");
+    ScopedEnvVar env_dir("CHAT_HOOK_PLUGINS_DIR", "");
+    ScopedTempDir cache_temp("knights_chat_service_hook_cache");
+    const auto cache_path = cache_temp.path().string();
+    const auto lock_path = (cache_temp.path() / "chat_hook.lock").string();
+    ScopedEnvVar env_lock("CHAT_HOOK_LOCK_PATH", lock_path.c_str());
+    ScopedEnvVar env_cache("CHAT_HOOK_CACHE_DIR", cache_path.c_str());
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    const auto before = lua_runtime->metrics_snapshot();
+
+    std::vector<std::uint8_t> payload;
+    write_lp_utf8(payload, "deny_login");
+    write_lp_utf8(payload, "test_token");
+    chat_service_->on_login(*session_, payload);
+    ProcessJobs();
+    FlushSessionIO();
+
+    const auto error = WaitForError();
+    ASSERT_TRUE(error.has_value());
+    EXPECT_EQ(error->code, core_proto::errc::FORBIDDEN);
+
+    const auto after = lua_runtime->metrics_snapshot();
+    EXPECT_EQ(after.calls_total, before.calls_total);
+}
+
+TEST_F(ChatServiceTest, LuaColdHookSkippedWhenNativePluginBlocksLeave) {
+    if (std::string(TEST_CHAT_HOOK_V2_ONLY_PATH).empty()) {
+        GTEST_SKIP() << "TEST_CHAT_HOOK_V2_ONLY_PATH is not configured";
+    }
+
+    ScopedTempDir script_temp("knights_chat_lua_plugin_block_leave");
+    const auto script_path = script_temp.path() / "on_leave.lua";
+    {
+        std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(out.good());
+        out << "return 1\n";
+        out.flush();
+        ASSERT_TRUE(out.good());
+    }
+
+    auto lua_runtime = std::make_shared<server::core::scripting::LuaRuntime>();
+    std::vector<server::core::scripting::LuaRuntime::ScriptEntry> scripts;
+    scripts.push_back(server::core::scripting::LuaRuntime::ScriptEntry{script_path, "on_leave"});
+    const auto reload_result = lua_runtime->reload_scripts(scripts);
+    ASSERT_TRUE(reload_result.error.empty());
+    services::set(lua_runtime);
+
+    ScopedEnvVar env_single("CHAT_HOOK_PLUGIN_PATH", TEST_CHAT_HOOK_V2_ONLY_PATH);
+    ScopedEnvVar env_paths("CHAT_HOOK_PLUGIN_PATHS", "");
+    ScopedEnvVar env_dir("CHAT_HOOK_PLUGINS_DIR", "");
+    ScopedTempDir cache_temp("knights_chat_service_hook_cache_leave");
+    const auto cache_path = cache_temp.path().string();
+    const auto lock_path = (cache_temp.path() / "chat_hook.lock").string();
+    ScopedEnvVar env_lock("CHAT_HOOK_LOCK_PATH", lock_path.c_str());
+    ScopedEnvVar env_cache("CHAT_HOOK_CACHE_DIR", cache_path.c_str());
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    LoginAs("allow_user");
+
+    std::vector<std::uint8_t> join_payload;
+    write_lp_utf8(join_payload, "locked_leave");
+    write_lp_utf8(join_payload, "");
+    chat_service_->on_join(*session_, join_payload);
+    ProcessJobs();
+    FlushSessionIO();
+
+    const auto before_leave = lua_runtime->metrics_snapshot();
+
+    std::vector<std::uint8_t> leave_payload;
+    write_lp_utf8(leave_payload, "locked_leave");
+    chat_service_->on_leave(*session_, leave_payload);
+    ProcessJobs();
+    FlushSessionIO();
+
+    const auto error_code = WaitForErrorCode();
+    ASSERT_TRUE(error_code.has_value());
+    EXPECT_EQ(*error_code, core_proto::errc::FORBIDDEN);
+
+    const auto after_leave = lua_runtime->metrics_snapshot();
+    EXPECT_EQ(after_leave.calls_total, before_leave.calls_total);
 }
 
 // 세션 종료 테스트

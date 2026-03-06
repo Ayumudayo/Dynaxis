@@ -29,8 +29,22 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
         std::vector<std::uint8_t> body;
         std::string name;
         std::string room_left;
+
+        std::string user_for_hook;
         {
             std::lock_guard<std::mutex> lk(state_.mu);
+            if (auto itname = state_.user.find(s.get()); itname != state_.user.end()) {
+                user_for_hook = itname->second;
+            }
+        }
+        notify_session_event_hook(s->session_id(),
+                                  SessionEventKindV2::kClose,
+                                  user_for_hook,
+                                  "connection_closed");
+
+        {
+            std::lock_guard<std::mutex> lk(state_.mu);
+            state_.by_session_id.erase(s->session_id());
             if (auto itname = state_.user.find(s.get()); itname != state_.user.end()) {
                 name = itname->second;
             } else {

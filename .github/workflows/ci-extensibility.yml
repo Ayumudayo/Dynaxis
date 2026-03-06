@@ -1,0 +1,171 @@
+name: CI Extensibility
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "CMakeLists.txt"
+      - "CMakePresets.json"
+      - "Dockerfile"
+      - "Dockerfile.base"
+      - "core/include/server/core/plugin/**"
+      - "core/include/server/core/scripting/**"
+      - "core/src/plugin/**"
+      - "core/src/scripting/**"
+      - "server/include/server/scripting/**"
+      - "server/src/scripting/**"
+      - "server/src/chat/**"
+      - "server/plugins/**"
+      - "server/scripts/**"
+      - "docker/stack/plugins/**"
+      - "docker/stack/scripts/**"
+      - "docker/**"
+      - "scripts/deploy_docker.ps1"
+      - "scripts/docker_entrypoint.sh"
+      - "tests/python/verify_plugin_*.py"
+      - "tests/python/verify_script_*.py"
+      - "tests/python/verify_chat_hook_behavior.py"
+      - "tests/python/verify_runtime_toggle_metrics.py"
+      - "docs/extensibility/**"
+      - "docs/runtime-extensibility-plan.md"
+  pull_request:
+    paths:
+      - "CMakeLists.txt"
+      - "CMakePresets.json"
+      - "Dockerfile"
+      - "Dockerfile.base"
+      - "core/include/server/core/plugin/**"
+      - "core/include/server/core/scripting/**"
+      - "core/src/plugin/**"
+      - "core/src/scripting/**"
+      - "server/include/server/scripting/**"
+      - "server/src/scripting/**"
+      - "server/src/chat/**"
+      - "server/plugins/**"
+      - "server/scripts/**"
+      - "docker/stack/plugins/**"
+      - "docker/stack/scripts/**"
+      - "docker/**"
+      - "scripts/deploy_docker.ps1"
+      - "scripts/docker_entrypoint.sh"
+      - "tests/python/verify_plugin_*.py"
+      - "tests/python/verify_script_*.py"
+      - "tests/python/verify_chat_hook_behavior.py"
+      - "tests/python/verify_runtime_toggle_metrics.py"
+      - "docs/extensibility/**"
+      - "docs/runtime-extensibility-plan.md"
+  merge_group:
+    types:
+      - checks_requested
+
+env:
+  PYTHONIOENCODING: utf-8
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-extensibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker Info
+        run: |
+          docker version
+          docker compose version
+
+      - name: Build Base Image (knights-base) with cache
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.base
+          tags: knights-base:latest
+          load: true
+          cache-from: type=gha,scope=knights-base-${{ runner.os }}
+          cache-to: type=gha,mode=max,scope=knights-base-${{ runner.os }}
+          provenance: false
+
+      - name: Verify Local Base Image
+        run: |
+          docker image inspect knights-base:latest > /dev/null
+
+      - name: Start Stack (Detached, Runtime On)
+        shell: pwsh
+        env:
+          DOCKER_BUILDKIT: "0"
+          CHAT_HOOK_ENABLED: "1"
+          LUA_ENABLED: "1"
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/deploy_docker.ps1 -Action up -Detached -Build
+
+      - name: Wait For HAProxy
+        run: |
+          python3 - <<'PY'
+          import socket, time
+          host, port = '127.0.0.1', 6000
+          deadline = time.time() + 60
+          last_err = None
+          while time.time() < deadline:
+              try:
+                  with socket.create_connection((host, port), timeout=1.0):
+                      print('HAProxy is ready')
+                      raise SystemExit(0)
+              except Exception as e:
+                  last_err = e
+                  time.sleep(1)
+          raise SystemExit(f'HAProxy not ready: {last_err}')
+          PY
+
+      - name: Verify Runtime Toggles (On)
+        run: |
+          python3 tests/python/verify_runtime_toggle_metrics.py --expect-chat-hook-enabled 1 --expect-lua-enabled 1
+
+      - name: Smoke Test (Plugin Metrics)
+        run: |
+          python3 tests/python/verify_plugin_hot_reload.py --check-only
+
+      - name: Smoke Test (Plugin Hot Reload)
+        run: |
+          python3 tests/python/verify_plugin_hot_reload.py
+
+      - name: Smoke Test (Plugin V2 Fallback)
+        run: |
+          python3 tests/python/verify_plugin_v2_fallback.py
+
+      - name: Smoke Test (Plugin Rollback)
+        run: |
+          python3 tests/python/verify_plugin_rollback.py
+
+      - name: Smoke Test (Lua Script Hot Reload)
+        run: |
+          python3 tests/python/verify_script_hot_reload.py
+
+      - name: Smoke Test (Lua Script Fallback Switch)
+        run: |
+          python3 tests/python/verify_script_fallback_switch.py
+
+      - name: Smoke Test (Chat Hook Behavior)
+        run: |
+          python3 tests/python/verify_chat_hook_behavior.py
+
+      - name: Dump Stack Logs (On Failure)
+        if: failure()
+        run: |
+          docker compose --project-name knights-stack --project-directory docker/stack -f docker/stack/docker-compose.yml ps
+          docker compose --project-name knights-stack --project-directory docker/stack -f docker/stack/docker-compose.yml logs --no-color --tail 200
+
+      - name: Stop Stack
+        if: always()
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/deploy_docker.ps1 -Action down

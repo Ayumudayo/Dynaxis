@@ -1,0 +1,27 @@
+{
+  "name": "on_join_policy",
+  "version": "0.1.0",
+  "kind": "lua_script",
+  "hook_scope": [
+    "on_join"
+  ],
+  "stage": "authorize",
+  "priority": 30,
+  "exclusive_group": "on_join_policy",
+  "checksum": "sha256:REPLACE_WITH_SCRIPT_SHA256",
+  "compat": {
+    "lua_mode": "function_hook_ctx_primary",
+    "fallback_modes": [
+      "return_table",
+      "directive_testing"
+    ],
+    "requires": [
+      "LUA_ENABLED=1"
+    ]
+  },
+  "target_profiles": [
+    "all"
+  ],
+  "description": "TODO: describe script intent",
+  "owner": "TODO:owner"
+}

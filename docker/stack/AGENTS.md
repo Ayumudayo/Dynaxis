@@ -19,9 +19,12 @@ Client (host) -> `haproxy` (TCP) -> `gateway-*` -> `server-*`.
 - `haproxy`: game traffic on host `6000`, stats+Prometheus metrics on host `8404`.
 
 ## Chat Hook Plugins (Experimental)
-- `server-*` defaults to `CHAT_HOOK_PLUGINS_DIR=/app/plugins` (see `docker/stack/docker-compose.yml`).
-- Sample plugins are packaged into the image under `/app/plugins/`.
+- `server-*` defaults to `CHAT_HOOK_ENABLED=0` and `CHAT_HOOK_PLUGINS_DIR=/app/plugins` (see `docker/stack/docker-compose.yml`).
+- Sample plugins are packaged into the image under `/app/plugins_builtin/` (fallback path).
 - Hot reload is done by swapping the `.so` in-place (optional lock/sentinel file to defer reload).
+
+## Lua (Experimental)
+- `server-*` defaults to `LUA_ENABLED=0` with scripts mounted at `/app/scripts` and fallback `/app/scripts_builtin`.
 
 ## Observability Profile
 Enables: `prometheus`, `grafana`, `redis_exporter`, `postgres_exporter`.

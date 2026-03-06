@@ -176,6 +176,24 @@ flowchart TB
 
 ### 환경 설정
 
+서브모듈 초기화(최초 1회):
+
+```powershell
+git submodule sync --recursive
+git submodule update --init --recursive
+# Lua scripting 경로만 빠르게 초기화할 때
+git submodule update --init --recursive external/luajit external/sol2
+```
+
+현재 필수 서브모듈:
+- `external/imgui` (client GUI)
+- `external/luajit` (upstream LuaJIT 2.1, scripting engine source)
+- `external/sol2` (sol2 header-only binding source, pinned to `v3.5.0`)
+
+공식 빌드와 런타임 이미지는 Lua capability를 항상 포함합니다.
+`external/luajit`를 기준으로 정적 LuaJIT 라이브러리를 생성하고, `external/sol2/include`를 바인딩 헤더 경로로 사용합니다.
+실제 기능 활성화 여부는 런타임 설정(`LUA_ENABLED`)으로 제어합니다.
+
 애플리케이션은 **OS 환경 변수**를 읽어 설정됩니다.
 로컬 개발에서는 `.env.example`를 복사해 `.env`를 만들고, 스크립트들이 이를 로드하도록 사용할 수 있습니다.
 (코드 자체에는 `.env` 자동 로더가 없습니다.)

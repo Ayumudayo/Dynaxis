@@ -68,3 +68,21 @@ TEST(UdpBindAbuseGuardTest, EndpointIsolationMitigatesCrossEndpointHijackNoise) 
     EXPECT_FALSE(guard.record_failure(normal, 210));
     EXPECT_FALSE(guard.block_state(normal, 220).blocked);
 }
+
+TEST(UdpBindAbuseGuardTest, BlockProgressIsTrackedIndependentlyPerEndpoint) {
+    gateway::UdpBindAbuseGuard guard;
+    guard.configure(10000, 2, 3000);
+
+    const std::string endpoint_a = "10.10.10.20:41000";
+    const std::string endpoint_b = "10.10.10.21:41001";
+
+    EXPECT_FALSE(guard.record_failure(endpoint_a, 100));
+    EXPECT_TRUE(guard.record_failure(endpoint_a, 200));
+    EXPECT_TRUE(guard.block_state(endpoint_a, 201).blocked);
+
+    EXPECT_FALSE(guard.block_state(endpoint_b, 201).blocked);
+    EXPECT_FALSE(guard.record_failure(endpoint_b, 250));
+    EXPECT_FALSE(guard.block_state(endpoint_b, 251).blocked);
+    EXPECT_TRUE(guard.record_failure(endpoint_b, 350));
+    EXPECT_TRUE(guard.block_state(endpoint_b, 351).blocked);
+}

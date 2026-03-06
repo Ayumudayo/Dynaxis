@@ -56,6 +56,7 @@ if (BUILD_GTEST_TESTS)
 
     add_executable(chat_history_tests
         chat_history_tests.cpp
+        ${CMAKE_SOURCE_DIR}/server/src/scripting/chat_lua_bindings.cpp
         ${CMAKE_SOURCE_DIR}/server/src/chat/chat_service_core.cpp
         ${CMAKE_SOURCE_DIR}/server/src/chat/chat_hook_plugin_manager.cpp
         ${CMAKE_SOURCE_DIR}/server/src/chat/chat_hook_plugin_chain.cpp
@@ -105,8 +106,75 @@ if (BUILD_GTEST_TESTS)
         server_core
     )
 
+    add_library(test_plugin_runtime_v1 MODULE
+        core/plugin_runtime_v1.cpp
+    )
+    target_include_directories(test_plugin_runtime_v1 PRIVATE
+        ${CMAKE_SOURCE_DIR}/tests/core
+    )
+    set_target_properties(test_plugin_runtime_v1 PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "test_plugin_runtime_v1"
+    )
+
+    add_library(test_plugin_runtime_v2 MODULE
+        core/plugin_runtime_v2.cpp
+    )
+    target_include_directories(test_plugin_runtime_v2 PRIVATE
+        ${CMAKE_SOURCE_DIR}/tests/core
+    )
+    set_target_properties(test_plugin_runtime_v2 PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "test_plugin_runtime_v2"
+    )
+
+    add_library(test_plugin_runtime_invalid MODULE
+        core/plugin_runtime_invalid.cpp
+    )
+    target_include_directories(test_plugin_runtime_invalid PRIVATE
+        ${CMAKE_SOURCE_DIR}/tests/core
+    )
+    set_target_properties(test_plugin_runtime_invalid PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "test_plugin_runtime_invalid"
+    )
+
+    add_executable(core_plugin_runtime_tests
+        core/test_shared_library.cpp
+        core/test_plugin_host.cpp
+        core/test_plugin_chain_host.cpp
+        core/test_script_watcher.cpp
+        core/test_lua_runtime.cpp
+        core/test_lua_sandbox.cpp
+    )
+    target_include_directories(core_plugin_runtime_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/include
+        ${CMAKE_SOURCE_DIR}/tests/core
+    )
+    target_compile_definitions(core_plugin_runtime_tests PRIVATE
+        TEST_PLUGIN_RUNTIME_V1_FILE="$<TARGET_FILE_NAME:test_plugin_runtime_v1>"
+        TEST_PLUGIN_RUNTIME_V2_FILE="$<TARGET_FILE_NAME:test_plugin_runtime_v2>"
+        TEST_PLUGIN_RUNTIME_INVALID_FILE="$<TARGET_FILE_NAME:test_plugin_runtime_invalid>"
+    )
+    target_link_libraries(core_plugin_runtime_tests PRIVATE
+        GTest::gtest_main
+        server_core
+        ${CMAKE_DL_LIBS}
+    )
+    add_dependencies(core_plugin_runtime_tests
+        test_plugin_runtime_v1
+        test_plugin_runtime_v2
+        test_plugin_runtime_invalid
+    )
+
     add_executable(server_general_tests
         server/test_server_chat.cpp
+        server/test_server_config.cpp
+        server/test_chat_lua_bindings.cpp
+        server/test_lua_hook_integration.cpp
+        server/test_hook_auto_disable.cpp
+        ${CMAKE_SOURCE_DIR}/server/src/app/config.cpp
+        ${CMAKE_SOURCE_DIR}/server/src/scripting/chat_lua_bindings.cpp
         ${CMAKE_SOURCE_DIR}/server/src/chat/chat_service_core.cpp
         ${CMAKE_SOURCE_DIR}/server/src/chat/chat_hook_plugin_manager.cpp
         ${CMAKE_SOURCE_DIR}/server/src/chat/chat_hook_plugin_chain.cpp
@@ -132,13 +200,127 @@ if (BUILD_GTEST_TESTS)
     # Linux dynamic loader symbols (dlopen/dlsym)
     target_link_libraries(server_general_tests PRIVATE ${CMAKE_DL_LIBS})
 
+    if (TARGET chat_hook_sample AND TARGET chat_hook_sample_v2 AND TARGET chat_hook_tag)
+        add_library(test_chat_hook_v2_only MODULE
+            server/chat_hook_v2_only.cpp
+        )
+        target_include_directories(test_chat_hook_v2_only PRIVATE
+            ${CMAKE_SOURCE_DIR}/server/include
+        )
+        target_compile_definitions(test_chat_hook_v2_only PRIVATE
+            CHAT_HOOK_PLUGIN_BUILD
+        )
+        set_target_properties(test_chat_hook_v2_only PROPERTIES
+            PREFIX ""
+            OUTPUT_NAME "10_chat_hook_v2_only"
+        )
+
+        target_compile_definitions(server_general_tests PRIVATE
+            TEST_CHAT_HOOK_V2_ONLY_PATH="$<TARGET_FILE:test_chat_hook_v2_only>"
+            TEST_CHAT_HOOK_THROWING_PATH="$<TARGET_FILE:test_chat_hook_throwing>"
+        )
+        add_dependencies(server_general_tests
+            test_chat_hook_v2_only
+            test_chat_hook_throwing
+        )
+
+        add_library(test_chat_hook_dual_entrypoint MODULE
+            server/chat_hook_dual_entrypoint.cpp
+        )
+        target_include_directories(test_chat_hook_dual_entrypoint PRIVATE
+            ${CMAKE_SOURCE_DIR}/server/include
+        )
+        target_compile_definitions(test_chat_hook_dual_entrypoint PRIVATE
+            CHAT_HOOK_PLUGIN_BUILD
+        )
+        set_target_properties(test_chat_hook_dual_entrypoint PROPERTIES
+            PREFIX ""
+            OUTPUT_NAME "10_chat_hook_dual_entrypoint"
+        )
+
+        add_library(test_chat_hook_throwing MODULE
+            server/chat_hook_throwing.cpp
+        )
+        target_include_directories(test_chat_hook_throwing PRIVATE
+            ${CMAKE_SOURCE_DIR}/server/include
+        )
+        target_compile_definitions(test_chat_hook_throwing PRIVATE
+            CHAT_HOOK_PLUGIN_BUILD
+        )
+        set_target_properties(test_chat_hook_throwing PROPERTIES
+            PREFIX ""
+            OUTPUT_NAME "10_chat_hook_throwing"
+        )
+
+        add_executable(server_plugin_chain_tests
+            server/test_chat_plugin_chain.cpp
+            ${CMAKE_SOURCE_DIR}/server/src/chat/chat_hook_plugin_chain.cpp
+        )
+        target_include_directories(server_plugin_chain_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/core/include
+            ${CMAKE_SOURCE_DIR}/server/include
+            ${CMAKE_SOURCE_DIR}/server/src/chat
+        )
+        target_compile_definitions(server_plugin_chain_tests PRIVATE
+            TEST_CHAT_HOOK_SAMPLE_PATH="$<TARGET_FILE:chat_hook_sample>"
+            TEST_CHAT_HOOK_SAMPLE_V2_PATH="$<TARGET_FILE:chat_hook_sample_v2>"
+            TEST_CHAT_HOOK_TAG_PATH="$<TARGET_FILE:chat_hook_tag>"
+        )
+        target_link_libraries(server_plugin_chain_tests PRIVATE
+            GTest::gtest_main
+            server_core
+            ${CMAKE_DL_LIBS}
+        )
+        add_dependencies(server_plugin_chain_tests
+            chat_hook_sample
+            chat_hook_sample_v2
+            chat_hook_tag
+        )
+
+        add_executable(server_plugin_chain_v2_tests
+            server/test_chat_plugin_chain_v2.cpp
+            ${CMAKE_SOURCE_DIR}/server/src/chat/chat_hook_plugin_chain.cpp
+        )
+        target_include_directories(server_plugin_chain_v2_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/core/include
+            ${CMAKE_SOURCE_DIR}/server/include
+            ${CMAKE_SOURCE_DIR}/server/src/chat
+        )
+        target_compile_definitions(server_plugin_chain_v2_tests PRIVATE
+            TEST_CHAT_HOOK_SAMPLE_V2_PATH="$<TARGET_FILE:chat_hook_sample_v2>"
+            TEST_CHAT_HOOK_TAG_PATH="$<TARGET_FILE:chat_hook_tag>"
+            TEST_CHAT_HOOK_V2_ONLY_PATH="$<TARGET_FILE:test_chat_hook_v2_only>"
+            TEST_CHAT_HOOK_DUAL_PATH="$<TARGET_FILE:test_chat_hook_dual_entrypoint>"
+            TEST_CHAT_HOOK_THROWING_PATH="$<TARGET_FILE:test_chat_hook_throwing>"
+        )
+        target_link_libraries(server_plugin_chain_v2_tests PRIVATE
+            GTest::gtest_main
+            server_core
+            ${CMAKE_DL_LIBS}
+        )
+        add_dependencies(server_plugin_chain_v2_tests
+            chat_hook_sample_v2
+            chat_hook_tag
+            test_chat_hook_v2_only
+            test_chat_hook_dual_entrypoint
+            test_chat_hook_throwing
+        )
+    endif()
+
     include(GoogleTest)
     gtest_discover_tests(storage_basic_tests)
     gtest_discover_tests(core_concurrency_tests)
     gtest_discover_tests(server_state_tests)
     gtest_discover_tests(chat_history_tests)
     gtest_discover_tests(core_general_tests)
+    gtest_discover_tests(core_plugin_runtime_tests)
     gtest_discover_tests(server_general_tests)
+    if (TARGET server_plugin_chain_tests)
+        gtest_discover_tests(server_plugin_chain_tests)
+    endif()
+    if (TARGET server_plugin_chain_v2_tests)
+        gtest_discover_tests(server_plugin_chain_v2_tests)
+    endif()
 endif()
 
 if (BUILD_CONTRACT_TESTS)
@@ -188,9 +370,69 @@ if (BUILD_CONTRACT_TESTS)
         NAME CoreApiStableGovernanceFixtures
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/check_core_api_contracts.py" --check-stable-governance-fixtures
       )
+
     else()
       message(WARNING "Python3 not found: CoreApiBoundaryFixtures test disabled")
     endif()
+endif()
+
+if (Python3_Interpreter_FOUND)
+    add_test(
+      NAME StackPythonVerifyPluginMetrics
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_plugin_hot_reload.py" --check-only
+    )
+    add_test(
+      NAME StackPythonVerifyRuntimeTogglesOn
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_runtime_toggle_metrics.py"
+              --expect-chat-hook-enabled 1
+              --expect-lua-enabled 1
+    )
+    add_test(
+      NAME StackPythonHotReloadPluginV2
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_plugin_hot_reload.py"
+    )
+    add_test(
+      NAME StackPythonVerifyPluginV2Fallback
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_plugin_v2_fallback.py"
+    )
+    add_test(
+      NAME StackPythonRollbackPluginV1
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_plugin_rollback.py"
+    )
+    add_test(
+      NAME StackPythonHotReloadLuaScript
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_script_hot_reload.py"
+    )
+    add_test(
+      NAME StackPythonVerifyScriptFallbackSwitch
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_script_fallback_switch.py"
+    )
+    add_test(
+      NAME StackPythonChatHookBehavior
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_chat_hook_behavior.py"
+    )
+
+    set_tests_properties(
+      StackPythonVerifyPluginMetrics
+      StackPythonVerifyRuntimeTogglesOn
+      StackPythonHotReloadPluginV2
+      StackPythonVerifyPluginV2Fallback
+      StackPythonRollbackPluginV1
+      StackPythonHotReloadLuaScript
+      StackPythonVerifyScriptFallbackSwitch
+      StackPythonChatHookBehavior
+      PROPERTIES
+        LABELS "python;stack;plugin-script"
+        SKIP_RETURN_CODE 77
+    )
 endif()
 
 if (NOT BUILD_GTEST_TESTS AND NOT BUILD_CONTRACT_TESTS)

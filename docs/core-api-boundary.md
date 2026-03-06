@@ -50,7 +50,13 @@
 | `server/core/protocol/protocol_errors.hpp` | Stable | 프로토콜 응답 공용 오류 코드 상수 |
 | `server/core/protocol/protocol_flags.hpp` | Stable | 프로토콜 플래그/기능 비트 공용 상수 |
 | `server/core/protocol/system_opcodes.hpp` | Stable | server/client 경로에서 소비하는 생성 opcode 계약 |
+| `server/core/plugin/shared_library.hpp` | Transitional | 동적 라이브러리 로더 RAII 래퍼로 다중 서비스 확장 공용화를 진행 중인 표면 |
+| `server/core/plugin/plugin_host.hpp` | Transitional | 플러그인 로딩/리로드 제네릭 호스트로 API/운영 계약 안정화 단계 |
+| `server/core/plugin/plugin_chain_host.hpp` | Transitional | 디렉터리 스캔/체인 구성/리로드 정책이 안정화 중인 확장 체인 표면 |
 | `server/core/runtime_metrics.hpp` | Stable | server/gateway/tools 관측 경로가 사용하는 프로세스 전역 런타임 카운터/스냅샷 계약 |
+| `server/core/scripting/script_watcher.hpp` | Transitional | 파일 감시/sentinel 정책이 확장 운영 규칙과 함께 안정화 중인 표면 |
+| `server/core/scripting/lua_runtime.hpp` | Transitional | Lua cold-hook 실행/메트릭 표면으로 scaffold/실행형 경계가 안정화 중 |
+| `server/core/scripting/lua_sandbox.hpp` | Transitional | instruction/memory 제한 및 허용 라이브러리 정책을 정교화 중인 표면 |
 | `server/core/security/admin_command_auth.hpp` | Internal | admin control-plane 서명 검증/nonce replay 보호를 위한 내부 인증 helper |
 | `server/core/security/cipher.hpp` | Stable | 키/IV 크기 검증과 인증 실패 신호를 포함한 AES-256-GCM 암복호화 계약 |
 | `server/core/trace/context.hpp` | Internal | 로그/상관관계 추적 컨텍스트의 구현 결합 helper |
@@ -70,6 +76,6 @@
 - 공개 문서/예제는 `Internal` 헤더를 포함하면 안 됩니다.
 
 ## 즉시 후속 작업
-- `Transitional` 헤더 개수를 0으로 유지하고, 새 노출 헤더는 `Stable` 또는 `Internal`로 직접 분류합니다.
+- `Transitional` 헤더는 릴리스마다 축소하고, 안정화가 끝난 표면은 `Stable`로 승격하거나 `Internal`로 재분류합니다.
 - 공개 예제가 `Stable` 헤더만으로 컴파일되도록 CI 가드를 추가합니다.
 - `docs/core-api/compatibility-matrix.json`를 `Stable` 헤더 인벤토리와 API 버전에 맞춰 동기화합니다.

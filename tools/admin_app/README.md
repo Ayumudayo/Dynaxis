@@ -21,6 +21,10 @@
 - `/api/v1/users/kick` (POST, query/body)
 - `/api/v1/announcements` (POST, query/body)
 - `/api/v1/settings` (PATCH, query/body)
+- `/api/v1/ext/inventory` (GET)
+- `/api/v1/ext/precheck` (POST, JSON)
+- `/api/v1/ext/deployments` (GET/POST, JSON)
+- `/api/v1/ext/schedules` (POST, JSON)
 - `/api/v1/worker/write-behind` (JSON)
 - `/api/v1/metrics/links` (JSON)
 
@@ -48,6 +52,9 @@
 | `ADMIN_BEARER_TOKEN` | bearer 인증 토큰 값 | (unset) |
 | `ADMIN_BEARER_ACTOR` | bearer 인증 성공 시 주체(actor) 값 | `token-user` |
 | `ADMIN_BEARER_ROLE` | bearer 인증 성공 시 역할(role) 값 (`viewer/operator/admin`) | `viewer` |
+| `ADMIN_EXT_SCHEDULE_STORE_PATH` | 확장 배포 schedule 저장소(JSON) 경로 | `tasks/runtime_ext_deployments_store.json` |
+| `ADMIN_EXT_MAX_CLOCK_SKEW_MS` | 예약 실행 허용 clock skew(ms) | `5000` |
+| `ADMIN_EXT_FORCE_FAIL_WAVE_INDEX` | (테스트용) 해당 wave에서 강제 실패(0=비활성) | `0` |
 | `METRICS_HTTP_MAX_CONNECTIONS` | admin/metrics HTTP 동시 연결 상한 | `64` |
 | `METRICS_HTTP_HEADER_TIMEOUT_MS` | admin/metrics HTTP header read timeout(ms) | `5000` |
 | `METRICS_HTTP_BODY_TIMEOUT_MS` | admin/metrics HTTP body read timeout(ms) | `5000` |
@@ -136,6 +143,31 @@ pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build -Observability
 - `viewer`: 조회 전용(read-only)
 - `operator`: 공지(announcement) 가능
 - `admin`: 런타임 설정(runtime settings) + moderation 포함 전체 가능
+
+## 확장 배포 제어면 (Phase 7)
+
+`/api/v1/ext/*`는 플러그인/스크립트 배포 제어를 위한 API다.
+
+- `GET /api/v1/ext/inventory`
+  - manifest 인벤토리 조회 (`kind`, `hook_scope`, `stage`, `target_profile` 필터 지원)
+- `POST /api/v1/ext/precheck`
+  - 적용 없는 사전 검증
+  - 충돌 정책 `(hook_scope, stage, exclusive_group)` 검사
+  - `observe` stage decision 제한 검사
+  - 실패 시 `409 PRECHECK_FAILED` + 상세 `issues` 반환
+- `POST /api/v1/ext/deployments`
+  - 즉시 배포 생성 (멱등 키 `command_id` 중복 거부)
+  - 기본 전략: `all_at_once`
+  - `canary_wave` 사용 시 기본 wave: `5,25,100`
+- `POST /api/v1/ext/schedules`
+  - 예약 배포 생성 (`run_at_utc` 필수)
+  - scheduler가 UTC 기준으로 실행
+  - `ADMIN_EXT_MAX_CLOCK_SKEW_MS` 초과 시 `failed(clock_skew)` 처리
+
+`command_id`는 실행 멱등 키이며, 이미 생성된 배포의 동일 `command_id` 재사용은 `409 IDEMPOTENT_REJECTED`로 거부된다.
+
+`ADMIN_READ_ONLY=1`일 때도 `POST /api/v1/ext/precheck`는 허용되며,
+실제 변경을 일으키는 `POST /api/v1/ext/deployments`, `POST /api/v1/ext/schedules`는 차단된다.
 
 ## 감사 로그
 

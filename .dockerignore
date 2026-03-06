@@ -65,6 +65,10 @@ verify_*.py
 docs/
 Sapphire/
 external/
+!external/luajit/
+!external/luajit/**
+!external/sol2/
+!external/sol2/**
 external-refs/
 *.md
 !README.md

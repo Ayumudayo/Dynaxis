@@ -1,12 +1,10 @@
 #pragma once
 
 #include "server/chat/chat_hook_plugin_abi.hpp"
+#include "server/core/plugin/plugin_host.hpp"
 
-#include <atomic>
 #include <cstdint>
 #include <filesystem>
-#include <mutex>
-#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -81,17 +79,7 @@ public:
     MetricsSnapshot metrics_snapshot() const;
 
 private:
-    struct LoadedPlugin;
-
-    Config cfg_;
-    std::atomic<std::shared_ptr<LoadedPlugin>> current_{};
-    std::optional<std::filesystem::file_time_type> last_attempt_mtime_;
-    mutable std::mutex reload_mu_;
-    static std::atomic<std::uint64_t> g_cache_seq_;
-
-    std::atomic<std::uint64_t> reload_attempt_total_{0};
-    std::atomic<std::uint64_t> reload_success_total_{0};
-    std::atomic<std::uint64_t> reload_failure_total_{0};
+    server::core::plugin::PluginHost<ChatHookApiV2> host_;
 };
 
 } // namespace server::app::chat

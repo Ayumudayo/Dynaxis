@@ -8,9 +8,11 @@
 #include <chrono>
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <optional>
 #include <cctype>
 #include <unordered_map>
+#include <limits>
 
 #include <boost/asio.hpp>
 #include <clocale>
@@ -35,6 +37,8 @@
 #include "server/core/concurrent/task_scheduler.hpp"
 #include "server/core/memory/memory_pool.hpp"
 #include "server/core/runtime_metrics.hpp"
+#include "server/core/scripting/lua_runtime.hpp"
+#include "server/core/scripting/script_watcher.hpp"
 #include "server/chat/chat_service.hpp"
 // Protobuf (수신 payload ts_ms 파싱용)
 #include "wire.pb.h"
@@ -69,6 +73,7 @@ std::atomic<std::uint64_t> g_admin_command_verify_future_total{0};
 std::atomic<std::uint64_t> g_admin_command_verify_missing_field_total{0};
 std::atomic<std::uint64_t> g_admin_command_verify_invalid_issued_at_total{0};
 std::atomic<std::uint64_t> g_admin_command_verify_secret_not_configured_total{0};
+std::atomic<std::uint64_t> g_admin_command_target_mismatch_total{0};
 std::atomic<std::uint64_t> g_shutdown_drain_completed_total{0};
 std::atomic<std::uint64_t> g_shutdown_drain_timeout_total{0};
 std::atomic<std::uint64_t> g_shutdown_drain_forced_close_total{0};
@@ -139,6 +144,117 @@ std::vector<std::string> split_csv(std::string_view input) {
     return out;
 }
 
+std::string to_lower_ascii(std::string_view value) {
+    std::string out;
+    out.reserve(value.size());
+    for (const char ch : value) {
+        out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    }
+    return out;
+}
+
+struct AdminSelectorParseResult {
+    server::state::InstanceSelector selector;
+    bool selector_specified{false};
+    bool valid{true};
+};
+
+AdminSelectorParseResult parse_admin_selector_fields(const std::unordered_map<std::string, std::string>& fields) {
+    AdminSelectorParseResult result;
+
+    auto parse_csv_field = [&](const char* key, std::vector<std::string>& out_values) {
+        const auto it = fields.find(key);
+        if (it == fields.end()) {
+            return;
+        }
+        result.selector_specified = true;
+        out_values = split_csv(it->second);
+    };
+
+    if (const auto it = fields.find("all"); it != fields.end()) {
+        result.selector_specified = true;
+        const std::string normalized = to_lower_ascii(trim_ascii(it->second));
+        if (normalized.empty() || normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on") {
+            result.selector.all = true;
+        } else if (normalized == "0" || normalized == "false" || normalized == "no" || normalized == "off") {
+            result.selector.all = false;
+        } else {
+            result.valid = false;
+            return result;
+        }
+    }
+
+    parse_csv_field("server_ids", result.selector.server_ids);
+    parse_csv_field("roles", result.selector.roles);
+    parse_csv_field("game_modes", result.selector.game_modes);
+    parse_csv_field("regions", result.selector.regions);
+    parse_csv_field("shards", result.selector.shards);
+    parse_csv_field("tags", result.selector.tags);
+
+    return result;
+}
+
+std::string make_lua_env_name(const std::filesystem::path& scripts_dir,
+                              const std::filesystem::path& script_path) {
+    std::error_code ec;
+    std::filesystem::path relative = std::filesystem::relative(script_path, scripts_dir, ec);
+    if (ec || relative.empty()) {
+        relative = script_path.filename();
+    }
+    relative.replace_extension();
+
+    std::string env_name = relative.lexically_normal().generic_string();
+    if (env_name.empty()) {
+        env_name = script_path.stem().string();
+    }
+    return env_name;
+}
+
+bool is_lua_script_file(const std::filesystem::path& path) {
+    if (!path.has_extension()) {
+        return false;
+    }
+
+    std::string ext = path.extension().string();
+#if defined(_WIN32)
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+#endif
+    return ext == ".lua";
+}
+
+std::vector<std::filesystem::path> list_lua_scripts(const std::filesystem::path& scripts_dir) {
+    std::vector<std::filesystem::path> scripts;
+
+    std::error_code ec;
+    if (!std::filesystem::exists(scripts_dir, ec) || ec) {
+        return scripts;
+    }
+
+    std::filesystem::recursive_directory_iterator it(scripts_dir, ec);
+    if (ec) {
+        return scripts;
+    }
+
+    for (const auto& entry : it) {
+        std::error_code st_ec;
+        if (!entry.is_regular_file(st_ec) || st_ec) {
+            continue;
+        }
+
+        const auto path = entry.path();
+        if (is_lua_script_file(path)) {
+            scripts.push_back(path);
+        }
+    }
+
+    std::sort(scripts.begin(), scripts.end(), [](const std::filesystem::path& lhs, const std::filesystem::path& rhs) {
+        return lhs.lexically_normal().generic_string() < rhs.lexically_normal().generic_string();
+    });
+    return scripts;
+}
+
 } // namespace
 
 // 메인 서버 실행 함수
@@ -159,6 +275,9 @@ int run_server(int argc, char** argv) {
     core::concurrent::TaskScheduler scheduler;
     std::shared_ptr<asio::steady_timer> scheduler_timer;
     std::shared_ptr<core::storage::DbWorkerPool> db_workers;
+    std::shared_ptr<core::scripting::LuaRuntime> lua_runtime;
+    std::shared_ptr<asio::strand<asio::io_context::executor_type>> lua_reload_strand;
+    std::shared_ptr<core::scripting::ScriptWatcher> lua_script_watcher;
     std::shared_ptr<server::state::RedisInstanceStateBackend> registry_backend;
     server::state::InstanceRecord registry_record{};
     bool registry_registered = false;
@@ -206,8 +325,39 @@ int run_server(int argc, char** argv) {
             corelog::info(std::string("Log buffer capacity set to ") + std::to_string(config.log_buffer_capacity));
         }
 
+        if (config.lua_enabled) {
+            corelog::info(
+                "Lua scripting enabled"
+                " scripts_dir=" + config.lua_scripts_dir
+                + " fallback_scripts_dir=" + config.lua_fallback_scripts_dir
+                + " reload_interval_ms=" + std::to_string(config.lua_reload_interval_ms)
+                + " instruction_limit=" + std::to_string(config.lua_instruction_limit)
+                + " memory_limit_bytes=" + std::to_string(config.lua_memory_limit_bytes)
+                + " auto_disable_threshold=" + std::to_string(config.lua_auto_disable_threshold));
+            if (config.lua_scripts_dir.empty() && config.lua_fallback_scripts_dir.empty()) {
+                corelog::warn("LUA_ENABLED is set but LUA_SCRIPTS_DIR and LUA_FALLBACK_SCRIPTS_DIR are both empty; scripts will not be loaded until configured");
+            }
+        }
+
+        if (config.lua_enabled) {
+            core::scripting::LuaRuntime::Config lua_cfg{};
+            lua_cfg.instruction_limit = config.lua_instruction_limit;
+            const std::uint64_t max_size_t = static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max());
+            const std::uint64_t capped_memory_limit =
+                config.lua_memory_limit_bytes > max_size_t ? max_size_t : config.lua_memory_limit_bytes;
+            lua_cfg.memory_limit_bytes = static_cast<std::size_t>(capped_memory_limit);
+
+            lua_runtime = std::make_shared<core::scripting::LuaRuntime>(std::move(lua_cfg));
+            services::set(lua_runtime);
+            corelog::info("Lua runtime scaffold initialised");
+        }
+
         // 3. 코어 컴포넌트 초기화
         asio::io_context io;
+        if (lua_runtime) {
+            lua_reload_strand = std::make_shared<asio::strand<asio::io_context::executor_type>>(
+                asio::make_strand(io));
+        }
         core::JobQueue job_queue(config.job_queue_max);
         auto* job_queue_ptr = &job_queue;
         core::ThreadManager workers(job_queue);
@@ -233,6 +383,9 @@ int run_server(int argc, char** argv) {
         core_internal::register_connection_runtime_state_service(state);
         services::set(make_ref(scheduler));
         services::set(make_ref(app_host));
+        if (lua_reload_strand) {
+            services::set(lua_reload_strand);
+        }
 
         // 스케줄러 타이머 설정
         scheduler_timer = std::make_shared<asio::steady_timer>(io);
@@ -252,6 +405,207 @@ int run_server(int argc, char** argv) {
             });
         };
         (*scheduler_tick)();
+
+        if (lua_runtime
+            && (!config.lua_scripts_dir.empty() || !config.lua_fallback_scripts_dir.empty())) {
+            const std::filesystem::path primary_scripts_dir =
+                config.lua_scripts_dir.empty()
+                    ? std::filesystem::path{}
+                    : std::filesystem::path(config.lua_scripts_dir);
+            const std::filesystem::path fallback_scripts_dir =
+                config.lua_fallback_scripts_dir.empty()
+                    ? std::filesystem::path{}
+                    : std::filesystem::path(config.lua_fallback_scripts_dir);
+
+            const auto resolve_effective_scripts_dir =
+                [primary_scripts_dir, fallback_scripts_dir](bool& using_fallback) {
+                    using_fallback = false;
+
+                    if (!primary_scripts_dir.empty()) {
+                        const auto primary_scripts = list_lua_scripts(primary_scripts_dir);
+                        if (!primary_scripts.empty()) {
+                            return primary_scripts_dir;
+                        }
+                    }
+
+                    if (!fallback_scripts_dir.empty()) {
+                        const auto fallback_scripts = list_lua_scripts(fallback_scripts_dir);
+                        if (!fallback_scripts.empty()) {
+                            using_fallback = true;
+                            return fallback_scripts_dir;
+                        }
+                    }
+
+                    if (!primary_scripts_dir.empty()) {
+                        return primary_scripts_dir;
+                    }
+                    if (!fallback_scripts_dir.empty()) {
+                        using_fallback = true;
+                        return fallback_scripts_dir;
+                    }
+
+                    return std::filesystem::path{};
+                };
+
+            auto active_scripts_dir = std::make_shared<std::filesystem::path>();
+
+            const auto ensure_lua_watcher =
+                [resolve_effective_scripts_dir,
+                 primary_scripts_dir,
+                 fallback_scripts_dir,
+                 &config,
+                 &lua_script_watcher,
+                 active_scripts_dir]() -> bool {
+                    bool using_fallback = false;
+                    const std::filesystem::path resolved_scripts_dir =
+                        resolve_effective_scripts_dir(using_fallback);
+
+                    if (resolved_scripts_dir.empty()) {
+                        corelog::warn("Lua runtime enabled but no effective scripts directory resolved");
+                        return false;
+                    }
+
+                    const bool first_resolution = active_scripts_dir->empty();
+                    const bool scripts_dir_changed = (*active_scripts_dir != resolved_scripts_dir);
+                    if (!first_resolution && !scripts_dir_changed && lua_script_watcher) {
+                        return true;
+                    }
+
+                    core::scripting::ScriptWatcher::Config watcher_cfg{};
+                    watcher_cfg.scripts_dir = resolved_scripts_dir;
+                    watcher_cfg.extensions = {".lua"};
+                    watcher_cfg.recursive = true;
+                    if (!config.lua_lock_path.empty()) {
+                        watcher_cfg.lock_path = std::filesystem::path(config.lua_lock_path);
+                    }
+
+                    lua_script_watcher = std::make_shared<core::scripting::ScriptWatcher>(std::move(watcher_cfg));
+                    *active_scripts_dir = resolved_scripts_dir;
+
+                    if (using_fallback && !primary_scripts_dir.empty() && !fallback_scripts_dir.empty()) {
+                        corelog::info(
+                            "Lua scripts fallback selected scripts_dir=" + resolved_scripts_dir.string()
+                            + " primary_dir=" + primary_scripts_dir.string());
+                    } else {
+                        const std::string switch_reason = first_resolution
+                            ? "initial"
+                            : "switch";
+                        corelog::info(
+                            "Lua scripts source selected scripts_dir=" + resolved_scripts_dir.string()
+                            + " reason=" + switch_reason);
+                    }
+
+                    (void)lua_script_watcher->poll(core::scripting::ScriptWatcher::ChangeCallback{});
+                    return true;
+                };
+
+            if (!ensure_lua_watcher()) {
+                corelog::warn("Lua runtime enabled but script watcher could not start");
+            } else {
+                const auto reload_all_lua_scripts = std::make_shared<std::function<void()>>();
+                *reload_all_lua_scripts = [lua_runtime, active_scripts_dir]() {
+                    const auto scripts = list_lua_scripts(*active_scripts_dir);
+                    std::vector<core::scripting::LuaRuntime::ScriptEntry> entries;
+                    entries.reserve(scripts.size());
+                    for (const auto& script_path : scripts) {
+                        entries.push_back(core::scripting::LuaRuntime::ScriptEntry{
+                            script_path,
+                            make_lua_env_name(*active_scripts_dir, script_path)
+                        });
+                    }
+
+                    const auto reload_result = lua_runtime->reload_scripts(entries);
+                    if (!reload_result.error.empty()) {
+                        corelog::warn(
+                            "Lua script reload failed scripts_dir=" + active_scripts_dir->string()
+                            + " reason=" + reload_result.error);
+                        return;
+                    }
+
+                    corelog::info(
+                        "Lua script reload complete scripts_dir=" + active_scripts_dir->string()
+                        + " loaded=" + std::to_string(reload_result.loaded)
+                        + " failed=" + std::to_string(reload_result.failed));
+                };
+
+                const auto schedule_lua_reload = [lua_reload_strand, reload_all_lua_scripts]() {
+                    if (!lua_reload_strand) {
+                        (*reload_all_lua_scripts)();
+                        return;
+                    }
+
+                    asio::post(*lua_reload_strand, [reload_all_lua_scripts]() {
+                        (*reload_all_lua_scripts)();
+                    });
+                };
+
+                const auto run_lua_reload_sync = [lua_reload_strand, reload_all_lua_scripts, &io]() {
+                    if (!lua_reload_strand) {
+                        (*reload_all_lua_scripts)();
+                        return;
+                    }
+
+                    auto promise = std::make_shared<std::promise<void>>();
+                    auto future = promise->get_future();
+                    asio::post(*lua_reload_strand, [reload_all_lua_scripts, promise]() {
+                        (*reload_all_lua_scripts)();
+                        promise->set_value();
+                    });
+
+                    while (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+                        if (io.poll_one() == 0) {
+                            std::this_thread::yield();
+                        }
+                    }
+                    future.get();
+                };
+
+                run_lua_reload_sync();
+
+                const auto poll_lua_scripts = [&lua_script_watcher,
+                                               ensure_lua_watcher,
+                                               schedule_lua_reload,
+                                               active_scripts_dir]() {
+                    if (!ensure_lua_watcher() || !lua_script_watcher) {
+                        return;
+                    }
+
+                    std::size_t change_count = 0;
+                    const bool poll_ok = lua_script_watcher->poll([&change_count](const core::scripting::ScriptWatcher::ChangeEvent&) {
+                        ++change_count;
+                    });
+
+                    if (!poll_ok) {
+                        corelog::warn("Lua script watcher poll failed scripts_dir=" + active_scripts_dir->string());
+                        return;
+                    }
+
+                    if (change_count == 0) {
+                        return;
+                    }
+
+                    corelog::info(
+                        "Lua script watcher detected changes scripts_dir=" + active_scripts_dir->string()
+                        + " count=" + std::to_string(change_count));
+                    schedule_lua_reload();
+                };
+
+                poll_lua_scripts();
+
+                const std::uint64_t max_interval = static_cast<std::uint64_t>(std::numeric_limits<long long>::max());
+                const std::uint64_t capped_interval =
+                    config.lua_reload_interval_ms > max_interval ? max_interval : config.lua_reload_interval_ms;
+
+                scheduler.schedule_every(
+                    [poll_lua_scripts]() {
+                        poll_lua_scripts();
+                    },
+                    std::chrono::milliseconds{static_cast<long long>(capped_interval)});
+                corelog::info(
+                    "Lua script watcher started scripts_dir=" + active_scripts_dir->string()
+                    + " interval_ms=" + std::to_string(config.lua_reload_interval_ms));
+            }
+        }
 
         // 4. DB 커넥션 풀 구성
         std::shared_ptr<core::storage::IConnectionPool> db_pool;
@@ -358,7 +712,11 @@ int run_server(int argc, char** argv) {
                 registry_record.instance_id = config.server_instance_id;
                 registry_record.host = config.advertise_host;
                 registry_record.port = config.advertise_port;
-                registry_record.role = "server";
+                registry_record.role = config.server_role;
+                registry_record.game_mode = config.server_game_mode;
+                registry_record.region = config.server_region;
+                registry_record.shard = config.server_shard;
+                registry_record.tags = config.server_tags;
                 registry_record.capacity = 0;
                 registry_record.active_sessions = 0;
                 registry_record.ready = app_host.ready();
@@ -453,6 +811,14 @@ int run_server(int argc, char** argv) {
             config.admin_command_signing_secret,
             admin_verify_options);
 
+        server::state::InstanceRecord local_instance_selector_context{};
+        local_instance_selector_context.instance_id = config.server_instance_id;
+        local_instance_selector_context.role = config.server_role;
+        local_instance_selector_context.game_mode = config.server_game_mode;
+        local_instance_selector_context.region = config.server_region;
+        local_instance_selector_context.shard = config.server_shard;
+        local_instance_selector_context.tags = config.server_tags;
+
         if (config.use_redis_pubsub && config.admin_command_signing_secret.empty()) {
             corelog::warn("ADMIN_COMMAND_SIGNING_SECRET is empty; admin fanout commands will be rejected");
         }
@@ -489,7 +855,8 @@ int run_server(int argc, char** argv) {
                                      refresh_prefix,
                                      room_prefix,
                                      exact_channels,
-                                     admin_command_verifier](const std::string& channel, const std::string& message) {
+                                     admin_command_verifier,
+                                     local_instance_selector_context](const std::string& channel, const std::string& message) {
                 // 1. Self-Echo 방지
                 if (message.rfind("gw=", 0) == 0) {
                     auto nl = message.find('\n');
@@ -592,6 +959,42 @@ int run_server(int argc, char** argv) {
                         }
 
                         g_admin_command_verify_ok_total.fetch_add(1, std::memory_order_relaxed);
+
+                        const AdminSelectorParseResult selector_parse = parse_admin_selector_fields(admin_fields);
+                        if (selector_parse.selector_specified) {
+                            bool target_match = false;
+                            if (selector_parse.valid) {
+                                target_match = server::state::matches_selector(
+                                    local_instance_selector_context,
+                                    selector_parse.selector);
+                            }
+
+                            if (!target_match) {
+                                g_admin_command_target_mismatch_total.fetch_add(1, std::memory_order_relaxed);
+                                const auto request_id_it = admin_fields.find("request_id");
+                                const auto actor_it = admin_fields.find("actor");
+                                const std::string request_id = request_id_it == admin_fields.end()
+                                    ? std::string("unknown")
+                                    : request_id_it->second;
+                                const std::string actor = actor_it == admin_fields.end()
+                                    ? std::string("unknown")
+                                    : actor_it->second;
+
+                                std::string layer = "invalid";
+                                if (selector_parse.valid) {
+                                    layer = std::string(server::state::selector_policy_layer_name(
+                                        server::state::classify_selector_policy_layer(selector_parse.selector)));
+                                }
+
+                                corelog::info(
+                                    "admin command ignored by target selector channel=" + channel
+                                    + " request_id=" + request_id
+                                    + " actor=" + actor
+                                    + " layer=" + layer
+                                    + " instance_id=" + local_instance_selector_context.instance_id);
+                                return;
+                            }
+                        }
                     }
 
                     switch (*exact_match) {
@@ -748,6 +1151,11 @@ int run_server(int argc, char** argv) {
             }
         });
         app_host.add_shutdown_step("shutdown scheduler", [&]() { scheduler.shutdown(); });
+        app_host.add_shutdown_step("reset lua runtime", [&]() {
+            if (lua_runtime) {
+                lua_runtime->reset();
+            }
+        });
         app_host.add_shutdown_step("stop metrics server", [&]() {
             if (metrics_server) metrics_server->stop();
         });

@@ -45,6 +45,22 @@ class GatewayConnection;
  */
 class GatewayApp {
 public:
+    /**
+     * @brief Gateway 세션이 backend로 payload를 전달하기 위한 전송 인터페이스입니다.
+     *
+     * TCP/UDP ingress 경로는 이 인터페이스만 사용해 backend forward를 수행하고,
+     * 실제 전송 구현(TCP bridge, 향후 UDP/RUDP direct path)은 구현체로 분리합니다.
+     */
+    class ITransportSession {
+    public:
+        virtual ~ITransportSession() = default;
+        virtual void send(std::vector<std::uint8_t> payload) = 0;
+        virtual void send(const std::uint8_t* data, std::size_t length) = 0;
+        virtual void close() = 0;
+        virtual const std::string& session_id() const = 0;
+    };
+    using TransportSessionPtr = std::shared_ptr<ITransportSession>;
+
     enum class IngressAdmission {
         kAccept = 0,
         kRejectNotReady,
@@ -73,7 +89,8 @@ public:
      * `GatewayConnection`(클라이언트)과 game server 사이에서
      * payload를 양방향 브리지합니다.
      */
-    class BackendConnection : public std::enable_shared_from_this<BackendConnection> {
+    class BackendConnection : public ITransportSession,
+                              public std::enable_shared_from_this<BackendConnection> {
     public:
         /**
          * @brief backend 연결을 생성합니다.
@@ -107,23 +124,23 @@ public:
          * @brief backend로 payload를 비동기 전송 큐에 넣습니다.
          * @param payload 전송할 바이트 배열
          */
-        void send(std::vector<std::uint8_t> payload);
+        void send(std::vector<std::uint8_t> payload) override;
 
         /**
          * @brief backend로 raw bytes를 복사해 비동기 전송 큐에 넣습니다.
          * @param data 전송할 바이트 포인터
          * @param length 전송할 바이트 길이
          */
-        void send(const std::uint8_t* data, std::size_t length);
+        void send(const std::uint8_t* data, std::size_t length) override;
 
         /** @brief backend 연결을 종료합니다. */
-        void close();
+        void close() override;
 
         /**
          * @brief gateway 내부 세션 ID를 반환합니다.
          * @return backend 연결과 매핑된 세션 ID
          */
-        const std::string& session_id() const;
+        const std::string& session_id() const override;
 
     private:
         void do_connect(const std::string& host, std::uint16_t port);
@@ -206,6 +223,7 @@ public:
 
     bool consume_backend_retry_budget();
     std::chrono::milliseconds backend_retry_delay(std::uint32_t attempt) const;
+    std::uint32_t udp_bind_retry_delay_ms(std::uint32_t attempt) const;
 
     void record_backend_retry_scheduled() {
         (void)backend_connect_retry_total_.fetch_add(1, std::memory_order_relaxed);
@@ -306,13 +324,15 @@ public:
 
     /** @brief gateway 세션별 TCP/UDP 바인딩 상태를 보관하는 내부 상태입니다. */
     struct SessionState {
-        BackendConnectionPtr session;              ///< backend TCP 연결 핸들
+        TransportSessionPtr session;              ///< backend 전송 세션 핸들
         std::string client_id;                     ///< sticky 조회용 클라이언트 ID
         bool udp_bound{false};                     ///< UDP endpoint 바인딩 완료 여부
         boost::asio::ip::udp::endpoint udp_endpoint; ///< 바인딩된 UDP endpoint
         std::uint64_t udp_nonce{0};                ///< 마지막 발급 nonce
         std::uint64_t udp_expires_unix_ms{0};      ///< bind ticket 만료 시각
         std::uint64_t udp_ticket_issued_unix_ms{0}; ///< bind ticket 발급 시각
+        std::uint32_t udp_bind_fail_attempts{0};   ///< 최근 bind 실패 누적 횟수(backoff 계산용)
+        std::uint64_t udp_bind_retry_after_unix_ms{0}; ///< 다음 bind 재시도 허용 시각(Epoch ms)
         std::string udp_token;                     ///< bind 검증 토큰
         UdpSequencedMetrics udp_sequenced_metrics; ///< UDP 순서/품질 추적기
         bool rudp_selected{false};                 ///< canary/게이트에 의해 RUDP가 선택된 세션 여부
@@ -364,6 +384,10 @@ public:
     std::uint32_t udp_bind_fail_window_ms_{10000};
     std::uint32_t udp_bind_fail_limit_{5};
     std::uint32_t udp_bind_block_ms_{60000};
+    std::uint32_t udp_bind_retry_backoff_ms_{200};
+    std::uint32_t udp_bind_retry_backoff_max_ms_{2000};
+    std::uint32_t udp_bind_retry_max_attempts_{6};
+    std::unordered_set<std::uint16_t> udp_opcode_allowlist_{};
     RudpRolloutPolicy rudp_rollout_policy_{};
     server::core::net::rudp::RudpConfig rudp_config_{};
     UdpBindAbuseGuard udp_bind_abuse_guard_;
@@ -386,6 +410,9 @@ public:
     std::atomic<std::uint64_t> udp_bind_reject_total_{0};
     std::atomic<std::uint64_t> udp_bind_block_total_{0};
     std::atomic<std::uint64_t> udp_bind_rate_limit_reject_total_{0};
+    std::atomic<std::uint64_t> udp_bind_retry_backoff_total_{0};
+    std::atomic<std::uint64_t> udp_bind_retry_reject_total_{0};
+    std::atomic<std::uint64_t> udp_opcode_allowlist_reject_total_{0};
     std::atomic<std::uint64_t> udp_forward_total_{0};
     std::atomic<std::uint64_t> udp_forward_reliable_ordered_total_{0};
     std::atomic<std::uint64_t> udp_forward_reliable_total_{0};

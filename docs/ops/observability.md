@@ -228,7 +228,72 @@ max_over_time(wb_pending[5m])
   - 기준: 12h 오류율 > 0.3%가 6h 지속
 - 운영 정책: burn-rate 경보 지속 시 신규 기능 rollout을 일시 중지하고, 최근 배포/의존성 포화/백프레셔 설정을 우선 점검한다.
 
-### 6.3 RUDP 관측 계약 (기본 OFF)
+### 6.3 Plugin/Script 경보 규칙
+
+플러그인/스크립팅 운영 시 최소 아래 규칙을 함께 본다.
+
+Grafana 기본 대시보드(`chat-server-runtime`)의 `Extensibility` row에는 다음 패널을 포함한다.
+
+- `Plugin Reload Success Rate`
+- `Plugin Hook Calls (/s)`
+- `Plugin Hook Error Rate`
+- `Lua Memory Used (bytes)`
+- `Hook Auto Disable Events (10m)`
+
+- `ChatHookPluginReloadFailureSpike` (경고)
+  - 의도: 손상된 `.so` 배포 또는 swap 실패를 조기 감지
+  - 예시 PromQL:
+
+```promql
+sum(rate(chat_hook_plugin_reload_failure_total[5m])) > 0
+```
+
+- `ChatHookPluginReloadFailureBurst` (치명)
+  - 의도: 짧은 시간 내 연속 실패 급증 감지
+  - 예시 PromQL:
+
+```promql
+sum(increase(chat_hook_plugin_reload_failure_total[10m])) >= 3
+```
+
+- `ChatHookPluginDisabledUnexpected` (경고)
+  - 의도: 플러그인이 비의도적으로 꺼진 상태 감지
+  - 예시 PromQL:
+
+```promql
+min_over_time(chat_hook_plugins_enabled[5m]) < 1
+```
+
+Lua cold-hook은 전용 Prometheus 카운터를 함께 본다. 특히 `lua_script_errors_total`, `lua_instruction_limit_hits_total`, `lua_memory_limit_hits_total`, `hook_auto_disable_total{source="lua"}` 급증은 스크립트 결함/정책 오작동 신호다.
+
+```promql
+sum(rate(lua_script_errors_total[5m])) > 0
+```
+
+```promql
+sum(increase(lua_instruction_limit_hits_total[10m])) > 0
+or
+sum(increase(lua_memory_limit_hits_total[10m])) > 0
+```
+
+```promql
+sum(increase(hook_auto_disable_total{source="lua"}[10m])) > 0
+```
+
+또한 watcher/reload 로그(`Lua script watcher detected changes`, `Lua script reload complete`)와 `chat_dispatch_exception_total`/`chat_frame_error_total` 급증을 함께 본다.
+
+```promql
+sum(rate(chat_dispatch_exception_total[5m])) > 0
+```
+
+```promql
+sum(rate(chat_frame_error_total[5m]))
+/
+clamp_min(sum(rate(chat_frame_total[5m])), 1)
+> 0.01
+```
+
+### 6.4 RUDP 관측 계약 (기본 OFF)
 
 RUDP adapter/core 엔진은 구현되어 있지만 기본 경로는 TCP다. 기본값에서는 `GATEWAY_RUDP_ENABLE=0` 또는 canary/allowlist 미설정으로 인해 RUDP 지표가 0에 머물 수 있다.
 
@@ -272,7 +337,7 @@ clamp_min(sum(rate(gateway_rudp_inner_forward_total[5m])), 1)
 sum(rate(gateway_rudp_fallback_total[5m]))
 ```
 
-### 6.4 인증서 만료 알람 소스 메트릭
+### 6.5 인증서 만료 알람 소스 메트릭
 
 - 기본 식은 blackbox exporter 메트릭 `probe_ssl_earliest_cert_expiry`를 사용한다.
 - 운영에서 x509 exporter를 사용할 경우 동일 임계치 식을 `x509_cert_not_after`로 치환해 적용한다.

@@ -1,0 +1,30 @@
+{
+  "name": "on_login_welcome",
+  "version": "1.0.0",
+  "kind": "lua_script",
+  "hook_scope": [
+    "on_login"
+  ],
+  "stage": "side_effect",
+  "priority": 100,
+  "exclusive_group": "lua.on_login.welcome",
+  "checksum": "sha256:REPLACE_ON_LOGIN_WELCOME",
+  "compat": {
+    "lua_mode": "function_hook_ctx_primary",
+    "fallback_modes": [
+      "return_table",
+      "directive_testing"
+    ],
+    "requires": [
+      "LUA_ENABLED=1"
+    ]
+  },
+  "target_profiles": [
+    "all"
+  ],
+  "allowed_decisions": [
+    "pass"
+  ],
+  "description": "Sample function-style login welcome Lua hook",
+  "owner": "runtime-extensibility"
+}

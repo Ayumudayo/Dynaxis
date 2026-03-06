@@ -3,6 +3,7 @@
 #include <string>
 #include <cstdint>
 #include <chrono>
+#include <vector>
 
 namespace server::app {
 
@@ -26,6 +27,11 @@ struct ServerConfig {
     std::string registry_prefix = "gateway/instances/";
     std::chrono::seconds registry_ttl{30};
     std::string server_instance_id;
+    std::string server_role = "server";
+    std::string server_game_mode = "default";
+    std::string server_region = "global";
+    std::string server_shard = "default";
+    std::vector<std::string> server_tags;
 
     // 데이터베이스 설정
     std::string db_uri;
@@ -53,6 +59,16 @@ struct ServerConfig {
     std::string admin_command_signing_secret;
     std::uint64_t admin_command_ttl_ms = 60'000;
     std::uint64_t admin_command_future_skew_ms = 5'000;
+
+    // Lua scripting (Stream B scaffold)
+    bool lua_enabled = false;
+    std::string lua_scripts_dir;
+    std::string lua_fallback_scripts_dir;
+    std::string lua_lock_path;
+    std::uint64_t lua_reload_interval_ms = 1'000;
+    std::uint64_t lua_instruction_limit = 100'000;
+    std::uint64_t lua_memory_limit_bytes = 1'048'576;
+    std::uint64_t lua_auto_disable_threshold = 3;
 
     // 메트릭 설정
     unsigned short metrics_port = 0;

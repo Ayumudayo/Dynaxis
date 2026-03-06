@@ -78,12 +78,21 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         std::string lobby_room_id;
         std::string login_ip = session_sp->remote_ip();
         corelog::info("LOGIN_REQ handling started (worker thread)");
-        
+
+        {
+            std::lock_guard<std::mutex> lk(state_.mu);
+            state_.by_session_id[session_sp->session_id()] = session_sp;
+        }
+
         // 게스트 모드 판별: 닉네임이 없거나 "guest"인 경우
         bool guest_mode = (user.empty() || user == "guest");
         std::string new_user = ensure_unique_or_error(*session_sp, user);
         if (new_user.empty()) return; // 중복 등으로 실패 시 종료
         const std::string hwid_hash = hash_hwid_token(token);
+
+        if (maybe_handle_login_hook(*session_sp, new_user)) {
+            return;
+        }
 
         const auto now = std::chrono::steady_clock::now();
         std::string deny_reason;

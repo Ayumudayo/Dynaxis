@@ -96,6 +96,11 @@ inline std::unordered_set<std::uint16_t> parse_rudp_opcode_allowlist(std::string
     return out;
 }
 
+/** @brief UDP ingress opcode allowlist(CSV)를 파싱해 opcode 집합으로 반환합니다. */
+inline std::unordered_set<std::uint16_t> parse_udp_opcode_allowlist(std::string_view csv) {
+    return parse_rudp_opcode_allowlist(csv);
+}
+
 /** @brief 세션 canary 및 opcode allowlist 기반 RUDP rollout 정책입니다. */
 struct RudpRolloutPolicy {
     /** @brief gateway RUDP 경로 활성화 여부입니다. */

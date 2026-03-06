@@ -8,6 +8,7 @@ add_executable(server_app
     src/chat/chat_service_core.cpp
     src/chat/chat_hook_plugin_manager.cpp
     src/chat/chat_hook_plugin_chain.cpp
+    src/scripting/chat_lua_bindings.cpp
     src/chat/handlers_login.cpp
     src/chat/session_events.cpp
     src/chat/handlers_join.cpp

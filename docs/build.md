@@ -8,12 +8,12 @@ Windows는 개발/디버깅(빌드/클라이언트) 용도로 유지한다.
 - C++20 컴파일러
 - Python 3 (선택: opcodes/wire codegen 자동 실행)
 
-## 로컬 CI(Act) 사전 검증
+## 로컬 사전 검증
 
-큰 변경(빌드/의존성/워크플로우/다중 모듈 변경)은 push 전에 로컬 CI를 통과하는 것을 권장한다.
+큰 변경(빌드/의존성/워크플로우/다중 모듈 변경)은 push 전에 로컬 검증을 통과하는 것을 권장한다.
 
-- 상세 절차: `docs/ops/local-ci-with-act.md`
-- 핵심 원칙: 로컬 CI 실패 상태에서는 push하지 않는다.
+- 핵심 원칙: 로컬 검증 실패 상태에서는 push하지 않는다.
+- 권장 최소 검증: `pwsh scripts/build.ps1 -Config Release`, `ctest --preset windows-test --output-on-failure`
 
 ## 윈도우(Windows) 개발 빌드
 
@@ -71,7 +71,7 @@ cmake --preset linux-asan
 cmake --build --preset linux-asan --target server_app --parallel
 ```
 
-CI에서는 `knights-base` 컨테이너 내부에서 `linux-asan` 빌드를 수행한다. (`.github/workflows/ci.yml` 참고)
+CI에서는 `knights-base` 컨테이너 내부에서 `linux-asan` 빌드를 수행한다. (`.github/workflows/ci-hardening.yml` 참고)
 
 ## 코드 생성(opcodes)
 

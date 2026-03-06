@@ -25,8 +25,15 @@ add_library(server_core
     src/security/cipher.cpp
     src/security/admin_command_auth.cpp
     src/compression/compressor.cpp
+    src/plugin/shared_library.cpp
+    src/scripting/lua_sandbox.cpp
+    src/scripting/script_watcher.cpp
+    src/scripting/lua_runtime.cpp
 )
 add_library(server_core::server_core ALIAS server_core)
+
+knights_configure_luajit_submodule(KNIGHTS_LUAJIT_VENDOR_TARGET)
+knights_configure_sol2_submodule(KNIGHTS_SOL2_VENDOR_TARGET)
 
 # -----------------------------------------------------------------------------
 # Build metadata (git hash/describe + build time)
@@ -84,6 +91,14 @@ if (NOT TARGET lz4::lz4)
 endif()
 
 target_link_libraries(server_core PUBLIC OpenSSL::SSL OpenSSL::Crypto lz4::lz4)
+
+if (KNIGHTS_LUAJIT_VENDOR_TARGET)
+    target_link_libraries(server_core PRIVATE $<BUILD_INTERFACE:${KNIGHTS_LUAJIT_VENDOR_TARGET}>)
+endif()
+
+if (KNIGHTS_SOL2_VENDOR_TARGET)
+    target_link_libraries(server_core PRIVATE $<BUILD_INTERFACE:${KNIGHTS_SOL2_VENDOR_TARGET}>)
+endif()
 
 target_include_directories(server_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

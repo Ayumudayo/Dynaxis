@@ -77,6 +77,10 @@ Windows에서 빌드된 실행 파일은 `build-windows/server/Debug/server_app.
 | `USE_REDIS_PUBSUB` | Redis Pub/Sub을 이용한 분산 채팅 활성화 여부 | `0` |
 | `SERVER_ADVERTISE_HOST` | 레지스트리에 등록할 호스트 주소 (게이트웨이가 접근 가능한 주소) | `127.0.0.1` |
 | `SERVER_ADVERTISE_PORT` | 레지스트리에 등록할 포트(옵션) | `5000` |
+| `SERVER_ROLE` | 서버 역할 메타데이터(제어면 selector에서 role 기준 필터링) | `server` |
+| `SERVER_REGION` | 서버 지역 메타데이터(예: `ap-northeast`) | `global` |
+| `SERVER_SHARD` | 서버 샤드 메타데이터(예: `shard-01`) | `default` |
+| `SERVER_TAGS` | 서버 태그 목록(CSV, 예: `canary,vip`) | (unset) |
 | `SERVER_REGISTRY_PREFIX` | Instance Registry 키 접두사 | `gateway/instances/` |
 | `SERVER_REGISTRY_TTL` | Instance Registry TTL(초) | `30` |
 | `METRICS_PORT` | 메트릭 수집을 위한 HTTP 포트 | `9090` |
@@ -86,11 +90,23 @@ Windows에서 빌드된 실행 파일은 `build-windows/server/Debug/server_app.
 | `SERVER_DRAIN_TIMEOUT_MS` | SIGTERM 이후 기존 연결 drain 대기 최대 시간(ms) | `15000` |
 | `SERVER_DRAIN_POLL_MS` | drain 진행률(남은 연결 수) 폴링 주기(ms) | `100` |
 | `CHAT_HOOK_PLUGINS_DIR` | (실험, 권장) 플러그인 디렉터리(모든 `.so/.dll`을 파일명 순으로 로드) | `/app/plugins` |
+| `CHAT_HOOK_FALLBACK_PLUGINS_DIR` | (실험) `CHAT_HOOK_PLUGINS_DIR`가 비어있거나 읽기 실패일 때 사용할 fallback 플러그인 디렉터리 | `/app/plugins_builtin` |
 | `CHAT_HOOK_PLUGIN_PATHS` | (실험) 플러그인 경로 목록(순서 고정, 구분자 `;` 또는 `,`) | `/app/plugins/10_chat_hook_sample.so;/app/plugins/20_chat_hook_tag.so` |
 | `CHAT_HOOK_PLUGIN_PATH` | (실험, 레거시) 단일 플러그인(.so/.dll) 경로 | `/app/plugins/10_chat_hook_sample.so` |
+| `CHAT_HOOK_ENABLED` | (실험) 플러그인 런타임 활성화 (`1`: 활성화, `0`: 비활성화) | `0` |
 | `CHAT_HOOK_CACHE_DIR` | 플러그인 캐시 디렉터리(원본을 cache-copy 후 로드) | `/tmp/chat_hook_cache` |
 | `CHAT_HOOK_LOCK_PATH` | (옵션) lock/sentinel 파일 경로(존재 시 reload 스킵, 단일 플러그인 모드에만 적용) | `<plugin_stem>_LOCK` |
 | `CHAT_HOOK_RELOAD_INTERVAL_MS` | reload 폴링 주기(ms) | `500` |
+| `CHAT_HOOK_WARN_BUDGET_US` | (실험) 플러그인 hook 호출 경고 예산(마이크로초). 0이면 비활성 | `0` |
+| `LUA_ENABLED` | (실험) Lua 스크립팅 활성화 (`1`: 활성화, `0`: 비활성화) | `0` |
+| `LUA_SCRIPTS_DIR` | (실험) Lua 스크립트 디렉터리 | `/app/scripts` |
+| `LUA_FALLBACK_SCRIPTS_DIR` | (실험) `LUA_SCRIPTS_DIR`가 비어 있거나 읽기 실패일 때 사용할 fallback 스크립트 디렉터리 | `/app/scripts_builtin` |
+| `LUA_LOCK_PATH` | (실험) Lua 리로드 lock/sentinel 파일 경로(존재 시 watcher poll/reload 스킵) | (unset) |
+| `LUA_RELOAD_INTERVAL_MS` | (실험) Lua 스크립트 리로드 폴링 주기(ms) | `1000` |
+| `LUA_INSTRUCTION_LIMIT` | (실험) Lua 호출 1회당 instruction 제한 | `100000` |
+| `LUA_MEMORY_LIMIT_BYTES` | (실험) Lua 런타임 메모리 상한(바이트) | `1048576` |
+| `LUA_AUTO_DISABLE_THRESHOLD` | (실험) 연속 오류 시 자동 비활성화 임계치 | `3` |
+| `LUA_HOOK_WARN_BUDGET_US` | (실험) Lua cold hook 호출 경고 예산(마이크로초). 0이면 비활성 | `0` |
 | `LOG_BUFFER_CAPACITY` | 메모리 내 로그 버퍼 크기 | `256` |
 | `CHAT_JOB_QUEUE_MAX` | 서버 로직 작업 큐 최대 길이(트래픽 스파이크 시 백프레셔/메모리 보호) | `8192` |
 | `CHAT_DB_JOB_QUEUE_MAX` | DB 작업 큐 최대 길이(DB 지연 시 백프레셔/메모리 보호) | `4096` |
@@ -110,28 +126,87 @@ Windows에서 빌드된 실행 파일은 `build-windows/server/Debug/server_app.
 
 ## 채팅 훅(Chat Hook) 플러그인 (실험)
 
-`server_app`은 `MSG_CHAT_SEND` 경로에 hot-reload 가능한 플러그인 훅을 붙일 수 있습니다.
+`server_app`은 hot-reload 가능한 플러그인 훅을 다음 경로에 붙일 수 있습니다.
 
-- ABI: `server/include/server/chat/chat_hook_plugin_abi.hpp` (C ABI v1, entrypoint `chat_hook_api_v1()`)
-- 멀티 플러그인: 파일명 순서(예: `10_*.so`, `20_*.so`)로 순차 적용; `kReplaceText`는 다음 플러그인에 반영됨
-- Docker 샘플 플러그인:
-  - `/app/plugins/10_chat_hook_sample.so`
-  - `/app/plugins/20_chat_hook_tag.so`
-  - `/app/plugins/staging/10_chat_hook_sample_v2.so` (swap 용)
-- Docker 스택 기본 설정: `docker/stack/docker-compose.yml`에서 `CHAT_HOOK_PLUGINS_DIR=/app/plugins`
+- `on_chat_send` (`MSG_CHAT_SEND`)
+- `on_login`
+- `on_join`
+- `on_leave`
+- `on_session_event`
+- `on_admin_command`
+
+- ABI: `server/include/server/chat/chat_hook_plugin_abi.hpp` (`ChatHookApiV2` + `ChatHookApiV1` 하위 호환)
+- 엔트리포인트 탐색: `chat_hook_api_v2()` 우선, 미존재 시 `chat_hook_api_v1()` 자동 폴백
+- 멀티 플러그인: 파일명 순서(예: `10_*.so`, `20_*.so`)로 순차 적용; 텍스트 변경(`v1:kReplaceText`, `v2:kModify`) 결과는 다음 플러그인에 반영됨
+- deny 계열 결정(`kBlock`/`kDeny`)은 기본 경로를 중단하고 `MSG_ERR(FORBIDDEN)`로 전달됨
+- Docker 샘플 플러그인(fallback 경로):
+  - `/app/plugins_builtin/10_chat_hook_sample.so`
+  - `/app/plugins_builtin/20_chat_hook_tag.so`
+  - `/app/plugins_builtin/staging/10_chat_hook_sample_v2.so` (swap 용)
+- Docker 스택 기본 설정: `docker/stack/docker-compose.yml`에서 `CHAT_HOOK_ENABLED=0`(기본 비활성), `CHAT_HOOK_PLUGINS_DIR=/app/plugins`, `CHAT_HOOK_FALLBACK_PLUGINS_DIR=/app/plugins_builtin`
+- `/app/plugins`에 로드 가능한 모듈이 있으면 1차 디렉터리(`/app/plugins`)를 우선 사용하고, 비어 있으면 fallback(`/app/plugins_builtin`)을 사용한다.
 
 핫 리로드 예시:
 
 ```bash
 # 잠금 파일(lock/sentinel, 선택)
-docker exec knights-stack-server-1-1 touch /app/plugins/10_chat_hook_sample_LOCK
+docker exec knights-stack-server-1-1 touch /app/plugins_builtin/10_chat_hook_sample_LOCK
 
 # 바이너리 교체(swap)
-docker exec knights-stack-server-1-1 cp /app/plugins/staging/10_chat_hook_sample_v2.so /app/plugins/10_chat_hook_sample.so
+docker exec knights-stack-server-1-1 cp /app/plugins_builtin/staging/10_chat_hook_sample_v2.so /app/plugins_builtin/10_chat_hook_sample.so
 
 # 잠금 해제(unlock)
-docker exec knights-stack-server-1-1 rm -f /app/plugins/10_chat_hook_sample_LOCK
+docker exec knights-stack-server-1-1 rm -f /app/plugins_builtin/10_chat_hook_sample_LOCK
 ```
+
+## Lua cold-hook authoring model (실험)
+
+Phase 16 backlog 기준으로 Lua 스크립트의 기본 작성 모델은 function-style hook + `ctx`다.
+공식 빌드/런타임 이미지는 Lua capability를 항상 포함하고, 실제 활성화는 `LUA_ENABLED=1`에서만 일어난다.
+
+권장 형태:
+
+```lua
+function on_login(ctx)
+  if not ctx or not ctx.session_id then
+    return { decision = "pass" }
+  end
+
+  local name = server.get_user_name(ctx.session_id)
+  if name and name ~= "" then
+    server.send_notice(ctx.session_id, "welcome back, " .. name)
+  end
+
+  return { decision = "pass" }
+end
+```
+
+핵심 규약:
+
+- 기본 형태: `function on_<hook>(ctx) ... end`
+- 입력: `ctx.session_id`, `ctx.user`, `ctx.room`, `ctx.command`, `ctx.args` 등 hook별 스냅샷 필드
+- 호스트 API: `server.get_*`, `server.send_notice`, `server.broadcast_*`, `server.log_*`, `server.hook_name`, `server.script_name`
+- 적용 경로: native 훅 체인 결과가 `kPass`일 때만 Lua cold hook 호출
+- native 훅이 `kBlock/kDeny`를 반환하면 Lua는 호출되지 않는다
+
+호환성 fallback/testing aid:
+
+- return-table 형식(예): `return { hook = "on_login", decision = "pass", notice = "welcome" }`
+- directive 형식(예): `-- hook=on_login decision=deny reason=login denied by lua scaffold`
+- limit 시뮬레이션: `-- hook=on_admin_command limit=instruction|memory`
+- 위 형식들은 샘플 bring-up, auto-disable, limit-path 테스트를 위한 보조 수단으로 유지한다.
+
+샘플 경로:
+
+- `server/scripts/*.lua`는 런타임 이미지의 builtin fallback(`/app/scripts_builtin`) 소스다.
+- `docker/stack/scripts/*.lua`는 compose mount(`/app/scripts`) 샘플이다.
+- 겹치는 샘플 이름은 builtin과 stack 동작이 어긋나지 않도록 같은 내용으로 유지한다.
+
+기본 샘플:
+
+- `server/scripts/on_login_welcome.lua`
+- `server/scripts/on_join_policy.lua`
+- `server/scripts/admin_commands.lua`
 
 ## 디렉터리 구조
 
