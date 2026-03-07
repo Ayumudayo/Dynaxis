@@ -286,7 +286,7 @@ scripts/deploy_docker.ps1 -Action logs
 
 더 깊이 있는 기술적인 내용은 `docs/` 디렉토리에서 확인할 수 있습니다.
 
--   [**Repository Structure**](docs/repo-structure.md): 프로젝트 구조 설명
+-   [**Documentation Index**](docs/README.md): 현재 문서의 canonical/reference/historical 구분과 진입점
 -   [**Naming & Commenting Conventions**](docs/naming-conventions.md): 네이밍/네임스페이스 + 한국어 Doxygen 주석 규칙
 -   [**Server Architecture**](docs/server-architecture.md): 서버 상세 아키텍처
 -   [**Redis Strategy**](docs/db/redis-strategy.md): Redis 활용 전략 (Streams, Pub/Sub)
