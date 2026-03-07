@@ -106,15 +106,14 @@ python tools/gen_opcode_docs.py --check
 ```
 
 ## Conventions
-- Naming/namespace: `docs/naming-conventions.md` (역할 기반 네이밍, 파일/함수 snake_case, 코드 심볼 ASCII).
-- Repo 구조 원칙/금지사항: `docs/repo-structure.md`.
+- Naming/namespace and repo hygiene: `docs/naming-conventions.md` (역할 기반 네이밍, 파일/함수 snake_case, 코드 심볼 ASCII).
 - Headers: `.hpp` + `#pragma once`, include 순서(표준 -> 서드파티 -> 프로젝트).
 - CMake: 소스는 명시적으로 나열(= `file(GLOB ...)` 금지). 옵션은 `BUILD_SERVER_STACK`, `BUILD_GATEWAY_APP`, `BUILD_SERVER_TESTS`, `BUILD_GTEST_TESTS`, `BUILD_CONTRACT_TESTS`, `BUILD_WRITE_BEHIND_TOOLS` 중심.
 - Conan2: `conanfile.py` + `conan.lock` 기반으로 Windows 개발 의존성을 고정하며(리눅스/도커 런타임은 시스템 패키지 기반).
 - Metrics: `/metrics`는 Prometheus text format. 포트는 `METRICS_PORT`로 제어(서비스별 환경 변수로 주입).
 
 ## Anti-Patterns (This Repo)
-- 코드/타깃/산출물/네임스페이스에 `Knights/knights/kproj` 문자열 사용 금지(`docs/repo-structure.md`).
+- 코드/타깃/산출물/네임스페이스에 `Knights/knights/kproj` 문자열 사용 금지.
 - CMake에서 소스 수집을 `GLOB`로 처리 금지(리뷰 불가/증분 빌드 혼선).
 - `core/`가 `server/`/`gateway/` 구현에 의존하도록 만들지 말 것(단방향 의존).
 - Docker runtime 실행은 `scripts/deploy_docker.ps1`(또는 `scripts/run_full_stack_observability.ps1`) 경로만 사용하고, 임의 wrapper를 추가하지 않는다.
@@ -158,11 +157,11 @@ python tools/gen_opcode_docs.py --check
 
 ## Task Management
 
-1. ** Plan First **: Write plan to 'tasks/todo.md' with checkable items
+1. ** Plan First **: Write plan to local ignored `tasks/` notes with checkable items
 2. ** Verify Plan **: Check in before starting implementation
 3. ** Track Progress **: Mark items complete as you go
 4. ** Explain Changes **: High-level summary at each step
-5. ** Document Results **: Add review section to 'tasks/todo.md'
+5. ** Document Results **: Add review section to the relevant local task note
 6. ** Capture Lessons **: Update `tasks/lessons.md' after corrections
 
 ## Core Principles
