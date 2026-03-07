@@ -1,7 +1,6 @@
 # Plugin/Script Test Plan
 
 기준 문서:
-- `tasks/runtime-extensibility-todo.md`
 - `docs/runtime-extensibility-plan.md`
 
 ## 1. Goal
