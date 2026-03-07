@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "name": "steady_chat",
   "sessions": 24,
   "ramp_up_ms": 3000,

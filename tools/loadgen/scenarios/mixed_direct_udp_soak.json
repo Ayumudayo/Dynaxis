@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
-  "name": "mixed_session_soak",
+  "name": "mixed_direct_udp_soak",
   "sessions": 24,
   "ramp_up_ms": 3000,
-  "duration_ms": 15000,
+  "duration_ms": 60000,
   "room": "loadgen_room",
   "room_password": "loadgen-shared",
   "unique_room_per_run": true,
   "message_bytes": 80,
-  "login_prefix": "mixed_soak",
+  "login_prefix": "mixed_direct_udp",
   "connect_timeout_ms": 5000,
   "read_timeout_ms": 5000,
   "groups": [
@@ -16,7 +16,7 @@
       "name": "chat",
       "transport": "tcp",
       "mode": "chat",
-      "count": 12,
+      "count": 10,
       "rate_per_sec": 0.25,
       "join_room": true
     },
@@ -29,10 +29,16 @@
       "join_room": false
     },
     {
-      "name": "login_only",
+      "name": "tcp_login_only",
       "transport": "tcp",
       "mode": "login_only",
-      "count": 6
+      "count": 4
+    },
+    {
+      "name": "udp_attach",
+      "transport": "udp",
+      "mode": "login_only",
+      "count": 4
     }
   ]
 }

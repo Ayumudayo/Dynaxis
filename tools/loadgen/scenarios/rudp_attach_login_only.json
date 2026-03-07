@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "name": "rudp_attach_login_only",
+  "transport": "rudp",
+  "sessions": 4,
+  "ramp_up_ms": 1000,
+  "duration_ms": 5000,
+  "room": "loadgen_room",
+  "unique_room_per_run": true,
+  "login_prefix": "rudp_attach",
+  "connect_timeout_ms": 5000,
+  "read_timeout_ms": 5000,
+  "groups": [
+    {
+      "name": "rudp_attach",
+      "mode": "login_only",
+      "count": 4,
+      "join_room": false
+    }
+  ]
+}
