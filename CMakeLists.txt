@@ -217,6 +217,9 @@ if (BUILD_LOADGEN_TOOLS)
 
   add_executable(stack_loadgen
     tools/loadgen/main.cpp
+    tools/loadgen/report_writer.cpp
+    tools/loadgen/scenario_loader.cpp
+    tools/loadgen/scenario_runner.cpp
     tools/loadgen/session_client.cpp
   )
   target_include_directories(stack_loadgen PRIVATE
