@@ -63,7 +63,7 @@
    - TCP-only smoke(`python tests/python/verify_pong.py`)와 핵심 KPI 복귀 확인
 
 ## 4. 스모크 테스트 절차
-1. devclient 실행 → `/login runbook` → `/join lobby` → `/chat runbook-check`
+1. `client_gui` 또는 동등한 e2e 클라이언트로 `/login runbook` → `/join lobby` → `/chat runbook-check`
 2. `/refresh` 로 snapshot 정상 반환 여부 확인
 3. `wb_emit` 로 write-behind 이벤트 발행 → `wb_worker` 로그 확인
 4. Grafana 대시보드 스크린샷 저장 (배포 후 5분)
@@ -81,6 +81,5 @@
 
 ## 6. 참고
 - `docs/ops/fallback-and-alerts.md`
-- `docs/ops/deployment.md`
 - `docs/ops/observability.md`
 - `docs/ops/udp-rollout-rollback.md`

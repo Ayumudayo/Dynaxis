@@ -121,6 +121,5 @@ listen stats
 | 특정 backend 로 트래픽 쏠림 | Gateway 라우팅 | Instance Registry active_sessions, SessionDirectory sticky 점검 |
 
 ## 7. 참고 문서
-- `docs/ops/distributed_routing_draft.md`
 - `docs/ops/fallback-and-alerts.md`
 - `docs/ops/observability.md`
