@@ -71,12 +71,14 @@ Knights는 C++20 기반 분산 채팅 스택입니다: HAProxy(TCP) -> `gateway_
 | Build presets / 옵션 | `CMakeLists.txt`, `CMakePresets.json` | `BUILD_*` 옵션, Windows(vcpkg) vs Linux(docker) 흐름 |
 | Windows 빌드 | `scripts/build.ps1` | vcpkg bootstrap + preset configure/build |
 | Docker 풀스택 | `docker/stack/docker-compose.yml`, `scripts/deploy_docker.ps1` | `observability` profile 포함 |
+| 문서 진입점 / 정책 | `docs/README.md` | 현재 유지되는 canonical docs entrypoint |
 | Observability | `docker/observability/prometheus/prometheus.yml`, `docker/observability/grafana/dashboards/`, `docs/ops/observability.md` | Grafana provisioning은 `docker/observability/grafana/provisioning/`; gateway/wb_worker 신규 하드닝 메트릭 포함 |
 | 서버 런타임 메트릭 | `core/include/server/core/runtime_metrics.hpp`, `server/src/app/metrics_server.cpp` | `/metrics` 텍스트 포맷 노출 |
 | 코어 플러그인/스크립팅 인프라 | `core/include/server/core/plugin/`, `core/include/server/core/scripting/`, `core/src/plugin/`, `core/src/scripting/` | `server`/`gateway`가 재사용하는 공용 host 계층 |
 | Chat hook plugin | `server/src/chat/chat_hook_plugin_*.{hpp,cpp}`, `server/plugins/` | 설정: `docs/configuration.md`, `server/README.md` |
 | Lua cold-hook scaffold | `core/src/scripting/lua_runtime.cpp`, `server/src/scripting/chat_lua_bindings.cpp`, `server/scripts/` | 현재는 directive/return-table 기반 scaffold 실행 |
 | Runtime extensibility docs | `docs/runtime-extensibility-plan.md`, `docs/extensibility/`, `docs/core-api/extensions.md` | quickstart/recipes/정책 및 ABI 계약 |
+| Admin control plane | `tools/admin_app/README.md` | admin_app API/권한/운영 surface의 canonical 문서 |
 | 게이트웨이 라우팅/세션 | `gateway/src/gateway_app.cpp`, `gateway/src/gateway_connection.cpp`, `gateway/README.md` | Redis Instance Registry + SessionDirectory + backend connect timeout/send queue guardrail |
 | Write-behind 워커 | `tools/wb_worker/main.cpp`, `tools/wb_worker/README.md`, `docs/db/write-behind.md` | Redis Streams -> Postgres + `/metrics`(옵션) + DB reconnect backoff/readiness/drop visibility |
 | DB 마이그레이션 | `tools/migrations/runner.cpp`, `tools/migrations/*.sql` | `CREATE INDEX CONCURRENTLY`는 트랜잭션 밖 |
@@ -132,7 +134,7 @@ python tools/gen_opcode_docs.py --check
 ## Workflow Orchestration
 
 ### 1. Self-Improvement Loop
-- After ANY correction from the user: update 'tasks/lessons.md' with the pattern
+- After ANY correction from the user: update `tasks/_shared/lessons.md` with the pattern
 - Write rules for yourself that prevent the same mistake
 - Ruthlessly iterate on these lessons until mistake rate drops
 - Review lessons at session start for relevant project
@@ -157,12 +159,18 @@ python tools/gen_opcode_docs.py --check
 
 ## Task Management
 
-1. ** Plan First **: Write plan to local ignored `tasks/` notes with checkable items
+1. ** Plan First **: Write plan to `tasks/README.md` and the relevant local task note with checkable items
 2. ** Verify Plan **: Check in before starting implementation
 3. ** Track Progress **: Mark items complete as you go
 4. ** Explain Changes **: High-level summary at each step
 5. ** Document Results **: Add review section to the relevant local task note
-6. ** Capture Lessons **: Update `tasks/lessons.md' after corrections
+6. ** Capture Lessons **: Update `tasks/_shared/lessons.md` after corrections
+
+### Local Task Workspace Shape
+- `tasks/` is local-only and gitignored; do not treat it as repo source of truth.
+- Use `tasks/README.md` as the local workspace index.
+- Preferred shape: `tasks/<domain>/<topic>/todo.md` with optional sibling `notes.md`.
+- Put cross-cutting rules and reusable snippets under `tasks/_shared/`.
 
 ## Core Principles
 
