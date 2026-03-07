@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "name": "mixed_direct_rudp_soak_long",
+  "sessions": 48,
+  "ramp_up_ms": 6000,
+  "duration_ms": 120000,
+  "room": "loadgen_room",
+  "room_password": "loadgen-shared",
+  "unique_room_per_run": true,
+  "message_bytes": 80,
+  "login_prefix": "mixed_direct_rudp_long",
+  "connect_timeout_ms": 5000,
+  "read_timeout_ms": 5000,
+  "groups": [
+    {
+      "name": "chat",
+      "transport": "tcp",
+      "mode": "chat",
+      "count": 20,
+      "rate_per_sec": 0.25,
+      "join_room": true
+    },
+    {
+      "name": "ping",
+      "transport": "tcp",
+      "mode": "ping",
+      "count": 12,
+      "rate_per_sec": 0.35,
+      "join_room": false
+    },
+    {
+      "name": "tcp_login_only",
+      "transport": "tcp",
+      "mode": "login_only",
+      "count": 8
+    },
+    {
+      "name": "rudp_attach",
+      "transport": "rudp",
+      "mode": "login_only",
+      "count": 8
+    }
+  ]
+}

@@ -287,6 +287,24 @@ std::string endpoint_key(const boost::asio::ip::udp::endpoint& endpoint) {
     return endpoint.address().to_string() + ":" + std::to_string(endpoint.port());
 }
 
+std::string udp_frame_summary(std::span<const std::uint8_t> frame) {
+    namespace proto = server::core::protocol;
+
+    std::ostringstream oss;
+    oss << "bytes=" << frame.size();
+    if (frame.size() < proto::k_header_bytes) {
+        oss << " short";
+        return oss.str();
+    }
+
+    proto::PacketHeader header{};
+    proto::decode_header(frame.data(), header);
+    oss << " msg_id=" << header.msg_id
+        << " seq=" << header.seq
+        << " payload_len=" << header.length;
+    return oss.str();
+}
+
 } // namespace
 
 // --- BackendConnection Implementation ---
@@ -482,6 +500,7 @@ void GatewayApp::BackendConnection::send(std::vector<std::uint8_t> payload) {
         return;
     }
 
+    auto buffer = std::make_shared<std::vector<std::uint8_t>>(std::move(payload));
     bool overflow = false;
 
     {
@@ -490,12 +509,12 @@ void GatewayApp::BackendConnection::send(std::vector<std::uint8_t> payload) {
             return;
         }
 
-        const auto payload_bytes = payload.size();
+        const auto payload_bytes = buffer->size();
         if (server::core::net::exceeds_queue_budget(send_queue_max_bytes_, queued_bytes_, payload_bytes)) {
             overflow = true;
         } else {
             queued_bytes_ += payload_bytes;
-            write_queue_.push_back(std::move(payload));
+            write_queue_.push_back(std::move(buffer));
             if (connected_ && !write_in_progress_) {
                 do_write();
             }
@@ -520,6 +539,7 @@ void GatewayApp::BackendConnection::send(const std::uint8_t* data, std::size_t l
         return;
     }
 
+    auto buffer = std::make_shared<std::vector<std::uint8_t>>(data, data + length);
     // 브리지 read 버퍼를 바로 큐에 복사해 caller의 중간 임시 payload vector를 줄인다.
     bool overflow = false;
 
@@ -529,11 +549,12 @@ void GatewayApp::BackendConnection::send(const std::uint8_t* data, std::size_t l
             return;
         }
 
-        if (server::core::net::exceeds_queue_budget(send_queue_max_bytes_, queued_bytes_, length)) {
+        const auto payload_bytes = buffer->size();
+        if (server::core::net::exceeds_queue_budget(send_queue_max_bytes_, queued_bytes_, payload_bytes)) {
             overflow = true;
         } else {
-            queued_bytes_ += length;
-            write_queue_.emplace_back(data, data + length);
+            queued_bytes_ += payload_bytes;
+            write_queue_.push_back(std::move(buffer));
             if (connected_ && !write_in_progress_) {
                 do_write();
             }
@@ -560,11 +581,23 @@ void GatewayApp::BackendConnection::do_write() {
     }
 
     write_in_progress_ = true;
-    auto& msg = write_queue_.front();
+    auto msg = write_queue_.front();
+    if (!msg) {
+        write_queue_.pop_front();
+        if (!write_queue_.empty()) {
+            do_write();
+        } else {
+            write_in_progress_ = false;
+        }
+        return;
+    }
     
     auto self = shared_from_this();
-    boost::asio::async_write(socket_, boost::asio::buffer(msg),
-        [self, this](const boost::system::error_code& ec, std::size_t /*bytes_transferred*/) {
+    boost::asio::async_write(socket_, boost::asio::buffer(*msg),
+        [self, this, msg](const boost::system::error_code& ec, std::size_t /*bytes_transferred*/) {
+            if (ec == boost::asio::error::operation_aborted || closed_.load(std::memory_order_relaxed)) {
+                return;
+            }
             if (ec) {
                 app_.record_backend_write_error();
                 if (auto conn = connection_.lock()) {
@@ -577,7 +610,7 @@ void GatewayApp::BackendConnection::do_write() {
 
             std::lock_guard<std::mutex> lock(send_mutex_);
             if (!write_queue_.empty()) {
-                const auto sent = write_queue_.front().size();
+                const auto sent = msg->size();
                 queued_bytes_ = queued_bytes_ >= sent ? (queued_bytes_ - sent) : 0;
                 write_queue_.pop_front();
             }
@@ -802,6 +835,9 @@ GatewayApp::GatewayApp()
 
         stream << "# TYPE gateway_udp_receive_error_total counter\n";
         stream << "gateway_udp_receive_error_total " << udp_receive_error_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE gateway_udp_send_error_total counter\n";
+        stream << "gateway_udp_send_error_total " << udp_send_error_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_bind_ticket_issued_total counter\n";
         stream << "gateway_udp_bind_ticket_issued_total "
@@ -1254,6 +1290,7 @@ std::optional<std::vector<std::uint8_t>> GatewayApp::make_udp_bind_ticket_frame(
     }
 
     UdpBindTicket ticket{};
+    bool rudp_selected = false;
     {
         std::lock_guard<std::mutex> lock(session_mutex_);
         auto it = sessions_.find(session_id);
@@ -1292,9 +1329,15 @@ std::optional<std::vector<std::uint8_t>> GatewayApp::make_udp_bind_ticket_frame(
         ticket.nonce = nonce;
         ticket.expires_unix_ms = expires_unix_ms;
         ticket.token = token;
+        rudp_selected = it->second.rudp_selected;
     }
 
     (void)udp_bind_ticket_issued_total_.fetch_add(1, std::memory_order_relaxed);
+    server::core::log::info(
+        "GatewayApp UDP bind ticket issued: session=" + ticket.session_id
+        + " nonce=" + std::to_string(ticket.nonce)
+        + " expires_unix_ms=" + std::to_string(ticket.expires_unix_ms)
+        + " rudp_selected=" + std::string(rudp_selected ? "1" : "0"));
     return make_udp_bind_res_frame(0, ticket, "issued");
 }
 
@@ -1440,12 +1483,63 @@ void GatewayApp::send_udp_datagram(std::vector<std::uint8_t> frame,
         return;
     }
 
+    auto buffer = std::make_shared<std::vector<std::uint8_t>>(std::move(frame));
+    trace_udp_bind_send(std::span<const std::uint8_t>(buffer->data(), buffer->size()), endpoint);
+    auto handler = [this, buffer, endpoint](const boost::system::error_code& ec, std::size_t) {
+        if (ec) {
+            (void)udp_send_error_total_.fetch_add(1, std::memory_order_relaxed);
+            server::core::log::warn(
+                "GatewayApp UDP send failed: endpoint="
+                + endpoint.address().to_string() + ":" + std::to_string(endpoint.port())
+                + " error=" + ec.message());
+        }
+    };
+
     udp_socket_->async_send_to(
-        boost::asio::buffer(frame),
+        boost::asio::buffer(*buffer),
         endpoint,
-        [frame = std::move(frame)](const boost::system::error_code&, std::size_t) mutable {
-            frame.clear();
-        });
+        std::move(handler));
+}
+
+void GatewayApp::trace_udp_bind_send(std::span<const std::uint8_t> frame,
+                                     const boost::asio::ip::udp::endpoint& endpoint) const {
+    namespace proto = server::core::protocol;
+
+    if (frame.size() < proto::k_header_bytes) {
+        return;
+    }
+
+    proto::PacketHeader header{};
+    proto::decode_header(frame.data(), header);
+    if (header.msg_id != server::protocol::MSG_UDP_BIND_RES) {
+        return;
+    }
+
+    std::string session_id;
+    std::uint16_t code = 0;
+    std::uint64_t nonce = 0;
+    std::uint64_t expires_unix_ms = 0;
+    std::string message;
+    const auto payload = frame.subspan(proto::k_header_bytes);
+    if (payload.size() >= 2) {
+        code = proto::read_be16(payload.data());
+        auto in = payload.subspan(2);
+        (void)proto::read_lp_utf8(in, session_id);
+        (void)read_be64(in, nonce);
+        (void)read_be64(in, expires_unix_ms);
+        std::string ignored_token;
+        (void)proto::read_lp_utf8(in, ignored_token);
+        (void)proto::read_lp_utf8(in, message);
+    }
+
+    server::core::log::info(
+        "GatewayApp UDP bind response send: endpoint=" + endpoint_key(endpoint)
+        + " session=" + session_id
+        + " nonce=" + std::to_string(nonce)
+        + " expires_unix_ms=" + std::to_string(expires_unix_ms)
+        + " code=" + std::to_string(code)
+        + " message=" + message
+        + " " + udp_frame_summary(frame));
 }
 
 std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const std::string& client_id) {
@@ -2177,6 +2271,11 @@ void GatewayApp::do_udp_receive() {
             if (header.msg_id == server::protocol::MSG_UDP_BIND_REQ) {
                 const auto remote_key = endpoint_key(udp_remote_endpoint_);
                 const auto block_state = udp_bind_abuse_guard_.block_state(remote_key, now_ms);
+                server::core::log::info(
+                    "GatewayApp UDP bind request recv: endpoint=" + remote_key
+                    + " blocked=" + std::string(block_state.blocked ? "1" : "0")
+                    + " retry_after_ms=" + std::to_string(block_state.retry_after_ms)
+                    + " " + udp_frame_summary(incoming_datagram));
                 if (block_state.blocked) {
                     (void)udp_bind_rate_limit_reject_total_.fetch_add(1, std::memory_order_relaxed);
                     (void)udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
@@ -2204,6 +2303,9 @@ void GatewayApp::do_udp_receive() {
                 if (!parse_udp_bind_req(payload, req)) {
                     (void)udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
                     record_bind_failure();
+                    server::core::log::warn(
+                        "GatewayApp UDP bind request parse failed: endpoint=" + remote_key
+                        + " " + udp_frame_summary(incoming_datagram));
                     auto frame = make_udp_bind_res_frame(
                         server::core::protocol::errc::INVALID_PAYLOAD,
                         std::string_view{},
@@ -2218,15 +2320,37 @@ void GatewayApp::do_udp_receive() {
                     return;
                 }
 
+                server::core::log::info(
+                    "GatewayApp UDP bind request parsed: session=" + req.session_id
+                    + " endpoint=" + remote_key
+                    + " nonce=" + std::to_string(req.nonce)
+                    + " expires_unix_ms=" + std::to_string(req.expires_unix_ms)
+                    + " token_bytes=" + std::to_string(req.token.size())
+                    + " seq=" + std::to_string(header.seq));
+
                 UdpBindTicket ticket{};
                 std::string message;
                 const auto code = apply_udp_bind_request(req, udp_remote_endpoint_, ticket, message);
                 if (code == 0) {
                     (void)udp_bind_success_total_.fetch_add(1, std::memory_order_relaxed);
                     udp_bind_abuse_guard_.record_success(remote_key);
+                    server::core::log::info(
+                        "GatewayApp UDP bind success: session=" + ticket.session_id
+                        + " endpoint=" + remote_key
+                        + " nonce=" + std::to_string(ticket.nonce)
+                        + " expires_unix_ms=" + std::to_string(ticket.expires_unix_ms)
+                        + " seq=" + std::to_string(header.seq));
                 } else {
                     (void)udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
                     record_bind_failure();
+                    server::core::log::warn(
+                        "GatewayApp UDP bind reject: session=" + req.session_id
+                        + " endpoint=" + remote_key
+                        + " nonce=" + std::to_string(req.nonce)
+                        + " expires_unix_ms=" + std::to_string(req.expires_unix_ms)
+                        + " seq=" + std::to_string(header.seq)
+                        + " code=" + std::to_string(code)
+                        + " message=" + message);
                 }
 
                 auto frame = (code == 0)

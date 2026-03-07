@@ -136,7 +136,9 @@ private:
     /**
      * @brief 비동기 쓰기 완료 콜백
      */
-    void handle_write(const boost::system::error_code& ec, std::size_t bytes_transferred);
+    void handle_write(const boost::system::error_code& ec,
+                      std::size_t bytes_transferred,
+                      std::size_t packet_size);
 
     /**
      * @brief 쓰기 큐에 있는 데이터를 실제로 전송합니다.
@@ -153,7 +155,7 @@ private:
     std::array<std::uint8_t, 4096> read_buffer_{};
     
     // 송신 큐: 전송 대기 중인 패킷들을 저장합니다.
-    std::deque<std::vector<std::uint8_t>> write_queue_;
+    std::deque<std::shared_ptr<std::vector<std::uint8_t>>> write_queue_;
     std::size_t queued_bytes_{0};
     std::size_t send_queue_max_bytes_{k_default_send_queue_max};
     

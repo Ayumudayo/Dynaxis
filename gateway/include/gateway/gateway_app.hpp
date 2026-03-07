@@ -166,7 +166,7 @@ public:
         std::uint32_t retry_attempt_{0};
         
         std::mutex send_mutex_;
-        std::deque<std::vector<std::uint8_t>> write_queue_;
+        std::deque<std::shared_ptr<std::vector<std::uint8_t>>> write_queue_;
         std::size_t queued_bytes_{0};
         std::size_t send_queue_max_bytes_{256 * 1024};
         std::chrono::milliseconds connect_timeout_{5000};
@@ -308,6 +308,8 @@ public:
                                                         std::string_view token,
                                                         std::string_view message,
                                                         std::uint32_t seq = 0) const;
+     void trace_udp_bind_send(std::span<const std::uint8_t> frame,
+                              const boost::asio::ip::udp::endpoint& endpoint) const;
      bool parse_udp_bind_req(std::span<const std::uint8_t> payload, ParsedUdpBindRequest& out) const;
      std::uint16_t apply_udp_bind_request(const ParsedUdpBindRequest& req,
                                           const boost::asio::ip::udp::endpoint& endpoint,
@@ -405,6 +407,7 @@ public:
     std::thread infra_probe_thread_;
     std::atomic<std::uint64_t> udp_packets_total_{0};
     std::atomic<std::uint64_t> udp_receive_error_total_{0};
+    std::atomic<std::uint64_t> udp_send_error_total_{0};
     std::atomic<std::uint64_t> udp_bind_ticket_issued_total_{0};
     std::atomic<std::uint64_t> udp_bind_success_total_{0};
     std::atomic<std::uint64_t> udp_bind_reject_total_{0};

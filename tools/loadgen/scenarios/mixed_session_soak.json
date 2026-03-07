@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "name": "mixed_session_soak",
+  "sessions": 24,
+  "ramp_up_ms": 3000,
+  "duration_ms": 15000,
+  "room": "loadgen_room",
+  "room_password": "loadgen-shared",
+  "unique_room_per_run": true,
+  "message_bytes": 80,
+  "login_prefix": "mixed_soak",
+  "connect_timeout_ms": 5000,
+  "read_timeout_ms": 5000,
+  "groups": [
+    {
+      "name": "chat",
+      "transport": "tcp",
+      "mode": "chat",
+      "count": 12,
+      "rate_per_sec": 0.25,
+      "join_room": true
+    },
+    {
+      "name": "ping",
+      "transport": "tcp",
+      "mode": "ping",
+      "count": 6,
+      "rate_per_sec": 0.35,
+      "join_room": false
+    },
+    {
+      "name": "login_only",
+      "transport": "tcp",
+      "mode": "login_only",
+      "count": 6
+    }
+  ]
+}

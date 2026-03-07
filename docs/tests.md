@@ -64,3 +64,27 @@ scripts/smoke_wb.ps1 -Config Debug -BuildDir build-windows
   - `python tools/check_core_api_contracts.py --check-boundary-fixtures`
   - `python tools/check_core_api_contracts.py --check-stable-governance-fixtures`
 - Linux 경로는 Docker stack 로컬 검증 + 원격 GitHub CI 결과를 기준으로 판단한다.
+
+## 8. Loadgen Plan
+
+- 설계 문서: [loadgen-plan.md](tests/loadgen-plan.md)
+- 다음 세션 handoff: [loadgen-next-steps.md](tests/loadgen-next-steps.md)
+- 실행 가이드: [README.md](../tools/loadgen/README.md)
+- 목적: 기존 `haproxy -> gateway_app -> server_app` 경로를 대상으로 단일 loadgen harness로 soak/latency/throughput을 재현 가능하게 측정
+- 현재 지원:
+  - `tcp` workload (`chat` / `ping` / `login_only`)
+  - `udp` attach validation (`login_only` only)
+  - `rudp` attach/fallback visibility (`login_only` only)
+  - basic scenario catalog: `steady_chat`, `mixed_session_soak`, `mixed_session_soak_long`, `mixed_direct_udp_soak`, `mixed_direct_udp_soak_long`, `mixed_direct_rudp_soak_long`, `udp_attach_login_only`, `rudp_attach_login_only`
+- attach 검증 주의:
+  - UDP/RUDP attach는 gateway-local bind ticket을 사용하므로 HAProxy가 아니라 같은 gateway의 TCP+UDP 포트를 직접 지정해야 한다.
+  - `docker/stack/.env.rudp-*.example`를 쓸 때는 `GATEWAY_UDP_BIND_SECRET=replace-with-non-empty-secret`를 실제 non-empty 값으로 바꿔야 한다.
+  - 2026-03-07 기준 same-network / Windows host-path direct same-gateway 검증에서 `udp_bind_ok=4` 및 `rudp_attach_ok=4`를 확인했다.
+  - mixed direct same-gateway quantitative sample도 확보했다: `build/loadgen/mixed_direct_udp_soak.host.json`에서 `success=283 errors=0 udp_bind_ok=4 udp_bind_fail=0`.
+  - long control/mixed sample도 확보했다: `build/loadgen/mixed_session_soak_long.json`, `build/loadgen/mixed_direct_udp_soak_long.host.json`, `build/loadgen/mixed_direct_rudp_soak_long.host.json`.
+  - long mixed RUDP policy comparison도 확보했다: `build/loadgen/mixed_direct_rudp_soak_long.fallback.host.json`, `build/loadgen/mixed_direct_rudp_soak_long.off.host.json`, `build/loadgen/mixed_direct_rudp_soak_long.final.matrix.host.json`.
+  - forced fallback proof도 확보했다: `build/loadgen/rudp_attach_login_only.fallback.json`에서 `rudp_attach_ok=0 rudp_attach_fallback=4 errors=0`.
+  - OFF invariance proof도 확보했다: `build/loadgen/rudp_attach_login_only.off.json`에서 `rudp_attach_ok=0 rudp_attach_fallback=4 errors=0`.
+  - 테스트 후 normal attach env restore proof도 남겼다: `build/loadgen/rudp_attach_login_only.final.json`에서 `rudp_attach_ok=4 rudp_attach_fallback=0 errors=0`.
+  - `rudp_attach_fallback`는 fallback visibility counter이며 forced-fallback scenario에서는 기대값이다.
+  - 현재 attach 검증은 문서화된 로컬/수동 검증 게이트이며 `.github/workflows/`의 required CI에는 아직 포함되지 않는다.

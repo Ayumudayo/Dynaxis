@@ -97,6 +97,7 @@ external/vcpkg/
 
 # CMake
 cmake-build-*/
+build/
 build-*/
 
 # Mongo Explorer plugin

@@ -92,7 +92,8 @@ void Connection::async_send(std::vector<std::uint8_t> data) {
             return;
         }
 
-        const auto payload_size = payload.size();
+        auto buffer = std::make_shared<std::vector<std::uint8_t>>(std::move(payload));
+        const auto payload_size = buffer->size();
         if (self->send_queue_max_bytes_ > 0) {
             const auto remaining = self->send_queue_max_bytes_ - std::min(self->send_queue_max_bytes_, self->queued_bytes_);
             if (payload_size > remaining) {
@@ -104,7 +105,7 @@ void Connection::async_send(std::vector<std::uint8_t> data) {
 
         const bool idle = self->write_queue_.empty();
         self->queued_bytes_ += payload_size;
-        self->write_queue_.push_back(std::move(payload));
+        self->write_queue_.push_back(std::move(buffer));
         if (idle) {
             // 기존 write 작업이 없을 때만 do_write를 시작해 순서를 보장합니다.
             // 만약 이미 전송 중이라면, 전송 완료 핸들러에서 큐를 확인하고 계속 전송할 것입니다.
@@ -151,7 +152,9 @@ void Connection::handle_read(const boost::system::error_code& ec, std::size_t by
     }
 }
 
-void Connection::handle_write(const boost::system::error_code& ec, std::size_t bytes_transferred) {
+void Connection::handle_write(const boost::system::error_code& ec,
+                              std::size_t bytes_transferred,
+                              std::size_t packet_size) {
     if (ec) {
         on_error(ec);
         stop();
@@ -160,14 +163,15 @@ void Connection::handle_write(const boost::system::error_code& ec, std::size_t b
 
     on_write(bytes_transferred);
 
-    const auto written = write_queue_.front().size();
-    if (queued_bytes_ >= written) {
-        queued_bytes_ -= written;
+    if (queued_bytes_ >= packet_size) {
+        queued_bytes_ -= packet_size;
     } else {
         queued_bytes_ = 0;
     }
 
-    write_queue_.pop_front();
+    if (!write_queue_.empty()) {
+        write_queue_.pop_front();
+    }
     if (!write_queue_.empty()) {
         // 큐가 비워질 때까지 한 번에 하나의 async_write만 유지해 backpressure를 단순화합니다.
         // 즉, 보내는 속도가 너무 빠르면 큐에 쌓이게 되고, 메모리 사용량이 늘어납니다.
@@ -176,11 +180,24 @@ void Connection::handle_write(const boost::system::error_code& ec, std::size_t b
 }
 
 void Connection::do_write() {
+    if (write_queue_.empty()) {
+        return;
+    }
+
     auto self = shared_from_this();
+    auto buffer = write_queue_.front();
+    if (!buffer) {
+        write_queue_.pop_front();
+        if (!write_queue_.empty()) {
+            do_write();
+        }
+        return;
+    }
+    const auto packet_size = buffer->size();
     boost::asio::async_write(socket_,
-        boost::asio::buffer(write_queue_.front()),
-        boost::asio::bind_executor(self->strand_, [self](const boost::system::error_code& ec, std::size_t bytes_transferred) {
-            self->handle_write(ec, bytes_transferred);
+        boost::asio::buffer(*buffer),
+        boost::asio::bind_executor(self->strand_, [self, buffer, packet_size](const boost::system::error_code& ec, std::size_t bytes_transferred) {
+            self->handle_write(ec, bytes_transferred, packet_size);
         }));
 }
 
