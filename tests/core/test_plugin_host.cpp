@@ -19,7 +19,7 @@
 #error "TEST_PLUGIN_RUNTIME_INVALID_FILE is not defined"
 #endif
 
-namespace knights::tests::plugin {
+namespace tests::plugin {
 namespace {
 
 class PluginHostTest : public ::testing::Test {
@@ -167,4 +167,4 @@ TEST_F(PluginHostTest, SuccessfulSwapReplacesCurrentPlugin) {
 }
 
 } // namespace
-} // namespace knights::tests::plugin
+} // namespace tests::plugin

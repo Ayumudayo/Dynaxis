@@ -13,7 +13,7 @@
 #include <thread>
 #include <vector>
 
-namespace knights::tests::plugin {
+namespace tests::plugin {
 
 using Host = server::core::plugin::PluginHost<TestPluginApi>;
 
@@ -35,7 +35,7 @@ inline std::filesystem::path resolve_module_path(const char* file_name) {
 inline std::filesystem::path make_temp_dir(const std::string& tag) {
     const auto base = std::filesystem::temp_directory_path();
     const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
-    const auto dir = base / ("knights_" + tag + "_" + std::to_string(nonce));
+    const auto dir = base / ("" + tag + "_" + std::to_string(nonce));
     std::error_code ec;
     (void)std::filesystem::create_directories(dir, ec);
     return dir;
@@ -44,12 +44,30 @@ inline std::filesystem::path make_temp_dir(const std::string& tag) {
 inline bool copy_with_mtime_tick(const std::filesystem::path& src,
                                  const std::filesystem::path& dst,
                                  std::string& error) {
+    std::error_code previous_ec;
+    const auto previous_mtime = std::filesystem::exists(dst)
+        ? std::optional<std::filesystem::file_time_type>(std::filesystem::last_write_time(dst, previous_ec))
+        : std::nullopt;
+
     std::this_thread::sleep_for(std::chrono::milliseconds(1100));
 
     std::error_code ec;
     std::filesystem::copy_file(src, dst, std::filesystem::copy_options::overwrite_existing, ec);
     if (ec) {
         error = ec.message();
+        return false;
+    }
+
+    const auto now = std::filesystem::file_time_type::clock::now();
+    const auto tick = std::chrono::duration_cast<std::filesystem::file_time_type::duration>(std::chrono::seconds(2));
+    const auto bumped_mtime = previous_mtime.has_value()
+        ? std::max(now, *previous_mtime + tick)
+        : now;
+
+    ec.clear();
+    std::filesystem::last_write_time(dst, bumped_mtime, ec);
+    if (ec) {
+        error = std::string("last_write_time failed: ") + ec.message();
         return false;
     }
 
@@ -121,4 +139,4 @@ inline server::core::plugin::PluginChainHost<TestPluginApi>::Config make_chain_c
     return cfg;
 }
 
-} // namespace knights::tests::plugin
+} // namespace tests::plugin

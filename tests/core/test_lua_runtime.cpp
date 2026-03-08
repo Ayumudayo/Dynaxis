@@ -16,7 +16,7 @@ protected:
         const auto nonce = std::to_string(
             std::chrono::steady_clock::now().time_since_epoch().count());
         temp_dir_ = std::filesystem::temp_directory_path()
-            / ("knights_lua_runtime_test_" + nonce);
+            / ("lua_runtime_test_" + nonce);
         ASSERT_TRUE(std::filesystem::create_directories(temp_dir_));
     }
 

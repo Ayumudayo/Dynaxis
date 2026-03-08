@@ -352,7 +352,7 @@ protected:
         ScopedEnvVar env_single("CHAT_HOOK_PLUGIN_PATH", plugin_path ? plugin_path : "");
         ScopedEnvVar env_paths("CHAT_HOOK_PLUGIN_PATHS", "");
         ScopedEnvVar env_dir("CHAT_HOOK_PLUGINS_DIR", "");
-        ScopedTempDir cache_temp("knights_lua_hook_integration_cache");
+        ScopedTempDir cache_temp("lua_hook_integration_cache");
         const auto cache_path = cache_temp.path().string();
         const auto lock_path = (cache_temp.path() / "chat_hook.lock").string();
         ScopedEnvVar env_lock("CHAT_HOOK_LOCK_PATH", lock_path.c_str());
@@ -367,7 +367,7 @@ TEST_F(LuaHookIntegrationTest, NativePassThenLuaDenyOnLogin) {
         GTEST_SKIP() << "TEST_CHAT_HOOK_V2_ONLY_PATH is not configured";
     }
 
-    ScopedTempDir script_temp("knights_lua_hook_integration_pass_then_deny");
+    ScopedTempDir script_temp("lua_hook_integration_pass_then_deny");
     const auto script_path = script_temp.path() / "policy.lua";
     {
         std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
@@ -386,7 +386,7 @@ TEST_F(LuaHookIntegrationTest, NativePassThenLuaDenyOnLogin) {
     ScopedEnvVar env_single("CHAT_HOOK_PLUGIN_PATH", TEST_CHAT_HOOK_V2_ONLY_PATH);
     ScopedEnvVar env_paths("CHAT_HOOK_PLUGIN_PATHS", "");
     ScopedEnvVar env_dir("CHAT_HOOK_PLUGINS_DIR", "");
-    ScopedTempDir cache_temp("knights_lua_hook_integration_cache_pass");
+    ScopedTempDir cache_temp("lua_hook_integration_cache_pass");
     const auto cache_path = cache_temp.path().string();
     const auto lock_path = (cache_temp.path() / "chat_hook.lock").string();
     ScopedEnvVar env_lock("CHAT_HOOK_LOCK_PATH", lock_path.c_str());
@@ -413,7 +413,7 @@ TEST_F(LuaHookIntegrationTest, NativeBlockSkipsLuaOnLogin) {
         GTEST_SKIP() << "TEST_CHAT_HOOK_V2_ONLY_PATH is not configured";
     }
 
-    ScopedTempDir script_temp("knights_lua_hook_integration_native_block");
+    ScopedTempDir script_temp("lua_hook_integration_native_block");
     const auto script_path = script_temp.path() / "policy.lua";
     {
         std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
@@ -431,7 +431,7 @@ TEST_F(LuaHookIntegrationTest, NativeBlockSkipsLuaOnLogin) {
     ScopedEnvVar env_single("CHAT_HOOK_PLUGIN_PATH", TEST_CHAT_HOOK_V2_ONLY_PATH);
     ScopedEnvVar env_paths("CHAT_HOOK_PLUGIN_PATHS", "");
     ScopedEnvVar env_dir("CHAT_HOOK_PLUGINS_DIR", "");
-    ScopedTempDir cache_temp("knights_lua_hook_integration_cache_block");
+    ScopedTempDir cache_temp("lua_hook_integration_cache_block");
     const auto cache_path = cache_temp.path().string();
     const auto lock_path = (cache_temp.path() / "chat_hook.lock").string();
     ScopedEnvVar env_lock("CHAT_HOOK_LOCK_PATH", lock_path.c_str());

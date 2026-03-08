@@ -6,14 +6,14 @@ int transform(int value) {
     return value + 1;
 }
 
-const knights::tests::plugin::TestPluginApi kApi{
-    knights::tests::plugin::kExpectedAbiVersion,
+const tests::plugin::TestPluginApi kApi{
+    tests::plugin::kExpectedAbiVersion,
     "plugin_v1",
     &transform,
 };
 
 } // namespace
 
-extern "C" KNIGHTS_TEST_PLUGIN_EXPORT const knights::tests::plugin::TestPluginApi* knights_test_plugin_api_v1() {
+extern "C" TEST_PLUGIN_EXPORT const tests::plugin::TestPluginApi* test_plugin_api_v1() {
     return &kApi;
 }
