@@ -40,7 +40,7 @@
 ### Removed repository artifacts
 
 - `vcpkg.json`
-- `cmake/knights_vcpkg_toolchain.cmake`
+- `cmake/vcpkg_toolchain.cmake`
 - `scripts/setup_vcpkg.ps1`
 - `scripts/setup_vcpkg.sh`
 
@@ -81,7 +81,7 @@ pwsh scripts/deploy_docker.ps1 -Action down
 
 ## 5) Verification Checklist
 
-- `git grep -n "setup_vcpkg|knights_vcpkg_toolchain|VCPKG_|vcpkg.json" -- . ":(exclude)docs/**"` returns no matches.
+- `git grep -n "setup_vcpkg|vcpkg_toolchain|VCPKG_|vcpkg.json" -- . ":(exclude)docs/**"` returns no matches.
 - Windows default commands (`scripts/build.ps1 -Config Debug`, `ctest --preset windows-test`) succeed with Conan-generated toolchain.
 - Required CI passes with Conan cache telemetry present.
 

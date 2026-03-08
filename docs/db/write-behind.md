@@ -82,7 +82,7 @@
 - 공통
   - `DB_URI`, `REDIS_URI`
   - `METRICS_PORT`(설정 시 `/metrics` 노출; server_app / wb_worker 공용)
-  - `KNIGHTS_TRACING_ENABLED`, `KNIGHTS_TRACING_SAMPLE_PERCENT`(설정 시 stream->DB 경로 상관키 추적)
+  - `RUNTIME_TRACING_ENABLED`, `RUNTIME_TRACING_SAMPLE_PERCENT`(설정 시 stream->DB 경로 상관키 추적)
 
 ## 스트림(Streams) 운영 키/그룹/필드 정리
 - 생산 키: `session_events`(=`REDIS_STREAM_KEY`)

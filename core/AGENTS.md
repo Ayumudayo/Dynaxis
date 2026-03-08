@@ -5,7 +5,7 @@ Shared C++20 library used by `server_app`, `gateway_app`, tools, and the Windows
 ## Entry Points
 - `core/CMakeLists.txt`: defines the `server_core` library target (explicit source list; no GLOB).
 - `core/include/server/core/build_info.hpp`: build metadata (git hash/describe + build time).
-- `core/include/server/core/metrics/build_info.hpp`: Prometheus helper for `knights_build_info`.
+- `core/include/server/core/metrics/build_info.hpp`: Prometheus helper for `runtime_build_info`.
 - `core/include/server/core/runtime_metrics.hpp`: process-wide counters + dispatch latency histogram buckets.
 - `core/src/runtime_metrics.cpp`: runtime metrics storage/aggregation.
 - `core/include/server/core/metrics/http_server.hpp`: minimal HTTP server for exposing `/metrics`.

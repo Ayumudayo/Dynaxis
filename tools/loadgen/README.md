@@ -237,10 +237,10 @@ build-windows\Release\stack_loadgen.exe `
 Same-network Docker bridge example:
 
 ```bash
-docker run --rm --network "knights-stack_knights-stack" \
+docker run --rm --network "dynaxis-stack_dynaxis-stack" \
   -v "$(pwd):/workspace" \
   -w /workspace \
-  knights-base:latest \
+  dynaxis-base:latest \
   bash -lc "cmake --preset linux-release -DBUILD_SERVER_TESTS=OFF -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=OFF >/tmp/loadgen-configure.log && cmake --build build-linux --target stack_loadgen >/tmp/loadgen-build.log && ./build-linux/stack_loadgen --host gateway-1 --port 6000 --udp-port 7000 --scenario tools/loadgen/scenarios/udp_attach_login_only.json --report build/loadgen/udp_attach_login_only.trace.json --verbose"
 ```
 

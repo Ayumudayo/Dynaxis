@@ -41,7 +41,7 @@
 | --- | --- |
 | `REDIS_URI` | `tcp://host:6379` (redis-plus-plus URI). 미지정 시 Redis 기능 비활성화 |
 | `REDIS_POOL_MAX` | 클라이언트 풀 최대 연결 수 |
-| `REDIS_CHANNEL_PREFIX` | Pub/Sub prefix. 예: `knights:` |
+| `REDIS_CHANNEL_PREFIX` | Pub/Sub prefix. 예: `dynaxis:` |
 | `REDIS_USE_STREAMS`, `REDIS_STREAM_MAXLEN` | Streams 사용 여부와 maxlen(approx) |
 | `CACHE_TTL_SESSION`, `CACHE_TTL_RECENT_MSGS`, `CACHE_TTL_MEMBERS` | 각 캐시 TTL(초) |
 | `PRESENCE_TTL_SEC`, `PRESENCE_CLEAN_ON_START` | Presence TTL 및 재시작 클린업 옵션 |

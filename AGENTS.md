@@ -5,7 +5,7 @@ Commit: 4a25352
 Branch: Huge-Refactor
 
 ## Overview
-Knights는 C++20 기반 분산 채팅 스택입니다: HAProxy(TCP) -> `gateway_app` -> `server_app`, 그리고 Redis Streams -> Postgres 경로를 비동기로 적재하는 `wb_worker`(write-behind)가 있습니다.
+Dynaxis는 C++20 기반 분산 채팅 스택입니다: HAProxy(TCP) -> `gateway_app` -> `server_app`, 그리고 Redis Streams -> Postgres 경로를 비동기로 적재하는 `wb_worker`(write-behind)가 있습니다.
 
 표준 런타임은 Linux(Docker) 풀스택(`docker/stack/`)이며, Windows는 개발(빌드/클라이언트) 용도로 둡니다.
 
@@ -22,7 +22,7 @@ Knights는 C++20 기반 분산 채팅 스택입니다: HAProxy(TCP) -> `gateway_
 │  └─ observability/     # Prometheus/Grafana 설정/대시보드
 ├─ docs/                 # 설계/운영 문서
 ├─ external/              # 3rd-party (imgui 등)
-├─ Sapphire/              # 참고용 서브프로젝트(별도 레포; Knights 스택/빌드와 무관)
+├─ Sapphire/              # 참고용 서브프로젝트(별도 레포; Dynaxis 스택/빌드와 무관)
 ├─ proto/                # Protobuf 정의
 ├─ protocol/             # wire map(JSON) 등 프로토콜 소스
 ├─ tests/                # GTest + python 검증
@@ -34,7 +34,7 @@ Knights는 C++20 기반 분산 채팅 스택입니다: HAProxy(TCP) -> `gateway_
 |---|---|---|---|
 | `server::core::net::Hive` | class | `core/include/server/core/net/hive.hpp` | io_context 수명/실행 관리 |
 | `server::core::metrics::MetricsHttpServer` | class | `core/include/server/core/metrics/http_server.hpp` | `/metrics` HTTP endpoint |
-| `server::core::metrics::append_build_info` | fn | `core/include/server/core/metrics/build_info.hpp` | `knights_build_info` 메트릭 라인 출력 |
+| `server::core::metrics::append_build_info` | fn | `core/include/server/core/metrics/build_info.hpp` | `runtime_build_info` 메트릭 라인 출력 |
 | `server::core::runtime_metrics::Snapshot` | struct | `core/include/server/core/runtime_metrics.hpp` | 프로세스 런타임 카운터 스냅샷 |
 | `server::app::run_server` | fn | `server/src/app/bootstrap.cpp` | server_app 부트스트랩(설정/DI/리스너/루프) |
 | `server::app::register_routes` | fn | `server/src/app/router.cpp` | opcode -> handler 라우팅 |
@@ -115,19 +115,19 @@ python tools/gen_opcode_docs.py --check
 - Metrics: `/metrics`는 Prometheus text format. 포트는 `METRICS_PORT`로 제어(서비스별 환경 변수로 주입).
 
 ## Anti-Patterns (This Repo)
-- 코드/타깃/산출물/네임스페이스에 `Knights/knights/kproj` 문자열 사용 금지.
+- 코드/타깃/산출물/네임스페이스에 `legacy project-name token / placeholder codename` 문자열 사용 금지.
 - CMake에서 소스 수집을 `GLOB`로 처리 금지(리뷰 불가/증분 빌드 혼선).
 - `core/`가 `server/`/`gateway/` 구현에 의존하도록 만들지 말 것(단방향 의존).
 - Docker runtime 실행은 `scripts/deploy_docker.ps1`(또는 `scripts/run_full_stack_observability.ps1`) 경로만 사용하고, 임의 wrapper를 추가하지 않는다.
 - 비밀정보/개인정보를 로그에 남기지 말 것(운영/샘플 토큰 포함). `.env`는 커밋 금지.
 
 ## Notes
-- Docker 이미지: `knights-base:latest`(기반) + 서비스별 런타임 이미지(`knights-server:local`, `knights-gateway:local`, `knights-worker:local`, `knights-admin:local`, `knights-migrator:local`). `docker/stack`은 `observability` profile로 exporters/Prometheus/Grafana를 포함.
+- Docker 이미지: `dynaxis-base:latest`(기반) + 서비스별 런타임 이미지(`dynaxis-server:local`, `dynaxis-gateway:local`, `dynaxis-worker:local`, `dynaxis-admin:local`, `dynaxis-migrator:local`). `docker/stack`은 `observability` profile로 exporters/Prometheus/Grafana를 포함.
 - Dispatch latency quantile(p95/p99)는 최근 구간에 샘플이 없으면 NaN이 나올 수 있음(정상). 트래픽 주입 후 확인.
 - Gateway 하드닝 기본값: `GATEWAY_BACKEND_CONNECT_TIMEOUT_MS=5000`, `GATEWAY_BACKEND_SEND_QUEUE_MAX_BYTES=262144`; 관련 장애 카운터는 `gateway_backend_*` 메트릭으로 노출.
 - wb_worker는 Redis/DB 의존성 정상화 전 `ready=false`를 유지하고, DB 재연결 시 지수 백오프(+jitter)를 사용한다.
 - `WB_ACK_ON_ERROR=1` + `WB_DLQ_ON_ERROR=0` 조합은 실패 이벤트 유실을 유발할 수 있으므로 운영에서 주의(관측: `wb_error_drop_total`).
-- `Sapphire/`는 참고용으로 동봉된 별도 프로젝트이며, Knights의 런타임/빌드 대상으로 취급하지 않는다.
+- `Sapphire/`는 참고용으로 동봉된 별도 프로젝트이며, Dynaxis의 런타임/빌드 대상으로 취급하지 않는다.
 - clangd/LSP 정밀 진단이 필요하면 `pwsh scripts/configure_windows_ninja.ps1`로 `build-windows-ninja/compile_commands.json`를 생성한 뒤, repo root에 `compile_commands.json`를 두면 된다(파일은 `.gitignore` 처리됨).
 
 

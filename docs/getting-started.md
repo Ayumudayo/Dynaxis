@@ -22,7 +22,7 @@ REDIS_URI=tcp://127.0.0.1:6379
 # Optional: Pub/Sub 분산 브로드캐스트
 USE_REDIS_PUBSUB=1
 GATEWAY_ID=gw-local
-REDIS_CHANNEL_PREFIX=knights:
+REDIS_CHANNEL_PREFIX=dynaxis:
 
 # Presence
 PRESENCE_TTL_SEC=30

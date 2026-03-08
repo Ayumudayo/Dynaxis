@@ -9,12 +9,12 @@
 사용 예시(psql)
 1) DB/유저 생성 (슈퍼유저 권한 필요)
    psql -U postgres -h <host> -d postgres \
-     -v APP_DB=knights -v APP_USER=knights_app -v APP_PASS='change_me' \
+     -v APP_DB=dynaxis -v APP_USER=dynaxis_app -v APP_PASS='change_me' \
      -f tools/provisioning/01_create_db_and_user.sql
 
 2) 새 DB 초기화(확장/권한/스키마)
-   psql -U postgres -h <host> -d knights \
-     -v APP_DB=knights -v APP_USER=knights_app \
+   psql -U postgres -h <host> -d dynaxis \
+     -v APP_DB=dynaxis -v APP_USER=dynaxis_app \
      -f tools/provisioning/02_init_db.sql
 
 3) 스키마 마이그레이션/시드 적용(옵션)

@@ -11,11 +11,11 @@
 권장: `scripts/deploy_docker.ps1`를 사용한다. (base 이미지 빌드/compose profile/포트 매핑을 일관되게 유지)
 
 현재 스택은 서비스별 런타임 이미지로 분리되어 빌드된다.
-- `knights-server:local`
-- `knights-gateway:local`
-- `knights-worker:local`
-- `knights-admin:local`
-- `knights-migrator:local`
+- `dynaxis-server:local`
+- `dynaxis-gateway:local`
+- `dynaxis-worker:local`
+- `dynaxis-admin:local`
+- `dynaxis-migrator:local`
 
 ```powershell
 # 스택 기동(build + detached)

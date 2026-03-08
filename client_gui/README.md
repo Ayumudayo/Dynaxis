@@ -1,6 +1,6 @@
 # Client GUI (ImGui Client)
 
-**Knights** 프로젝트를 위한 차세대 그래픽 채팅 클라이언트입니다.
+**Dynaxis** 프로젝트를 위한 차세대 그래픽 채팅 클라이언트입니다.
 **Dear ImGui** 라이브러리를 기반으로 제작되었으며, 직관적인 UI와 한국어 입력 지원을 특징으로 합니다.
 
 ## ✨ 주요 기능 (Key Features)

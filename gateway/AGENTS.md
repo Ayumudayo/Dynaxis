@@ -44,6 +44,6 @@ pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build
 ## Metrics
 - `/metrics` (Prometheus text format) is served by `server::core::metrics::MetricsHttpServer`.
 - Current gateway metrics:
-  - `knights_build_info` (gauge; build metadata labels)
+  - `runtime_build_info` (gauge; build metadata labels)
   - `gateway_sessions_active` (gauge)
   - `gateway_connections_total` (counter)

@@ -17,7 +17,7 @@
 - built-in fallback 이미지는 `server/scripts/`를 복사해 만든다.
 - 겹치는 샘플 이름은 `server/scripts/`와 `docker/stack/scripts/`에서 같은 내용으로 유지해 mount/fallback 드리프트를 줄인다.
 - 기본 런타임 토글: `CHAT_HOOK_ENABLED=0`, `LUA_ENABLED=0`
-- 서버 컨테이너 예시: `knights-stack-server-1-1`, `knights-stack-server-2-1`
+- 서버 컨테이너 예시: `dynaxis-stack-server-1-1`, `dynaxis-stack-server-2-1`
 
 기동/재기동:
 
@@ -36,8 +36,8 @@ pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build
 2) 컨테이너 반영 확인
 
 ```powershell
-docker exec knights-stack-server-1-1 sh -lc "ls -la /app/plugins"
-docker exec knights-stack-server-2-1 sh -lc "ls -la /app/plugins"
+docker exec dynaxis-stack-server-1-1 sh -lc "ls -la /app/plugins"
+docker exec dynaxis-stack-server-2-1 sh -lc "ls -la /app/plugins"
 ```
 
 3) reload 확인
@@ -45,8 +45,8 @@ docker exec knights-stack-server-2-1 sh -lc "ls -la /app/plugins"
 - 관련 메트릭: `chat_hook_plugin_reload_attempt_total`, `chat_hook_plugin_reload_success_total`, `chat_hook_plugin_reload_failure_total`
 
 ```powershell
-docker logs knights-stack-server-1-1 --since 5m
-docker logs knights-stack-server-2-1 --since 5m
+docker logs dynaxis-stack-server-1-1 --since 5m
+docker logs dynaxis-stack-server-2-1 --since 5m
 ```
 
 참고:
@@ -65,8 +65,8 @@ docker logs knights-stack-server-2-1 --since 5m
   - `Lua script reload complete`
 
 ```powershell
-docker logs knights-stack-server-1-1 --since 5m
-docker logs knights-stack-server-2-1 --since 5m
+docker logs dynaxis-stack-server-1-1 --since 5m
+docker logs dynaxis-stack-server-2-1 --since 5m
 ```
 
 3) 동작 확인
@@ -98,8 +98,8 @@ docker logs knights-stack-server-2-1 --since 5m
 - `pwsh scripts/deploy_docker.ps1 -Action ps`
 
 2) 최근 에러 확인
-- `docker logs knights-stack-server-1-1 --since 10m`
-- `docker logs knights-stack-server-2-1 --since 10m`
+- `docker logs dynaxis-stack-server-1-1 --since 10m`
+- `docker logs dynaxis-stack-server-2-1 --since 10m`
 
 3) 메트릭 확인
 - plugin reload failure 급증 여부

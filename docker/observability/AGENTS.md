@@ -33,5 +33,5 @@ pwsh scripts/check_prometheus_rules.ps1
 3) Update/add a dashboard JSON under `docker/observability/grafana/dashboards/`.
 
 ## Notes
-- Most binaries export `knights_build_info` (git hash/describe + build time) at the top of `/metrics`.
+- Most binaries export `runtime_build_info` (git hash/describe + build time) at the top of `/metrics`.
 - `server_app` can export chat hook plugin metrics when plugins are enabled.

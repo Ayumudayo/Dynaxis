@@ -1,6 +1,6 @@
 # 서버 애플리케이션
 
-`server_app`은 Knights 프로젝트의 메인 채팅 서버 애플리케이션입니다.
+`server_app`은 Dynaxis 프로젝트의 메인 채팅 서버 애플리케이션입니다.
 `core` 라이브러리를 기반으로 구축되었으며, 클라이언트 연결 관리, 채팅 로직 처리, 데이터 저장(DB/Redis), 그리고 인스턴스 레지스트리 등록 등의 역할을 수행합니다.
 
 ## 아키텍처
@@ -71,7 +71,7 @@ Windows에서 빌드된 실행 파일은 `build-windows/server/Debug/server_app.
 | 변수명 | 설명 | 기본값/예시 |
 | --- | --- | --- |
 | `PORT` | 서버가 수신 대기할 포트 | `5000` |
-| `DB_URI` | PostgreSQL 연결 문자열 (필수) | `postgresql://user:pass@localhost:5432/knights` |
+| `DB_URI` | PostgreSQL 연결 문자열 (필수) | `postgresql://user:pass@localhost:5432/dynaxis` |
 | `REDIS_URI` | Redis 연결 문자열 (선택) | `tcp://127.0.0.1:6379` |
 | `WRITE_BEHIND_ENABLED` | Write-behind 패턴 사용 여부 (`1`: 사용, `0`: 미사용) | `1` |
 | `USE_REDIS_PUBSUB` | Redis Pub/Sub을 이용한 분산 채팅 활성화 여부 | `0` |
@@ -110,8 +110,8 @@ Windows에서 빌드된 실행 파일은 `build-windows/server/Debug/server_app.
 | `LOG_BUFFER_CAPACITY` | 메모리 내 로그 버퍼 크기 | `256` |
 | `CHAT_JOB_QUEUE_MAX` | 서버 로직 작업 큐 최대 길이(트래픽 스파이크 시 백프레셔/메모리 보호) | `8192` |
 | `CHAT_DB_JOB_QUEUE_MAX` | DB 작업 큐 최대 길이(DB 지연 시 백프레셔/메모리 보호) | `4096` |
-| `KNIGHTS_TRACING_ENABLED` | 경량 tracing context + span 로그 활성화 (`1`/`0`) | `0` |
-| `KNIGHTS_TRACING_SAMPLE_PERCENT` | tracing 샘플링 비율(0~100) | `100` |
+| `RUNTIME_TRACING_ENABLED` | 경량 tracing context + span 로그 활성화 (`1`/`0`) | `0` |
+| `RUNTIME_TRACING_SAMPLE_PERCENT` | tracing 샘플링 비율(0~100) | `100` |
 
 ## 종료(Graceful drain) 절차
 
@@ -150,13 +150,13 @@ Windows에서 빌드된 실행 파일은 `build-windows/server/Debug/server_app.
 
 ```bash
 # 잠금 파일(lock/sentinel, 선택)
-docker exec knights-stack-server-1-1 touch /app/plugins_builtin/10_chat_hook_sample_LOCK
+docker exec dynaxis-stack-server-1-1 touch /app/plugins_builtin/10_chat_hook_sample_LOCK
 
 # 바이너리 교체(swap)
-docker exec knights-stack-server-1-1 cp /app/plugins_builtin/staging/10_chat_hook_sample_v2.so /app/plugins_builtin/10_chat_hook_sample.so
+docker exec dynaxis-stack-server-1-1 cp /app/plugins_builtin/staging/10_chat_hook_sample_v2.so /app/plugins_builtin/10_chat_hook_sample.so
 
 # 잠금 해제(unlock)
-docker exec knights-stack-server-1-1 rm -f /app/plugins_builtin/10_chat_hook_sample_LOCK
+docker exec dynaxis-stack-server-1-1 rm -f /app/plugins_builtin/10_chat_hook_sample_LOCK
 ```
 
 ## Lua cold-hook authoring model (실험)

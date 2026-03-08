@@ -1,6 +1,6 @@
 # 관측성 가이드
 
-목표는 “무슨 문제가 발생했는지 5분 안에 파악”이다. Knights는 기본적으로 Prometheus 텍스트 포맷 `/metrics`를 제공하고, `docker/stack`의 `observability` 프로필로 Prometheus/Grafana를 함께 올릴 수 있다.
+목표는 “무슨 문제가 발생했는지 5분 안에 파악”이다. Dynaxis는 기본적으로 Prometheus 텍스트 포맷 `/metrics`를 제공하고, `docker/stack`의 `observability` 프로필로 Prometheus/Grafana를 함께 올릴 수 있다.
 
 ## 1. 빠른 시작 (Docker Stack + 관측성)
 
@@ -51,7 +51,7 @@ pwsh scripts/smoke_metrics.ps1
 ## 3. 메트릭 목록 (현재)
 
 ### 공통(core)
-- 빌드(Build): `knights_build_info{git_hash=...,git_describe=...,build_time_utc=...} 1`
+- 빌드(Build): `runtime_build_info{git_hash=...,git_describe=...,build_time_utc=...} 1`
 - 런타임 핵심(core runtime):
   - `core_runtime_accept_total` (counter)
   - `core_runtime_session_started_total` (counter)
@@ -166,7 +166,7 @@ pwsh scripts/smoke_metrics.ps1
 - 배치/지연: `wb_flush_batch_size_last` (gauge), `wb_flush_commit_ms_last` (gauge)
 
 ### 관리자 앱(admin_app)
-- 빌드(Build): `knights_build_info{...} 1`
+- 빌드(Build): `runtime_build_info{...} 1`
 - API 트래픽: `admin_http_requests_total`, `admin_http_errors_total`, `admin_http_server_errors_total` (counters)
 - 인증 트래픽: `admin_http_unauthorized_total`, `admin_http_forbidden_total` (counters)
 - API 종류별: `admin_overview_requests_total`, `admin_instances_requests_total`, `admin_session_lookup_requests_total`, `admin_worker_requests_total` (counters)
@@ -181,7 +181,7 @@ pwsh scripts/smoke_metrics.ps1
 sum(up)
 
 # 배포된 빌드 버전 라벨 확인
-knights_build_info
+runtime_build_info
 
 # 서버 앱 디스패치(server_app) p95 (트래픽이 있어야 NaN이 아님)
 histogram_quantile(0.95, sum by (le) (rate(chat_dispatch_latency_ms_bucket[5m])))
@@ -355,9 +355,9 @@ pwsh scripts/check_prometheus_rules.ps1
 
 경량 tracing context는 환경 변수로 켜고 끌 수 있다.
 
-- `KNIGHTS_TRACING_ENABLED=1`: ingress -> dispatch -> dependency 호출 경로에 span 로그를 남긴다.
-- `KNIGHTS_TRACING_SAMPLE_PERCENT`: 샘플링 비율(0~100).
-- `KNIGHTS_TRACING_ENABLED=0`이면 trace context가 비활성화되어 trace/correlation 로그 부가 정보가 붙지 않는다.
+- `RUNTIME_TRACING_ENABLED=1`: ingress -> dispatch -> dependency 호출 경로에 span 로그를 남긴다.
+- `RUNTIME_TRACING_SAMPLE_PERCENT`: 샘플링 비율(0~100).
+- `RUNTIME_TRACING_ENABLED=0`이면 trace context가 비활성화되어 trace/correlation 로그 부가 정보가 붙지 않는다.
 
 현재 표준 스택은 OTLP exporter/collector를 기본 포함하지 않는다. 대신 `trace_id`/`correlation_id`를 로그와 write-behind 이벤트 필드로 전파해 운영자가 동일 요청을 교차 추적할 수 있게 한다.
 
@@ -374,7 +374,7 @@ pwsh scripts/check_prometheus_rules.ps1
 - ingress(span_start) -> dispatch(span_end) -> redis_xadd -> db_insert
 
 4) tracing을 끄고 비교 검증한다(성능/부작용 점검).
-- `KNIGHTS_TRACING_ENABLED=0`으로 재기동 후 기능 동일성/지연 변화를 비교한다.
+- `RUNTIME_TRACING_ENABLED=0`으로 재기동 후 기능 동일성/지연 변화를 비교한다.
 
 ### 7.2 구조화 로그 스키마와 품질 지표
 

@@ -14,7 +14,7 @@
 
 - Phase 6.5 CI 단순화:
   - plugin/script Python smoke를 개별 step 나열 대신 ctest label(`plugin-script`) 기반으로 집계했다.
-  - stack 의존 Python 테스트는 `KNIGHTS_ENABLE_STACK_PYTHON_TESTS=1`일 때만 실행되고, 미설정 시 skip code(77)로 처리한다.
+  - stack 의존 Python 테스트는 `ENABLE_STACK_PYTHON_TESTS=1`일 때만 실행되고, 미설정 시 skip code(77)로 처리한다.
   - Docker stack 기본값은 `CHAT_HOOK_ENABLED=0`, `LUA_ENABLED=0`으로 두고, CI plugin/script smoke에서는 두 토글을 명시적으로 `1`로 설정해 활성 시나리오를 검증한다.
   - CI에 runtime toggle matrix baseline을 추가해 OFF baseline(`CHAT_HOOK_ENABLED=0`, `LUA_ENABLED=0`)과 ON smoke(`CHAT_HOOK_ENABLED=1`, `LUA_ENABLED=1`)를 `tests/python/verify_runtime_toggle_metrics.py`로 각각 검증한다.
   - Linux/Windows fast gate는 capability 포함 기본 빌드에서 Lua 핵심 테스트(`LuaRuntimeTest|LuaSandboxTest|ChatLuaBindingsTest`)를 직접 실행해 회귀를 고정한다.
@@ -533,7 +533,7 @@ public:
 |---|---|---|
 | 바인딩 | Sol2 (sol3) | C++20 네이티브 지원, zero-overhead 설계, `sol::protected_function`으로 에러 격리 |
 | 엔진 | upstream LuaJIT 2.1 (기본), PUC Lua 5.4 (대안) | 기본 경로는 단일 upstream LuaJIT submodule로 고정해 운영 일관성을 높이고, PUC는 호환/이식성 fallback으로 유지 |
-| 빌드 통합 | `KNIGHTS_LUAJIT_SUBMODULE_DIR` + `KNIGHTS_SOL2_SUBMODULE_DIR` + always-on capability build | 공식 빌드는 Lua capability를 항상 포함하고, LuaJIT는 `knights_luajit_vendor_build`로 정적 라이브러리를 생성하며 Sol2는 `external/sol2/include`를 header-only target으로 연결 |
+| 빌드 통합 | `LUAJIT_SUBMODULE_DIR` + `SOL2_SUBMODULE_DIR` + always-on capability build | 공식 빌드는 Lua capability를 항상 포함하고, LuaJIT는 `luajit_vendor_build`로 정적 라이브러리를 생성하며 Sol2는 `external/sol2/include`를 header-only target으로 연결 |
 
 현재 구현 상태(2026-03-06):
 - `LuaRuntime::call`/`call_all`은 Sol2 `safe_script` + `protected_function` 경로를 사용해 스크립트/훅 함수를 실행한다.

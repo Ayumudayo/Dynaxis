@@ -1,9 +1,9 @@
-# Knights Chat Stack
+# Dynaxis Chat Stack
 
-**Knights**는 본 프로젝트의 정식 이름이 아닙니다.
-임시로 대강 붙인 이름입니다.
+**Dynaxis**는 이 저장소의 현재 제품 이름입니다.
+분산 채팅 스택과 운영 자산은 모두 Dynaxis 브랜드를 기준으로 정리됩니다.
 
-**Knights**는 AI 에이전트를 사용해 C++20로 작성된 고성능 분산 채팅 시스템입니다. 마이크로서비스 아키텍처를 채택하여 확장성을 보장하며, Redis와 PostgreSQL을 활용한 견고한 데이터 처리 파이프라인을 갖추고 있습니다.
+**Dynaxis**는 AI 에이전트를 사용해 C++20로 작성된 고성능 분산 채팅 시스템입니다. 마이크로서비스 아키텍처를 채택하여 확장성을 보장하며, Redis와 PostgreSQL을 활용한 견고한 데이터 처리 파이프라인을 갖추고 있습니다.
 
 ## 🚀 프로젝트 개요
 
@@ -200,7 +200,7 @@ git submodule update --init --recursive external/luajit external/sol2
 
 ```ini
 # 코어(Core)
-DB_URI=postgresql://knights:password@127.0.0.1:5432/knights_db
+DB_URI=postgresql://dynaxis:password@127.0.0.1:5432/dynaxis_db
 REDIS_URI=tcp://127.0.0.1:6379
 
 # 서버 앱(server_app)
@@ -287,6 +287,7 @@ scripts/deploy_docker.ps1 -Action logs
 더 깊이 있는 기술적인 내용은 `docs/` 디렉토리에서 확인할 수 있습니다.
 
 -   [**Documentation Index**](docs/README.md): 현재 문서의 canonical/reference/historical 구분과 진입점
+-   [**Rename Boundary**](docs/rename_boundary.md): 브랜드/역할 기반 rename 경계와 legacy 허용 위치
 -   [**Naming & Commenting Conventions**](docs/naming-conventions.md): 네이밍/네임스페이스 + 한국어 Doxygen 주석 규칙
 -   [**Server Architecture**](docs/server-architecture.md): 서버 상세 아키텍처
 -   [**Redis Strategy**](docs/db/redis-strategy.md): Redis 활용 전략 (Streams, Pub/Sub)
