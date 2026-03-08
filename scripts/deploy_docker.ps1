@@ -58,7 +58,7 @@ function Resolve-ComposeTarget {
     $composeDir = Split-Path -Parent $composePath
 
     if (-not $ProjectName -or $ProjectName.Trim() -eq "") {
-        $ProjectName = "knights-stack"
+        $ProjectName = "dynaxis-stack"
     }
 
     return @{
@@ -112,11 +112,11 @@ function Needs-BaseImage([string]$ComposePath) {
 }
 
 function Ensure-BaseImage {
-    if ($NoCache -or -not (Test-DockerImageExists "knights-base")) {
-        Write-Host "Building base image 'knights-base'..." -ForegroundColor Yellow
-        $BuildArgs = @("build", "-f", "Dockerfile.base", "-t", "knights-base", ".")
+    if ($NoCache -or -not (Test-DockerImageExists "dynaxis-base")) {
+        Write-Host "Building base image 'dynaxis-base'..." -ForegroundColor Yellow
+        $BuildArgs = @("build", "-f", "Dockerfile.base", "-t", "dynaxis-base", ".")
         if ($NoCache) { $BuildArgs += "--no-cache" }
-        Invoke-DockerCommand -Args $BuildArgs -FailureMessage "Failed to build base image 'knights-base'."
+        Invoke-DockerCommand -Args $BuildArgs -FailureMessage "Failed to build base image 'dynaxis-base'."
     }
 }
 
@@ -161,7 +161,7 @@ if ($Action -eq "build") {
 elseif ($Action -eq "up") {
     if (Needs-BaseImage $ComposePath) {
         # Up 실행 시에도 Base Image가 없으면 빌드해야 함 (Build 옵션이 켜져있거나 이미지가 없을 때)
-        if ($Build -or $NoCache -or -not (Test-DockerImageExists "knights-base")) {
+        if ($Build -or $NoCache -or -not (Test-DockerImageExists "dynaxis-base")) {
             Ensure-BaseImage
         }
     }

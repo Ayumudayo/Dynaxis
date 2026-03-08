@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 
 
-IMAGE = "knights-admin:local"
+IMAGE = "dynaxis-admin:local"
 TOKEN = "ci-admin-token"
 
 
@@ -337,7 +337,7 @@ def main() -> int:
             raise RuntimeError(f"authorized /admin expected 200, got {status}")
         if "text/html" not in content_type:
             raise RuntimeError("authorized /admin expected html content-type")
-        if "Knights Admin Console" not in body:
+        if "Dynaxis Admin Console" not in body:
             raise RuntimeError("authorized /admin missing expected UI marker")
 
         print("PASS: admin auth mode smoke test")

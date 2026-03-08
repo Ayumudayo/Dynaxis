@@ -92,7 +92,7 @@ def redis_get_session_backend(user_name: str):
     cmd = [
         "docker",
         "exec",
-        "knights-stack-redis-1",
+        "dynaxis-stack-redis-1",
         "redis-cli",
         "--raw",
         "GET",

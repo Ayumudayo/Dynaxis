@@ -18,7 +18,7 @@ PROBE_SCRIPT = Path(
 )
 SERVER_CONTAINERS = _env_list(
     "LUA_SERVER_CONTAINERS",
-    "knights-stack-server-1-1,knights-stack-server-2-1",
+    "dynaxis-stack-server-1-1,dynaxis-stack-server-2-1",
 )
 
 WAIT_TIMEOUT_SEC = float(os.getenv("LUA_WAIT_TIMEOUT_SEC", "30"))

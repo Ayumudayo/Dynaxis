@@ -21,10 +21,10 @@ Deprecated: use docker stack compose instead.
 
 Optional environment variables:
   NO_BUILD=1      Skip --build
-  NO_BASE=1       Skip building knights-base
-  NO_CACHE=1      Pass --no-cache when building knights-base
+  NO_BASE=1       Skip building dynaxis-base
+  NO_CACHE=1      Pass --no-cache when building dynaxis-base
   DETACHED=0      Run attached (no -d)
-  PROJECT_NAME=   Override compose project name (default: knights-stack)
+  PROJECT_NAME=   Override compose project name (default: dynaxis-stack)
 
 Stop:
   docker compose -f docker/stack/docker-compose.yml down
@@ -45,12 +45,12 @@ docker compose version >/dev/null 2>&1 || fail "docker compose is not available"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 compose_dir="$repo_root/docker/stack"
 compose_file="$compose_dir/docker-compose.yml"
-project_name="${PROJECT_NAME:-knights-stack}"
+project_name="${PROJECT_NAME:-dynaxis-stack}"
 
 if [[ "${NO_BUILD:-0}" != "1" && "${NO_BASE:-0}" != "1" ]]; then
-  if [[ -z "$(docker images -q knights-base 2>/dev/null)" ]]; then
-    info "Building base image: knights-base"
-    build_args=(build -f "$repo_root/Dockerfile.base" -t knights-base "$repo_root")
+  if [[ -z "$(docker images -q dynaxis-base 2>/dev/null)" ]]; then
+    info "Building base image: dynaxis-base"
+    build_args=(build -f "$repo_root/Dockerfile.base" -t dynaxis-base "$repo_root")
     if [[ "${NO_CACHE:-0}" == "1" ]]; then build_args+=(--no-cache); fi
     docker "${build_args[@]}"
   fi

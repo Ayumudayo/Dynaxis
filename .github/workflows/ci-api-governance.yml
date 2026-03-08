@@ -169,27 +169,27 @@ jobs:
           docker version
           docker compose version
 
-      - name: Build Base Image (knights-base) with cache
+      - name: Build Base Image (dynaxis-base) with cache
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.base
-          tags: knights-base:latest
+          tags: dynaxis-base:latest
           load: true
-          cache-from: type=gha,scope=knights-base-${{ runner.os }}
-          cache-to: type=gha,mode=max,scope=knights-base-${{ runner.os }}
+          cache-from: type=gha,scope=dynaxis-base-${{ runner.os }}
+          cache-to: type=gha,mode=max,scope=dynaxis-base-${{ runner.os }}
           provenance: false
 
       - name: Verify Local Base Image
         run: |
-          docker image inspect knights-base:latest > /dev/null
+          docker image inspect dynaxis-base:latest > /dev/null
 
       - name: Run Core API Contract Checks and Linux Consumer Tests
         run: |
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/app" \
             -w /app \
-            knights-base:latest \
+            dynaxis-base:latest \
             bash -lc "set -e; apt-get update && apt-get install -y ninja-build; \
             python3 tools/check_core_api_contracts.py --check-boundary; \
             python3 tools/check_core_api_contracts.py --check-boundary-fixtures; \

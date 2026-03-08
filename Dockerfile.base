@@ -1,5 +1,5 @@
 # ==============================================================================
-# Knights Server - Base Image with Dependencies
+# Dynaxis Server - Base Image with Dependencies
 # ==============================================================================
 # This image contains all C++ dependencies built from source or apt packages.
 # Hybrid approach: System packages where stable, source builds for C++20 ABI.

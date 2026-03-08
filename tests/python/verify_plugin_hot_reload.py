@@ -17,7 +17,7 @@ METRICS_URLS = _env_list(
 )
 SERVER_CONTAINERS = _env_list(
     "PLUGIN_SERVER_CONTAINERS",
-    "knights-stack-server-1-1,knights-stack-server-2-1",
+    "dynaxis-stack-server-1-1,dynaxis-stack-server-2-1",
 )
 
 ACTIVE_PLUGIN_PATH = os.getenv(

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Linux/WSL build helper for Knights
+# Linux/WSL build helper for Dynaxis
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
