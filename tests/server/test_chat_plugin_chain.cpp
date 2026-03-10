@@ -38,7 +38,7 @@ protected:
         ASSERT_TRUE(std::filesystem::exists(tag_module_));
 
         const auto nonce = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-        temp_dir_ = std::filesystem::temp_directory_path() / ("knights_chat_plugin_chain_test_" + nonce);
+        temp_dir_ = std::filesystem::temp_directory_path() / ("chat_plugin_chain_test_" + nonce);
         plugins_dir_ = temp_dir_ / "plugins";
         cache_dir_ = temp_dir_ / "cache";
         ASSERT_TRUE(std::filesystem::create_directories(plugins_dir_));

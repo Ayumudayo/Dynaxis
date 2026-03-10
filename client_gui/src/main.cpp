@@ -20,7 +20,7 @@ int main(int, char**)
     GuiManager gui(app);
 
     // 3. UI 초기화 (윈도우 생성 등)
-    if (!gui.init(1280, 720, "Knights ImGui Client (Refactored)")) {
+    if (!gui.init(1280, 720, "Dynaxis ImGui Client (Refactored)")) {
         return 1;
     }
 

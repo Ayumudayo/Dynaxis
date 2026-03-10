@@ -40,7 +40,7 @@ scripts/smoke_wb.ps1 -Config Debug -BuildDir build-windows
   - `curl http://127.0.0.1:<port>/healthz`
   - `curl http://127.0.0.1:<port>/readyz`
 - 핵심 지표(현재 구현 기준):
-  - server_app: `knights_build_info`, `chat_session_active`, `chat_dispatch_latency_ms_*`, `chat_dispatch_opcode_named_total`, `chat_job_queue_depth`, `chat_subscribe_total`, `chat_subscribe_last_lag_ms`, `chat_hook_plugins_enabled`
+  - server_app: `runtime_build_info`, `chat_session_active`, `chat_dispatch_latency_ms_*`, `chat_dispatch_opcode_named_total`, `chat_job_queue_depth`, `chat_subscribe_total`, `chat_subscribe_last_lag_ms`, `chat_hook_plugins_enabled`
   - wb_worker: `wb_pending`, `wb_flush_total`, `wb_flush_batch_size_last`, `wb_flush_commit_ms_last`
 
 ## 6. CI 권장 플랜

@@ -16,7 +16,8 @@
 - `server/core/net/connection.hpp`의 송신 큐 수명주기 계약을 명시하고, close 중 큐 정리와 in-flight write가 충돌하지 않도록 버퍼 소유권 규칙을 강화했습니다.
 
 ### 파괴적 변경(Breaking)
-- 없음
+- `server/core/build_info.hpp`와 `server/core/metrics/build_info.hpp`가 legacy 브랜드 토큰을 직접 노출하지 않도록 정리되면서 기본 build info 메트릭 이름이 `knights_build_info`에서 `runtime_build_info`로 변경되었습니다.
+- Migration: `docs/core-api/runtime-build-info-rename.md`
 
 ### 사용 중단(Deprecated)
 - 없음

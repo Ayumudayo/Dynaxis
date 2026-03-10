@@ -2,7 +2,7 @@
 
 ## 개요
 
-Knights 서버는 멀티 스테이지 Docker 빌드 전략을 사용합니다.
+Dynaxis 서버는 멀티 스테이지 Docker 빌드 전략을 사용합니다.
 - **Dockerfile.base**: C++ 의존성을 포함한 베이스 이미지
 - **Dockerfile**: 애플리케이션 빌드 단계
 - **docker-compose.yml**: 멀티 서비스 오케스트레이션
@@ -60,7 +60,7 @@ Client → Gateway:6000 → Load Balancer:7001 → Server:10001/10002
 
 ## 이미지 빌드
 
-### 베이스 이미지 (`knights-base`)
+### 베이스 이미지 (`dynaxis-base`)
 
 모든 의존성이 포함됩니다. 아래 상황에서 재빌드합니다.
 - C++ 라이브러리 버전 변경
@@ -68,14 +68,14 @@ Client → Gateway:6000 → Load Balancer:7001 → Server:10001/10002
 - 새 의존성 추가
 
 ```bash
-docker build -f Dockerfile.base -t knights-base:latest .
+docker build -f Dockerfile.base -t dynaxis-base:latest .
 ```
 
 **빌드 시간**: 약 5~10분(네트워크 상태에 따라 변동)
 
 ### 애플리케이션 이미지
 
-`knights-base`를 기반으로 빌드합니다. 아래 상황에서 재빌드합니다.
+`dynaxis-base`를 기반으로 빌드합니다. 아래 상황에서 재빌드합니다.
 - 애플리케이션 코드 변경
 - 설정 변경
 
@@ -91,7 +91,7 @@ docker compose build
 
 ```env
 # 데이터베이스(Database)
-DB_URI=postgresql://knights:password@postgres:5432/knights
+DB_URI=postgresql://dynaxis:password@postgres:5432/dynaxis
 
 # 레디스(Redis)
 REDIS_URI=redis://redis:6379
@@ -153,7 +153,7 @@ CMake Error: libpqxx not found
 **연결 거부(Connection refused)**:
 - 서비스 상태 확인: `docker compose ps`
 - 로그 확인: `docker compose logs <service>`
-- 네트워크 확인: `docker network inspect knights_default`
+- 네트워크 확인: `docker network inspect dynaxis-stack_dynaxis-stack`
 
 **데이터베이스 마이그레이션 오류**:
 - migrator 실행 전 postgres가 healthy 상태인지 확인

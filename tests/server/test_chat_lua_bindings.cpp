@@ -119,7 +119,7 @@ TEST(ChatLuaBindingsTest, FunctionStyleScriptCanUseRegisteredBindings) {
     const auto bindings = server::app::scripting::register_chat_lua_bindings(runtime, host);
     EXPECT_EQ(bindings.attempted, server::app::scripting::chat_lua_binding_count());
 
-    const auto temp_dir = std::filesystem::temp_directory_path() / "knights_chat_lua_bindings_test.lua";
+    const auto temp_dir = std::filesystem::temp_directory_path() / "chat_lua_bindings_test.lua";
     {
         std::ofstream out(temp_dir, std::ios::binary | std::ios::trunc);
         ASSERT_TRUE(out.good());

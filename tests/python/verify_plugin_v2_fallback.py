@@ -16,7 +16,7 @@ METRICS_URLS = _env_list(
 )
 SERVER_CONTAINERS = _env_list(
     "PLUGIN_SERVER_CONTAINERS",
-    "knights-stack-server-1-1,knights-stack-server-2-1",
+    "dynaxis-stack-server-1-1,dynaxis-stack-server-2-1",
 )
 STAGING_V2_PATH = os.getenv(
     "PLUGIN_STAGING_V2_PATH", "/app/plugins_builtin/staging/10_chat_hook_sample_v2.so"

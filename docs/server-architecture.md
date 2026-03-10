@@ -1,6 +1,6 @@
 # 서버 아키텍처 개요
 
-Knights의 현재 실행 토폴로지는 `gateway_app`와 `server_app` 중심이며, **외부 TCP 로드밸런서(예: HAProxy)** 를 두어 `gateway_app` 인스턴스를 수평 확장하는 배포 모델을 전제로 한다.
+Dynaxis의 현재 실행 토폴로지는 `gateway_app`와 `server_app` 중심이며, **외부 TCP 로드밸런서(예: HAProxy)** 를 두어 `gateway_app` 인스턴스를 수평 확장하는 배포 모델을 전제로 한다.
 
 ```
 Client (TCP)
@@ -15,7 +15,7 @@ HAProxy (TCP, L4)  ──>  gateway_app  ── TCP ──>  server_app
 > **참고**: 과거 문서에는 `load_balancer_app`(gRPC Stream 기반 커스텀 LB) 계층이 포함되어 있었으나, 현재 코드/빌드 타깃에는 존재하지 않는다. 본 문서는 **HAProxy 기반 배포**와 **Gateway 내부 라우팅(Sticky + Least Connections)** 을 기준으로 정리한다.
 
 ## 1. 개요
-Knights는 고성능 실시간 채팅을 위한 분산 스택을 지향한다.
+Dynaxis는 고성능 실시간 채팅을 위한 분산 스택을 지향한다.
 - **Edge Load Balancer (HAProxy)**: 클라이언트 TCP 연결을 여러 `gateway_app` 인스턴스로 분산한다.
 - **Gateway (`gateway_app`)**: 클라이언트 TCP 연결을 terminate하고 인증/세션 관리를 수행한다. Redis Instance Registry를 조회해 backend(`server_app`)를 선택하고 1:1 TCP 브리지를 구성한다.
 - **Server (`server_app`)**: 채팅 비즈니스 로직 처리, Redis Pub/Sub(팬아웃), Redis Streams(write-behind) 이벤트 발행, PostgreSQL 적재 파이프라인을 담당한다.
@@ -63,7 +63,7 @@ Knights는 고성능 실시간 채팅을 위한 분산 스택을 지향한다.
 - **Persistence**: PostgreSQL은 SoR, Redis는 캐시/팬아웃/스트림 레이어. 자세한 전략은 `docs/db/redis-strategy.md` 참고.
 
 ## 5. 프라이버시(Privacy) 및 감사(Audit) (Room Rotation)
-Knights는 채팅 내역의 영구 보존(Audit)과 프라이버시(Privacy)를 동시에 만족하기 위해 **Room Rotation** 전략을 사용한다.
+Dynaxis는 채팅 내역의 영구 보존(Audit)과 프라이버시(Privacy)를 동시에 만족하기 위해 **Room Rotation** 전략을 사용한다.
 - **방 닫기 (Soft Delete)**: 방의 마지막 유저가 나가면 해당 방은 `is_active=false`로 설정되고 `closed_at`이 기록된다.
 - **새로운 UUID 발급**: 이후 동일한 이름의 방이 생성되면, 이전 방(Old UUID)은 무시되고 새로운 UUID를 가진 방이 생성된다.
 - **결과**: 이전 채팅 내역은 DB에 보존되지만, 새로운 방에서는 조회되지 않아 프라이버시가 보호된다.

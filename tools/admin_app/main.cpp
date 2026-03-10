@@ -84,7 +84,7 @@ constexpr std::string_view kAdminUiFallbackHtml = R"ADMIN(<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Knights Admin Console</title>
+  <title>Dynaxis Admin Console</title>
   <style>
     body { font-family: "Avenir Next", "Trebuchet MS", sans-serif; padding: 24px; background: #f3f6f7; color: #23323a; }
     .panel { max-width: 700px; margin: 0 auto; padding: 18px; border-radius: 12px; background: #fff; border: 1px solid #dbe3e8; }
@@ -95,7 +95,7 @@ constexpr std::string_view kAdminUiFallbackHtml = R"ADMIN(<!doctype html>
 </head>
 <body>
   <section class="panel">
-    <h1>Knights Admin Console</h1>
+    <h1>Dynaxis Admin Console</h1>
     <p>UI asset could not be loaded. Check <code>admin_ui.html</code> next to <code>admin_app</code> binary.</p>
     <p>API is still available at <code>/api/v1/overview</code>.</p>
   </section>

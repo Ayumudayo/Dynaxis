@@ -7,6 +7,7 @@ Historical proposal/report docs were pruned from the active docs tree; use the f
 
 - `README.md` - top-level project overview and entry links.
 - `docs/getting-started.md` - local setup and basic run flow.
+- `docs/rename_boundary.md` - canonical rename policy, affected surfaces, and allowed legacy record.
 - `docs/build.md` - build guidance.
 - `docs/configuration.md` - runtime config surface.
 - `docs/tests.md` - verification/test entrypoint.

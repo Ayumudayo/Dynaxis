@@ -267,20 +267,20 @@ std::string AppHost::readiness_body(bool ok) const {
 
 std::string AppHost::dependency_metrics_text() const {
     std::ostringstream out;
-    out << "# TYPE knights_dependency_ready gauge\n";
+    out << "# TYPE runtime_dependency_ready gauge\n";
 
     if (deps_) {
         std::lock_guard<std::mutex> lock(deps_->mutex);
         for (const auto& e : deps_->entries) {
             const char* required = (e.requirement == DependencyRequirement::kRequired) ? "true" : "false";
-            out << "knights_dependency_ready{name=\"" << e.name << "\",required=\"" << required << "\"} "
+            out << "runtime_dependency_ready{name=\"" << e.name << "\",required=\"" << required << "\"} "
                 << (e.ok ? 1 : 0) << "\n";
         }
     }
 
     // 전체 집계 지표를 함께 노출해 알람 규칙을 단순화한다.
-    out << "# TYPE knights_dependencies_ok gauge\n";
-    out << "knights_dependencies_ok " << (dependencies_ok() ? 1 : 0) << "\n";
+    out << "# TYPE runtime_dependencies_ok gauge\n";
+    out << "runtime_dependencies_ok " << (dependencies_ok() ? 1 : 0) << "\n";
     return out.str();
 }
 
@@ -288,11 +288,11 @@ std::string AppHost::lifecycle_metrics_text() const {
     std::ostringstream out;
 
     const auto phase = lifecycle_phase();
-    out << "# TYPE knights_lifecycle_phase_code gauge\n";
-    out << "knights_lifecycle_phase_code " << static_cast<unsigned>(to_phase_code(phase)) << "\n";
+    out << "# TYPE runtime_lifecycle_phase_code gauge\n";
+    out << "runtime_lifecycle_phase_code " << static_cast<unsigned>(to_phase_code(phase)) << "\n";
 
-    out << "# TYPE knights_lifecycle_phase gauge\n";
-    out << "knights_lifecycle_phase{phase=\"" << lifecycle_phase_name(phase) << "\"} 1\n";
+    out << "# TYPE runtime_lifecycle_phase gauge\n";
+    out << "runtime_lifecycle_phase{phase=\"" << lifecycle_phase_name(phase) << "\"} 1\n";
 
     return out.str();
 }

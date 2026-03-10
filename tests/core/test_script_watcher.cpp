@@ -17,7 +17,7 @@ class ScriptWatcherTest : public ::testing::Test {
 protected:
     void SetUp() override {
         const auto nonce = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-        temp_dir_ = std::filesystem::temp_directory_path() / ("knights_script_watcher_test_" + nonce);
+        temp_dir_ = std::filesystem::temp_directory_path() / ("script_watcher_test_" + nonce);
         ASSERT_TRUE(std::filesystem::create_directories(temp_dir_));
     }
 

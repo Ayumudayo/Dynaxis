@@ -32,8 +32,8 @@ add_library(server_core
 )
 add_library(server_core::server_core ALIAS server_core)
 
-knights_configure_luajit_submodule(KNIGHTS_LUAJIT_VENDOR_TARGET)
-knights_configure_sol2_submodule(KNIGHTS_SOL2_VENDOR_TARGET)
+configure_luajit_submodule(LUAJIT_VENDOR_TARGET)
+configure_sol2_submodule(SOL2_VENDOR_TARGET)
 
 # -----------------------------------------------------------------------------
 # Build metadata (git hash/describe + build time)
@@ -44,40 +44,40 @@ knights_configure_sol2_submodule(KNIGHTS_SOL2_VENDOR_TARGET)
 # -----------------------------------------------------------------------------
 find_package(Git QUIET)
 
-set(KNIGHTS_GIT_HASH "unknown")
-set(KNIGHTS_GIT_DESCRIBE "unknown")
+set(BUILD_GIT_HASH "unknown")
+set(BUILD_GIT_DESCRIBE "unknown")
 if (GIT_FOUND)
     execute_process(
         COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        RESULT_VARIABLE _knights_git_hash_res
-        OUTPUT_VARIABLE _knights_git_hash_out
+        RESULT_VARIABLE _build_git_hash_res
+        OUTPUT_VARIABLE _build_git_hash_out
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET
     )
-    if (_knights_git_hash_res EQUAL 0 AND NOT _knights_git_hash_out STREQUAL "")
-        set(KNIGHTS_GIT_HASH "${_knights_git_hash_out}")
+    if (_build_git_hash_res EQUAL 0 AND NOT _build_git_hash_out STREQUAL "")
+        set(BUILD_GIT_HASH "${_build_git_hash_out}")
     endif()
 
     execute_process(
         COMMAND "${GIT_EXECUTABLE}" describe --always --dirty
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        RESULT_VARIABLE _knights_git_desc_res
-        OUTPUT_VARIABLE _knights_git_desc_out
+        RESULT_VARIABLE _build_git_desc_res
+        OUTPUT_VARIABLE _build_git_desc_out
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET
     )
-    if (_knights_git_desc_res EQUAL 0 AND NOT _knights_git_desc_out STREQUAL "")
-        set(KNIGHTS_GIT_DESCRIBE "${_knights_git_desc_out}")
+    if (_build_git_desc_res EQUAL 0 AND NOT _build_git_desc_out STREQUAL "")
+        set(BUILD_GIT_DESCRIBE "${_build_git_desc_out}")
     endif()
 endif()
 
-string(TIMESTAMP KNIGHTS_BUILD_TIME_UTC "%Y-%m-%dT%H:%M:%SZ" UTC)
+string(TIMESTAMP BUILD_TIME_UTC "%Y-%m-%dT%H:%M:%SZ" UTC)
 
 target_compile_definitions(server_core PUBLIC
-    KNIGHTS_GIT_HASH="${KNIGHTS_GIT_HASH}"
-    KNIGHTS_GIT_DESCRIBE="${KNIGHTS_GIT_DESCRIBE}"
-    KNIGHTS_BUILD_TIME_UTC="${KNIGHTS_BUILD_TIME_UTC}"
+    BUILD_GIT_HASH="${BUILD_GIT_HASH}"
+    BUILD_GIT_DESCRIBE="${BUILD_GIT_DESCRIBE}"
+    BUILD_TIME_UTC="${BUILD_TIME_UTC}"
 )
 
 find_package(OpenSSL REQUIRED)
@@ -92,12 +92,12 @@ endif()
 
 target_link_libraries(server_core PUBLIC OpenSSL::SSL OpenSSL::Crypto lz4::lz4)
 
-if (KNIGHTS_LUAJIT_VENDOR_TARGET)
-    target_link_libraries(server_core PRIVATE $<BUILD_INTERFACE:${KNIGHTS_LUAJIT_VENDOR_TARGET}>)
+if (LUAJIT_VENDOR_TARGET)
+    target_link_libraries(server_core PRIVATE $<BUILD_INTERFACE:${LUAJIT_VENDOR_TARGET}>)
 endif()
 
-if (KNIGHTS_SOL2_VENDOR_TARGET)
-    target_link_libraries(server_core PRIVATE $<BUILD_INTERFACE:${KNIGHTS_SOL2_VENDOR_TARGET}>)
+if (SOL2_VENDOR_TARGET)
+    target_link_libraries(server_core PRIVATE $<BUILD_INTERFACE:${SOL2_VENDOR_TARGET}>)
 endif()
 
 target_include_directories(server_core PUBLIC

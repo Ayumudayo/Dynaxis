@@ -161,7 +161,7 @@ def main() -> int:
         if "text/html" not in content_type:
             raise RuntimeError(f"/admin expected html content-type, got {content_type}")
         html = body.decode("utf-8", errors="replace")
-        if "Knights Admin Console" not in html:
+        if "Dynaxis Admin Console" not in html:
             raise RuntimeError("/admin missing expected UI title")
         if 'id="audit-trend"' not in html:
             raise RuntimeError("/admin missing audit trend container")

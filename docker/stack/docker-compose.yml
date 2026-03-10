@@ -1,53 +1,53 @@
-x-knights-server: &knights-server
-  image: knights-server:local
+x-server: &server
+  image: dynaxis-server:local
   pull_policy: never
 
-x-knights-server-build: &knights-server-build
-  <<: *knights-server
+x-server-build: &server-build
+  <<: *server
   build:
     context: ../..
     dockerfile: Dockerfile
     target: server-runtime
 
-x-knights-gateway: &knights-gateway
-  image: knights-gateway:local
+x-gateway: &gateway
+  image: dynaxis-gateway:local
   pull_policy: never
 
-x-knights-gateway-build: &knights-gateway-build
-  <<: *knights-gateway
+x-gateway-build: &gateway-build
+  <<: *gateway
   build:
     context: ../..
     dockerfile: Dockerfile
     target: gateway-runtime
 
-x-knights-worker: &knights-worker
-  image: knights-worker:local
+x-worker: &worker
+  image: dynaxis-worker:local
   pull_policy: never
 
-x-knights-worker-build: &knights-worker-build
-  <<: *knights-worker
+x-worker-build: &worker-build
+  <<: *worker
   build:
     context: ../..
     dockerfile: Dockerfile
     target: worker-runtime
 
-x-knights-admin: &knights-admin
-  image: knights-admin:local
+x-admin: &admin
+  image: dynaxis-admin:local
   pull_policy: never
 
-x-knights-admin-build: &knights-admin-build
-  <<: *knights-admin
+x-admin-build: &admin-build
+  <<: *admin
   build:
     context: ../..
     dockerfile: Dockerfile
     target: admin-runtime
 
-x-knights-migrator: &knights-migrator
-  image: knights-migrator:local
+x-migrator: &migrator
+  image: dynaxis-migrator:local
   pull_policy: never
 
-x-knights-migrator-build: &knights-migrator-build
-  <<: *knights-migrator
+x-migrator-build: &migrator-build
+  <<: *migrator
   build:
     context: ../..
     dockerfile: Dockerfile
@@ -58,17 +58,17 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-knights}
+      POSTGRES_USER: ${POSTGRES_USER:-dynaxis}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
-      POSTGRES_DB: ${POSTGRES_DB:-knights_db}
+      POSTGRES_DB: ${POSTGRES_DB:-dynaxis_db}
     ports:
       - "${POSTGRES_HOST_PORT:-35432}:5432"
     volumes:
-      - knights_stack_postgres_data:/var/lib/postgresql/data
+      - dynaxis_stack_postgres_data:/var/lib/postgresql/data
     networks:
-      - knights-stack
+      - dynaxis-stack
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-knights} -d ${POSTGRES_DB:-knights_db}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dynaxis} -d ${POSTGRES_DB:-dynaxis_db}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -78,9 +78,9 @@ services:
     ports:
       - "${REDIS_HOST_PORT:-36379}:6379"
     volumes:
-      - knights_stack_redis_data:/data
+      - dynaxis_stack_redis_data:/data
     networks:
-      - knights-stack
+      - dynaxis-stack
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -88,26 +88,26 @@ services:
       retries: 10
 
   migrator:
-    <<: *knights-migrator-build
+    <<: *migrator-build
     command: ["migrate"]
     environment:
-      DB_URI: postgresql://${POSTGRES_USER:-knights}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-knights_db}
+      DB_URI: postgresql://${POSTGRES_USER:-dynaxis}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-dynaxis_db}
       MIGRATIONS_DIR: /app/migrations
     depends_on:
       postgres:
         condition: service_healthy
     networks:
-      - knights-stack
+      - dynaxis-stack
 
   server-1:
-    <<: *knights-server-build
+    <<: *server-build
     command: ["server"]
     environment:
       PORT: "5000"
-      DB_URI: postgresql://${POSTGRES_USER:-knights}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-knights_db}
+      DB_URI: postgresql://${POSTGRES_USER:-dynaxis}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-dynaxis_db}
       REDIS_URI: tcp://redis:6379
       USE_REDIS_PUBSUB: "1"
-      REDIS_CHANNEL_PREFIX: "knights:"
+      REDIS_CHANNEL_PREFIX: "dynaxis:"
       WRITE_BEHIND_ENABLED: "1"
       REDIS_STREAM_KEY: "session_events"
       SERVER_INSTANCE_ID: "server-1"
@@ -132,8 +132,8 @@ services:
       ADMIN_COMMAND_FUTURE_SKEW_MS: "${ADMIN_COMMAND_FUTURE_SKEW_MS:-5000}"
       SERVER_DRAIN_TIMEOUT_MS: "${SERVER_DRAIN_TIMEOUT_MS:-15000}"
       SERVER_DRAIN_POLL_MS: "${SERVER_DRAIN_POLL_MS:-100}"
-      KNIGHTS_TRACING_ENABLED: "${KNIGHTS_TRACING_ENABLED:-0}"
-      KNIGHTS_TRACING_SAMPLE_PERCENT: "${KNIGHTS_TRACING_SAMPLE_PERCENT:-100}"
+      RUNTIME_TRACING_ENABLED: "${RUNTIME_TRACING_ENABLED:-0}"
+      RUNTIME_TRACING_SAMPLE_PERCENT: "${RUNTIME_TRACING_SAMPLE_PERCENT:-100}"
     volumes:
       - ./plugins:/app/plugins:ro
       - ./scripts:/app/scripts:ro
@@ -145,20 +145,20 @@ services:
       migrator:
         condition: service_completed_successfully
     networks:
-      - knights-stack
+      - dynaxis-stack
     ports:
       - "${SERVER1_HOST_PORT:-30001}:5000"
       - "${SERVER1_METRICS_HOST_PORT:-39091}:9090"
 
   server-2:
-    <<: *knights-server
+    <<: *server
     command: ["server"]
     environment:
       PORT: "5000"
-      DB_URI: postgresql://${POSTGRES_USER:-knights}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-knights_db}
+      DB_URI: postgresql://${POSTGRES_USER:-dynaxis}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-dynaxis_db}
       REDIS_URI: tcp://redis:6379
       USE_REDIS_PUBSUB: "1"
-      REDIS_CHANNEL_PREFIX: "knights:"
+      REDIS_CHANNEL_PREFIX: "dynaxis:"
       WRITE_BEHIND_ENABLED: "1"
       REDIS_STREAM_KEY: "session_events"
       SERVER_INSTANCE_ID: "server-2"
@@ -183,8 +183,8 @@ services:
       ADMIN_COMMAND_FUTURE_SKEW_MS: "${ADMIN_COMMAND_FUTURE_SKEW_MS:-5000}"
       SERVER_DRAIN_TIMEOUT_MS: "${SERVER_DRAIN_TIMEOUT_MS:-15000}"
       SERVER_DRAIN_POLL_MS: "${SERVER_DRAIN_POLL_MS:-100}"
-      KNIGHTS_TRACING_ENABLED: "${KNIGHTS_TRACING_ENABLED:-0}"
-      KNIGHTS_TRACING_SAMPLE_PERCENT: "${KNIGHTS_TRACING_SAMPLE_PERCENT:-100}"
+      RUNTIME_TRACING_ENABLED: "${RUNTIME_TRACING_ENABLED:-0}"
+      RUNTIME_TRACING_SAMPLE_PERCENT: "${RUNTIME_TRACING_SAMPLE_PERCENT:-100}"
     volumes:
       - ./plugins:/app/plugins:ro
       - ./scripts:/app/scripts:ro
@@ -196,23 +196,23 @@ services:
       migrator:
         condition: service_completed_successfully
     networks:
-      - knights-stack
+      - dynaxis-stack
     ports:
       - "${SERVER2_HOST_PORT:-30002}:5000"
       - "${SERVER2_METRICS_HOST_PORT:-39092}:9090"
 
   wb_worker:
-    <<: *knights-worker-build
+    <<: *worker-build
     command: ["worker"]
     environment:
-      DB_URI: postgresql://${POSTGRES_USER:-knights}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-knights_db}
+      DB_URI: postgresql://${POSTGRES_USER:-dynaxis}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-dynaxis_db}
       REDIS_URI: tcp://redis:6379
       REDIS_STREAM_KEY: "session_events"
       WB_GROUP: "wb_group"
       WB_CONSUMER: "worker-1"
       METRICS_PORT: "9090"
-      KNIGHTS_TRACING_ENABLED: "${KNIGHTS_TRACING_ENABLED:-0}"
-      KNIGHTS_TRACING_SAMPLE_PERCENT: "${KNIGHTS_TRACING_SAMPLE_PERCENT:-100}"
+      RUNTIME_TRACING_ENABLED: "${RUNTIME_TRACING_ENABLED:-0}"
+      RUNTIME_TRACING_SAMPLE_PERCENT: "${RUNTIME_TRACING_SAMPLE_PERCENT:-100}"
     depends_on:
       redis:
         condition: service_healthy
@@ -221,16 +221,16 @@ services:
       migrator:
         condition: service_completed_successfully
     networks:
-      - knights-stack
+      - dynaxis-stack
     ports:
       - "${WB_WORKER_METRICS_HOST_PORT:-39093}:9090"
 
   admin-app:
-    <<: *knights-admin-build
+    <<: *admin-build
     command: ["admin"]
     environment:
       REDIS_URI: tcp://redis:6379
-      REDIS_CHANNEL_PREFIX: "knights:"
+      REDIS_CHANNEL_PREFIX: "dynaxis:"
       SERVER_REGISTRY_PREFIX: "gateway/instances/"
       SERVER_REGISTRY_TTL: "30"
       GATEWAY_SESSION_PREFIX: "gateway/session/"
@@ -256,7 +256,7 @@ services:
       migrator:
         condition: service_completed_successfully
     networks:
-      - knights-stack
+      - dynaxis-stack
     ports:
       - "${ADMIN_APP_HOST_PORT:-39200}:39200"
     healthcheck:
@@ -266,7 +266,7 @@ services:
       retries: 10
 
   gateway-1:
-    <<: *knights-gateway-build
+    <<: *gateway-build
     command: ["gateway"]
     environment:
       GATEWAY_LISTEN: "0.0.0.0:6000"
@@ -289,14 +289,14 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - knights-stack
+      - dynaxis-stack
     ports:
       - "${GATEWAY1_TCP_HOST_PORT:-36100}:6000"
       - "${GATEWAY1_METRICS_HOST_PORT:-36001}:6001"
       - "${GATEWAY1_UDP_HOST_PORT:-7000}:7000/udp"
 
   gateway-2:
-    <<: *knights-gateway
+    <<: *gateway
     command: ["gateway"]
     environment:
       GATEWAY_LISTEN: "0.0.0.0:6000"
@@ -319,7 +319,7 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - knights-stack
+      - dynaxis-stack
     ports:
       - "${GATEWAY2_TCP_HOST_PORT:-36101}:6000"
       - "${GATEWAY2_METRICS_HOST_PORT:-36002}:6001"
@@ -336,7 +336,7 @@ services:
     volumes:
       - ./haproxy/${HAPROXY_CONFIG:-haproxy.cfg}:/usr/local/etc/haproxy/haproxy.cfg:ro
     networks:
-      - knights-stack
+      - dynaxis-stack
 
   prometheus:
     image: prom/prometheus:latest
@@ -347,7 +347,7 @@ services:
     ports:
       - "${PROMETHEUS_HOST_PORT:-39090}:9090"
     networks:
-      - knights-stack
+      - dynaxis-stack
 
   grafana:
     image: grafana/grafana:latest
@@ -360,7 +360,7 @@ services:
       - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ../observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
     networks:
-      - knights-stack
+      - dynaxis-stack
 
   redis_exporter:
     image: oliver006/redis_exporter:latest
@@ -373,25 +373,25 @@ services:
     ports:
       - "${REDIS_EXPORTER_HOST_PORT:-39121}:9121"
     networks:
-      - knights-stack
+      - dynaxis-stack
 
   postgres_exporter:
     image: prometheuscommunity/postgres-exporter:latest
     profiles: ["observability"]
     environment:
-      - DATA_SOURCE_NAME=postgresql://${POSTGRES_USER:-knights}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-knights_db}?sslmode=disable
+      - DATA_SOURCE_NAME=postgresql://${POSTGRES_USER:-dynaxis}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-dynaxis_db}?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
     ports:
       - "${POSTGRES_EXPORTER_HOST_PORT:-39187}:9187"
     networks:
-      - knights-stack
+      - dynaxis-stack
 
 volumes:
-  knights_stack_postgres_data:
-  knights_stack_redis_data:
+  dynaxis_stack_postgres_data:
+  dynaxis_stack_redis_data:
 
 networks:
-  knights-stack:
+  dynaxis-stack:
     driver: bridge

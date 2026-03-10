@@ -6,7 +6,7 @@
 
 ## 1. 목적
 
-현재 Knights는 다음 두 문제가 동시에 존재한다.
+현재 Dynaxis는 다음 두 문제가 동시에 존재한다.
 
 1. capability 포함 여부와 기능 사용 여부가 build flag와 runtime toggle에 나뉘어 있어 정책이 일관되지 않다.
 2. `.github/workflows/ci.yml` 한 파일에 빠른 회귀, core API governance, Docker stack smoke, plugin/script 통합 검증, hardening 성격 검증, 캐시/prefetch 성격 관심사가 과도하게 섞여 있다.
@@ -29,7 +29,7 @@
 작업 시작 시 빌드 그래프와 CI에는 아래 build flag가 남아 있었다.
 
 - `BUILD_LUA_SCRIPTING`
-- `KNIGHTS_ENABLE_GATEWAY_UDP_INGRESS`
+- `ENABLE_GATEWAY_UDP_INGRESS`
 
 이 둘은 현재 제품 라인업을 나누는 필수 build matrix라기보다, 과도기 구현 검증과 source-selection regression을 위해 남아 있는 성격이 강했다.
 2026-03-06 기준으로 두 build flag와 관련 off-build 경로는 코드/도커/CI에서 제거 완료했다.
@@ -73,7 +73,7 @@
 다음 build flag는 제거 대상으로 본다.
 
 - `BUILD_LUA_SCRIPTING`
-- `KNIGHTS_ENABLE_GATEWAY_UDP_INGRESS`
+- `ENABLE_GATEWAY_UDP_INGRESS`
 
 원칙:
 
@@ -226,7 +226,7 @@ required PR gate는 다음 성격만 남긴다.
 작업:
 
 - `BUILD_LUA_SCRIPTING` 제거
-- `KNIGHTS_ENABLE_GATEWAY_UDP_INGRESS` 제거
+- `ENABLE_GATEWAY_UDP_INGRESS` 제거
 - Lua/UDP capability를 항상 포함하는 빌드 그래프로 전환
 - 관련 disabled path / off preset / checker 제거 또는 축소
 
@@ -314,9 +314,9 @@ required PR gate는 다음 성격만 남긴다.
 
 ## 7.1 현재 구현 결과 (2026-03-06)
 
-- `BUILD_LUA_SCRIPTING`, `KNIGHTS_ENABLE_GATEWAY_UDP_INGRESS`를 코드/도커/CI에서 제거했다.
+- `BUILD_LUA_SCRIPTING`, `ENABLE_GATEWAY_UDP_INGRESS`를 코드/도커/CI에서 제거했다.
 - LuaJIT/sol2 vendor helper는 capability-always-on 모델로 수정해, 깨끗한 configure에서도 Lua vendor target이 항상 생성되도록 정리했다.
-- `KNIGHTS_BUILD_LUA_SCRIPTING` 호환 매크로와 dead test branch를 제거해 Lua 테스트를 항상-capability 기준으로 단순화했다.
+- `BUILD_LUA_SCRIPTING` 호환 매크로와 dead test branch를 제거해 Lua 테스트를 항상-capability 기준으로 단순화했다.
 - Windows fast CI의 중복 Lua ctest 재실행을 제거했다.
 - 기존 단일 `ci.yml`을 `ci`, `ci-api-governance`, `ci-stack`, `ci-extensibility`, `ci-hardening`, `ci-prewarm`으로 분리하고 역할별 trigger를 재설정했다.
 - `CI`는 branch protection 안전성을 위해 path filter 없이 항상 실행되도록 두고, path-gated workflow는 선택적/보조 gate로 분리했다.

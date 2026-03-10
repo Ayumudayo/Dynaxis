@@ -997,7 +997,7 @@ TEST_F(ChatServiceTest, LoginDeniedByV2HookPluginReturnsForbidden) {
     ScopedEnvVar env_single("CHAT_HOOK_PLUGIN_PATH", TEST_CHAT_HOOK_V2_ONLY_PATH);
     ScopedEnvVar env_paths("CHAT_HOOK_PLUGIN_PATHS", "");
     ScopedEnvVar env_dir("CHAT_HOOK_PLUGINS_DIR", "");
-    ScopedTempDir cache_temp("knights_chat_service_hook_cache");
+    ScopedTempDir cache_temp("chat_service_hook_cache");
     const auto cache_path = cache_temp.path().string();
     const auto lock_path = (cache_temp.path() / "chat_hook.lock").string();
     ScopedEnvVar env_lock("CHAT_HOOK_LOCK_PATH", lock_path.c_str());
@@ -1027,7 +1027,7 @@ TEST_F(ChatServiceTest, JoinDeniedByV2HookPluginReturnsForbidden) {
     ScopedEnvVar env_single("CHAT_HOOK_PLUGIN_PATH", TEST_CHAT_HOOK_V2_ONLY_PATH);
     ScopedEnvVar env_paths("CHAT_HOOK_PLUGIN_PATHS", "");
     ScopedEnvVar env_dir("CHAT_HOOK_PLUGINS_DIR", "");
-    ScopedTempDir cache_temp("knights_chat_service_hook_cache");
+    ScopedTempDir cache_temp("chat_service_hook_cache");
     const auto cache_path = cache_temp.path().string();
     const auto lock_path = (cache_temp.path() / "chat_hook.lock").string();
     ScopedEnvVar env_lock("CHAT_HOOK_LOCK_PATH", lock_path.c_str());
@@ -1059,7 +1059,7 @@ TEST_F(ChatServiceTest, LeaveDeniedByV2HookPluginReturnsForbidden) {
     ScopedEnvVar env_single("CHAT_HOOK_PLUGIN_PATH", TEST_CHAT_HOOK_V2_ONLY_PATH);
     ScopedEnvVar env_paths("CHAT_HOOK_PLUGIN_PATHS", "");
     ScopedEnvVar env_dir("CHAT_HOOK_PLUGINS_DIR", "");
-    ScopedTempDir cache_temp("knights_chat_service_hook_cache");
+    ScopedTempDir cache_temp("chat_service_hook_cache");
     const auto cache_path = cache_temp.path().string();
     const auto lock_path = (cache_temp.path() / "chat_hook.lock").string();
     ScopedEnvVar env_lock("CHAT_HOOK_LOCK_PATH", lock_path.c_str());
@@ -1095,7 +1095,7 @@ TEST_F(ChatServiceTest, ThrowingChatHookExceptionDoesNotStopChatOrAdminSettingPa
     ScopedEnvVar env_single("CHAT_HOOK_PLUGIN_PATH", TEST_CHAT_HOOK_THROWING_PATH);
     ScopedEnvVar env_paths("CHAT_HOOK_PLUGIN_PATHS", "");
     ScopedEnvVar env_dir("CHAT_HOOK_PLUGINS_DIR", "");
-    ScopedTempDir cache_temp("knights_chat_service_throwing_hook_cache");
+    ScopedTempDir cache_temp("chat_service_throwing_hook_cache");
     const auto cache_path = cache_temp.path().string();
     const auto lock_path = (cache_temp.path() / "chat_hook.lock").string();
     ScopedEnvVar env_lock("CHAT_HOOK_LOCK_PATH", lock_path.c_str());
@@ -1145,7 +1145,7 @@ TEST_F(ChatServiceTest, ThrowingChatHookExceptionDoesNotStopChatOrAdminSettingPa
 }
 
 TEST_F(ChatServiceTest, LuaColdHooksRunForLoginAndJoinButNotChatSend) {
-    ScopedTempDir script_temp("knights_chat_lua_cold_hook");
+    ScopedTempDir script_temp("chat_lua_cold_hook");
     const auto script_path = script_temp.path() / "on_login.lua";
     {
         std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
@@ -1176,7 +1176,7 @@ TEST_F(ChatServiceTest, LuaColdHooksRunForLoginAndJoinButNotChatSend) {
 }
 
 TEST_F(ChatServiceTest, LuaColdHookDenyStopsLoginWhenNativePathPasses) {
-    ScopedTempDir script_temp("knights_chat_lua_login_deny");
+    ScopedTempDir script_temp("chat_lua_login_deny");
     const auto script_path = script_temp.path() / "policy.lua";
     {
         std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
@@ -1210,7 +1210,7 @@ TEST_F(ChatServiceTest, LuaColdHookDenyStopsLoginWhenNativePathPasses) {
 }
 
 TEST_F(ChatServiceTest, LuaColdHookPassSendsLoginWelcomeNotice) {
-    ScopedTempDir script_temp("knights_chat_lua_login_notice");
+    ScopedTempDir script_temp("chat_lua_login_notice");
     const auto script_path = script_temp.path() / "policy.lua";
     {
         std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
@@ -1246,7 +1246,7 @@ TEST_F(ChatServiceTest, LuaColdHookPassSendsLoginWelcomeNotice) {
 }
 
 TEST_F(ChatServiceTest, LuaAdminHookCanUseArgsAndBroadcastAll) {
-    ScopedTempDir script_temp("knights_chat_lua_admin_announce");
+    ScopedTempDir script_temp("chat_lua_admin_announce");
     const auto script_path = script_temp.path() / "policy.lua";
     {
         std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
@@ -1280,7 +1280,7 @@ TEST_F(ChatServiceTest, LuaAdminHookCanUseArgsAndBroadcastAll) {
 }
 
 TEST_F(ChatServiceTest, LuaColdHookDenyStopsJoinWhenNativePathPasses) {
-    ScopedTempDir script_temp("knights_chat_lua_join_deny");
+    ScopedTempDir script_temp("chat_lua_join_deny");
     const auto script_path = script_temp.path() / "policy.lua";
     {
         std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
@@ -1316,7 +1316,7 @@ TEST_F(ChatServiceTest, LuaColdHookDenyStopsJoinWhenNativePathPasses) {
 }
 
 TEST_F(ChatServiceTest, LuaColdHookJoinVipPolicyCanDenyAccess) {
-    ScopedTempDir script_temp("knights_chat_lua_join_vip_policy");
+    ScopedTempDir script_temp("chat_lua_join_vip_policy");
     const auto script_path = script_temp.path() / "policy.lua";
     {
         std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
@@ -1352,7 +1352,7 @@ TEST_F(ChatServiceTest, LuaColdHookJoinVipPolicyCanDenyAccess) {
 }
 
 TEST_F(ChatServiceTest, LuaColdHookDenySkipsAdminRuntimeSettingReload) {
-    ScopedTempDir script_temp("knights_chat_lua_admin_deny");
+    ScopedTempDir script_temp("chat_lua_admin_deny");
     const auto script_path = script_temp.path() / "policy.lua";
     {
         std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
@@ -1387,7 +1387,7 @@ TEST_F(ChatServiceTest, LuaColdHookCanDenyAfterNativePluginPassesLogin) {
         GTEST_SKIP() << "TEST_CHAT_HOOK_V2_ONLY_PATH is not configured";
     }
 
-    ScopedTempDir script_temp("knights_chat_lua_after_native_pass");
+    ScopedTempDir script_temp("chat_lua_after_native_pass");
     const auto script_path = script_temp.path() / "policy.lua";
     {
         std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
@@ -1407,7 +1407,7 @@ TEST_F(ChatServiceTest, LuaColdHookCanDenyAfterNativePluginPassesLogin) {
     ScopedEnvVar env_single("CHAT_HOOK_PLUGIN_PATH", TEST_CHAT_HOOK_V2_ONLY_PATH);
     ScopedEnvVar env_paths("CHAT_HOOK_PLUGIN_PATHS", "");
     ScopedEnvVar env_dir("CHAT_HOOK_PLUGINS_DIR", "");
-    ScopedTempDir cache_temp("knights_chat_service_hook_cache_pass");
+    ScopedTempDir cache_temp("chat_service_hook_cache_pass");
     const auto cache_path = cache_temp.path().string();
     const auto lock_path = (cache_temp.path() / "chat_hook.lock").string();
     ScopedEnvVar env_lock("CHAT_HOOK_LOCK_PATH", lock_path.c_str());
@@ -1437,7 +1437,7 @@ TEST_F(ChatServiceTest, LuaColdHookSkippedWhenNativePluginBlocksLogin) {
         GTEST_SKIP() << "TEST_CHAT_HOOK_V2_ONLY_PATH is not configured";
     }
 
-    ScopedTempDir script_temp("knights_chat_lua_plugin_block");
+    ScopedTempDir script_temp("chat_lua_plugin_block");
     const auto script_path = script_temp.path() / "on_login.lua";
     {
         std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
@@ -1457,7 +1457,7 @@ TEST_F(ChatServiceTest, LuaColdHookSkippedWhenNativePluginBlocksLogin) {
     ScopedEnvVar env_single("CHAT_HOOK_PLUGIN_PATH", TEST_CHAT_HOOK_V2_ONLY_PATH);
     ScopedEnvVar env_paths("CHAT_HOOK_PLUGIN_PATHS", "");
     ScopedEnvVar env_dir("CHAT_HOOK_PLUGINS_DIR", "");
-    ScopedTempDir cache_temp("knights_chat_service_hook_cache");
+    ScopedTempDir cache_temp("chat_service_hook_cache");
     const auto cache_path = cache_temp.path().string();
     const auto lock_path = (cache_temp.path() / "chat_hook.lock").string();
     ScopedEnvVar env_lock("CHAT_HOOK_LOCK_PATH", lock_path.c_str());
@@ -1486,7 +1486,7 @@ TEST_F(ChatServiceTest, LuaColdHookSkippedWhenNativePluginBlocksLeave) {
         GTEST_SKIP() << "TEST_CHAT_HOOK_V2_ONLY_PATH is not configured";
     }
 
-    ScopedTempDir script_temp("knights_chat_lua_plugin_block_leave");
+    ScopedTempDir script_temp("chat_lua_plugin_block_leave");
     const auto script_path = script_temp.path() / "on_leave.lua";
     {
         std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
@@ -1506,7 +1506,7 @@ TEST_F(ChatServiceTest, LuaColdHookSkippedWhenNativePluginBlocksLeave) {
     ScopedEnvVar env_single("CHAT_HOOK_PLUGIN_PATH", TEST_CHAT_HOOK_V2_ONLY_PATH);
     ScopedEnvVar env_paths("CHAT_HOOK_PLUGIN_PATHS", "");
     ScopedEnvVar env_dir("CHAT_HOOK_PLUGINS_DIR", "");
-    ScopedTempDir cache_temp("knights_chat_service_hook_cache_leave");
+    ScopedTempDir cache_temp("chat_service_hook_cache_leave");
     const auto cache_path = cache_temp.path().string();
     const auto lock_path = (cache_temp.path() / "chat_hook.lock").string();
     ScopedEnvVar env_lock("CHAT_HOOK_LOCK_PATH", lock_path.c_str());

@@ -1,6 +1,6 @@
 # 빌드 가이드
 
-Knights의 표준 런타임/검증 환경은 Linux(Docker) 풀스택(`docker/stack`)이다.
+Dynaxis의 표준 런타임/검증 환경은 Linux(Docker) 풀스택(`docker/stack`)이다.
 Windows는 개발/디버깅(빌드/클라이언트) 용도로 유지한다.
 
 ## 전제
@@ -62,7 +62,7 @@ pwsh scripts/deploy_docker.ps1 -Action down
 
 ## 메모리/정의되지 않은 동작 검사 (Sanitizer: ASan/UBSan)
 
-- CMake 옵션: `KNIGHTS_ENABLE_SANITIZERS=ON`
+- CMake 옵션: `ENABLE_SANITIZERS=ON`
 - 프리셋: `linux-asan`
 
 로컬 Linux 환경에서:
@@ -71,7 +71,7 @@ cmake --preset linux-asan
 cmake --build --preset linux-asan --target server_app --parallel
 ```
 
-CI에서는 `knights-base` 컨테이너 내부에서 `linux-asan` 빌드를 수행한다. (`.github/workflows/ci-hardening.yml` 참고)
+CI에서는 `dynaxis-base` 컨테이너 내부에서 `linux-asan` 빌드를 수행한다. (`.github/workflows/ci-hardening.yml` 참고)
 
 ## 코드 생성(opcodes)
 

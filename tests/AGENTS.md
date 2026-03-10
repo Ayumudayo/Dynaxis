@@ -39,7 +39,7 @@ Plugin/script smoke tests can be run through ctest labels after configuring test
 
 ```bash
 cmake --preset linux -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=ON
-KNIGHTS_ENABLE_STACK_PYTHON_TESTS=1 ctest --test-dir build-linux -L "plugin-script" --output-on-failure
+ENABLE_STACK_PYTHON_TESTS=1 ctest --test-dir build-linux -L "plugin-script" --output-on-failure
 ```
 
-Without `KNIGHTS_ENABLE_STACK_PYTHON_TESTS=1`, label-matched stack Python tests are skipped by design.
+Without `ENABLE_STACK_PYTHON_TESTS=1`, label-matched stack Python tests are skipped by design.

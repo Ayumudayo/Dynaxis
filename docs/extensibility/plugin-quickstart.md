@@ -91,8 +91,8 @@ Docker 기준 빠른 확인:
 
 ```powershell
 pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build
-docker exec knights-stack-server-1-1 sh -lc "ls -la /app/plugins"
-docker logs knights-stack-server-1-1 --since 5m
+docker exec dynaxis-stack-server-1-1 sh -lc "ls -la /app/plugins"
+docker logs dynaxis-stack-server-1-1 --since 5m
 ```
 
 ## 4) 검증 포인트

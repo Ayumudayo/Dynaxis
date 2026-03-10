@@ -11,7 +11,7 @@ function on_login(ctx)
   if name and name ~= "" then
     server.send_notice(ctx.session_id, "welcome back, " .. name)
   else
-    server.send_notice(ctx.session_id, "welcome to Knights")
+    server.send_notice(ctx.session_id, "welcome to the server")
   end
 
   server.send_notice(

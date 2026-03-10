@@ -16,7 +16,7 @@ function on_login(ctx)
     return { decision = "pass" }
   end
 
-  server.send_notice(ctx.session_id, "welcome to Knights")
+  server.send_notice(ctx.session_id, "welcome to the server")
   return { decision = "pass" }
 end
 ```

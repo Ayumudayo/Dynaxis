@@ -66,7 +66,7 @@ function Assert-MetricsEndpoint {
 }
 
 $commonMarkers = @(
-  "knights_build_info",
+  "runtime_build_info",
   "core_runtime_session_started_total"
 )
 

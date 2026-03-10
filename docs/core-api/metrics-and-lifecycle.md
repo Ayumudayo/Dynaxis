@@ -19,7 +19,7 @@
 ## 메트릭 계약
 - `metrics` API(`get_counter/get_gauge/get_histogram`)는 exporter 백엔드가 없을 때도 no-op 안전 fallback을 보장합니다.
 - `MetricsHttpServer`는 `/metrics`, `/healthz`, `/readyz`와 선택적 커스텀 라우트를 노출합니다.
-- `build_info` helper는 Prometheus 텍스트 포맷으로 `knights_build_info`를 출력합니다.
+- `build_info` helper는 Prometheus 텍스트 포맷으로 `runtime_build_info`를 출력합니다.
 - `runtime_metrics` snapshot은 프로세스 전역 카운터와 히스토그램 버킷을 안정적인 읽기 계약으로 제공합니다.
 
 ## 운영 규칙

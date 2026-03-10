@@ -1,7 +1,7 @@
 import json
-import os
+from pathlib import Path
 
-DASHBOARD_PATH = r"e:\Repos\MyRepos\Knights\docker\observability\grafana\dashboards\server-metrics.json"
+DASHBOARD_PATH = Path(__file__).resolve().parents[1] / "docker" / "observability" / "grafana" / "dashboards" / "server-metrics.json"
 
 # Define the logical grouping of panels by their Title
 SECTIONS = {

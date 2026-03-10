@@ -36,9 +36,10 @@ Start-Sleep -Milliseconds 500
 try {
   # 4) 스트림에 이벤트 적재
   Info "이벤트 XADD(wb_emit)"
-  $eventId = & $wbEmit 'session_login'
-  if ($LASTEXITCODE -ne 0 -or -not $eventId) { Fail "wb_emit 실패" }
-  $eventId = $eventId.Trim()
+  $eventOutput = & $wbEmit 'session_login'
+  if ($LASTEXITCODE -ne 0 -or -not $eventOutput) { Fail "wb_emit 실패" }
+  $eventOutput = ($eventOutput | Out-String).Trim()
+  $eventId = if ($eventOutput -match 'ID:\s*([^\s]+)$') { $Matches[1] } else { $eventOutput }
   Info "event_id=$eventId"
 
   # 5) 커밋 대기 후 확인

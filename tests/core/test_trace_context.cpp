@@ -20,8 +20,8 @@ void set_env_value(const char* key, const char* value) {
 } // namespace
 
 TEST(TraceContextTest, InjectsTraceAndCorrelationIntoLogsWhenEnabled) {
-    set_env_value("KNIGHTS_TRACING_ENABLED", "1");
-    set_env_value("KNIGHTS_TRACING_SAMPLE_PERCENT", "100");
+    set_env_value("RUNTIME_TRACING_ENABLED", "1");
+    set_env_value("RUNTIME_TRACING_SAMPLE_PERCENT", "100");
     server::core::trace::reset_for_tests();
 
     EXPECT_TRUE(server::core::trace::enabled());
@@ -50,6 +50,6 @@ TEST(TraceContextTest, InjectsTraceAndCorrelationIntoLogsWhenEnabled) {
     }
     EXPECT_TRUE(found_marker);
 
-    set_env_value("KNIGHTS_TRACING_ENABLED", "0");
+    set_env_value("RUNTIME_TRACING_ENABLED", "0");
     server::core::trace::reset_for_tests();
 }

@@ -245,7 +245,7 @@ protected:
 };
 
 TEST_F(HookAutoDisableTest, LuaHookAutoDisablesAfterConsecutiveFailuresAndReenablesOnReload) {
-    ScopedTempDir script_temp("knights_hook_auto_disable");
+    ScopedTempDir script_temp("hook_auto_disable");
     const auto bad_script_path = script_temp.path() / "policy_bad.lua";
     {
         std::ofstream out(bad_script_path, std::ios::binary | std::ios::trunc);
@@ -314,7 +314,7 @@ TEST_F(HookAutoDisableTest, LuaHookAutoDisablesAfterConsecutiveFailuresAndReenab
 }
 
 TEST_F(HookAutoDisableTest, LuaInstructionLimitFailureDoesNotStopAdminSettingPath) {
-    ScopedTempDir script_temp("knights_hook_instruction_limit");
+    ScopedTempDir script_temp("hook_instruction_limit");
     const auto script_path = script_temp.path() / "policy_instruction.lua";
     {
         std::ofstream out(script_path, std::ios::binary | std::ios::trunc);
@@ -363,7 +363,7 @@ TEST_F(HookAutoDisableTest, LuaInstructionLimitFailureDoesNotStopAdminSettingPat
 }
 
 TEST_F(HookAutoDisableTest, LuaMemoryLimitFailureDoesNotStopAdminSettingPath) {
-    ScopedTempDir script_temp("knights_hook_memory_limit");
+    ScopedTempDir script_temp("hook_memory_limit");
     const auto script_path = script_temp.path() / "policy_memory.lua";
     {
         std::ofstream out(script_path, std::ios::binary | std::ios::trunc);

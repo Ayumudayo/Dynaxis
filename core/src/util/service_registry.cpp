@@ -14,7 +14,7 @@ namespace server::core::util::services {
 
 namespace {
 // DLL이나 테스트 바이너리가 분리된 주소 공간에서 동일 레지스트리를 재사용하기 위한 환경 변수 키
-constexpr const char* kRegistryEnvVar = "KNIGHTS_SERVICE_REGISTRY";
+constexpr const char* kRegistryEnvVar = "SERVER_CORE_SERVICE_REGISTRY";
 
 std::string pointer_to_string(const Registry* reg) {
     std::ostringstream oss;

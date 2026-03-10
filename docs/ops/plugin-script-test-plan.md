@@ -18,7 +18,7 @@
 - 문서/샘플 기준 작성 모델은 function-style hook + `ctx`이며, directive/return-table은 fallback/testing aid로만 유지
 
 현재 공백:
-- stack 의존 Python 테스트는 `KNIGHTS_ENABLE_STACK_PYTHON_TESTS=1` 환경이 있어야 실행됨
+- stack 의존 Python 테스트는 `ENABLE_STACK_PYTHON_TESTS=1` 환경이 있어야 실행됨
 - runtime toggle matrix는 CI baseline(OFF) + smoke(ON)에서 고정되지만, 향후 `CHAT_HOOK_ENABLED/LUA_ENABLED` 조합(4개) 전체를 자동화할 필요가 있음
 
 ## 3. Test Layers

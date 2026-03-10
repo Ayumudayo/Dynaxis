@@ -19,7 +19,7 @@ pwsh scripts/run_full_stack_observability.ps1
 ```
 
 ## Notes
-- Default compose project name: `knights-stack` (override via `scripts/deploy_docker.ps1 -ProjectName ...`).
+- Default compose project name: `dynaxis-stack` (override via `scripts/deploy_docker.ps1 -ProjectName ...`).
 - Observability is gated behind compose profile `observability` (toggle via `scripts/deploy_docker.ps1 -Observability`).
 
 See `docker/stack/AGENTS.md` and `docker/observability/AGENTS.md` for module-specific details.

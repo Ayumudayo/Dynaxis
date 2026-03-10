@@ -1,6 +1,6 @@
 # 코어(Core) 설계 노트
 
-`server_core`는 Knights 공용 런타임으로, 네트워크 I/O·동시성·저장소·운영 유틸리티를 묶은 C++20 라이브러리다. `gateway_app`, `server_app`이 이 모듈을 링크해 동일한 패턴(Hive, ServiceRegistry, metrics 등)을 재사용한다. (HAProxy는 외부 인프라 컴포넌트로, 본 리포의 core를 링크하지 않는다.)
+`server_core`는 Dynaxis 공용 런타임으로, 네트워크 I/O·동시성·저장소·운영 유틸리티를 묶은 C++20 라이브러리다. `gateway_app`, `server_app`이 이 모듈을 링크해 동일한 패턴(Hive, ServiceRegistry, metrics 등)을 재사용한다. (HAProxy는 외부 인프라 컴포넌트로, 본 리포의 core를 링크하지 않는다.)
 
 ## 1. 설계 목표
 - **모듈화**: 채팅 서버뿐 아니라 향후 서비스가 동일한 기반을 공유할 수 있도록 core/net·core/concurrent·core/storage 계층을 명확히 분리한다.
@@ -45,7 +45,7 @@
 - `metrics` 서브시스템은 Counter/Gauge/Histogram registry 백엔드를 제공하며, `append_prometheus_metrics()`로 공용 메트릭을 `/metrics`에 합성할 수 있다.
 - `append_runtime_core_metrics()`는 서비스별 구현과 무관하게 build info와 함께 공통 런타임 핵심 카운터를 노출하도록 강제한다.
 - `AppHost`는 공통 lifecycle phase(`init -> bootstrapping -> running -> stopping -> stopped|failed`)를 관리하고,
-  `knights_lifecycle_phase`, `knights_lifecycle_phase_code` 메트릭으로 현재 단계를 노출한다.
+  `runtime_lifecycle_phase`, `runtime_lifecycle_phase_code` 메트릭으로 현재 단계를 노출한다.
 
 ## 3. 실행 흐름
 1. `.env` 로드 → `ServiceRegistry` 초기화 → DbWorkerPool/Redis/Write-behind/TaskScheduler를 등록한다.

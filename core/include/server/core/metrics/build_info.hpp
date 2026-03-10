@@ -35,11 +35,11 @@ inline void write_prometheus_escaped_label_value(std::ostream& out, std::string_
  * @param metric_name 출력할 메트릭 이름
  *
  * 출력 형식:
- * `knights_build_info{git_hash="...", git_describe="...", build_time_utc="..."} 1`
+ * `runtime_build_info{git_hash="...", git_describe="...", build_time_utc="..."} 1`
  *
  * 의존성을 최소화해 모든 바이너리(server/gateway/tools)가 부담 없이 포함하도록 유지합니다.
  */
-inline void append_build_info(std::ostream& out, std::string_view metric_name = "knights_build_info") {
+inline void append_build_info(std::ostream& out, std::string_view metric_name = "runtime_build_info") {
     out << "# TYPE " << metric_name << " gauge\n";
     out << metric_name << "{git_hash=\"";
     detail::write_prometheus_escaped_label_value(out, server::core::build_info::git_hash());

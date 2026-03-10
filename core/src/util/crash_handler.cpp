@@ -113,7 +113,7 @@ void dump_stack() noexcept {
 #endif
 
 void handle_crash_signal(int signo) noexcept {
-    safe_write_literal("=== Knights crash handler: signal ");
+    safe_write_literal("=== Dynaxis crash handler: signal ");
     safe_write_number(static_cast<unsigned long long>(signo));
     safe_write_literal(" ===");
     safe_write_newline();
@@ -127,7 +127,7 @@ void handle_crash_signal(int signo) noexcept {
 #if defined(_WIN32)
 LONG WINAPI unhandled_exception_handler(EXCEPTION_POINTERS* info) {
     (void)info;
-    safe_write_literal("=== Knights crash handler: unhandled exception ===\n");
+    safe_write_literal("=== Dynaxis crash handler: unhandled exception ===\n");
     dump_stack();
     safe_write_literal("=== crash handler end ===\n");
     return EXCEPTION_EXECUTE_HANDLER;

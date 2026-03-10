@@ -308,18 +308,19 @@ if (BUILD_GTEST_TESTS)
     endif()
 
     include(GoogleTest)
-    gtest_discover_tests(storage_basic_tests)
-    gtest_discover_tests(core_concurrency_tests)
-    gtest_discover_tests(server_state_tests)
-    gtest_discover_tests(chat_history_tests)
-    gtest_discover_tests(core_general_tests)
-    gtest_discover_tests(core_plugin_runtime_tests)
-    gtest_discover_tests(server_general_tests)
+    set(GTEST_DISCOVERY_TIMEOUT_SEC 30)
+    gtest_discover_tests(storage_basic_tests DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC})
+    gtest_discover_tests(core_concurrency_tests DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC})
+    gtest_discover_tests(server_state_tests DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC})
+    gtest_discover_tests(chat_history_tests DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC})
+    gtest_discover_tests(core_general_tests DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC})
+    gtest_discover_tests(core_plugin_runtime_tests DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC})
+    gtest_discover_tests(server_general_tests DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC})
     if (TARGET server_plugin_chain_tests)
-        gtest_discover_tests(server_plugin_chain_tests)
+        gtest_discover_tests(server_plugin_chain_tests DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC})
     endif()
     if (TARGET server_plugin_chain_v2_tests)
-        gtest_discover_tests(server_plugin_chain_v2_tests)
+        gtest_discover_tests(server_plugin_chain_v2_tests DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC})
     endif()
 endif()
 
@@ -432,6 +433,7 @@ if (Python3_Interpreter_FOUND)
       PROPERTIES
         LABELS "python;stack;plugin-script"
         SKIP_RETURN_CODE 77
+        RUN_SERIAL TRUE
     )
 endif()
 

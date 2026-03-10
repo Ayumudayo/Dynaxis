@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 
 
-IMAGE = "knights-admin:local"
+IMAGE = "dynaxis-admin:local"
 
 
 def pick_free_port() -> int:

@@ -56,7 +56,7 @@ function on_login(ctx)
   if name and name ~= "" then
     server.send_notice(ctx.session_id, "welcome back, " .. name)
   else
-    server.send_notice(ctx.session_id, "welcome to Knights")
+    server.send_notice(ctx.session_id, "welcome to the server")
   end
 
   server.send_notice(
@@ -120,7 +120,7 @@ Docker 기준:
 
 ```powershell
 pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build
-docker logs knights-stack-server-1-1 --since 5m
+docker logs dynaxis-stack-server-1-1 --since 5m
 ```
 
 확인 로그:

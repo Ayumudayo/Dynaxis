@@ -12,7 +12,7 @@
 #error "TEST_PLUGIN_RUNTIME_V1_FILE is not defined"
 #endif
 
-namespace knights::tests::plugin {
+namespace tests::plugin {
 namespace {
 
 class SharedLibraryTest : public ::testing::Test {
@@ -107,7 +107,7 @@ TEST_F(SharedLibraryTest, MissingSymbolReturnsErrorAndKeepsLoadedLibrary) {
     EXPECT_TRUE(error.empty());
     EXPECT_TRUE(library.is_loaded());
 
-    void* symbol = library.symbol("knights_symbol_that_does_not_exist", error);
+    void* symbol = library.symbol("symbol_that_does_not_exist", error);
     EXPECT_EQ(symbol, nullptr);
     EXPECT_FALSE(error.empty());
     EXPECT_TRUE(library.is_loaded());
@@ -189,4 +189,4 @@ TEST_F(SharedLibraryTest, MoveOperationsTransferOwnership) {
 }
 
 } // namespace
-} // namespace knights::tests::plugin
+} // namespace tests::plugin

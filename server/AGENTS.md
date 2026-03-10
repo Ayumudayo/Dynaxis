@@ -52,5 +52,5 @@ pwsh scripts/run_full_stack_observability.ps1
 ## Notes
 - Dispatch latency quantiles can be NaN if there are no samples in the PromQL rate window (normal; send traffic).
 - Instance registry uses Redis and the `SERVER_REGISTRY_PREFIX` keyspace.
-- Metrics also include `knights_build_info` and (optional) chat hook/plugin series when enabled.
+- Metrics also include `runtime_build_info` and (optional) chat hook/plugin series when enabled.
 - Runtime extensibility quick guides: `docs/extensibility/plugin-quickstart.md`, `docs/extensibility/lua-quickstart.md`, `docs/extensibility/conflict-policy.md`, `docs/extensibility/recipes.md`.

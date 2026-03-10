@@ -208,7 +208,7 @@ void GuiManager::render_login_modal() {
     // 항상 팝업이 열리도록 플래그 설정
     bool open = true;
     if (ImGui::BeginPopupModal("Login", &open, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
-        ImGui::Text("Connect to Knights Server");
+        ImGui::Text("Connect to Dynaxis Server");
         ImGui::Separator();
         
         ImGui::InputText("Host", state_.host_buffer, sizeof(state_.host_buffer));

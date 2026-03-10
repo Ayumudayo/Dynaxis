@@ -77,8 +77,8 @@ tools/wb_worker/
 | --- | --- | --- |
 | `WB_RETRY_MAX` | flush 트랜잭션 즉시 재시도 최대 횟수 | `5` |
 | `WB_RETRY_BACKOFF_MS` | flush 재시도 선형 백오프 시작값(ms) | `250` |
-| `KNIGHTS_TRACING_ENABLED` | stream->DB tracing context 활성화 | `0` |
-| `KNIGHTS_TRACING_SAMPLE_PERCENT` | tracing 샘플링 비율(0~100) | `100` |
+| `RUNTIME_TRACING_ENABLED` | stream->DB tracing context 활성화 | `0` |
+| `RUNTIME_TRACING_SAMPLE_PERCENT` | tracing 샘플링 비율(0~100) | `100` |
 
 `WB_RECLAIM_MIN_IDLE_MS`가 너무 작으면 아직 처리 중인 메시지를 회수해서 중복 처리가 발생할 수 있다.
 

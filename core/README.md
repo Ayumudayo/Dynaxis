@@ -1,6 +1,6 @@
 # 코어 라이브러리(server_core)
 
-`core`는 Knights 프로젝트 전역에서 공유하는 C++20 정적 라이브러리(Static Library)입니다.
+`core`는 Dynaxis 프로젝트 전역에서 공유하는 C++20 정적 라이브러리(Static Library)입니다.
 Boost.Asio 기반의 고성능 네트워크 계층(Hive/SessionListener/Session + TransportListener/TransportConnection), 멀티스레딩 지원(JobQueue, TaskScheduler), 메모리 관리(MemoryPool), 그리고 로깅 및 유틸리티를 제공합니다.
 
 ## 주요 기능

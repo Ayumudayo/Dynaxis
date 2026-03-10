@@ -10,7 +10,7 @@ from typing import cast
 
 
 def _is_enabled() -> bool:
-    value = os.environ.get("KNIGHTS_ENABLE_STACK_PYTHON_TESTS", "")
+    value = os.environ.get("ENABLE_STACK_PYTHON_TESTS", "")
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -18,7 +18,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Run a stack-dependent Python test script for ctest. "
-            "Returns 77 when KNIGHTS_ENABLE_STACK_PYTHON_TESTS is not enabled."
+            "Returns 77 when ENABLE_STACK_PYTHON_TESTS is not enabled."
         )
     )
     _ = parser.add_argument("script", help="Python test script path")
@@ -30,7 +30,7 @@ def main() -> int:
     script_args = cast(list[str], args.script_args)
 
     if not _is_enabled():
-        print("[skip] KNIGHTS_ENABLE_STACK_PYTHON_TESTS is not enabled.")
+        print("[skip] ENABLE_STACK_PYTHON_TESTS is not enabled.")
         return 77
 
     script_path = Path(script)

@@ -1,5 +1,5 @@
 <#
-  Conan2 bootstrap + install helper for Knights
+  Conan2 bootstrap + install helper for Dynaxis
   - Resolves host/build profiles from repository defaults.
   - Runs `conan profile detect --force`.
   - Runs `conan install` into <buildDir>/conan unless -SkipInstall is set.
@@ -123,7 +123,7 @@ if (-not $SkipInstall) {
     '--build=missing',
     '--profile:host', $hostProfilePath,
     '--profile:build', $buildProfilePath,
-    '--options:host', "&:knights_feature=$Feature"
+    '--options:host', "&:build_profile=$Feature"
   )
 
   if ($ToolchainGenerator -and $ToolchainGenerator -ne '') {

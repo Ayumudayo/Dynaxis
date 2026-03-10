@@ -338,7 +338,7 @@ TEST(MetricsHttpServerTest, MetricsEndpointIncludesCommonAndApiMetrics) {
     }
 
     EXPECT_NE(response.find("HTTP/1.1 200 OK"), std::string::npos);
-    EXPECT_NE(response.find("knights_build_info"), std::string::npos);
+    EXPECT_NE(response.find("runtime_build_info"), std::string::npos);
     EXPECT_NE(response.find("core_runtime_session_started_total"), std::string::npos);
     EXPECT_NE(response.find("metrics_smoke_total{component=\"core\"} 2"), std::string::npos);
 }
@@ -475,8 +475,8 @@ TEST(LogSchemaMetricsTest, JsonSchemaMetricsExposeParseAndFillSignals) {
     reset_for_tests();
 
     set_env_value("LOG_FORMAT", "json");
-    set_env_value("KNIGHTS_TRACING_ENABLED", "1");
-    set_env_value("KNIGHTS_TRACING_SAMPLE_PERCENT", "100");
+    set_env_value("RUNTIME_TRACING_ENABLED", "1");
+    set_env_value("RUNTIME_TRACING_SAMPLE_PERCENT", "100");
     server::core::trace::reset_for_tests();
 
     server::core::log::set_level(server::core::log::level::debug);
@@ -526,6 +526,6 @@ TEST(LogSchemaMetricsTest, JsonSchemaMetricsExposeParseAndFillSignals) {
     EXPECT_GE(after.log_masked_fields_total, before.log_masked_fields_total + 1);
 
     set_env_value("LOG_FORMAT", "text");
-    set_env_value("KNIGHTS_TRACING_ENABLED", "0");
+    set_env_value("RUNTIME_TRACING_ENABLED", "0");
     server::core::trace::reset_for_tests();
 }

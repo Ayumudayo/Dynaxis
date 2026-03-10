@@ -4,8 +4,8 @@ project(ServerProject LANGUAGES CXX)
 option(SERVER_ENABLE_TLS "Enable TLS(Asio SSL)" OFF)
 option(SERVER_ENABLE_PROFILING "Enable profiling markers" OFF)
 option(SERVER_USE_HEADER_ONLY_BOOST_SYSTEM "Use header-only boost::system (no lib link)" OFF)
-option(KNIGHTS_ENABLE_SANITIZERS "Enable sanitizers (ASan+UBSan)" OFF)
-option(KNIGHTS_ENABLE_IPO "Enable interprocedural optimization (IPO/LTO)" OFF)
+option(ENABLE_SANITIZERS "Enable sanitizers (ASan+UBSan)" OFF)
+option(ENABLE_IPO "Enable interprocedural optimization (IPO/LTO)" OFF)
 option(BUILD_SERVER_STACK "Build server libraries and server_app" ON)
 option(BUILD_GATEWAY_APP "Build gateway_app" ON)
 
@@ -17,35 +17,35 @@ option(BUILD_WRITE_BEHIND_TOOLS "Build write-behind helper tools" ON)
 option(BUILD_LOADGEN_TOOLS "Build unified load generator tools" ON)
 option(BUILD_ADMIN_APP "Build admin management app" ON)
 option(BUILD_MIGRATIONS_RUNNER "Build migrations runner tool" ON)
-set(KNIGHTS_LUAJIT_SUBMODULE_DIR "${CMAKE_SOURCE_DIR}/external/luajit" CACHE PATH
+set(LUAJIT_SUBMODULE_DIR "${CMAKE_SOURCE_DIR}/external/luajit" CACHE PATH
     "Path to the upstream LuaJIT source submodule")
-set(KNIGHTS_SOL2_SUBMODULE_DIR "${CMAKE_SOURCE_DIR}/external/sol2" CACHE PATH
+set(SOL2_SUBMODULE_DIR "${CMAKE_SOURCE_DIR}/external/sol2" CACHE PATH
     "Path to the sol2 header-only source submodule")
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
-include(knights_luajit_submodule)
-include(knights_sol2_submodule)
+include(luajit_submodule)
+include(sol2_submodule)
 
-if (NOT EXISTS "${KNIGHTS_LUAJIT_SUBMODULE_DIR}/src/lua.h")
+if (NOT EXISTS "${LUAJIT_SUBMODULE_DIR}/src/lua.h")
     message(FATAL_ERROR
-        "Lua capability requires upstream LuaJIT sources at: ${KNIGHTS_LUAJIT_SUBMODULE_DIR}. "
+        "Lua capability requires upstream LuaJIT sources at: ${LUAJIT_SUBMODULE_DIR}. "
         "Run: git submodule update --init --recursive external/luajit")
 endif()
 
-file(STRINGS "${KNIGHTS_LUAJIT_SUBMODULE_DIR}/src/luajit_rolling.h" _KNIGHTS_LUAJIT_VERSION_LINE
+file(STRINGS "${LUAJIT_SUBMODULE_DIR}/src/luajit_rolling.h" _LUAJIT_VERSION_LINE
      REGEX "^#define[ \t]+LUAJIT_VERSION[ \t]+")
-if (NOT _KNIGHTS_LUAJIT_VERSION_LINE)
+if (NOT _LUAJIT_VERSION_LINE)
     message(FATAL_ERROR
-        "Lua capability expects LuaJIT headers at: ${KNIGHTS_LUAJIT_SUBMODULE_DIR}. "
+        "Lua capability expects LuaJIT headers at: ${LUAJIT_SUBMODULE_DIR}. "
         "Detected Lua headers without LUAJIT_VERSION marker.")
 endif()
 
-if (NOT EXISTS "${KNIGHTS_SOL2_SUBMODULE_DIR}/include/sol/sol.hpp")
+if (NOT EXISTS "${SOL2_SUBMODULE_DIR}/include/sol/sol.hpp")
     message(FATAL_ERROR
-        "Lua capability requires sol2 headers at: ${KNIGHTS_SOL2_SUBMODULE_DIR}. "
+        "Lua capability requires sol2 headers at: ${SOL2_SUBMODULE_DIR}. "
         "Run: git submodule update --init --recursive external/sol2")
 endif()
 
@@ -55,7 +55,7 @@ if (MSVC)
     add_compile_options(/utf-8 /MP)
 endif()
 
-if (KNIGHTS_ENABLE_SANITIZERS)
+if (ENABLE_SANITIZERS)
     message(STATUS "Sanitizers enabled (ASan+UBSan where supported)")
 
     if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -66,18 +66,18 @@ if (KNIGHTS_ENABLE_SANITIZERS)
         add_compile_options(/fsanitize=address)
         add_link_options(/INCREMENTAL:NO)
     else()
-        message(WARNING "KNIGHTS_ENABLE_SANITIZERS=ON but unsupported compiler: ${CMAKE_CXX_COMPILER_ID}")
+        message(WARNING "ENABLE_SANITIZERS=ON but unsupported compiler: ${CMAKE_CXX_COMPILER_ID}")
     endif()
 endif()
 
-if (KNIGHTS_ENABLE_IPO)
+if (ENABLE_IPO)
     include(CheckIPOSupported)
-    check_ipo_supported(RESULT KNIGHTS_IPO_SUPPORTED OUTPUT KNIGHTS_IPO_OUTPUT)
-    if (KNIGHTS_IPO_SUPPORTED)
+    check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_OUTPUT)
+    if (IPO_SUPPORTED)
         set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
-        message(STATUS "IPO/LTO enabled (KNIGHTS_ENABLE_IPO=ON)")
+        message(STATUS "IPO/LTO enabled (ENABLE_IPO=ON)")
     else()
-        message(WARNING "KNIGHTS_ENABLE_IPO=ON but IPO is not supported: ${KNIGHTS_IPO_OUTPUT}")
+        message(WARNING "ENABLE_IPO=ON but IPO is not supported: ${IPO_OUTPUT}")
     endif()
 endif()
 

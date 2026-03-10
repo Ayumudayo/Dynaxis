@@ -14,7 +14,7 @@
 #error "TEST_PLUGIN_RUNTIME_V2_FILE is not defined"
 #endif
 
-namespace knights::tests::plugin {
+namespace tests::plugin {
 namespace {
 
 using Chain = server::core::plugin::PluginChainHost<TestPluginApi>;
@@ -154,4 +154,4 @@ TEST_F(PluginChainHostTest, ScanFailureKeepsPreviousChain) {
 }
 
 } // namespace
-} // namespace knights::tests::plugin
+} // namespace tests::plugin

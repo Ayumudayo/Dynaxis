@@ -6,7 +6,7 @@ int transform(int value) {
     return value + 99;
 }
 
-const knights::tests::plugin::TestPluginApi kApi{
+const tests::plugin::TestPluginApi kApi{
     999,
     "plugin_invalid",
     &transform,
@@ -14,6 +14,6 @@ const knights::tests::plugin::TestPluginApi kApi{
 
 } // namespace
 
-extern "C" KNIGHTS_TEST_PLUGIN_EXPORT const knights::tests::plugin::TestPluginApi* knights_test_plugin_api_v1() {
+extern "C" TEST_PLUGIN_EXPORT const tests::plugin::TestPluginApi* test_plugin_api_v1() {
     return &kApi;
 }

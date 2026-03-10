@@ -1,7 +1,7 @@
 param(
     [string]$CanaryEnvFile = "docker/stack/.env.udp-canary.example",
     [string]$RollbackEnvFile = "docker/stack/.env.udp-rollback.example",
-    [string]$ProjectName = "knights-stack",
+    [string]$ProjectName = "dynaxis-stack",
     [switch]$Observability = $true,
     [switch]$NoBuild = $false
 )

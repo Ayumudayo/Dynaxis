@@ -57,8 +57,8 @@ std::uint32_t parse_env_u32(const char* key, std::uint32_t fallback, std::uint32
 const TraceConfig& config() {
     std::lock_guard<std::mutex> lock(g_trace_config_mu);
     if (!g_trace_config_loaded) {
-        g_trace_config.enabled = parse_env_bool("KNIGHTS_TRACING_ENABLED", false);
-        g_trace_config.sample_percent = parse_env_u32("KNIGHTS_TRACING_SAMPLE_PERCENT", 100, 0, 100);
+        g_trace_config.enabled = parse_env_bool("RUNTIME_TRACING_ENABLED", false);
+        g_trace_config.sample_percent = parse_env_u32("RUNTIME_TRACING_SAMPLE_PERCENT", 100, 0, 100);
         g_trace_config_loaded = true;
     }
     return g_trace_config;

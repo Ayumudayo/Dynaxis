@@ -2,17 +2,17 @@ from conan import ConanFile
 from conan.tools.cmake import CMakeDeps, CMakeToolchain, cmake_layout
 
 
-class KnightsConan(ConanFile):
-    name = "knights"
+class ProjectConan(ConanFile):
+    name = "dynaxis"
     version = "0.1.0"
     package_type = "application"
 
     settings = "os", "compiler", "build_type", "arch"
     options = {
-        "knights_feature": ["windows-dev", "windows-client"],
+        "build_profile": ["windows-dev", "windows-client"],
     }
     default_options = {
-        "knights_feature": "windows-dev",
+        "build_profile": "windows-dev",
         "*:shared": False,
     }
 
@@ -20,7 +20,7 @@ class KnightsConan(ConanFile):
         cmake_layout(self)
 
     def requirements(self):
-        feature = str(self.options.knights_feature)
+        feature = str(self.options.build_profile)
 
         self.requires("boost/[>=1.83 <2]")
         self.requires("protobuf/[>=3.21 <7]")
