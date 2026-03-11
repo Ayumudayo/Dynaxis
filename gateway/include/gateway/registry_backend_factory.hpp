@@ -9,6 +9,10 @@
 
 namespace gateway {
 
+std::shared_ptr<server::core::storage::redis::IRedisClient>
+make_redis_client(const std::string& redis_uri,
+                  const server::core::storage::redis::Options& options);
+
 std::shared_ptr<server::core::state::IInstanceStateBackend>
 make_registry_backend(const std::shared_ptr<server::core::storage::redis::IRedisClient>& redis_client,
                       std::string key_prefix,

@@ -38,7 +38,6 @@
 #include "server/core/metrics/build_info.hpp"
 #include "server/core/metrics/metrics.hpp"
 #include "server/protocol/game_opcodes.hpp"
-#include "server/storage/redis/client.hpp"
 
 /**
  * @brief GatewayApp/BackendConnection의 라우팅·브리지 구현입니다.
@@ -1938,8 +1937,8 @@ void GatewayApp::configure_infrastructure() {
     redis_uri_ = redis_env ? redis_env : kDefaultRedisUri;
 
     try {
-        server::storage::redis::Options opts;
-        redis_client_ = server::storage::redis::make_redis_client(redis_uri_, opts);
+        server::core::storage::redis::Options opts;
+        redis_client_ = gateway::make_redis_client(redis_uri_, opts);
         
         if (redis_client_) {
              std::string registry_prefix = kDefaultServerRegistryPrefix;

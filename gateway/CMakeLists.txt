@@ -1,7 +1,13 @@
+add_library(gateway_backends STATIC
+    src/registry_backend_factory.cpp
+)
+target_include_directories(gateway_backends PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
+target_link_libraries(gateway_backends PUBLIC server_core)
+target_link_libraries(gateway_backends PRIVATE server_state)
+
 add_executable(gateway_app
     src/gateway_connection.cpp
     src/gateway_app.cpp
-    src/registry_backend_factory.cpp
     src/session_directory.cpp
     src/main.cpp
 )
@@ -11,8 +17,8 @@ target_include_directories(gateway_app PRIVATE
 )
 
 target_link_libraries(gateway_app PRIVATE
+    gateway_backends
     server_core
-    server_state
 )
 
 if (TARGET generate_game_opcodes)
