@@ -224,7 +224,6 @@ if (BUILD_LOADGEN_TOOLS)
     tools/loadgen/session_client.cpp
   )
   target_include_directories(stack_loadgen PRIVATE
-    ${CMAKE_SOURCE_DIR}/server/include
     ${CMAKE_BINARY_DIR}/proto
   )
   target_link_libraries(stack_loadgen PRIVATE
