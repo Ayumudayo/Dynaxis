@@ -300,6 +300,18 @@ TEST(MetricsHttpServerTest, BuiltInRoutesRejectNonGetMethods) {
     EXPECT_NE(response.find("Allow: GET, HEAD"), std::string::npos);
 }
 
+TEST(BuildInfoMetricsTest, AppendBuildInfoEmitsRuntimeBuildInfoMetric) {
+    std::ostringstream out;
+    append_build_info(out);
+    const std::string text = out.str();
+
+    EXPECT_NE(text.find("# TYPE runtime_build_info gauge"), std::string::npos);
+    EXPECT_NE(text.find("runtime_build_info{git_hash=\""), std::string::npos);
+    EXPECT_NE(text.find(",git_describe=\""), std::string::npos);
+    EXPECT_NE(text.find(",build_time_utc=\""), std::string::npos);
+    EXPECT_NE(text.find("} 1\n"), std::string::npos);
+}
+
 TEST(MetricsHttpServerTest, MetricsEndpointIncludesCommonAndApiMetrics) {
     reset_for_tests();
 
@@ -341,6 +353,36 @@ TEST(MetricsHttpServerTest, MetricsEndpointIncludesCommonAndApiMetrics) {
     EXPECT_NE(response.find("runtime_build_info"), std::string::npos);
     EXPECT_NE(response.find("core_runtime_session_started_total"), std::string::npos);
     EXPECT_NE(response.find("metrics_smoke_total{component=\"core\"} 2"), std::string::npos);
+}
+
+TEST(MetricsHttpServerTest, HealthAndReadyEndpointsUseConfiguredCallbacksAndBodies) {
+    set_env_value("METRICS_HTTP_AUTH_TOKEN", "");
+    set_env_value("METRICS_HTTP_ALLOWLIST", "");
+
+    const auto port = reserve_free_port();
+    MetricsHttpServer server(
+        port,
+        []() { return std::string("test_metric 1\n"); },
+        []() { return false; },
+        []() { return true; },
+        {},
+        [](bool ok) { return ok ? std::string("healthy\n") : std::string("unhealthy\n"); },
+        [](bool ok) { return ok ? std::string("ready\n") : std::string("not ready\n"); });
+    server.start();
+
+    const std::string health = request_http_with_retry(
+        port,
+        "GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    EXPECT_NE(health.find("HTTP/1.1 503 Service Unavailable"), std::string::npos);
+    EXPECT_NE(health.find("unhealthy\n"), std::string::npos);
+
+    const std::string ready = request_http_with_retry(
+        port,
+        "GET /readyz HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    EXPECT_NE(ready.find("HTTP/1.1 200 OK"), std::string::npos);
+    EXPECT_NE(ready.find("ready\n"), std::string::npos);
+
+    server.stop();
 }
 
 TEST(MetricsHttpServerTest, CustomRouteCanReadRequestBody) {

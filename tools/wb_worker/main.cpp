@@ -13,7 +13,8 @@
 #include <limits>
 #include <random>
 
-#include "server/storage/redis/client.hpp"
+#include "../wb_common/redis_client_factory.hpp"
+#include "server/core/storage/redis/client.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/trace/context.hpp"
 #include "server/core/app/app_host.hpp"
@@ -149,7 +150,7 @@ bool IsUuid(const std::string& s) {
     return true;
 }
 
-std::size_t EstimateEntryBytes(const server::storage::redis::IRedisClient::StreamEntry& e) {
+std::size_t EstimateEntryBytes(const server::core::storage::redis::IRedisClient::StreamEntry& e) {
     std::size_t est = e.id.size();
     for (const auto& f : e.fields) {
         est += f.first.size() + f.second.size() + 4;
@@ -209,8 +210,8 @@ public:
         }
 
         // Redis 연결
-        server::storage::redis::Options ropts{};
-        redis_ = server::storage::redis::make_redis_client(config_.redis_uri, ropts);
+        server::core::storage::redis::Options ropts{};
+        redis_ = wb_tools::make_redis_client(config_.redis_uri, ropts);
         if (!redis_ || !redis_->health_check()) {
             std::cerr << "WB worker: Redis health check failed" << std::endl;
             app_host_.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kFailed);
@@ -351,7 +352,7 @@ private:
         auto last_reclaim = std::chrono::steady_clock::now() - std::chrono::milliseconds(config_.reclaim_interval_ms);
         bool initial_reclaim_done = false;
         
-        std::vector<server::storage::redis::IRedisClient::StreamEntry> buf;
+        std::vector<server::core::storage::redis::IRedisClient::StreamEntry> buf;
         buf.reserve(config_.batch_max_events);
         std::size_t buf_bytes = 0;
 
@@ -379,7 +380,7 @@ private:
             }
 
             // 1. Redis에서 메시지 읽기 (Blocking)
-            std::vector<server::storage::redis::IRedisClient::StreamEntry> entries;
+            std::vector<server::core::storage::redis::IRedisClient::StreamEntry> entries;
             if (!redis_->xreadgroup(config_.stream_key, config_.group, config_.consumer, 
                                   500, config_.batch_max_events, entries)) {
                 // 타임아웃 또는 에러 시 잠시 대기
@@ -425,14 +426,14 @@ private:
     }
 
     void ReclaimPending(long long min_idle_ms,
-                        std::vector<server::storage::redis::IRedisClient::StreamEntry>& buf,
+                        std::vector<server::core::storage::redis::IRedisClient::StreamEntry>& buf,
                         std::size_t& buf_bytes,
                         std::chrono::steady_clock::time_point& last_flush) {
         if (!redis_) {
             return;
         }
 
-        server::storage::redis::IRedisClient::StreamAutoClaimResult claimed;
+        server::core::storage::redis::IRedisClient::StreamAutoClaimResult claimed;
         wb_reclaim_runs_total_.fetch_add(1, std::memory_order_relaxed);
         if (!redis_->xautoclaim(config_.stream_key,
                                 config_.group,
@@ -482,7 +483,7 @@ private:
     //      특정 이벤트의 포맷 오류가 전체 배치를 망치지 않도록 한다.
     // 2) 트랜잭션 commit 성공 후에만 ACK 한다. (At-least-once)
     // 3) 영구적 오류는 DLQ로 이동한 뒤 ACK(옵션)하여 무한 재시도를 방지한다.
-    void Flush(std::vector<server::storage::redis::IRedisClient::StreamEntry>& buf) {
+    void Flush(std::vector<server::core::storage::redis::IRedisClient::StreamEntry>& buf) {
         if (buf.empty()) return;
 
         auto t0 = std::chrono::steady_clock::now();
@@ -602,7 +603,7 @@ private:
         buf.clear();
     }
 
-    void ProcessEntry(pqxx::transaction_base& tx, const server::storage::redis::IRedisClient::StreamEntry& e) {
+    void ProcessEntry(pqxx::transaction_base& tx, const server::core::storage::redis::IRedisClient::StreamEntry& e) {
         
         std::string type = "unknown";
         std::string ts_ms = "0";
@@ -655,7 +656,7 @@ private:
         }
     }
 
-    bool SendToDlq(const server::storage::redis::IRedisClient::StreamEntry& e, const char* error_msg) {
+    bool SendToDlq(const server::core::storage::redis::IRedisClient::StreamEntry& e, const char* error_msg) {
         try {
             std::vector<std::pair<std::string, std::string>> fields;
             fields.emplace_back("orig_event_id", e.id);
@@ -675,7 +676,7 @@ private:
     server::core::app::AppHost app_host_{"wb_worker"};
 
     WorkerConfig config_;
-    std::shared_ptr<server::storage::redis::IRedisClient> redis_;
+    std::shared_ptr<server::core::storage::redis::IRedisClient> redis_;
     std::unique_ptr<pqxx::connection> db_;
     bool db_prepared_{false};
 

@@ -20,14 +20,14 @@ struct PoolOptions {
 };
 
 /**
- * @brief 데이터베이스 연결 생명주기를 관리하는 SPI 인터페이스입니다.
+ * @brief 데이터베이스 연결 생명주기와 generic transaction 경계를 관리하는 SPI 인터페이스입니다.
  */
 class IConnectionPool {
 public:
     virtual ~IConnectionPool() = default;
 
     /**
-     * @brief 트랜잭션 단위 객체를 생성합니다.
+     * @brief generic transaction 단위 객체를 생성합니다.
      * @return 생성된 UnitOfWork
      *
      * UnitOfWork 소멸 시점에 연결 반환과 미완료 트랜잭션 롤백 책임이 구현체에 있습니다.

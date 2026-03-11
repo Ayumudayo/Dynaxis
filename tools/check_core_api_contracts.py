@@ -45,9 +45,10 @@ INTERNAL_HEADERS = {
     "server/core/net/acceptor.hpp",
     "server/core/net/connection_runtime_state.hpp",
     "server/core/net/session.hpp",
+    "server/core/state/instance_registry.hpp",
     "server/core/storage/connection_pool.hpp",
     "server/core/storage/db_worker_pool.hpp",
-    "server/core/storage/repositories.hpp",
+    "server/core/storage/redis/client.hpp",
     "server/core/storage/unit_of_work.hpp",
     "server/core/util/crash_handler.hpp",
 }
@@ -65,7 +66,9 @@ PR_REQUIRED_FIELDS = (
 
 API_VERSION_HEADER_REPO_PATH = "core/include/server/core/api/version.hpp"
 COMPATIBILITY_MATRIX_REPO_PATH = "docs/core-api/compatibility-matrix.json"
-STABLE_GOVERNANCE_FIXTURES_REPO_PATH = "tests/core/fixtures/api_contracts/stable_governance_cases.json"
+STABLE_GOVERNANCE_FIXTURES_REPO_PATH = (
+    "tests/core/fixtures/api_contracts/stable_governance_cases.json"
+)
 
 
 def read_text(path: pathlib.Path) -> str:
@@ -90,7 +93,9 @@ def iter_public_example_tests(repo_root: pathlib.Path) -> list[pathlib.Path]:
     return sorted(tests_dir.glob("public_api*.cpp"))
 
 
-def iter_boundary_fixture_tests(repo_root: pathlib.Path, prefix: str) -> list[pathlib.Path]:
+def iter_boundary_fixture_tests(
+    repo_root: pathlib.Path, prefix: str
+) -> list[pathlib.Path]:
     fixtures_dir = repo_root / "tests" / "core" / "fixtures" / "api_contracts"
     if not fixtures_dir.exists():
         return []
@@ -131,7 +136,9 @@ def check_boundary_contract(repo_root: pathlib.Path) -> list[str]:
         return errors
 
     smoke_text = read_text(smoke_file)
-    smoke_includes = [inc for inc in find_includes(smoke_text) if inc.startswith("server/core/")]
+    smoke_includes = [
+        inc for inc in find_includes(smoke_text) if inc.startswith("server/core/")
+    ]
     smoke_include_set = set(smoke_includes)
 
     for inc in smoke_includes:
@@ -192,18 +199,26 @@ def check_boundary_fixtures(repo_root: pathlib.Path) -> list[str]:
     bad_fixtures = iter_boundary_fixture_tests(repo_root, "bad_")
 
     if not good_fixtures:
-        errors.append("missing good boundary fixture: tests/core/fixtures/api_contracts/good_*.cpp")
+        errors.append(
+            "missing good boundary fixture: tests/core/fixtures/api_contracts/good_*.cpp"
+        )
     if not bad_fixtures:
-        errors.append("missing bad boundary fixture: tests/core/fixtures/api_contracts/bad_*.cpp")
+        errors.append(
+            "missing bad boundary fixture: tests/core/fixtures/api_contracts/bad_*.cpp"
+        )
 
     for fixture in good_fixtures:
         fixture_rel = normalize_repo_path(fixture, repo_root)
         for include_path in find_includes(read_text(fixture)):
             category = classify_core_public_include(include_path)
             if category == "internal":
-                errors.append(f"{fixture_rel} (good fixture) includes internal header: {include_path}")
+                errors.append(
+                    f"{fixture_rel} (good fixture) includes internal header: {include_path}"
+                )
             elif category == "non_stable":
-                errors.append(f"{fixture_rel} (good fixture) includes non-Stable header: {include_path}")
+                errors.append(
+                    f"{fixture_rel} (good fixture) includes non-Stable header: {include_path}"
+                )
 
     for fixture in bad_fixtures:
         fixture_rel = normalize_repo_path(fixture, repo_root)
@@ -231,8 +246,14 @@ def check_public_header_dependency_hygiene(repo_root: pathlib.Path) -> list[str]
             if inc.startswith("gateway/"):
                 errors.append(f"{header_rel} must not include gateway header: {inc}")
 
-            if inc.startswith("server/") and not inc.startswith("server/core/") and not inc.startswith("server/wire/"):
-                errors.append(f"{header_rel} must not include non-core server header: {inc}")
+            if (
+                inc.startswith("server/")
+                and not inc.startswith("server/core/")
+                and not inc.startswith("server/wire/")
+            ):
+                errors.append(
+                    f"{header_rel} must not include non-core server header: {inc}"
+                )
 
     return errors
 
@@ -249,15 +270,23 @@ def parse_api_version(repo_root: pathlib.Path) -> tuple[str, list[str]]:
     major_match = re.search(r"k_version_major\s*=\s*(\d+)", text)
     minor_match = re.search(r"k_version_minor\s*=\s*(\d+)", text)
     patch_match = re.search(r"k_version_patch\s*=\s*(\d+)", text)
-    literal_match = re.search(r'version_string\s*\(\)\s*noexcept\s*\{\s*return\s*"([^"]+)"', text)
+    literal_match = re.search(
+        r'version_string\s*\(\)\s*noexcept\s*\{\s*return\s*"([^"]+)"', text
+    )
 
     if not major_match or not minor_match or not patch_match:
-        errors.append(f"failed to parse API version tuple from: {API_VERSION_HEADER_REPO_PATH}")
+        errors.append(
+            f"failed to parse API version tuple from: {API_VERSION_HEADER_REPO_PATH}"
+        )
         return "", errors
 
-    version_tuple = f"{major_match.group(1)}.{minor_match.group(1)}.{patch_match.group(1)}"
+    version_tuple = (
+        f"{major_match.group(1)}.{minor_match.group(1)}.{patch_match.group(1)}"
+    )
     if not literal_match:
-        errors.append(f"failed to parse version_string() from: {API_VERSION_HEADER_REPO_PATH}")
+        errors.append(
+            f"failed to parse version_string() from: {API_VERSION_HEADER_REPO_PATH}"
+        )
         return version_tuple, errors
 
     version_literal = literal_match.group(1)
@@ -316,7 +345,11 @@ def check_compatibility_matrix(repo_root: pathlib.Path) -> list[str]:
 
     parsed_version, parse_errors = parse_api_version(repo_root)
     errors.extend(parse_errors)
-    if parsed_version and isinstance(matrix_version, str) and matrix_version != parsed_version:
+    if (
+        parsed_version
+        and isinstance(matrix_version, str)
+        and matrix_version != parsed_version
+    ):
         errors.append(
             "compatibility matrix api_version does not match "
             f"{API_VERSION_HEADER_REPO_PATH}: matrix={matrix_version}, header={parsed_version}"
@@ -325,16 +358,24 @@ def check_compatibility_matrix(repo_root: pathlib.Path) -> list[str]:
     return errors
 
 
-def git_changed_files(repo_root: pathlib.Path, base_sha: str, head_sha: str) -> list[str]:
+def git_changed_files(
+    repo_root: pathlib.Path, base_sha: str, head_sha: str
+) -> list[str]:
     command = ["git", "diff", "--name-only", base_sha, head_sha]
     result = subprocess.run(command, cwd=repo_root, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "git diff failed")
-    return [line.strip().replace("\\", "/") for line in result.stdout.splitlines() if line.strip()]
+    return [
+        line.strip().replace("\\", "/")
+        for line in result.stdout.splitlines()
+        if line.strip()
+    ]
 
 
 def parse_pr_field(body: str, field_name: str) -> str | None:
-    pattern = re.compile(rf"^\s*-\s*{re.escape(field_name)}\s*:\s*(.*?)\s*$", re.MULTILINE)
+    pattern = re.compile(
+        rf"^\s*-\s*{re.escape(field_name)}\s*:\s*(.*?)\s*$", re.MULTILINE
+    )
     match = pattern.search(body)
     if not match:
         return None
@@ -419,9 +460,13 @@ def check_pr_governance(
 
     breaking = field_values.get("Breaking change on Stable API", "").strip().lower()
     if breaking in {"yes", "y", "true", "1"}:
-        migration = field_values.get("Migration note path (required if breaking=yes)", "").strip()
+        migration = field_values.get(
+            "Migration note path (required if breaking=yes)", ""
+        ).strip()
         migration_lower = migration.lower()
-        if migration_lower in {"n/a", "na", "none", "no"} or not migration.startswith("docs/core-api/"):
+        if migration_lower in {"n/a", "na", "none", "no"} or not migration.startswith(
+            "docs/core-api/"
+        ):
             errors.append(
                 "breaking Stable API changes require a migration note path under docs/core-api/"
             )
@@ -429,7 +474,9 @@ def check_pr_governance(
     return errors
 
 
-def check_doc_freshness(repo_root: pathlib.Path, base_sha: str, head_sha: str) -> list[str]:
+def check_doc_freshness(
+    repo_root: pathlib.Path, base_sha: str, head_sha: str
+) -> list[str]:
     errors: list[str] = []
     changed = git_changed_files(repo_root, base_sha, head_sha)
 
@@ -450,7 +497,9 @@ def check_doc_freshness(repo_root: pathlib.Path, base_sha: str, head_sha: str) -
     return errors
 
 
-def check_stable_change_governance(repo_root: pathlib.Path, base_sha: str, head_sha: str) -> list[str]:
+def check_stable_change_governance(
+    repo_root: pathlib.Path, base_sha: str, head_sha: str
+) -> list[str]:
     changed = set(git_changed_files(repo_root, base_sha, head_sha))
     return check_stable_change_governance_from_changed_files(changed)
 
@@ -486,7 +535,9 @@ def check_stable_governance_fixtures(repo_root: pathlib.Path) -> list[str]:
     errors: list[str] = []
     fixtures_path = repo_root / STABLE_GOVERNANCE_FIXTURES_REPO_PATH
     if not fixtures_path.exists():
-        errors.append(f"missing stable governance fixture file: {STABLE_GOVERNANCE_FIXTURES_REPO_PATH}")
+        errors.append(
+            f"missing stable governance fixture file: {STABLE_GOVERNANCE_FIXTURES_REPO_PATH}"
+        )
         return errors
 
     try:
@@ -513,17 +564,31 @@ def check_stable_governance_fixtures(repo_root: pathlib.Path) -> list[str]:
         changed = case.get("changed")
         expected = case.get("expected_error_substrings")
 
-        if not isinstance(changed, list) or not all(isinstance(item, str) and item for item in changed):
-            errors.append(f"{case_label}: 'changed' must be an array of non-empty strings")
+        if not isinstance(changed, list) or not all(
+            isinstance(item, str) and item for item in changed
+        ):
+            errors.append(
+                f"{case_label}: 'changed' must be an array of non-empty strings"
+            )
             continue
 
-        if not isinstance(expected, list) or not all(isinstance(item, str) and item for item in expected):
-            errors.append(f"{case_label}: 'expected_error_substrings' must be an array of non-empty strings")
+        if not isinstance(expected, list) or not all(
+            isinstance(item, str) and item for item in expected
+        ):
+            errors.append(
+                f"{case_label}: 'expected_error_substrings' must be an array of non-empty strings"
+            )
             continue
 
         actual_errors = check_stable_change_governance_from_changed_files(set(changed))
-        missing_expected = [token for token in expected if not any(token in err for err in actual_errors)]
-        unexpected_actual = [err for err in actual_errors if not any(token in err for token in expected)]
+        missing_expected = [
+            token
+            for token in expected
+            if not any(token in err for err in actual_errors)
+        ]
+        unexpected_actual = [
+            err for err in actual_errors if not any(token in err for token in expected)
+        ]
 
         if missing_expected:
             errors.append(
@@ -538,15 +603,29 @@ def check_stable_governance_fixtures(repo_root: pathlib.Path) -> list[str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Check server_core API boundary and docs governance rules")
-    parser.add_argument("--check-boundary", action="store_true", help="validate public/internal include usage")
+    parser = argparse.ArgumentParser(
+        description="Check server_core API boundary and docs governance rules"
+    )
+    parser.add_argument(
+        "--check-boundary",
+        action="store_true",
+        help="validate public/internal include usage",
+    )
     parser.add_argument(
         "--check-boundary-fixtures",
         action="store_true",
         help="validate boundary checker fixtures for positive/negative include cases",
     )
-    parser.add_argument("--check-doc-freshness", action="store_true", help="require docs update when API headers change")
-    parser.add_argument("--check-pr-governance", action="store_true", help="validate PR governance fields for API-touching PRs")
+    parser.add_argument(
+        "--check-doc-freshness",
+        action="store_true",
+        help="require docs update when API headers change",
+    )
+    parser.add_argument(
+        "--check-pr-governance",
+        action="store_true",
+        help="validate PR governance fields for API-touching PRs",
+    )
     parser.add_argument(
         "--check-stable-change-governance",
         action="store_true",
@@ -557,9 +636,15 @@ def main() -> int:
         action="store_true",
         help="validate stable governance regression fixture cases",
     )
-    parser.add_argument("--base-sha", default="", help="base commit SHA for docs freshness check")
-    parser.add_argument("--head-sha", default="", help="head commit SHA for docs freshness check")
-    parser.add_argument("--event-path", default="", help="GitHub event payload path for PR body checks")
+    parser.add_argument(
+        "--base-sha", default="", help="base commit SHA for docs freshness check"
+    )
+    parser.add_argument(
+        "--head-sha", default="", help="head commit SHA for docs freshness check"
+    )
+    parser.add_argument(
+        "--event-path", default="", help="GitHub event payload path for PR body checks"
+    )
     args = parser.parse_args()
 
     if (
@@ -583,16 +668,22 @@ def main() -> int:
 
     if args.check_doc_freshness:
         if not args.base_sha or not args.head_sha:
-            all_errors.append("--check-doc-freshness requires --base-sha and --head-sha")
+            all_errors.append(
+                "--check-doc-freshness requires --base-sha and --head-sha"
+            )
         else:
             try:
-                all_errors.extend(check_doc_freshness(repo_root, args.base_sha, args.head_sha))
+                all_errors.extend(
+                    check_doc_freshness(repo_root, args.base_sha, args.head_sha)
+                )
             except RuntimeError as exc:
                 all_errors.append(str(exc))
 
     if args.check_pr_governance:
         if not args.base_sha or not args.head_sha:
-            all_errors.append("--check-pr-governance requires --base-sha and --head-sha")
+            all_errors.append(
+                "--check-pr-governance requires --base-sha and --head-sha"
+            )
         else:
             try:
                 all_errors.extend(
@@ -608,10 +699,16 @@ def main() -> int:
 
     if args.check_stable_change_governance:
         if not args.base_sha or not args.head_sha:
-            all_errors.append("--check-stable-change-governance requires --base-sha and --head-sha")
+            all_errors.append(
+                "--check-stable-change-governance requires --base-sha and --head-sha"
+            )
         else:
             try:
-                all_errors.extend(check_stable_change_governance(repo_root, args.base_sha, args.head_sha))
+                all_errors.extend(
+                    check_stable_change_governance(
+                        repo_root, args.base_sha, args.head_sha
+                    )
+                )
             except RuntimeError as exc:
                 all_errors.append(str(exc))
 

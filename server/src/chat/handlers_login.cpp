@@ -7,12 +7,12 @@
 #include "server/core/concurrent/job_queue.hpp"
 #include "wire.pb.h"
 // 저장소 연동 헤더
-#include "server/core/storage/connection_pool.hpp"
+#include "server/storage/connection_pool.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <optional>
-#include "server/storage/redis/client.hpp"
+#include "server/core/storage/redis/client.hpp"
 
 using namespace server::core;
 namespace proto = server::core::protocol;
@@ -180,7 +180,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                         // 1. 먼저 이름으로 기존 사용자가 있는지 검색합니다.
                         // 이미 존재하는 사용자라면 새로 만들지 않고 ID를 재사용합니다.
                         {
-                            auto uow_find = db_pool_->make_unit_of_work();
+                            auto uow_find = db_pool_->make_repository_unit_of_work();
                             auto existing = uow_find->users().find_by_name_ci(new_user, 1);
                             if (!existing.empty()) {
                                 uid = existing[0].id;
@@ -189,7 +189,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                         
                         // 2. 기존 사용자가 없다면 새로 생성을 시도합니다.
                         if (uid.empty()) {
-                            auto uow_create = db_pool_->make_unit_of_work();
+                            auto uow_create = db_pool_->make_repository_unit_of_work();
                             try {
                                 auto u = uow_create->users().create_guest(new_user);
                                 uid = u.id;
@@ -197,7 +197,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                             } catch (...) {
                                 // 3. 생성에 실패했다면(동시성 문제로 그 사이 누군가 만들었을 수 있음),
                                 // 다시 한 번 검색해서 ID를 가져옵니다.
-                                auto uow_retry = db_pool_->make_unit_of_work();
+                                auto uow_retry = db_pool_->make_repository_unit_of_work();
                                 auto existing = uow_retry->users().find_by_name_ci(new_user, 1);
                                 if (!existing.empty()) {
                                     uid = existing[0].id;
@@ -225,7 +225,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 // users 테이블에 마지막 로그인 IP와 시각을 기록한다.
                 {
                     auto ip = login_ip;
-                    auto uow3 = db_pool_->make_unit_of_work();
+                    auto uow3 = db_pool_->make_repository_unit_of_work();
                     uow3->users().update_last_login(uid, ip);
                     uow3->commit();
                 }
@@ -235,7 +235,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 if (!rid.empty()) {
                     lobby_room_id = rid; // write-behind 이벤트에 활용한다.
                     auto ip = login_ip;
-                    auto uow2 = db_pool_->make_unit_of_work();
+                    auto uow2 = db_pool_->make_repository_unit_of_work();
                     std::string sys = std::string("(login ip=") + ip + ")";
                     (void)uow2->messages().create(rid, std::string("lobby"), std::nullopt, sys);
                     uow2->commit();

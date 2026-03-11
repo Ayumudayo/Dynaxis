@@ -27,7 +27,9 @@
 #include <boost/asio/ip/tcp.hpp>
 
 #include "gateway/gateway_connection.hpp"
+#include "gateway/registry_backend_factory.hpp"
 #include "server/core/net/queue_budget.hpp"
+#include "server/core/state/instance_registry.hpp"
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
@@ -36,8 +38,6 @@
 #include "server/core/metrics/build_info.hpp"
 #include "server/core/metrics/metrics.hpp"
 #include "server/protocol/game_opcodes.hpp"
-#include "server/storage/redis/client.hpp"
-#include "server/state/instance_registry.hpp"
 
 /**
  * @brief GatewayApp/BackendConnection의 라우팅·브리지 구현입니다.
@@ -1567,7 +1567,7 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
     }
 
     // 2) 신규 선택: least-connections(active_sessions) 기반.
-    const server::state::InstanceRecord* selected = nullptr;
+    const server::core::state::InstanceRecord* selected = nullptr;
     for (const auto& rec : instances) {
         if (!rec.ready || rec.instance_id.empty() || rec.host.empty() || rec.port == 0) {
             continue;
@@ -1937,8 +1937,8 @@ void GatewayApp::configure_infrastructure() {
     redis_uri_ = redis_env ? redis_env : kDefaultRedisUri;
 
     try {
-        server::storage::redis::Options opts;
-        redis_client_ = server::storage::redis::make_redis_client(redis_uri_, opts);
+        server::core::storage::redis::Options opts;
+        redis_client_ = gateway::make_redis_client(redis_uri_, opts);
         
         if (redis_client_) {
              std::string registry_prefix = kDefaultServerRegistryPrefix;
@@ -1958,12 +1958,7 @@ void GatewayApp::configure_infrastructure() {
                  }
              }
 
-              auto state_client = server::state::make_redis_state_client(redis_client_);
-              backend_registry_ = std::make_unique<server::state::RedisInstanceStateBackend>(
-                  state_client,
-                  std::move(registry_prefix),
-                  registry_ttl
-              );
+              backend_registry_ = make_registry_backend(redis_client_, std::move(registry_prefix), registry_ttl);
               
               session_directory_ = std::make_unique<SessionDirectory>(
                   redis_client_,

@@ -128,6 +128,7 @@ if (Python3_Interpreter_FOUND)
         COMMENT "Generating protocol system opcodes header"
         VERBATIM)
     add_custom_target(generate_opcodes DEPENDS ${GENERATED_HEADER})
+
     # wire codec header generation
     set(WIRE_MAP_JSON ${CMAKE_SOURCE_DIR}/protocol/wire_map.json)
     set(GENERATED_WIRE_CODEC ${CMAKE_SOURCE_DIR}/core/include/server/wire/codec.hpp)
@@ -158,6 +159,9 @@ if (BUILD_SERVER_TESTS)
 endif()
 
 if (BUILD_WRITE_BEHIND_TOOLS)
+  add_library(wb_common_redis_factory STATIC tools/wb_common/redis_client_factory.cpp)
+  target_link_libraries(wb_common_redis_factory PUBLIC server_core)
+
   add_executable(wb_worker tools/wb_worker/main.cpp)
   add_executable(wb_dlq_replayer tools/wb_dlq_replayer/main.cpp)
   add_executable(wb_emit tools/wb_emit/main.cpp)
@@ -169,14 +173,14 @@ if (BUILD_WRITE_BEHIND_TOOLS)
   target_link_libraries(wb_check PRIVATE server_core)
 
   if (TARGET server_storage_pg)
-    target_link_libraries(wb_worker PRIVATE server_storage_pg)
-    target_link_libraries(wb_check PRIVATE server_storage_pg)
   endif()
-  if (TARGET server_storage_redis)
-    target_link_libraries(wb_worker PRIVATE server_storage_redis)
-    target_link_libraries(wb_dlq_replayer PRIVATE server_storage_redis)
-    target_link_libraries(wb_emit PRIVATE server_storage_redis)
+  if (TARGET server_storage_redis_factory)
+    target_link_libraries(wb_common_redis_factory PRIVATE server_storage_redis_factory)
   endif()
+
+  target_link_libraries(wb_worker PRIVATE wb_common_redis_factory)
+  target_link_libraries(wb_dlq_replayer PRIVATE wb_common_redis_factory)
+  target_link_libraries(wb_emit PRIVATE wb_common_redis_factory)
 
   if (TARGET nlohmann_json::nlohmann_json)
     target_link_libraries(wb_worker PRIVATE nlohmann_json::nlohmann_json)
@@ -223,7 +227,6 @@ if (BUILD_LOADGEN_TOOLS)
     tools/loadgen/session_client.cpp
   )
   target_include_directories(stack_loadgen PRIVATE
-    ${CMAKE_SOURCE_DIR}/server/include
     ${CMAKE_BINARY_DIR}/proto
   )
   target_link_libraries(stack_loadgen PRIVATE
@@ -249,6 +252,15 @@ if (BUILD_LOADGEN_TOOLS)
 endif()
 
 if (BUILD_ADMIN_APP)
+  add_library(admin_app_backends STATIC tools/admin_app/redis_client_factory.cpp)
+  target_link_libraries(admin_app_backends PUBLIC server_core)
+  if (TARGET server_state_redis_factory)
+    target_link_libraries(admin_app_backends PRIVATE server_state_redis_factory)
+  endif()
+  if (TARGET server_storage_redis_factory)
+    target_link_libraries(admin_app_backends PRIVATE server_storage_redis_factory)
+  endif()
+
   add_executable(admin_app tools/admin_app/main.cpp)
   target_link_libraries(admin_app PRIVATE server_core)
   if (TARGET nlohmann_json::nlohmann_json)
@@ -256,12 +268,7 @@ if (BUILD_ADMIN_APP)
   else()
     message(WARNING "nlohmann_json target not found ? admin_app may fail to compile")
   endif()
-  if (TARGET server_storage_redis)
-    target_link_libraries(admin_app PRIVATE server_storage_redis)
-  endif()
-  if (TARGET server_state)
-    target_link_libraries(admin_app PRIVATE server_state)
-  endif()
+  target_link_libraries(admin_app PRIVATE admin_app_backends)
 
   add_custom_command(TARGET admin_app POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

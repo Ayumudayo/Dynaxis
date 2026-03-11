@@ -10,6 +10,7 @@ Historical proposal/report docs were pruned from the active docs tree; use the f
 - `docs/rename_boundary.md` - canonical rename policy, affected surfaces, and allowed legacy record.
 - `docs/build.md` - build guidance.
 - `docs/configuration.md` - runtime config surface.
+- `docs/core-design.md` - core/runtime layering and composition ownership notes.
 - `docs/tests.md` - verification/test entrypoint.
 - `docs/protocol.md` - protocol overview.
 - `docs/protocol/rudp.md` - current RUDP/dual-transport behavior.

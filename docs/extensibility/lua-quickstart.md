@@ -14,6 +14,7 @@
 
 - `server/README.md`
 - `docs/configuration.md`
+- `docs/extensibility/governance.md`
 - `docs/ops/plugin-script-operations.md`
 
 ## 1) 준비

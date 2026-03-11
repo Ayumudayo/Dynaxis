@@ -3,8 +3,8 @@
 #include <server/core/net/session.hpp>
 #include <server/core/net/dispatcher.hpp>
 #include <server/core/concurrent/job_queue.hpp>
-#include <server/core/storage/connection_pool.hpp>
-#include <server/core/storage/unit_of_work.hpp>
+#include <server/storage/connection_pool.hpp>
+#include <server/storage/unit_of_work.hpp>
 #include <server/storage/redis/client.hpp>
 #include <server/core/config/options.hpp>
 #include <server/core/net/connection_runtime_state.hpp>
@@ -37,7 +37,7 @@
 
 using namespace server::app::chat;
 using namespace server::core;
-using namespace server::core::storage;
+using namespace server::storage;
 using namespace server::storage::redis;
 namespace game_proto = server::protocol;
 namespace core_proto = server::core::protocol;
@@ -171,12 +171,12 @@ public:
 
 class MockSessionRepository : public ISessionRepository {
 public:
-    std::optional<server::core::storage::Session> find_by_token_hash(const std::string&) override { return std::nullopt; }
-    server::core::storage::Session create(const std::string&, const std::chrono::system_clock::time_point&, const std::optional<std::string>&, const std::optional<std::string>&, const std::string&) override { return {}; }
+    std::optional<server::storage::Session> find_by_token_hash(const std::string&) override { return std::nullopt; }
+    server::storage::Session create(const std::string&, const std::chrono::system_clock::time_point&, const std::optional<std::string>&, const std::optional<std::string>&, const std::string&) override { return {}; }
     void revoke(const std::string&) override {}
 };
 
-class MockUnitOfWork : public IUnitOfWork {
+class MockUnitOfWork : public IRepositoryUnitOfWork {
 public:
     MockUserRepository user_repo;
     MockRoomRepository room_repo;
@@ -194,9 +194,9 @@ public:
     IMembershipRepository& memberships() override { return membership_repo; }
 };
 
-class MockConnectionPool : public IConnectionPool {
+class MockConnectionPool : public IRepositoryConnectionPool {
 public:
-    std::unique_ptr<IUnitOfWork> make_unit_of_work() override {
+    std::unique_ptr<IRepositoryUnitOfWork> make_repository_unit_of_work() override {
         return std::make_unique<MockUnitOfWork>();
     }
     bool health_check() override { return true; }
@@ -695,6 +695,7 @@ TEST_F(ChatServiceTest, ChatSend) {
 
     // 2. 메시지 전송
     std::vector<uint8_t> chat_payload;
+    write_lp_utf8(chat_payload, "room_1");
     write_lp_utf8(chat_payload, "Hello World");
     
     chat_service_->on_chat_send(*session_, chat_payload);

@@ -1,4 +1,4 @@
-#include "server/storage/redis/client.hpp"
+#include "server/storage/redis/factory.hpp"
 
 #include <memory>
 #include <utility>
@@ -618,7 +618,7 @@ private:
 };
 
 // redis++이 가능하면 실제 구현을, 아니면 Stub을 반환한다.
-std::shared_ptr<IRedisClient> make_redis_client(const std::string& uri, const Options& opts) {
+std::shared_ptr<IRedisClient> make_redis_client_impl(const std::string& uri, const Options& opts) {
 #if defined(HAVE_REDIS_PLUS_PLUS)
     try {
         return std::make_shared<RedisClientImpl>(uri, opts);

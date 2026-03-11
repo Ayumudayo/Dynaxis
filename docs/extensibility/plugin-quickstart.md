@@ -6,6 +6,7 @@
 - `server/include/server/chat/chat_hook_plugin_abi.hpp`
 - `server/plugins/chat_hook_sample.cpp`
 - `docs/core-api/extensions.md`
+- `docs/extensibility/governance.md`
 - `docs/ops/plugin-script-operations.md`
 
 ## 1) 30분 온보딩 경로

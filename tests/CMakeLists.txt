@@ -15,12 +15,20 @@ set_tests_properties(ProtocolFuzzHarness PROPERTIES LABELS "fuzz")
 if (BUILD_GTEST_TESTS)
     find_package(GTest CONFIG REQUIRED)
 
+    set(GTEST_DISCOVERY_TIMEOUT_SEC 30)
+
+    function(discover_labeled_gtests target labels)
+        string(REPLACE ";" "\\;" escaped_labels "${labels}")
+        gtest_discover_tests(${target}
+            DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC}
+            PROPERTIES LABELS "${escaped_labels}")
+    endfunction()
+
     add_executable(storage_basic_tests
         test_storage_basic.cpp
     )
     target_include_directories(storage_basic_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/core/include
-        ${CMAKE_SOURCE_DIR}/server/include
     )
     target_link_libraries(storage_basic_tests PRIVATE
         GTest::gtest_main
@@ -35,7 +43,6 @@ if (BUILD_GTEST_TESTS)
     )
     target_include_directories(core_concurrency_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/core/include
-        ${CMAKE_SOURCE_DIR}/server/include
     )
     target_link_libraries(core_concurrency_tests PRIVATE
         GTest::gtest_main
@@ -44,33 +51,22 @@ if (BUILD_GTEST_TESTS)
 
     add_executable(server_state_tests
         state_instance_registry_tests.cpp
-    )
-    target_include_directories(server_state_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/include
-        ${CMAKE_SOURCE_DIR}/server/include
+        gateway_session_directory_tests.cpp
     )
     target_link_libraries(server_state_tests PRIVATE
         GTest::gtest_main
-        server_state
+        gateway_session_directory
+        server_state_common
+        server_state_redis
+        server_state_consul
     )
 
     add_executable(chat_history_tests
         chat_history_tests.cpp
-        ${CMAKE_SOURCE_DIR}/server/src/scripting/chat_lua_bindings.cpp
-        ${CMAKE_SOURCE_DIR}/server/src/chat/chat_service_core.cpp
-        ${CMAKE_SOURCE_DIR}/server/src/chat/chat_hook_plugin_manager.cpp
-        ${CMAKE_SOURCE_DIR}/server/src/chat/chat_hook_plugin_chain.cpp
-    )
-    target_include_directories(chat_history_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/include
-        ${CMAKE_SOURCE_DIR}/server/include
-        ${CMAKE_SOURCE_DIR}/server
     )
     target_link_libraries(chat_history_tests PRIVATE
         GTest::gtest_main
-        server_core
-        server_storage_redis
-        wire_proto
+        server_chat_runtime
     )
 
     # Linux dynamic loader symbols (dlopen/dlsym)
@@ -81,6 +77,7 @@ if (BUILD_GTEST_TESTS)
         core/test_core_util.cpp
         core/test_core_metrics.cpp
         core/test_core_paths.cpp
+        core/test_app_host_lifecycle.cpp
         core/test_core_net.cpp
         core/test_gateway_resilience_controls.cpp
         core/test_trace_context.cpp
@@ -98,7 +95,6 @@ if (BUILD_GTEST_TESTS)
     )
     target_include_directories(core_general_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/core/include
-        ${CMAKE_SOURCE_DIR}/server/include
         ${CMAKE_SOURCE_DIR}/gateway/include
     )
     target_link_libraries(core_general_tests PRIVATE
@@ -173,29 +169,16 @@ if (BUILD_GTEST_TESTS)
         server/test_chat_lua_bindings.cpp
         server/test_lua_hook_integration.cpp
         server/test_hook_auto_disable.cpp
-        ${CMAKE_SOURCE_DIR}/server/src/app/config.cpp
-        ${CMAKE_SOURCE_DIR}/server/src/scripting/chat_lua_bindings.cpp
-        ${CMAKE_SOURCE_DIR}/server/src/chat/chat_service_core.cpp
-        ${CMAKE_SOURCE_DIR}/server/src/chat/chat_hook_plugin_manager.cpp
-        ${CMAKE_SOURCE_DIR}/server/src/chat/chat_hook_plugin_chain.cpp
-        ${CMAKE_SOURCE_DIR}/server/src/chat/handlers_login.cpp
-        ${CMAKE_SOURCE_DIR}/server/src/chat/handlers_join.cpp
-        ${CMAKE_SOURCE_DIR}/server/src/chat/handlers_leave.cpp
-        ${CMAKE_SOURCE_DIR}/server/src/chat/handlers_chat.cpp
-        ${CMAKE_SOURCE_DIR}/server/src/chat/handlers_ping.cpp
-        ${CMAKE_SOURCE_DIR}/server/src/chat/session_events.cpp
-    )
-    target_include_directories(server_general_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/include
-        ${CMAKE_SOURCE_DIR}/server/include
-        ${CMAKE_SOURCE_DIR}/server
     )
     target_link_libraries(server_general_tests PRIVATE
         GTest::gtest_main
+        server_app_config
+        server_chat_runtime
         server_core
-        server_storage_redis
-        wire_proto
     )
+    if (TARGET generate_game_opcodes)
+        add_dependencies(server_general_tests generate_game_opcodes)
+    endif()
 
     # Linux dynamic loader symbols (dlopen/dlsym)
     target_link_libraries(server_general_tests PRIVATE ${CMAKE_DL_LIBS})
@@ -254,12 +237,6 @@ if (BUILD_GTEST_TESTS)
 
         add_executable(server_plugin_chain_tests
             server/test_chat_plugin_chain.cpp
-            ${CMAKE_SOURCE_DIR}/server/src/chat/chat_hook_plugin_chain.cpp
-        )
-        target_include_directories(server_plugin_chain_tests PRIVATE
-            ${CMAKE_SOURCE_DIR}/core/include
-            ${CMAKE_SOURCE_DIR}/server/include
-            ${CMAKE_SOURCE_DIR}/server/src/chat
         )
         target_compile_definitions(server_plugin_chain_tests PRIVATE
             TEST_CHAT_HOOK_SAMPLE_PATH="$<TARGET_FILE:chat_hook_sample>"
@@ -268,6 +245,7 @@ if (BUILD_GTEST_TESTS)
         )
         target_link_libraries(server_plugin_chain_tests PRIVATE
             GTest::gtest_main
+            server_chat_runtime
             server_core
             ${CMAKE_DL_LIBS}
         )
@@ -279,12 +257,6 @@ if (BUILD_GTEST_TESTS)
 
         add_executable(server_plugin_chain_v2_tests
             server/test_chat_plugin_chain_v2.cpp
-            ${CMAKE_SOURCE_DIR}/server/src/chat/chat_hook_plugin_chain.cpp
-        )
-        target_include_directories(server_plugin_chain_v2_tests PRIVATE
-            ${CMAKE_SOURCE_DIR}/core/include
-            ${CMAKE_SOURCE_DIR}/server/include
-            ${CMAKE_SOURCE_DIR}/server/src/chat
         )
         target_compile_definitions(server_plugin_chain_v2_tests PRIVATE
             TEST_CHAT_HOOK_SAMPLE_V2_PATH="$<TARGET_FILE:chat_hook_sample_v2>"
@@ -295,6 +267,7 @@ if (BUILD_GTEST_TESTS)
         )
         target_link_libraries(server_plugin_chain_v2_tests PRIVATE
             GTest::gtest_main
+            server_chat_runtime
             server_core
             ${CMAKE_DL_LIBS}
         )
@@ -308,23 +281,26 @@ if (BUILD_GTEST_TESTS)
     endif()
 
     include(GoogleTest)
-    set(GTEST_DISCOVERY_TIMEOUT_SEC 30)
-    gtest_discover_tests(storage_basic_tests DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC})
-    gtest_discover_tests(core_concurrency_tests DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC})
-    gtest_discover_tests(server_state_tests DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC})
-    gtest_discover_tests(chat_history_tests DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC})
-    gtest_discover_tests(core_general_tests DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC})
-    gtest_discover_tests(core_plugin_runtime_tests DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC})
-    gtest_discover_tests(server_general_tests DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC})
+    discover_labeled_gtests(storage_basic_tests "integration;db")
+    discover_labeled_gtests(core_concurrency_tests "core-behavior")
+    discover_labeled_gtests(server_state_tests "integration;shared-state")
+    discover_labeled_gtests(chat_history_tests "integration;chat-history")
+    discover_labeled_gtests(core_general_tests "core-behavior")
+    discover_labeled_gtests(core_plugin_runtime_tests "core-behavior;extensibility")
+    discover_labeled_gtests(server_general_tests "integration;server-behavior;extensibility")
     if (TARGET server_plugin_chain_tests)
-        gtest_discover_tests(server_plugin_chain_tests DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC})
+        discover_labeled_gtests(server_plugin_chain_tests "integration;extensibility")
     endif()
     if (TARGET server_plugin_chain_v2_tests)
-        gtest_discover_tests(server_plugin_chain_v2_tests DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC})
+        discover_labeled_gtests(server_plugin_chain_v2_tests "integration;extensibility")
     endif()
 endif()
 
 if (BUILD_CONTRACT_TESTS)
+    if (NOT CMAKE_INSTALL_LIBDIR)
+        set(CMAKE_INSTALL_LIBDIR "lib")
+    endif()
+
     add_executable(core_public_api_smoke
         core/public_api_smoke.cpp
     )
@@ -335,6 +311,7 @@ if (BUILD_CONTRACT_TESTS)
         server_core
     )
     add_test(NAME CorePublicApiSmoke COMMAND core_public_api_smoke)
+    set_tests_properties(CorePublicApiSmoke PROPERTIES LABELS "contract;public-api;smoke")
 
     add_executable(core_public_api_headers_compile
         core/public_api_headers_compile.cpp
@@ -346,6 +323,7 @@ if (BUILD_CONTRACT_TESTS)
         server_core
     )
     add_test(NAME CorePublicApiHeadersCompile COMMAND core_public_api_headers_compile)
+    set_tests_properties(CorePublicApiHeadersCompile PROPERTIES LABELS "contract;public-api;compile")
 
     add_executable(core_public_api_stable_header_scenarios
         core/public_api_stable_header_scenarios.cpp
@@ -357,20 +335,76 @@ if (BUILD_CONTRACT_TESTS)
         server_core
     )
     add_test(NAME CorePublicApiStableHeaderScenarios COMMAND core_public_api_stable_header_scenarios)
+    set_tests_properties(CorePublicApiStableHeaderScenarios PROPERTIES LABELS "contract;public-api;smoke")
+
+    add_test(
+      NAME CoreInstalledPackageConsumer
+      COMMAND "${CMAKE_COMMAND}"
+              "-DBUILD_DIR=${CMAKE_BINARY_DIR}"
+              "-DCONSUMER_SOURCE_DIR=${CMAKE_SOURCE_DIR}/tests/package/installed_consumer"
+              "-DCONSUMER_BUILD_DIR=${CMAKE_BINARY_DIR}/contract/installed-consumer/build"
+              "-DINSTALL_PREFIX=${CMAKE_BINARY_DIR}/contract/installed-consumer/prefix"
+              "-DSERVER_CORE_PACKAGE_DIR=${CMAKE_BINARY_DIR}/contract/installed-consumer/prefix/${CMAKE_INSTALL_LIBDIR}/cmake/server_core"
+              "-DTOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
+              "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+              "-DCONFIG=$<CONFIG>"
+              "-DGENERATOR=${CMAKE_GENERATOR}"
+              "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+              "-DGENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+              -P "${CMAKE_SOURCE_DIR}/tests/core/run_installed_package_consumer.cmake"
+    )
+    set_tests_properties(CoreInstalledPackageConsumer PROPERTIES LABELS "contract;public-api;installed-consumer")
+
+    add_test(
+      NAME FactoryPgInstalledPackageConsumer
+      COMMAND "${CMAKE_COMMAND}"
+              "-DBUILD_DIR=${CMAKE_BINARY_DIR}"
+              "-DCONSUMER_SOURCE_DIR=${CMAKE_SOURCE_DIR}/tests/package/factory_pg_consumer"
+              "-DCONSUMER_BUILD_DIR=${CMAKE_BINARY_DIR}/contract/factory-pg-consumer/build"
+              "-DINSTALL_PREFIX=${CMAKE_BINARY_DIR}/contract/factory-pg-consumer/prefix"
+              "-DTOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
+              "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+              "-DCONFIG=$<CONFIG>"
+              "-DGENERATOR=${CMAKE_GENERATOR}"
+              "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+              "-DGENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+              -P "${CMAKE_SOURCE_DIR}/tests/core/run_installed_factory_package_consumer.cmake"
+    )
+    set_tests_properties(FactoryPgInstalledPackageConsumer PROPERTIES LABELS "contract;package;installed-consumer")
+
+    add_test(
+      NAME FactoryRedisInstalledPackageConsumer
+      COMMAND "${CMAKE_COMMAND}"
+              "-DBUILD_DIR=${CMAKE_BINARY_DIR}"
+              "-DCONSUMER_SOURCE_DIR=${CMAKE_SOURCE_DIR}/tests/package/factory_redis_consumer"
+              "-DCONSUMER_BUILD_DIR=${CMAKE_BINARY_DIR}/contract/factory-redis-consumer/build"
+              "-DINSTALL_PREFIX=${CMAKE_BINARY_DIR}/contract/factory-redis-consumer/prefix"
+              "-DTOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
+              "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+              "-DCONFIG=$<CONFIG>"
+              "-DGENERATOR=${CMAKE_GENERATOR}"
+              "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+              "-DGENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+              -P "${CMAKE_SOURCE_DIR}/tests/core/run_installed_factory_package_consumer.cmake"
+    )
+    set_tests_properties(FactoryRedisInstalledPackageConsumer PROPERTIES LABELS "contract;package;installed-consumer")
 
     if (Python3_Interpreter_FOUND)
       add_test(
         NAME CoreApiBoundaryFixtures
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/check_core_api_contracts.py" --check-boundary-fixtures
       )
+      set_tests_properties(CoreApiBoundaryFixtures PROPERTIES LABELS "contract;docs-policy")
       add_test(
         NAME DoxygenCoverageToolTests
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/test_check_doxygen_coverage.py"
       )
+      set_tests_properties(DoxygenCoverageToolTests PROPERTIES LABELS "contract;docs-policy")
       add_test(
         NAME CoreApiStableGovernanceFixtures
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/check_core_api_contracts.py" --check-stable-governance-fixtures
       )
+      set_tests_properties(CoreApiStableGovernanceFixtures PROPERTIES LABELS "contract;docs-policy")
 
     else()
       message(WARNING "Python3 not found: CoreApiBoundaryFixtures test disabled")

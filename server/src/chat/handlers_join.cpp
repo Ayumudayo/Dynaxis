@@ -8,7 +8,7 @@
 #include <optional>
 #include "server/storage/redis/client.hpp"
 // 저장소 연동 헤더
-#include "server/core/storage/connection_pool.hpp"
+#include "server/storage/connection_pool.hpp"
 
 using namespace server::core;
 namespace proto = server::core::protocol;
@@ -269,7 +269,7 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
                     auto rid = ensure_room_id_ci(room_to_join);
                     if (!rid.empty()) {
                         joined_room_id = rid;
-                        auto uow = db_pool_->make_unit_of_work();
+                        auto uow = db_pool_->make_repository_unit_of_work();
                         // 멤버십 테이블에 입장 기록 (upsert)
                         uow->memberships().upsert_join(uid, rid, "member");
                         // 방 입장 시점의 마지막 메시지까지 읽음으로 표시한다.
@@ -298,7 +298,7 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
                             redis_->del("room:password:" + previous_room);
                               if (db_pool_) {
                                 try {
-                                    auto uow = db_pool_->make_unit_of_work();
+                                    auto uow = db_pool_->make_repository_unit_of_work();
                                     auto found = uow->rooms().find_by_name_exact_ci(previous_room);
                                     if (found) {
                                         uow->rooms().close(found->id);

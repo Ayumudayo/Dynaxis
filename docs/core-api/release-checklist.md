@@ -17,6 +17,7 @@
   - `core_public_api_smoke`
   - `core_public_api_headers_compile`
   - `core_public_api_stable_header_scenarios`
+  - `CoreInstalledPackageConsumer`
 - [ ] API 거버넌스 검증 통과:
   - `python tools/check_core_api_contracts.py --check-boundary`
   - `python tools/check_core_api_contracts.py --check-boundary-fixtures`
@@ -33,7 +34,7 @@ pwsh scripts/build.ps1 -Config Debug -Target core_public_api_smoke
 pwsh scripts/build.ps1 -Config Debug -Target core_public_api_headers_compile
 pwsh scripts/build.ps1 -Config Debug -Target core_public_api_stable_header_scenarios
 
-ctest --preset windows-test -R "CorePublicApi|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure
+ctest -C Debug --test-dir build-windows/tests -L contract --output-on-failure
 ```
 
 ## 승인 기록

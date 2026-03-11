@@ -9,9 +9,14 @@
 #include "server/core/net/session.hpp"
 #include "server/core/storage/connection_pool.hpp"
 #include "server/core/storage/db_worker_pool.hpp"
+#include "server/core/storage/redis/client.hpp"
+#include "server/core/state/instance_registry.hpp"
 #include "server/core/util/service_registry.hpp"
 #include "server/core/util/crash_handler.hpp"
+#include "server/storage/connection_pool.hpp"
 #include "server/storage/postgres/connection_pool.hpp"
+#include "server/storage/redis/factory.hpp"
+#include "server/state/redis_backend_factory.hpp"
 
 /**
  * @brief server_app와 server_core 내부 구현을 연결하는 부트스트랩 어댑터 구현부입니다.
@@ -75,6 +80,39 @@ std::shared_ptr<server::core::storage::IConnectionPool> make_postgres_connection
     return server::storage::postgres::make_connection_pool(db_uri, options);
 }
 
+std::shared_ptr<server::storage::IRepositoryConnectionPool> make_repository_connection_pool(
+    const std::string& db_uri,
+    std::size_t min_size,
+    std::size_t max_size,
+    std::uint32_t connect_timeout_ms,
+    std::uint32_t query_timeout_ms,
+    bool prepare_statements) {
+    server::core::storage::PoolOptions options{};
+    options.min_size = min_size;
+    options.max_size = max_size;
+    options.connect_timeout_ms = connect_timeout_ms;
+    options.query_timeout_ms = query_timeout_ms;
+    options.prepare_statements = prepare_statements;
+    return server::storage::postgres::make_connection_pool(db_uri, options);
+}
+
+std::shared_ptr<server::core::storage::redis::IRedisClient> make_redis_client(
+    const std::string& redis_uri,
+    const server::core::storage::redis::Options& options) {
+    return server::storage::redis::make_redis_client(redis_uri, options);
+}
+
+std::shared_ptr<server::core::state::IInstanceStateBackend> make_registry_backend(
+    const std::shared_ptr<server::core::storage::redis::IRedisClient>& redis_client,
+    const std::string& key_prefix,
+    std::chrono::seconds ttl) {
+    if (!redis_client) {
+        return {};
+    }
+
+    return server::state::make_redis_registry_backend(redis_client, key_prefix, ttl);
+}
+
 bool connection_pool_health_check(
     const std::shared_ptr<server::core::storage::IConnectionPool>& connection_pool) noexcept {
     try {
@@ -125,6 +163,11 @@ void register_connection_runtime_state_service(
 
 void register_connection_pool_service(
     const std::shared_ptr<server::core::storage::IConnectionPool>& connection_pool) {
+    server::core::util::services::set(connection_pool);
+}
+
+void register_repository_connection_pool_service(
+    const std::shared_ptr<server::storage::IRepositoryConnectionPool>& connection_pool) {
     server::core::util::services::set(connection_pool);
 }
 

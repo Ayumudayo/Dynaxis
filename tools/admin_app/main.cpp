@@ -33,16 +33,17 @@
 
 #include <nlohmann/json.hpp>
 
+#include "redis_client_factory.hpp"
 #include "server/core/app/app_host.hpp"
 #include "server/core/app/termination_signals.hpp"
-#include "server/config/runtime_settings.hpp"
+#include "server/core/config/runtime_settings.hpp"
 #include "server/core/metrics/build_info.hpp"
 #include "server/core/metrics/http_server.hpp"
+#include "server/core/state/instance_registry.hpp"
+#include "server/core/storage/redis/client.hpp"
 #include "server/core/security/admin_command_auth.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/util/paths.hpp"
-#include "server/state/instance_registry.hpp"
-#include "server/storage/redis/client.hpp"
 
 namespace corelog = server::core::log;
 
@@ -176,7 +177,7 @@ struct QueryParseResult {
 };
 
 struct SelectorParseResult {
-    server::state::InstanceSelector selector;
+    server::core::state::InstanceSelector selector;
     bool selector_specified{false};
     bool all_specified{false};
     bool ok{true};
@@ -799,10 +800,10 @@ void append_selector_command_fields(std::unordered_map<std::string, std::string>
 }
 
 void append_selector_response_json(std::ostringstream& data, const SelectorParseResult& selector_parse) {
-    const auto selector_layer = server::state::classify_selector_policy_layer(selector_parse.selector);
+    const auto selector_layer = server::core::state::classify_selector_policy_layer(selector_parse.selector);
     data << "\"selector\":{";
     data << "\"applied\":" << bool_json(selector_parse.selector_specified) << ",";
-    data << "\"layer\":\"" << server::state::selector_policy_layer_name(selector_layer) << "\"";
+    data << "\"layer\":\"" << server::core::state::selector_policy_layer_name(selector_layer) << "\"";
     data << "}";
 }
 
@@ -869,7 +870,7 @@ static constexpr std::array<ExactRoute, 19> kExactRoutes{{
     return "unknown";
 }
 
-std::string runtime_setting_range_error_message(const server::config::RuntimeSettingRule& rule) {
+std::string runtime_setting_range_error_message(const server::core::config::RuntimeSettingRule& rule) {
     return std::string(rule.key_name) + " must be " +
            std::to_string(rule.min_value) + ".." + std::to_string(rule.max_value);
 }
@@ -1144,7 +1145,7 @@ private:
     struct ExtCommandSpec {
         std::string command_id;
         std::string artifact_id;
-        server::state::InstanceSelector selector;
+        server::core::state::InstanceSelector selector;
         bool selector_specified{false};
         std::optional<std::uint64_t> run_at_utc;
         ExtRolloutStrategy rollout;
@@ -1173,7 +1174,7 @@ private:
         std::string actor;
         std::string status{"pending"};
         std::string status_reason;
-        server::state::InstanceSelector selector;
+        server::core::state::InstanceSelector selector;
         bool selector_specified{false};
         std::optional<std::uint64_t> run_at_utc;
         ExtRolloutStrategy rollout;
@@ -1491,15 +1492,15 @@ private:
         }
     }
 
-    std::string make_instance_metrics_url(const server::state::InstanceRecord& item) const {
+    std::string make_instance_metrics_url(const server::core::state::InstanceRecord& item) const {
         return "http://" + item.host + ":" + std::to_string(instance_metrics_port_) + "/metrics";
     }
 
-    std::string make_instance_ready_url(const server::state::InstanceRecord& item) const {
+    std::string make_instance_ready_url(const server::core::state::InstanceRecord& item) const {
         return "http://" + item.host + ":" + std::to_string(instance_metrics_port_) + "/readyz";
     }
 
-    std::string probe_instance_ready_reason(const server::state::InstanceRecord& item) const {
+    std::string probe_instance_ready_reason(const server::core::state::InstanceRecord& item) const {
         const std::string fallback = item.ready ? "ready (registry)" : "not ready (registry)";
         const auto ready_url = parse_http_url(make_instance_ready_url(item));
         if (!ready_url) {
@@ -1533,15 +1534,14 @@ private:
 
     void init_backends() {
         if (!redis_uri_.empty()) {
-            server::storage::redis::Options options{};
+            server::core::storage::redis::Options options{};
             options.pool_max = read_env_u32("REDIS_POOL_MAX", 10, 1, 256);
-            redis_ = server::storage::redis::make_redis_client(redis_uri_, options);
+            redis_ = admin_app::make_redis_client(redis_uri_, options);
 
             if (redis_ && redis_->health_check()) {
                 app_host_.set_dependency_ok("redis", true);
-                auto adapter = server::state::make_redis_state_client(redis_);
-                registry_backend_ = std::make_shared<server::state::RedisInstanceStateBackend>(
-                    adapter,
+                registry_backend_ = admin_app::make_registry_backend(
+                    redis_,
                     registry_prefix_,
                     std::chrono::seconds(registry_ttl_sec_));
                 redis_available_.store(true, std::memory_order_relaxed);
@@ -1581,7 +1581,7 @@ private:
                 return lhs.instance_id < rhs.instance_id;
             });
 
-            std::unordered_map<std::string, server::state::InstanceRecord> index;
+            std::unordered_map<std::string, server::core::state::InstanceRecord> index;
             index.reserve(items.size());
             std::unordered_map<std::string, InstanceDetailSnapshot> details;
             details.reserve(items.size());
@@ -1977,9 +1977,9 @@ private:
         return &ext_inventory_cache_[it->second];
     }
 
-    std::vector<server::state::InstanceRecord> resolve_ext_targets(const server::state::InstanceSelector& selector,
-                                                                    bool selector_specified) const {
-        std::vector<server::state::InstanceRecord> targets;
+    std::vector<server::core::state::InstanceRecord> resolve_ext_targets(const server::core::state::InstanceSelector& selector,
+                                                                     bool selector_specified) const {
+        std::vector<server::core::state::InstanceRecord> targets;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
             targets = instances_cache_;
@@ -1988,7 +1988,7 @@ private:
         if (!selector_specified) {
             return targets;
         }
-        return server::state::select_instances(targets, selector, nullptr);
+        return server::core::state::select_instances(targets, selector, nullptr);
     }
 
     bool parse_rollout_strategy_json(const nlohmann::json& root,
@@ -3427,9 +3427,9 @@ private:
                 "redis registry unavailable");
         }
 
-        std::vector<server::state::InstanceRecord> items;
+        std::vector<server::core::state::InstanceRecord> items;
         std::uint64_t updated_ms = 0;
-        server::state::SelectorMatchStats selector_stats{};
+        server::core::state::SelectorMatchStats selector_stats{};
         bool selector_applied = false;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
@@ -3451,11 +3451,11 @@ private:
         }
         if (selector_parse.selector_specified) {
             selector_applied = true;
-            items = server::state::select_instances(items, selector_parse.selector, &selector_stats);
+            items = server::core::state::select_instances(items, selector_parse.selector, &selector_stats);
             instances_selector_requests_total_.fetch_add(1, std::memory_order_relaxed);
             instances_selector_mismatch_total_.fetch_add(selector_stats.selector_mismatch, std::memory_order_relaxed);
         }
-        const auto selector_layer = server::state::classify_selector_policy_layer(selector_parse.selector);
+        const auto selector_layer = server::core::state::classify_selector_policy_layer(selector_parse.selector);
 
         if (options.timeout_overridden) {
             const std::uint64_t now = now_ms();
@@ -3552,7 +3552,7 @@ private:
         data << "},";
         data << "\"selector\":{";
         data << "\"applied\":" << bool_json(selector_applied) << ",";
-        data << "\"layer\":\"" << server::state::selector_policy_layer_name(selector_layer) << "\",";
+        data << "\"layer\":\"" << server::core::state::selector_policy_layer_name(selector_layer) << "\",";
         data << "\"scanned\":" << selector_stats.scanned << ",";
         data << "\"matched\":" << selector_stats.matched << ",";
         data << "\"mismatch\":" << selector_stats.selector_mismatch;
@@ -3582,7 +3582,7 @@ private:
                 "redis registry unavailable");
         }
 
-        std::optional<server::state::InstanceRecord> item;
+        std::optional<server::core::state::InstanceRecord> item;
         std::optional<InstanceDetailSnapshot> detail;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
@@ -4149,7 +4149,7 @@ private:
                 "redis session lookup failed");
         }
 
-        std::optional<server::state::InstanceRecord> backend;
+        std::optional<server::core::state::InstanceRecord> backend;
         if (backend_id && !backend_id->empty()) {
             std::lock_guard<std::mutex> lock(cache_mutex_);
             if (const auto it = instances_index_.find(*backend_id); it != instances_index_.end()) {
@@ -4306,7 +4306,7 @@ private:
             }
         }
 
-        std::unordered_map<std::string, server::state::InstanceRecord> instances;
+        std::unordered_map<std::string, server::core::state::InstanceRecord> instances;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
             instances = instances_index_;
@@ -4690,7 +4690,7 @@ private:
                 json_details("value", value));
         }
 
-        const auto* setting_rule = server::config::find_runtime_setting_rule(key);
+        const auto* setting_rule = server::core::config::find_runtime_setting_rule(key);
         if (setting_rule == nullptr) {
             http_errors_total_.fetch_add(1, std::memory_order_relaxed);
             return json_error(request_id, "400 Bad Request", "BAD_REQUEST", "unsupported setting key");
@@ -5053,16 +5053,16 @@ private:
     std::string auth_bearer_actor_;
     std::string auth_bearer_role_;
 
-    std::shared_ptr<server::storage::redis::IRedisClient> redis_;
-    std::shared_ptr<server::state::RedisInstanceStateBackend> registry_backend_;
+    std::shared_ptr<server::core::storage::redis::IRedisClient> redis_;
+    std::shared_ptr<server::core::state::IInstanceStateBackend> registry_backend_;
 
     std::thread poller_;
     std::atomic<bool> poller_running_{false};
 
     mutable std::mutex cache_mutex_;
     mutable std::mutex ext_mutex_;
-    std::vector<server::state::InstanceRecord> instances_cache_;
-    std::unordered_map<std::string, server::state::InstanceRecord> instances_index_;
+    std::vector<server::core::state::InstanceRecord> instances_cache_;
+    std::unordered_map<std::string, server::core::state::InstanceRecord> instances_index_;
     std::unordered_map<std::string, InstanceDetailSnapshot> instance_details_index_;
     std::uint64_t instances_updated_at_ms_{0};
     WorkerSnapshot worker_cache_;

@@ -1,0 +1,69 @@
+name: Factory Package Publish
+
+on:
+  workflow_dispatch:
+
+env:
+  PYTHONIOENCODING: utf-8
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish-factory-packages-windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CONAN_HOME: ${{ github.workspace }}-conan2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Ensure Conan cache directory
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "${{ env.CONAN_HOME }}" | Out-Null
+
+      - name: Restore Conan cache (Windows)
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CONAN_HOME }}
+          key: ${{ runner.os }}-conan2-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/**', 'scripts/setup_conan.ps1', 'scripts/build.ps1', 'scripts/publish_factory_packages.ps1') }}
+          restore-keys: |
+            ${{ runner.os }}-conan2-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Conan2
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install "conan>=2.0,<3"
+          conan --version
+
+      - name: Enable MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build and Stage Factory Package Bundle
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/publish_factory_packages.ps1 -BuildDir build-windows -OutputRoot artifacts/factory-packages -Zip -CleanOutput
+
+      - name: Validate Package Consumers
+        shell: pwsh
+        run: |
+          ctest -C Release --test-dir build-windows/tests --output-on-failure -R "CoreInstalledPackageConsumer|FactoryPgInstalledPackageConsumer|FactoryRedisInstalledPackageConsumer"
+
+      - name: Upload Factory Package Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dynaxis-factory-packages-windows-release
+          path: artifacts/factory-packages/**
+          if-no-files-found: error

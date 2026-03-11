@@ -50,20 +50,21 @@
 | `server/core/protocol/protocol_errors.hpp` | Stable | 프로토콜 응답 공용 오류 코드 상수 |
 | `server/core/protocol/protocol_flags.hpp` | Stable | 프로토콜 플래그/기능 비트 공용 상수 |
 | `server/core/protocol/system_opcodes.hpp` | Stable | server/client 경로에서 소비하는 생성 opcode 계약 |
-| `server/core/plugin/shared_library.hpp` | Transitional | 동적 라이브러리 로더 RAII 래퍼로 다중 서비스 확장 공용화를 진행 중인 표면 |
-| `server/core/plugin/plugin_host.hpp` | Transitional | 플러그인 로딩/리로드 제네릭 호스트로 API/운영 계약 안정화 단계 |
-| `server/core/plugin/plugin_chain_host.hpp` | Transitional | 디렉터리 스캔/체인 구성/리로드 정책이 안정화 중인 확장 체인 표면 |
+| `server/core/plugin/shared_library.hpp` | Transitional | service-neutral extensibility mechanism. 동적 로더 RAII wrapper로 platform capability의 기반 표면 |
+| `server/core/plugin/plugin_host.hpp` | Transitional | 플러그인 로딩/리로드 제네릭 호스트로 core platform capability의 주 메커니즘 |
+| `server/core/plugin/plugin_chain_host.hpp` | Transitional | 디렉터리 스캔/체인 구성/리로드 정책이 안정화 중인 core 확장 체인 표면 |
 | `server/core/runtime_metrics.hpp` | Stable | server/gateway/tools 관측 경로가 사용하는 프로세스 전역 런타임 카운터/스냅샷 계약 |
-| `server/core/scripting/script_watcher.hpp` | Transitional | 파일 감시/sentinel 정책이 확장 운영 규칙과 함께 안정화 중인 표면 |
-| `server/core/scripting/lua_runtime.hpp` | Transitional | Lua cold-hook 실행/메트릭 표면으로 scaffold/실행형 경계가 안정화 중 |
-| `server/core/scripting/lua_sandbox.hpp` | Transitional | instruction/memory 제한 및 허용 라이브러리 정책을 정교화 중인 표면 |
+| `server/core/state/instance_registry.hpp` | Internal | `InstanceRecord`/selector/backend-interface 같은 shared discovery contract이지만 Redis/Consul adapter 및 sticky routing 안정화가 끝나지 않은 internal 경계 |
+| `server/core/scripting/script_watcher.hpp` | Transitional | 파일 감시/sentinel 정책을 제공하는 core extensibility mechanism |
+| `server/core/scripting/lua_runtime.hpp` | Transitional | Lua cold-hook 실행/메트릭 표면으로 core platform capability의 런타임 계층 |
+| `server/core/scripting/lua_sandbox.hpp` | Transitional | instruction/memory 제한 및 허용 라이브러리 정책을 정교화 중인 core sandbox 계층 |
 | `server/core/security/admin_command_auth.hpp` | Internal | admin control-plane 서명 검증/nonce replay 보호를 위한 내부 인증 helper |
 | `server/core/security/cipher.hpp` | Stable | 키/IV 크기 검증과 인증 실패 신호를 포함한 AES-256-GCM 암복호화 계약 |
 | `server/core/trace/context.hpp` | Internal | 로그/상관관계 추적 컨텍스트의 구현 결합 helper |
-| `server/core/storage/connection_pool.hpp` | Internal | 서버 저장소 어댑터 계약(`IConnectionPool`)은 chat repository/UoW를 통해 도메인 결합 상태 |
-| `server/core/storage/db_worker_pool.hpp` | Internal | 비동기 DB 실행 helper는 internal 저장소 계약 위의 서버 내부 배선 |
-| `server/core/storage/repositories.hpp` | Internal | repository DTO/인터페이스가 채팅 도메인 전용이므로 stable 엔진 API에서 제외 |
-| `server/core/storage/unit_of_work.hpp` | Internal | 트랜잭션 경계가 채팅 도메인 결합 internal repository 인터페이스에 의존 |
+| `server/core/storage/connection_pool.hpp` | Internal | generic transaction/UoW factory + health-check SPI. repository 접근자는 포함하지 않음 |
+| `server/core/storage/db_worker_pool.hpp` | Internal | generic `IUnitOfWork` commit/rollback seam 위에서 동작하는 비동기 DB 실행 helper |
+| `server/core/storage/redis/client.hpp` | Internal | gateway/server/tools가 공유하는 Redis client contract. concrete redis-plus-plus adapter와 factory는 여전히 server-owned |
+| `server/core/storage/unit_of_work.hpp` | Internal | 도메인 저장소 accessor 없는 generic commit/rollback transaction 경계 |
 | `server/core/util/crash_handler.hpp` | Internal | 앱 엔트리포인트용 프로세스 레벨 크래시 훅 |
 | `server/core/util/log.hpp` | Stable | 모든 바이너리가 사용하는 공통 로깅 계약 |
 | `server/core/util/paths.hpp` | Stable | 도구/서비스에서 사용하는 실행 파일 경로 helper |

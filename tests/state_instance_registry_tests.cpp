@@ -3,17 +3,22 @@
 
 #include <gtest/gtest.h>
 
-#include "server/state/instance_registry.hpp"
+#include "server/core/state/instance_registry.hpp"
+#include "server/state/instance_registry_common.hpp"
+#include "server/state/redis_instance_registry.hpp"
+#include "server/state/consul_instance_registry.hpp"
 
-using namespace server::state;
+namespace core_state = server::core::state;
+using server::state::ConsulInstanceStateBackend;
+using server::state::RedisInstanceStateBackend;
 
 /**
  * @brief 인스턴스 레지스트리(in-memory/Redis/Consul adapter) 동작을 검증합니다.
  */
 namespace {
 
-InstanceRecord sample_record() {
-    InstanceRecord record;
+core_state::InstanceRecord sample_record() {
+    core_state::InstanceRecord record;
     record.instance_id = "core-1";
     record.host = "127.0.0.1";
     record.port = 7000;
@@ -99,7 +104,7 @@ private:
 
 // InMemory 백엔드에서 인스턴스 등록 및 조회가 정상 동작하는지 확인합니다.
 TEST(InMemoryStateBackendTests, UpsertAndList) {
-    InMemoryStateBackend backend;
+    core_state::InMemoryStateBackend backend;
     auto record = sample_record();
     EXPECT_TRUE(backend.upsert(record));
     auto all = backend.list_instances();
@@ -108,7 +113,7 @@ TEST(InMemoryStateBackendTests, UpsertAndList) {
 }
 
 TEST(InMemoryStateBackendTests, TouchUpdatesHeartbeat) {
-    InMemoryStateBackend backend;
+    core_state::InMemoryStateBackend backend;
     auto record = sample_record();
     backend.upsert(record);
     EXPECT_TRUE(backend.touch("core-1", 999));
@@ -146,21 +151,21 @@ TEST(RedisInstanceStateBackendTests, PersistsWithSetex) {
 }
 
 TEST(InstanceRegistryJsonTests, MissingReadyDefaultsToTrue) {
-    auto parsed = detail::deserialize_json(
+    auto parsed = server::state::detail::deserialize_json(
         "{\"instance_id\":\"legacy\",\"host\":\"127.0.0.1\",\"port\":7000,\"role\":\"chat\",\"capacity\":10,\"active_sessions\":1,\"last_heartbeat_ms\":123}");
     ASSERT_TRUE(parsed.has_value());
     EXPECT_TRUE(parsed->ready);
 }
 
 TEST(InstanceRegistryJsonTests, ParsesExplicitReadyFalse) {
-    auto parsed = detail::deserialize_json(
+    auto parsed = server::state::detail::deserialize_json(
         "{\"instance_id\":\"s1\",\"host\":\"127.0.0.1\",\"port\":7000,\"role\":\"chat\",\"capacity\":10,\"active_sessions\":1,\"ready\":false,\"last_heartbeat_ms\":123}");
     ASSERT_TRUE(parsed.has_value());
     EXPECT_FALSE(parsed->ready);
 }
 
 TEST(InstanceRegistryJsonTests, ParsesRegionShardAndTags) {
-    auto parsed = detail::deserialize_json(
+    auto parsed = server::state::detail::deserialize_json(
         "{\"instance_id\":\"s2\",\"host\":\"127.0.0.1\",\"port\":7000,\"role\":\"chat\",\"game_mode\":\"pvp\",\"region\":\"ap-northeast\",\"shard\":\"shard-01\",\"tags\":\"canary|vip\",\"capacity\":10,\"active_sessions\":1,\"ready\":true,\"last_heartbeat_ms\":123}");
     ASSERT_TRUE(parsed.has_value());
     EXPECT_EQ(parsed->game_mode, "pvp");
@@ -198,7 +203,7 @@ TEST(ConsulInstanceStateBackendTests, UsesCallbacks) {
 TEST(InstanceSelectorTests, MatchesAllWhenAllIsTrue) {
     const auto record = sample_record();
 
-    InstanceSelector selector;
+    core_state::InstanceSelector selector;
     selector.all = true;
 
     EXPECT_TRUE(matches_selector(record, selector));
@@ -206,34 +211,34 @@ TEST(InstanceSelectorTests, MatchesAllWhenAllIsTrue) {
 
 TEST(InstanceSelectorTests, EmptySelectorMatchesNothing) {
     const auto record = sample_record();
-    const InstanceSelector selector;
+    const core_state::InstanceSelector selector;
 
-    EXPECT_FALSE(matches_selector(record, selector));
+    EXPECT_FALSE(core_state::matches_selector(record, selector));
 }
 
 TEST(InstanceSelectorTests, MatchesWithAndAcrossFields) {
     const auto record = sample_record();
 
-    InstanceSelector selector;
+    core_state::InstanceSelector selector;
     selector.roles = {"chat"};
     selector.game_modes = {"pvp"};
     selector.regions = {"ap-northeast"};
     selector.shards = {"shard-01"};
     selector.tags = {"vip"};
 
-    EXPECT_TRUE(matches_selector(record, selector));
+    EXPECT_TRUE(core_state::matches_selector(record, selector));
 
     selector.shards = {"shard-02"};
-    EXPECT_FALSE(matches_selector(record, selector));
+    EXPECT_FALSE(core_state::matches_selector(record, selector));
 }
 
 TEST(InstanceSelectorTests, MatchesServerIdsCaseInsensitiveTrimmed) {
     const auto record = sample_record();
 
-    InstanceSelector selector;
+    core_state::InstanceSelector selector;
     selector.server_ids = {"  CORE-1  "};
 
-    EXPECT_TRUE(matches_selector(record, selector));
+    EXPECT_TRUE(core_state::matches_selector(record, selector));
 }
 
 TEST(InstanceSelectorTests, SelectInstancesReturnsOnlyMatchesAndStats) {
@@ -251,15 +256,15 @@ TEST(InstanceSelectorTests, SelectInstancesReturnsOnlyMatchesAndStats) {
     b.shard = "shard-02";
     b.tags = {"stable"};
 
-    const std::vector<InstanceRecord> instances{a, b};
+    const std::vector<core_state::InstanceRecord> instances{a, b};
 
-    InstanceSelector selector;
+    core_state::InstanceSelector selector;
     selector.game_modes = {"pvp"};
     selector.regions = {"ap-northeast"};
     selector.tags = {"canary"};
 
-    SelectorMatchStats stats;
-    const auto selected = select_instances(instances, selector, &stats);
+    core_state::SelectorMatchStats stats;
+    const auto selected = core_state::select_instances(instances, selector, &stats);
 
     ASSERT_EQ(selected.size(), 1u);
     EXPECT_EQ(selected.front().instance_id, "core-1");
@@ -269,20 +274,20 @@ TEST(InstanceSelectorTests, SelectInstancesReturnsOnlyMatchesAndStats) {
 }
 
 TEST(InstanceSelectorTests, ClassifiesPolicyLayerBySpecificity) {
-    InstanceSelector selector;
+    core_state::InstanceSelector selector;
 
-    EXPECT_EQ(classify_selector_policy_layer(selector), SelectorPolicyLayer::kGlobal);
+    EXPECT_EQ(core_state::classify_selector_policy_layer(selector), core_state::SelectorPolicyLayer::kGlobal);
 
     selector.game_modes = {"pvp"};
-    EXPECT_EQ(classify_selector_policy_layer(selector), SelectorPolicyLayer::kGameMode);
+    EXPECT_EQ(core_state::classify_selector_policy_layer(selector), core_state::SelectorPolicyLayer::kGameMode);
 
     selector.regions = {"ap-northeast"};
-    EXPECT_EQ(classify_selector_policy_layer(selector), SelectorPolicyLayer::kRegion);
+    EXPECT_EQ(core_state::classify_selector_policy_layer(selector), core_state::SelectorPolicyLayer::kRegion);
 
     selector.shards = {"shard-01"};
-    EXPECT_EQ(classify_selector_policy_layer(selector), SelectorPolicyLayer::kShard);
+    EXPECT_EQ(core_state::classify_selector_policy_layer(selector), core_state::SelectorPolicyLayer::kShard);
 
     selector.server_ids = {"core-1"};
-    EXPECT_EQ(classify_selector_policy_layer(selector), SelectorPolicyLayer::kServer);
-    EXPECT_EQ(selector_policy_layer_name(SelectorPolicyLayer::kServer), "server");
+    EXPECT_EQ(core_state::classify_selector_policy_layer(selector), core_state::SelectorPolicyLayer::kServer);
+    EXPECT_EQ(core_state::selector_policy_layer_name(core_state::SelectorPolicyLayer::kServer), "server");
 }

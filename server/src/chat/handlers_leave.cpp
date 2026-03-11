@@ -8,7 +8,7 @@
 #include <optional>
 #include "server/storage/redis/client.hpp"
 #include "server/core/util/log.hpp"
-#include "server/core/storage/connection_pool.hpp"
+#include "server/storage/connection_pool.hpp"
 
 using namespace server::core;
 namespace proto = server::core::protocol;
@@ -190,7 +190,7 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
                         // 이전 채팅 내역이 보이지 않게 됩니다. (Privacy + Audit Log Preservation)
                         if (db_pool_ && !room_uuid.empty()) {
                             try {
-                                auto uow = db_pool_->make_unit_of_work();
+                                auto uow = db_pool_->make_repository_unit_of_work();
                                 uow->rooms().close(room_uuid);
                                 uow->commit();
 

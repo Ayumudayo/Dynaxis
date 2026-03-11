@@ -63,6 +63,11 @@ scripts/smoke_wb.ps1 -Config Debug -BuildDir build-windows
   - `python tools/check_core_api_contracts.py --check-boundary`
   - `python tools/check_core_api_contracts.py --check-boundary-fixtures`
   - `python tools/check_core_api_contracts.py --check-stable-governance-fixtures`
+- package-first extraction 관련 변경 시 추가 게이트:
+  - `ctest -C Debug --test-dir build-windows/tests -R "CoreInstalledPackageConsumer|FactoryPgInstalledPackageConsumer|FactoryRedisInstalledPackageConsumer" --output-on-failure`
+- publish automation 관련 변경 시 추가 게이트:
+  - `pwsh scripts/publish_factory_packages.ps1 -BuildDir build-windows -OutputRoot artifacts/factory-packages -Zip -CleanOutput`
+  - artifact prefix를 대상으로 package consumer configure/build 재확인
 - Linux 경로는 Docker stack 로컬 검증 + 원격 GitHub CI 결과를 기준으로 판단한다.
 
 ## 8. Loadgen Plan

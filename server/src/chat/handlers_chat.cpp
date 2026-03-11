@@ -7,8 +7,8 @@
 #include "server/core/concurrent/job_queue.hpp"
 #include "wire.pb.h"
 // 저장소 연동 헤더
-#include "server/core/storage/connection_pool.hpp"
-#include "server/storage/redis/client.hpp"
+#include "server/storage/connection_pool.hpp"
+#include "server/core/storage/redis/client.hpp"
 #include <vector>
 #include <algorithm>
 #include <cctype>
@@ -850,7 +850,7 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
                         auto it = state_.user_uuid.find(session_sp.get());
                         if (it != state_.user_uuid.end()) uid_opt = it->second;
                     }
-                    auto uow = db_pool_->make_unit_of_work();
+                    auto uow = db_pool_->make_repository_unit_of_work();
                     auto msg = uow->messages().create(persisted_room_id, current_room, uid_opt, text);
                     persisted_msg_id = msg.id;
                     uow->commit();
@@ -937,7 +937,7 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
                     if (it != state_.user_uuid.end()) uid = it->second;
                 }
                 if (!uid.empty()) {
-                    auto uow = db_pool_->make_unit_of_work();
+                    auto uow = db_pool_->make_repository_unit_of_work();
                     uow->memberships().update_last_seen(uid, persisted_room_id, persisted_msg_id);
                     uow->commit();
                 }
@@ -980,7 +980,7 @@ void ChatService::handle_refresh(std::shared_ptr<Session> session_sp) {
         if (uid.empty()) return;
         auto rid = ensure_room_id_ci(current);
         if (rid.empty()) return;
-        auto uow = db_pool_->make_unit_of_work();
+        auto uow = db_pool_->make_repository_unit_of_work();
         auto last_id = uow->messages().get_last_id(rid);
         if (last_id > 0) {
             uow->memberships().update_last_seen(uid, rid, last_id);

@@ -7,9 +7,9 @@
 #include <string>
 #include <unordered_map>
 
-namespace server::storage::redis {
+namespace server::core::storage::redis {
 class IRedisClient;
-} // namespace server::storage::redis
+} // namespace server::core::storage::redis
 
 namespace gateway {
 
@@ -27,7 +27,7 @@ public:
      * @param key_prefix Redis 키 접두사
      * @param ttl 매핑 TTL
      */
-    SessionDirectory(std::shared_ptr<server::storage::redis::IRedisClient> redis_client,
+    SessionDirectory(std::shared_ptr<server::core::storage::redis::IRedisClient> redis_client,
                      std::string key_prefix,
                      std::chrono::seconds ttl);
 
@@ -69,7 +69,7 @@ private:
         std::chrono::steady_clock::time_point expires; ///< 로컬 캐시 만료 시각
     };
 
-    std::shared_ptr<server::storage::redis::IRedisClient> redis_;
+    std::shared_ptr<server::core::storage::redis::IRedisClient> redis_;
     std::string key_prefix_;
     std::chrono::seconds ttl_;
     mutable std::mutex mutex_;

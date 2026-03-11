@@ -2,7 +2,7 @@
 
 #include <utility>
 
-#include "server/storage/redis/client.hpp"
+#include "server/core/storage/redis/client.hpp"
 
 /**
  * @brief SessionDirectory의 L1 캐시 + Redis(L2) 매핑 구현입니다.
@@ -12,7 +12,7 @@
  */
 namespace gateway {
 
-SessionDirectory::SessionDirectory(std::shared_ptr<server::storage::redis::IRedisClient> redis_client,
+SessionDirectory::SessionDirectory(std::shared_ptr<server::core::storage::redis::IRedisClient> redis_client,
                                    std::string key_prefix,
                                    std::chrono::seconds ttl)
     : redis_(std::move(redis_client))

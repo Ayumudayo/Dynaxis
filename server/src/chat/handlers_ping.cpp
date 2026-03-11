@@ -1,6 +1,6 @@
 #include "server/chat/chat_service.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
-#include "server/storage/redis/client.hpp"
+#include "server/core/storage/redis/client.hpp"
 #include <cstdlib>
 
 /**

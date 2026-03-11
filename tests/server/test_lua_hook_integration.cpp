@@ -9,8 +9,9 @@
 #include <server/core/protocol/packet.hpp>
 #include <server/core/protocol/protocol_errors.hpp>
 #include <server/core/scripting/lua_runtime.hpp>
-#include <server/core/storage/connection_pool.hpp>
-#include <server/core/storage/unit_of_work.hpp>
+#include <server/storage/connection_pool.hpp>
+#include <server/storage/unit_of_work.hpp>
+#include <server/storage/repositories.hpp>
 #include <server/core/util/service_registry.hpp>
 #include <server/protocol/game_opcodes.hpp>
 #include <server/storage/redis/client.hpp>
@@ -123,29 +124,29 @@ private:
     std::filesystem::path path_;
 };
 
-class MockUserRepository : public server::core::storage::IUserRepository {
+class MockUserRepository : public server::storage::IUserRepository {
 public:
-    std::optional<server::core::storage::User> find_by_id(const std::string&) override { return std::nullopt; }
-    std::vector<server::core::storage::User> find_by_name_ci(const std::string&, std::size_t) override { return {}; }
-    server::core::storage::User create_guest(const std::string&) override { return {}; }
+    std::optional<server::storage::User> find_by_id(const std::string&) override { return std::nullopt; }
+    std::vector<server::storage::User> find_by_name_ci(const std::string&, std::size_t) override { return {}; }
+    server::storage::User create_guest(const std::string&) override { return {}; }
     void update_last_login(const std::string&, const std::string&) override {}
 };
 
-class MockRoomRepository : public server::core::storage::IRoomRepository {
+class MockRoomRepository : public server::storage::IRoomRepository {
 public:
-    std::optional<server::core::storage::Room> find_by_id(const std::string&) override { return std::nullopt; }
-    std::vector<server::core::storage::Room> search_by_name_ci(const std::string&, std::size_t) override { return {}; }
-    std::optional<server::core::storage::Room> find_by_name_exact_ci(const std::string&) override { return std::nullopt; }
-    server::core::storage::Room create(const std::string&, bool) override { return {}; }
+    std::optional<server::storage::Room> find_by_id(const std::string&) override { return std::nullopt; }
+    std::vector<server::storage::Room> search_by_name_ci(const std::string&, std::size_t) override { return {}; }
+    std::optional<server::storage::Room> find_by_name_exact_ci(const std::string&) override { return std::nullopt; }
+    server::storage::Room create(const std::string&, bool) override { return {}; }
     void close(const std::string&) override {}
 };
 
-class MockMessageRepository : public server::core::storage::IMessageRepository {
+class MockMessageRepository : public server::storage::IMessageRepository {
 public:
-    std::vector<server::core::storage::Message> fetch_recent_by_room(const std::string&, std::uint64_t, std::size_t) override {
+    std::vector<server::storage::Message> fetch_recent_by_room(const std::string&, std::uint64_t, std::size_t) override {
         return {};
     }
-    server::core::storage::Message create(
+    server::storage::Message create(
         const std::string&, const std::string&, const std::optional<std::string>&, const std::string&) override {
         return {};
     }
@@ -153,7 +154,7 @@ public:
     void delete_by_room(const std::string&) override {}
 };
 
-class MockMembershipRepository : public server::core::storage::IMembershipRepository {
+class MockMembershipRepository : public server::storage::IMembershipRepository {
 public:
     void upsert_join(const std::string&, const std::string&, const std::string&) override {}
     void update_last_seen(const std::string&, const std::string&, std::uint64_t) override {}
@@ -161,14 +162,14 @@ public:
     std::optional<std::uint64_t> get_last_seen(const std::string&, const std::string&) override { return std::nullopt; }
 };
 
-class MockSessionRepository : public server::core::storage::ISessionRepository {
+class MockSessionRepository : public server::storage::ISessionRepository {
 public:
-    std::optional<server::core::storage::Session> find_by_token_hash(const std::string&) override { return std::nullopt; }
-    server::core::storage::Session create(const std::string&, const std::chrono::system_clock::time_point&, const std::optional<std::string>&, const std::optional<std::string>&, const std::string&) override { return {}; }
+    std::optional<server::storage::Session> find_by_token_hash(const std::string&) override { return std::nullopt; }
+    server::storage::Session create(const std::string&, const std::chrono::system_clock::time_point&, const std::optional<std::string>&, const std::optional<std::string>&, const std::string&) override { return {}; }
     void revoke(const std::string&) override {}
 };
 
-class MockUnitOfWork : public server::core::storage::IUnitOfWork {
+class MockUnitOfWork : public server::storage::IRepositoryUnitOfWork {
 public:
     MockUserRepository user_repo;
     MockRoomRepository room_repo;
@@ -178,16 +179,16 @@ public:
 
     void commit() override {}
     void rollback() override {}
-    server::core::storage::IUserRepository& users() override { return user_repo; }
-    server::core::storage::IRoomRepository& rooms() override { return room_repo; }
-    server::core::storage::IMessageRepository& messages() override { return message_repo; }
-    server::core::storage::ISessionRepository& sessions() override { return session_repo; }
-    server::core::storage::IMembershipRepository& memberships() override { return membership_repo; }
+    server::storage::IUserRepository& users() override { return user_repo; }
+    server::storage::IRoomRepository& rooms() override { return room_repo; }
+    server::storage::IMessageRepository& messages() override { return message_repo; }
+    server::storage::ISessionRepository& sessions() override { return session_repo; }
+    server::storage::IMembershipRepository& memberships() override { return membership_repo; }
 };
 
-class MockConnectionPool : public server::core::storage::IConnectionPool {
+class MockConnectionPool : public server::storage::IRepositoryConnectionPool {
 public:
-    std::unique_ptr<server::core::storage::IUnitOfWork> make_unit_of_work() override {
+    std::unique_ptr<server::storage::IRepositoryUnitOfWork> make_repository_unit_of_work() override {
         return std::make_unique<MockUnitOfWork>();
     }
     bool health_check() override { return true; }

@@ -95,7 +95,7 @@ Lua cold-hook 작성 기준:
 | --- | --- | --- |
 | `GATEWAY_LISTEN` | `0.0.0.0:6000` | 게이트웨이 TCP 리스너 |
 | `GATEWAY_ID` | `gateway-default` | 인스턴스 식별자(로그/Presence 등) |
-| `REDIS_URI` | `tcp://127.0.0.1:6379` | Instance Registry/SessionDirectory용 Redis |
+| `REDIS_URI` | `tcp://127.0.0.1:6379` | shared instance-discovery adapter(`server_state`)와 gateway SessionDirectory용 Redis |
 | `METRICS_PORT` | `6001` | HTTP 관리 포트(`/metrics`, `/healthz`, `/readyz`) |
 | `GATEWAY_BACKEND_CONNECT_TIMEOUT_MS` | `5000` | backend(server_app) TCP 연결 타임아웃(ms) |
 | `GATEWAY_BACKEND_SEND_QUEUE_MAX_BYTES` | `262144` | backend 전송 대기 큐 상한 바이트(초과 시 세션 종료) |

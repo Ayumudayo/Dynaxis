@@ -101,6 +101,11 @@ jobs:
         run: |
           python tools/check_doxygen_coverage.py
 
+      - name: Validate Core API Contracts
+        shell: pwsh
+        run: |
+          python tools/check_core_api_contracts.py
+
       - name: Validate Workflow YAML
         shell: pwsh
         run: |

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -20,6 +21,19 @@ class Session;
 namespace server::core::storage {
 class IConnectionPool;
 class DbWorkerPool;
+}
+
+namespace server::core::storage::redis {
+struct Options;
+class IRedisClient;
+}
+
+namespace server::storage {
+class IRepositoryConnectionPool;
+}
+
+namespace server::core::state {
+class IInstanceStateBackend;
 }
 
 namespace server::core::net {
@@ -81,6 +95,23 @@ std::shared_ptr<server::core::storage::IConnectionPool> make_postgres_connection
     std::uint32_t query_timeout_ms,
     bool prepare_statements);
 
+std::shared_ptr<server::storage::IRepositoryConnectionPool> make_repository_connection_pool(
+    const std::string& db_uri,
+    std::size_t min_size,
+    std::size_t max_size,
+    std::uint32_t connect_timeout_ms,
+    std::uint32_t query_timeout_ms,
+    bool prepare_statements);
+
+std::shared_ptr<server::core::storage::redis::IRedisClient> make_redis_client(
+    const std::string& redis_uri,
+    const server::core::storage::redis::Options& options);
+
+std::shared_ptr<server::core::state::IInstanceStateBackend> make_registry_backend(
+    const std::shared_ptr<server::core::storage::redis::IRedisClient>& redis_client,
+    const std::string& key_prefix,
+    std::chrono::seconds ttl);
+
 /**
  * @brief 커넥션 풀 헬스체크를 예외 안전하게 수행합니다.
  * @param connection_pool 점검할 커넥션 풀
@@ -136,6 +167,9 @@ void register_connection_runtime_state_service(
  */
 void register_connection_pool_service(
     const std::shared_ptr<server::core::storage::IConnectionPool>& connection_pool);
+
+void register_repository_connection_pool_service(
+    const std::shared_ptr<server::storage::IRepositoryConnectionPool>& connection_pool);
 
 /**
  * @brief DB worker 풀을 서비스 레지스트리에 등록합니다.

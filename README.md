@@ -166,7 +166,7 @@ flowchart TB
 -   **OS**: Windows 10/11 (개발) + Linux(Docker) 런타임(검증/운영)
 -   **Compiler**: MSVC 19.3x+ (Visual Studio 2022), Clang 14+, GCC 11+
 -   **Build System**: CMake 3.20+
--   **Dependency Manager**: vcpkg
+-   **Dependency Manager**: Conan 2
 -   **Infrastructure**:
     -   Redis 6.0+
     -   PostgreSQL 13+
@@ -192,7 +192,7 @@ git submodule update --init --recursive external/luajit external/sol2
 실제 기능 활성화 여부는 런타임 설정(`LUA_ENABLED`)으로 제어합니다.
 
 애플리케이션은 **OS 환경 변수**를 읽어 설정됩니다.
-로컬 개발에서는 `.env.example`를 복사해 `.env`를 만들고, 스크립트들이 이를 로드하도록 사용할 수 있습니다.
+로컬 개발에서는 `.env.example`를 복사해 `.env`를 만들고, 쉘/스크립트에서 이를 로드해 사용할 수 있습니다.
 (코드 자체에는 `.env` 자동 로더가 없습니다.)
 
 ```ini
