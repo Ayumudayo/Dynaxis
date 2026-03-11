@@ -5,7 +5,7 @@
 #include <server/core/concurrent/job_queue.hpp>
 #include <server/storage/connection_pool.hpp>
 #include <server/storage/unit_of_work.hpp>
-#include <server/core/storage/redis/client.hpp>
+#include <server/storage/redis/client.hpp>
 #include <server/core/config/options.hpp>
 #include <server/core/net/connection_runtime_state.hpp>
 #include <server/core/protocol/protocol_errors.hpp>

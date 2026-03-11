@@ -12,7 +12,7 @@
 #include <server/storage/unit_of_work.hpp>
 #include <server/storage/repositories.hpp>
 #include <server/core/util/service_registry.hpp>
-#include <server/core/storage/redis/client.hpp>
+#include <server/storage/redis/client.hpp>
 
 #include <boost/asio.hpp>
 
