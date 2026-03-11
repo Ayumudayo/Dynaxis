@@ -18,9 +18,10 @@ if (BUILD_GTEST_TESTS)
     set(GTEST_DISCOVERY_TIMEOUT_SEC 30)
 
     function(discover_labeled_gtests target labels)
+        string(REPLACE ";" "\\;" escaped_labels "${labels}")
         gtest_discover_tests(${target}
             DISCOVERY_TIMEOUT ${GTEST_DISCOVERY_TIMEOUT_SEC}
-            PROPERTIES LABELS "${labels}")
+            PROPERTIES LABELS "${escaped_labels}")
     endfunction()
 
     add_executable(storage_basic_tests
@@ -250,7 +251,6 @@ if (BUILD_GTEST_TESTS)
 
         add_executable(server_plugin_chain_tests
             server/test_chat_plugin_chain.cpp
-            ${CMAKE_SOURCE_DIR}/server/src/chat/chat_hook_plugin_chain.cpp
         )
         target_include_directories(server_plugin_chain_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/core/include
@@ -264,6 +264,7 @@ if (BUILD_GTEST_TESTS)
         )
         target_link_libraries(server_plugin_chain_tests PRIVATE
             GTest::gtest_main
+            server_chat_runtime
             server_core
             ${CMAKE_DL_LIBS}
         )
@@ -275,7 +276,6 @@ if (BUILD_GTEST_TESTS)
 
         add_executable(server_plugin_chain_v2_tests
             server/test_chat_plugin_chain_v2.cpp
-            ${CMAKE_SOURCE_DIR}/server/src/chat/chat_hook_plugin_chain.cpp
         )
         target_include_directories(server_plugin_chain_v2_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/core/include
@@ -291,6 +291,7 @@ if (BUILD_GTEST_TESTS)
         )
         target_link_libraries(server_plugin_chain_v2_tests PRIVATE
             GTest::gtest_main
+            server_chat_runtime
             server_core
             ${CMAKE_DL_LIBS}
         )
