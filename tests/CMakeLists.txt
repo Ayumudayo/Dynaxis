@@ -69,8 +69,6 @@ if (BUILD_GTEST_TESTS)
     )
     target_include_directories(chat_history_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/core/include
-        ${CMAKE_SOURCE_DIR}/server/include
-        ${CMAKE_SOURCE_DIR}/server
     )
     target_link_libraries(chat_history_tests PRIVATE
         GTest::gtest_main
@@ -180,8 +178,6 @@ if (BUILD_GTEST_TESTS)
     )
     target_include_directories(server_general_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/core/include
-        ${CMAKE_SOURCE_DIR}/server/include
-        ${CMAKE_SOURCE_DIR}/server
     )
     target_link_libraries(server_general_tests PRIVATE
         GTest::gtest_main
