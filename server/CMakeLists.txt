@@ -4,6 +4,13 @@ add_library(server_app_config STATIC
 target_include_directories(server_app_config PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(server_app_config PUBLIC server_core)
 
+add_library(server_app_backends STATIC
+    src/app/core_internal_adapter.cpp
+)
+target_include_directories(server_app_backends PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
+target_link_libraries(server_app_backends PUBLIC server_core)
+target_link_libraries(server_app_backends PRIVATE server_storage_pg server_storage_redis server_state_redis)
+
 add_library(server_chat_runtime STATIC
     src/chat/chat_service_core.cpp
     src/chat/chat_hook_plugin_manager.cpp
@@ -28,12 +35,11 @@ endif()
 add_executable(server_app
     src/main.cpp
     src/app/bootstrap.cpp
-    src/app/core_internal_adapter.cpp
     src/app/metrics_server.cpp
     src/app/router.cpp
 )
 target_include_directories(server_app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
-target_link_libraries(server_app PRIVATE server_app_config server_chat_runtime server_core wire_proto server_storage_pg server_storage_redis server_state_redis)
+target_link_libraries(server_app PRIVATE server_app_config server_app_backends server_chat_runtime server_core wire_proto)
 # dlopen/dlsym (Linux)
 target_link_libraries(server_app PRIVATE ${CMAKE_DL_LIBS})
 # protobuf 생성 헤더 경로 추가
