@@ -3,7 +3,7 @@
 #include <utility>
 
 #include "server/state/redis_instance_registry.hpp"
-#include "server/storage/redis/client.hpp"
+#include "server/storage/redis/factory.hpp"
 
 namespace gateway {
 

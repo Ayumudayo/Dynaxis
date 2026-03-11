@@ -1,6 +1,6 @@
 #include "redis_client_factory.hpp"
 
-#include "server/storage/redis/client.hpp"
+#include "server/storage/redis/factory.hpp"
 
 namespace wb_tools {
 

@@ -1,4 +1,4 @@
-#include "server/storage/redis/client.hpp"
+#include "server/storage/redis/factory.hpp"
 
 #include <memory>
 #include <utility>
