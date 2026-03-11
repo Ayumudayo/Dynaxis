@@ -1,4 +1,4 @@
-#include "server/state/instance_registry.hpp"
+#include "server/state/instance_registry_common.hpp"
 
 #include <array>
 #include <cctype>

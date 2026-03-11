@@ -1,4 +1,4 @@
-#include "server/state/instance_registry.hpp"
+#include "server/state/consul_instance_registry.hpp"
 
 #include <utility>
 
