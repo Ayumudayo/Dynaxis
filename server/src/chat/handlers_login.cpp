@@ -12,7 +12,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <optional>
-#include "server/storage/redis/client.hpp"
+#include "server/core/storage/redis/client.hpp"
 
 using namespace server::core;
 namespace proto = server::core::protocol;

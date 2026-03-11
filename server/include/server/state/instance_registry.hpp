@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "server/core/state/instance_registry.hpp"
-#include "server/storage/redis/client.hpp"
+#include "server/core/storage/redis/client.hpp"
 
 namespace server::state {
 using server::core::state::InstanceRecord;
@@ -161,6 +161,6 @@ private:
  * @return registry 백엔드에서 사용할 어댑터
  */
 std::shared_ptr<RedisInstanceStateBackend::IRedisClient>
-make_redis_state_client(std::shared_ptr<server::storage::redis::IRedisClient> client);
+make_redis_state_client(std::shared_ptr<server::core::storage::redis::IRedisClient> client);
 
 } // namespace server::state

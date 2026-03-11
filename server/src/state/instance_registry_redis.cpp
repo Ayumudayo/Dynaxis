@@ -8,7 +8,7 @@ namespace {
 
 class RedisClientAdapter final : public RedisInstanceStateBackend::IRedisClient {
 public:
-    explicit RedisClientAdapter(std::shared_ptr<server::storage::redis::IRedisClient> client)
+    explicit RedisClientAdapter(std::shared_ptr<server::core::storage::redis::IRedisClient> client)
         : client_(std::move(client)) {}
 
     bool scan_keys(const std::string& pattern, std::vector<std::string>& keys) override {
@@ -49,7 +49,7 @@ public:
     }
 
 private:
-    std::shared_ptr<server::storage::redis::IRedisClient> client_;
+    std::shared_ptr<server::core::storage::redis::IRedisClient> client_;
 };
 
 } // namespace
@@ -182,7 +182,7 @@ bool RedisInstanceStateBackend::write_record(const InstanceRecord& record) {
 }
 
 std::shared_ptr<RedisInstanceStateBackend::IRedisClient>
-make_redis_state_client(std::shared_ptr<server::storage::redis::IRedisClient> client) {
+make_redis_state_client(std::shared_ptr<server::core::storage::redis::IRedisClient> client) {
     return std::make_shared<RedisClientAdapter>(std::move(client));
 }
 

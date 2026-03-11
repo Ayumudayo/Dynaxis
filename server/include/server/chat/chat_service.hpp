@@ -19,10 +19,10 @@
 
 #include "server/core/net/session.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
+#include "server/core/storage/redis/client.hpp"
 #include "server/protocol/game_opcodes.hpp"
 #include "server/chat/chat_hook_plugin_abi.hpp"
 #include "server/scripting/chat_lua_bindings.hpp"
-#include "server/storage/redis/client.hpp"
 #include "wire.pb.h"
 
 namespace server::core { class JobQueue; }
@@ -65,7 +65,7 @@ public:
     ChatService(boost::asio::io_context& io,
                 server::core::JobQueue& job_queue,
                 std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool = {},
-                std::shared_ptr<server::storage::redis::IRedisClient> redis = {});
+                std::shared_ptr<server::core::storage::redis::IRedisClient> redis = {});
 
     /** @brief ChatService 리소스를 정리하고 플러그인/구독을 종료합니다. */
     ~ChatService();
@@ -405,7 +405,7 @@ private:
     boost::asio::io_context* io_{};
     server::core::JobQueue& job_queue_;
     std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool_{};
-    std::shared_ptr<server::storage::redis::IRedisClient> redis_{};
+    std::shared_ptr<server::core::storage::redis::IRedisClient> redis_{};
     std::shared_ptr<server::core::scripting::LuaRuntime> lua_runtime_{};
     std::shared_ptr<Strand> lua_execution_strand_{};
     std::string gateway_id_{"gw-default"};

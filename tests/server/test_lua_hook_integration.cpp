@@ -14,7 +14,7 @@
 #include <server/storage/repositories.hpp>
 #include <server/core/util/service_registry.hpp>
 #include <server/protocol/game_opcodes.hpp>
-#include <server/storage/redis/client.hpp>
+#include <server/core/storage/redis/client.hpp>
 
 #include <boost/asio.hpp>
 

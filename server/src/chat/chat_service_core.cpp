@@ -16,7 +16,7 @@
 #include "wire.pb.h"
 // 저장소 연동 헤더
 #include "server/storage/connection_pool.hpp"
-#include "server/storage/redis/client.hpp"
+#include "server/core/storage/redis/client.hpp"
 
 #include <openssl/sha.h>
 
@@ -146,7 +146,7 @@ std::string lua_session_event_name(SessionEventKindV2 kind) {
 ChatService::ChatService(boost::asio::io_context& io,
                          server::core::JobQueue& job_queue,
                          std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool,
-                         std::shared_ptr<server::storage::redis::IRedisClient> redis)
+                         std::shared_ptr<server::core::storage::redis::IRedisClient> redis)
     : io_(&io), job_queue_(job_queue), db_pool_(std::move(db_pool)), redis_(std::move(redis)) {
     
     // 의존성이 주입되지 않은 경우 ServiceRegistry에서 가져옵니다.
@@ -154,7 +154,7 @@ ChatService::ChatService(boost::asio::io_context& io,
         db_pool_ = services::get<server::storage::IRepositoryConnectionPool>();
     }
     if (!redis_) {
-        redis_ = services::get<server::storage::redis::IRedisClient>();
+        redis_ = services::get<server::core::storage::redis::IRedisClient>();
     }
     lua_runtime_ = services::get<server::core::scripting::LuaRuntime>();
     lua_execution_strand_ = services::get<Strand>();

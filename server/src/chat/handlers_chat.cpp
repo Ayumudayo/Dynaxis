@@ -8,7 +8,7 @@
 #include "wire.pb.h"
 // 저장소 연동 헤더
 #include "server/storage/connection_pool.hpp"
-#include "server/storage/redis/client.hpp"
+#include "server/core/storage/redis/client.hpp"
 #include <vector>
 #include <algorithm>
 #include <cctype>
