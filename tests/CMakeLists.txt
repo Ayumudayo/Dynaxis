@@ -53,10 +53,6 @@ if (BUILD_GTEST_TESTS)
         state_instance_registry_tests.cpp
         gateway_session_directory_tests.cpp
     )
-    target_include_directories(server_state_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/include
-        ${CMAKE_SOURCE_DIR}/gateway/include
-    )
     target_link_libraries(server_state_tests PRIVATE
         GTest::gtest_main
         gateway_session_directory
