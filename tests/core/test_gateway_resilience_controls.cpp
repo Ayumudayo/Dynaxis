@@ -17,6 +17,15 @@ TEST(GatewayTokenBucketTest, EnforcesBurstAndRefillRate) {
     EXPECT_FALSE(bucket.consume(1500));
 }
 
+TEST(GatewayTokenBucketTest, AvailableClampsToBurstAfterLongIdle) {
+    gateway::TokenBucket bucket;
+    bucket.configure(5.0, 10.0);
+
+    EXPECT_TRUE(bucket.consume(1000, 7.0));
+    EXPECT_NEAR(bucket.available(1000), 3.0, 1e-9);
+    EXPECT_NEAR(bucket.available(5000), 10.0, 1e-9);
+}
+
 TEST(GatewayRetryBudgetTest, ResetsBudgetAfterWindow) {
     gateway::RetryBudget budget;
     budget.configure(3, 1000);
@@ -27,6 +36,21 @@ TEST(GatewayRetryBudgetTest, ResetsBudgetAfterWindow) {
     EXPECT_FALSE(budget.consume(900));
 
     EXPECT_TRUE(budget.consume(1101));
+}
+
+TEST(GatewayRetryBudgetTest, RemainingTracksBudgetAndClockRollbackResetsWindow) {
+    gateway::RetryBudget budget;
+    budget.configure(2, 1000);
+
+    EXPECT_EQ(budget.remaining(100), 2u);
+    EXPECT_TRUE(budget.consume(100));
+    EXPECT_EQ(budget.remaining(100), 1u);
+    EXPECT_TRUE(budget.consume(200));
+    EXPECT_EQ(budget.remaining(200), 0u);
+    EXPECT_FALSE(budget.consume(300));
+
+    EXPECT_EQ(budget.remaining(50), 2u);
+    EXPECT_TRUE(budget.consume(50));
 }
 
 TEST(GatewayCircuitBreakerTest, OpensAfterThresholdAndRecoversAfterWindow) {
@@ -46,4 +70,16 @@ TEST(GatewayCircuitBreakerTest, OpensAfterThresholdAndRecoversAfterWindow) {
 
     breaker.record_success();
     EXPECT_FALSE(breaker.is_open(701));
+}
+
+TEST(GatewayCircuitBreakerTest, DisabledBreakerNeverOpensOrRejects) {
+    gateway::CircuitBreaker breaker;
+    breaker.configure(false, 1, 500);
+
+    EXPECT_TRUE(breaker.allow(100));
+    EXPECT_FALSE(breaker.record_failure(101));
+    EXPECT_FALSE(breaker.is_open(101));
+
+    breaker.record_success();
+    EXPECT_TRUE(breaker.allow(102));
 }

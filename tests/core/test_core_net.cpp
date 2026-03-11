@@ -3,9 +3,11 @@
 #include <server/core/config/options.hpp>
 #include <server/core/concurrent/job_queue.hpp>
 #include <server/core/memory/memory_pool.hpp>
+#include <server/core/net/connection.hpp>
 #include <server/core/net/dispatcher.hpp>
 #include <server/core/net/hive.hpp>
 #include <server/core/net/connection_runtime_state.hpp>
+#include <server/core/net/queue_budget.hpp>
 #include <server/core/net/session.hpp>
 #include <server/core/protocol/packet.hpp>
 #include <server/core/protocol/system_opcodes.hpp>
@@ -28,6 +30,28 @@
 using namespace server::core;
 using namespace server::core::net;
 namespace services = server::core::util::services;
+
+namespace {
+
+class ObservingConnection : public Connection {
+public:
+    ObservingConnection(std::shared_ptr<Hive> hive, std::size_t send_queue_max_bytes)
+        : Connection(std::move(hive), send_queue_max_bytes) {}
+
+    std::optional<boost::system::error_code> last_error;
+    std::size_t disconnect_count{0};
+
+protected:
+    void on_error(const boost::system::error_code& ec) override {
+        last_error = ec;
+    }
+
+    void on_disconnect() override {
+        ++disconnect_count;
+    }
+};
+
+} // namespace
 
 TEST(GatewayTransportAbstractionTest, BackendConnectionImplementsTransportSession) {
     EXPECT_TRUE((std::is_base_of_v<gateway::GatewayApp::ITransportSession,
@@ -372,6 +396,58 @@ TEST(HiveTest, Lifecycle) {
 
     hive.stop();
     EXPECT_TRUE(hive.is_stopped());
+}
+
+TEST(QueueBudgetTest, HandlesUnlimitedExactFitAndOverflowCases) {
+    EXPECT_FALSE(server::core::net::exceeds_queue_budget(0, 4096, 8192));
+    EXPECT_FALSE(server::core::net::exceeds_queue_budget(16, 0, 16));
+    EXPECT_FALSE(server::core::net::exceeds_queue_budget(16, 4, 12));
+    EXPECT_TRUE(server::core::net::exceeds_queue_budget(16, 5, 12));
+    EXPECT_TRUE(server::core::net::exceeds_queue_budget(16, 0, 17));
+}
+
+TEST(ConnectionBackpressureTest, OversizedSendStopsConnectionWithNoBufferSpaceError) {
+    boost::asio::io_context io;
+    auto hive = std::make_shared<Hive>(io);
+    auto connection = std::make_shared<ObservingConnection>(hive, 4);
+
+    connection->async_send(std::vector<std::uint8_t>(5, 0x42));
+    for (int i = 0; i < 8 && connection->disconnect_count == 0; ++i) {
+        io.poll();
+    }
+
+    EXPECT_TRUE(connection->is_stopped());
+    ASSERT_TRUE(connection->last_error.has_value());
+    EXPECT_EQ(connection->last_error->value(), boost::asio::error::no_buffer_space);
+    EXPECT_EQ(connection->disconnect_count, 1u);
+}
+
+TEST(SessionBackpressureTest, OversizedPacketDropsSessionAndRecordsQueueDropMetric) {
+    boost::asio::io_context io;
+    Dispatcher dispatcher;
+    BufferManager buffer_manager(2048, 8);
+    auto options = std::make_shared<SessionOptions>();
+    options->send_queue_max = 16;
+    auto state = std::make_shared<server::core::net::ConnectionRuntimeState>();
+    auto session = std::make_shared<Session>(
+        boost::asio::ip::tcp::socket(io),
+        dispatcher,
+        buffer_manager,
+        options,
+        state);
+
+    std::size_t close_count = 0;
+    session->set_on_close([&](std::shared_ptr<Session>) {
+        ++close_count;
+    });
+
+    const auto before = server::core::runtime_metrics::snapshot();
+    session->async_send(server::core::protocol::MSG_PING, std::vector<std::uint8_t>(32, 0x7F));
+    io.run();
+    const auto after = server::core::runtime_metrics::snapshot();
+
+    EXPECT_EQ(after.send_queue_drop_total, before.send_queue_drop_total + 1);
+    EXPECT_EQ(close_count, 1u);
 }
 
 TEST(OpcodePolicyTest, UdpBindOpcodePoliciesAreExpected) {
