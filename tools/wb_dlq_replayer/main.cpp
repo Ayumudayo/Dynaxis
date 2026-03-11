@@ -10,7 +10,8 @@
 #include <unordered_map>
 #include <algorithm>
 
-#include "server/storage/redis/client.hpp"
+#include "../wb_common/redis_client_factory.hpp"
+#include "server/core/storage/redis/client.hpp"
 #include "server/core/util/log.hpp"
 #include <pqxx/pqxx>
 #include <nlohmann/json.hpp>
@@ -103,8 +104,8 @@ public:
         }
 
         // Redis 연결
-        server::storage::redis::Options ropts{};
-        redis_ = server::storage::redis::make_redis_client(config_.redis_uri, ropts);
+        server::core::storage::redis::Options ropts{};
+        redis_ = wb_tools::make_redis_client(config_.redis_uri, ropts);
         if (!redis_ || !redis_->health_check()) {
             std::cerr << "DLQ: Redis health check failed" << std::endl;
             return 3;
@@ -152,7 +153,7 @@ private:
                 continue;
             }
 
-            std::vector<server::storage::redis::IRedisClient::StreamEntry> entries;
+            std::vector<server::core::storage::redis::IRedisClient::StreamEntry> entries;
             // DLQ는 처리량이 적으므로 1초 대기
             // 문서에 명시된 WB_DLQ_BATCH 값(기본 50)을 사용
             if (!redis_->xreadgroup(config_.dlq_stream, config_.group, config_.consumer, 
@@ -178,7 +179,7 @@ private:
         }
     }
 
-    void ProcessEntry(const server::storage::redis::IRedisClient::StreamEntry& e) {
+    void ProcessEntry(const server::core::storage::redis::IRedisClient::StreamEntry& e) {
         auto mp = ToMap(e.fields);
         
         // 원본 이벤트 ID 복원 (없으면 현재 ID 사용)
@@ -307,7 +308,7 @@ private:
     }
 
     ReplayerConfig config_;
-    std::shared_ptr<server::storage::redis::IRedisClient> redis_;
+    std::shared_ptr<server::core::storage::redis::IRedisClient> redis_;
     std::unique_ptr<pqxx::connection> db_;
 };
 

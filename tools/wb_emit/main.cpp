@@ -6,7 +6,8 @@
 #include <cstdlib>
 #include <optional>
 
-#include "server/storage/redis/client.hpp"
+#include "../wb_common/redis_client_factory.hpp"
+#include "server/core/storage/redis/client.hpp"
 
 // -----------------------------------------------------------------------------
 // wb_emit
@@ -30,8 +31,8 @@ int main(int argc, char** argv) {
 
         std::string stream = std::getenv("REDIS_STREAM_KEY") ? std::getenv("REDIS_STREAM_KEY") : std::string("session_events");
 
-        server::storage::redis::Options ropts{};
-        auto redis = server::storage::redis::make_redis_client(ruri, ropts);
+        server::core::storage::redis::Options ropts{};
+        auto redis = wb_tools::make_redis_client(ruri, ropts);
         if (!redis || !redis->health_check()) {
             std::cerr << "wb_emit: redis health failed" << std::endl;
             return 3;

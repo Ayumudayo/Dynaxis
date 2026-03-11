@@ -160,8 +160,8 @@ endif()
 
 if (BUILD_WRITE_BEHIND_TOOLS)
   add_executable(wb_worker tools/wb_worker/main.cpp tools/wb_worker/redis_client_factory.cpp)
-  add_executable(wb_dlq_replayer tools/wb_dlq_replayer/main.cpp)
-  add_executable(wb_emit tools/wb_emit/main.cpp)
+  add_executable(wb_dlq_replayer tools/wb_dlq_replayer/main.cpp tools/wb_common/redis_client_factory.cpp)
+  add_executable(wb_emit tools/wb_emit/main.cpp tools/wb_common/redis_client_factory.cpp)
   add_executable(wb_check tools/wb_check/main.cpp)
 
   target_link_libraries(wb_worker PRIVATE server_core)
