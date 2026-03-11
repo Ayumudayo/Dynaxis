@@ -13,7 +13,6 @@ target_include_directories(gateway_app PRIVATE
 target_link_libraries(gateway_app PRIVATE
     server_core
     server_state
-    server_storage_redis
 )
 
 if (TARGET generate_game_opcodes)
