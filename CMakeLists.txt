@@ -252,16 +252,20 @@ if (BUILD_LOADGEN_TOOLS)
 endif()
 
 if (BUILD_ADMIN_APP)
-  add_executable(admin_app tools/admin_app/main.cpp tools/admin_app/redis_client_factory.cpp)
+  add_library(admin_app_backends STATIC tools/admin_app/redis_client_factory.cpp)
+  target_link_libraries(admin_app_backends PUBLIC server_core)
+  if (TARGET server_state)
+    target_link_libraries(admin_app_backends PRIVATE server_state)
+  endif()
+
+  add_executable(admin_app tools/admin_app/main.cpp)
   target_link_libraries(admin_app PRIVATE server_core)
   if (TARGET nlohmann_json::nlohmann_json)
     target_link_libraries(admin_app PRIVATE nlohmann_json::nlohmann_json)
   else()
     message(WARNING "nlohmann_json target not found ? admin_app may fail to compile")
   endif()
-  if (TARGET server_state)
-    target_link_libraries(admin_app PRIVATE server_state)
-  endif()
+  target_link_libraries(admin_app PRIVATE admin_app_backends)
 
   add_custom_command(TARGET admin_app POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
