@@ -345,7 +345,8 @@ if (BUILD_CONTRACT_TESTS)
               "-DCONSUMER_BUILD_DIR=${CMAKE_BINARY_DIR}/contract/installed-consumer/build"
               "-DINSTALL_PREFIX=${CMAKE_BINARY_DIR}/contract/installed-consumer/prefix"
               "-DSERVER_CORE_PACKAGE_DIR=${CMAKE_BINARY_DIR}/contract/installed-consumer/prefix/${CMAKE_INSTALL_LIBDIR}/cmake/server_core"
-              "-DTOOLCHAIN_FILE=${CMAKE_BINARY_DIR}/conan/build/generators/conan_toolchain.cmake"
+              "-DTOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
+              "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
               "-DCONFIG=$<CONFIG>"
               "-DGENERATOR=${CMAKE_GENERATOR}"
               "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
@@ -353,6 +354,40 @@ if (BUILD_CONTRACT_TESTS)
               -P "${CMAKE_SOURCE_DIR}/tests/core/run_installed_package_consumer.cmake"
     )
     set_tests_properties(CoreInstalledPackageConsumer PROPERTIES LABELS "contract;public-api;installed-consumer")
+
+    add_test(
+      NAME FactoryPgInstalledPackageConsumer
+      COMMAND "${CMAKE_COMMAND}"
+              "-DBUILD_DIR=${CMAKE_BINARY_DIR}"
+              "-DCONSUMER_SOURCE_DIR=${CMAKE_SOURCE_DIR}/tests/package/factory_pg_consumer"
+              "-DCONSUMER_BUILD_DIR=${CMAKE_BINARY_DIR}/contract/factory-pg-consumer/build"
+              "-DINSTALL_PREFIX=${CMAKE_BINARY_DIR}/contract/factory-pg-consumer/prefix"
+              "-DTOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
+              "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+              "-DCONFIG=$<CONFIG>"
+              "-DGENERATOR=${CMAKE_GENERATOR}"
+              "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+              "-DGENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+              -P "${CMAKE_SOURCE_DIR}/tests/core/run_installed_factory_package_consumer.cmake"
+    )
+    set_tests_properties(FactoryPgInstalledPackageConsumer PROPERTIES LABELS "contract;package;installed-consumer")
+
+    add_test(
+      NAME FactoryRedisInstalledPackageConsumer
+      COMMAND "${CMAKE_COMMAND}"
+              "-DBUILD_DIR=${CMAKE_BINARY_DIR}"
+              "-DCONSUMER_SOURCE_DIR=${CMAKE_SOURCE_DIR}/tests/package/factory_redis_consumer"
+              "-DCONSUMER_BUILD_DIR=${CMAKE_BINARY_DIR}/contract/factory-redis-consumer/build"
+              "-DINSTALL_PREFIX=${CMAKE_BINARY_DIR}/contract/factory-redis-consumer/prefix"
+              "-DTOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
+              "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+              "-DCONFIG=$<CONFIG>"
+              "-DGENERATOR=${CMAKE_GENERATOR}"
+              "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+              "-DGENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+              -P "${CMAKE_SOURCE_DIR}/tests/core/run_installed_factory_package_consumer.cmake"
+    )
+    set_tests_properties(FactoryRedisInstalledPackageConsumer PROPERTIES LABELS "contract;package;installed-consumer")
 
     if (Python3_Interpreter_FOUND)
       add_test(

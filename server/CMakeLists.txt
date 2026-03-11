@@ -4,6 +4,18 @@ add_library(server_app_config STATIC
 target_include_directories(server_app_config PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(server_app_config PUBLIC server_core)
 
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+set(SERVER_FACTORY_PACKAGE_VERSION "1.0.0")
+file(READ "${CMAKE_SOURCE_DIR}/core/include/server/core/api/version.hpp" _server_core_api_version_hpp)
+string(REGEX MATCH "version_string\\(\\) noexcept \\{ return \"([0-9]+\\.[0-9]+\\.[0-9]+)\"; \\}"
+       _server_core_api_version_match
+       "${_server_core_api_version_hpp}")
+if (CMAKE_MATCH_1)
+    set(SERVER_FACTORY_PACKAGE_VERSION "${CMAKE_MATCH_1}")
+endif()
+
 add_library(server_app_backends STATIC
     src/app/core_internal_adapter.cpp
 )
@@ -74,14 +86,18 @@ add_library(server_storage_pg_objects OBJECT
     src/storage/postgres/connection_pool.cpp
 )
 target_include_directories(server_storage_pg_objects PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
-target_link_libraries(server_storage_pg_objects PUBLIC server_core)
+target_link_libraries(server_storage_pg_objects PUBLIC server_core::server_core)
 
 add_library(server_storage_pg_factory STATIC
     src/storage/postgres/connection_pool_factory.cpp
     $<TARGET_OBJECTS:server_storage_pg_objects>
 )
-target_include_directories(server_storage_pg_factory PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
-target_link_libraries(server_storage_pg_factory PUBLIC server_core)
+add_library(server_storage_pg_factory::server_storage_pg_factory ALIAS server_storage_pg_factory)
+target_include_directories(server_storage_pg_factory PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
+target_link_libraries(server_storage_pg_factory PUBLIC server_core::server_core)
 
 # Compatibility umbrella for broader legacy link points.
 add_library(server_storage_pg INTERFACE)
@@ -89,38 +105,41 @@ target_link_libraries(server_storage_pg INTERFACE server_storage_pg_factory)
 
 # libpqxx 필수: provider가 libpqxx::pqxx 또는 unofficial::libpqxx::libpqxx를 제공해야 함
 find_package(libpqxx CONFIG QUIET)
-if (libpqxx_FOUND AND TARGET libpqxx::pqxx)
-    target_link_libraries(server_storage_pg_objects PUBLIC libpqxx::pqxx)
-    target_link_libraries(server_storage_pg_factory PUBLIC libpqxx::pqxx)
-else()
+if (NOT TARGET libpqxx::pqxx)
     pkg_check_modules(libpqxx QUIET IMPORTED_TARGET libpqxx)
     if (libpqxx_FOUND)
-        target_link_libraries(server_storage_pg_objects PUBLIC PkgConfig::libpqxx)
-        target_link_libraries(server_storage_pg_factory PUBLIC PkgConfig::libpqxx)
+        add_library(libpqxx::pqxx INTERFACE IMPORTED)
+        target_link_libraries(libpqxx::pqxx INTERFACE PkgConfig::libpqxx)
     else()
         find_package(unofficial-libpqxx CONFIG QUIET)
         if (unofficial-libpqxx_FOUND AND TARGET unofficial::libpqxx::libpqxx)
-            target_link_libraries(server_storage_pg_objects PUBLIC unofficial::libpqxx::libpqxx)
-            target_link_libraries(server_storage_pg_factory PUBLIC unofficial::libpqxx::libpqxx)
+            add_library(libpqxx::pqxx INTERFACE IMPORTED)
+            target_link_libraries(libpqxx::pqxx INTERFACE unofficial::libpqxx::libpqxx)
         else()
             message(FATAL_ERROR "libpqxx not found — PostgreSQL storage requires libpqxx")
         endif()
     endif()
 endif()
+target_link_libraries(server_storage_pg_objects PUBLIC libpqxx::pqxx)
+target_link_libraries(server_storage_pg_factory PUBLIC libpqxx::pqxx)
 
 # Redis client/pool (skeleton)
 add_library(server_storage_redis_objects OBJECT
     src/storage/redis/client.cpp
 )
 target_include_directories(server_storage_redis_objects PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
-target_link_libraries(server_storage_redis_objects PUBLIC server_core)
+target_link_libraries(server_storage_redis_objects PUBLIC server_core::server_core)
 
 add_library(server_storage_redis_factory STATIC
     src/storage/redis/client_factory.cpp
     $<TARGET_OBJECTS:server_storage_redis_objects>
 )
-target_include_directories(server_storage_redis_factory PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
-target_link_libraries(server_storage_redis_factory PUBLIC server_core)
+add_library(server_storage_redis_factory::server_storage_redis_factory ALIAS server_storage_redis_factory)
+target_include_directories(server_storage_redis_factory PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
+target_link_libraries(server_storage_redis_factory PUBLIC server_core::server_core)
 
 # Compatibility umbrella for broader legacy link points.
 add_library(server_storage_redis INTERFACE)
@@ -128,6 +147,18 @@ target_link_libraries(server_storage_redis INTERFACE server_storage_redis_factor
 
 # Try to find redis-plus-plus exported targets
 find_package(redis++ CONFIG QUIET)
+if (NOT TARGET redis++::redis++)
+    if (TARGET redis++)
+        add_library(redis++::redis++ INTERFACE IMPORTED)
+        target_link_libraries(redis++::redis++ INTERFACE redis++)
+    elseif (TARGET redis++_static::redis++_static)
+        add_library(redis++::redis++ INTERFACE IMPORTED)
+        target_link_libraries(redis++::redis++ INTERFACE redis++_static::redis++_static)
+    elseif (TARGET redis++_static)
+        add_library(redis++::redis++ INTERFACE IMPORTED)
+        target_link_libraries(redis++::redis++ INTERFACE redis++_static)
+    endif()
+endif()
 if (TARGET redis++::redis++)
     target_link_libraries(server_storage_redis_objects PUBLIC redis++::redis++)
     target_link_libraries(server_storage_redis_factory PUBLIC redis++::redis++)
@@ -177,5 +208,64 @@ add_library(server_state_consul STATIC
 )
 target_include_directories(server_state_consul PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(server_state_consul PUBLIC server_state_common)
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_LIST_DIR}/cmake/server_storage_pg_factoryConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/server_storage_pg_factoryConfig.cmake"
+    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/server_storage_pg_factory"
+)
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/server_storage_pg_factoryConfigVersion.cmake"
+    VERSION "${SERVER_FACTORY_PACKAGE_VERSION}"
+    COMPATIBILITY SameMajorVersion
+)
+install(TARGETS server_storage_pg_factory
+        EXPORT server_storage_pg_factoryTargets
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+install(EXPORT server_storage_pg_factoryTargets
+        FILE server_storage_pg_factoryTargets.cmake
+        NAMESPACE server_storage_pg_factory::
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/server_storage_pg_factory")
+install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/server_storage_pg_factoryConfig.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/server_storage_pg_factoryConfigVersion.cmake"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/server_storage_pg_factory")
+install(FILES
+        "${CMAKE_CURRENT_LIST_DIR}/include/server/storage/postgres/connection_pool.hpp"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/server/storage/postgres")
+install(FILES
+        "${CMAKE_CURRENT_LIST_DIR}/include/server/storage/connection_pool.hpp"
+        "${CMAKE_CURRENT_LIST_DIR}/include/server/storage/unit_of_work.hpp"
+        "${CMAKE_CURRENT_LIST_DIR}/include/server/storage/repositories.hpp"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/server/storage")
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_LIST_DIR}/cmake/server_storage_redis_factoryConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/server_storage_redis_factoryConfig.cmake"
+    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/server_storage_redis_factory"
+)
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/server_storage_redis_factoryConfigVersion.cmake"
+    VERSION "${SERVER_FACTORY_PACKAGE_VERSION}"
+    COMPATIBILITY SameMajorVersion
+)
+install(TARGETS server_storage_redis_factory
+        EXPORT server_storage_redis_factoryTargets
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+install(EXPORT server_storage_redis_factoryTargets
+        FILE server_storage_redis_factoryTargets.cmake
+        NAMESPACE server_storage_redis_factory::
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/server_storage_redis_factory")
+install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/server_storage_redis_factoryConfig.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/server_storage_redis_factoryConfigVersion.cmake"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/server_storage_redis_factory")
+install(FILES
+        "${CMAKE_CURRENT_LIST_DIR}/include/server/storage/redis/factory.hpp"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/server/storage/redis")
 
 add_subdirectory(plugins)

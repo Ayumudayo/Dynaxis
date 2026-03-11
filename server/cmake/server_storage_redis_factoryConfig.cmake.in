@@ -1,0 +1,25 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(server_core CONFIG REQUIRED)
+find_dependency(redis++ CONFIG QUIET)
+
+if (NOT TARGET redis++::redis++)
+    if (TARGET redis++)
+        add_library(redis++::redis++ INTERFACE IMPORTED)
+        target_link_libraries(redis++::redis++ INTERFACE redis++)
+    elseif (TARGET redis++_static::redis++_static)
+        add_library(redis++::redis++ INTERFACE IMPORTED)
+        target_link_libraries(redis++::redis++ INTERFACE redis++_static::redis++_static)
+    elseif (TARGET redis++_static)
+        add_library(redis++::redis++ INTERFACE IMPORTED)
+        target_link_libraries(redis++::redis++ INTERFACE redis++_static)
+    else()
+        message(FATAL_ERROR "server_storage_redis_factory requires a supported redis++ target")
+    endif()
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/server_storage_redis_factoryTargets.cmake")
+
+check_required_components(server_storage_redis_factory)

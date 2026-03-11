@@ -1,0 +1,25 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(server_core CONFIG REQUIRED)
+
+find_dependency(libpqxx CONFIG QUIET)
+if (NOT TARGET libpqxx::pqxx)
+    find_dependency(unofficial-libpqxx CONFIG QUIET)
+    if (TARGET unofficial::libpqxx::libpqxx)
+        add_library(libpqxx::pqxx INTERFACE IMPORTED)
+        target_link_libraries(libpqxx::pqxx INTERFACE unofficial::libpqxx::libpqxx)
+    else()
+        find_dependency(PkgConfig REQUIRED)
+        pkg_check_modules(libpqxx REQUIRED IMPORTED_TARGET libpqxx)
+        if (NOT TARGET libpqxx::pqxx)
+            add_library(libpqxx::pqxx INTERFACE IMPORTED)
+            target_link_libraries(libpqxx::pqxx INTERFACE PkgConfig::libpqxx)
+        endif()
+    endif()
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/server_storage_pg_factoryTargets.cmake")
+
+check_required_components(server_storage_pg_factory)
