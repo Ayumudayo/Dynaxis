@@ -11,6 +11,7 @@
 #include "server/core/storage/db_worker_pool.hpp"
 #include "server/core/util/service_registry.hpp"
 #include "server/core/util/crash_handler.hpp"
+#include "server/storage/connection_pool.hpp"
 #include "server/storage/postgres/connection_pool.hpp"
 
 /**
@@ -60,6 +61,22 @@ std::shared_ptr<SessionListenerHandle> make_session_listener_handle(
 }
 
 std::shared_ptr<server::core::storage::IConnectionPool> make_postgres_connection_pool(
+    const std::string& db_uri,
+    std::size_t min_size,
+    std::size_t max_size,
+    std::uint32_t connect_timeout_ms,
+    std::uint32_t query_timeout_ms,
+    bool prepare_statements) {
+    server::core::storage::PoolOptions options{};
+    options.min_size = min_size;
+    options.max_size = max_size;
+    options.connect_timeout_ms = connect_timeout_ms;
+    options.query_timeout_ms = query_timeout_ms;
+    options.prepare_statements = prepare_statements;
+    return server::storage::postgres::make_connection_pool(db_uri, options);
+}
+
+std::shared_ptr<server::storage::IRepositoryConnectionPool> make_repository_connection_pool(
     const std::string& db_uri,
     std::size_t min_size,
     std::size_t max_size,
@@ -125,6 +142,11 @@ void register_connection_runtime_state_service(
 
 void register_connection_pool_service(
     const std::shared_ptr<server::core::storage::IConnectionPool>& connection_pool) {
+    server::core::util::services::set(connection_pool);
+}
+
+void register_repository_connection_pool_service(
+    const std::shared_ptr<server::storage::IRepositoryConnectionPool>& connection_pool) {
     server::core::util::services::set(connection_pool);
 }
 

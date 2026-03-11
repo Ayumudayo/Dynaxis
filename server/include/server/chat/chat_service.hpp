@@ -25,11 +25,11 @@
 #include "wire.pb.h"
 
 namespace server::core { class JobQueue; }
-namespace server::core::storage { class IConnectionPool; }
 namespace server::core::scripting {
 class LuaRuntime;
 struct LuaHookContext;
 }
+namespace server::storage { class IRepositoryConnectionPool; }
 namespace server::storage::redis { class IRedisClient; }
 
 namespace server::app::chat {
@@ -64,7 +64,7 @@ public:
      */
     ChatService(boost::asio::io_context& io,
                 server::core::JobQueue& job_queue,
-                std::shared_ptr<server::core::storage::IConnectionPool> db_pool = {},
+                std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool = {},
                 std::shared_ptr<server::storage::redis::IRedisClient> redis = {});
 
     /** @brief ChatService 리소스를 정리하고 플러그인/구독을 종료합니다. */
@@ -404,7 +404,7 @@ private:
 
     boost::asio::io_context* io_{};
     server::core::JobQueue& job_queue_;
-    std::shared_ptr<server::core::storage::IConnectionPool> db_pool_{};
+    std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool_{};
     std::shared_ptr<server::storage::redis::IRedisClient> redis_{};
     std::shared_ptr<server::core::scripting::LuaRuntime> lua_runtime_{};
     std::shared_ptr<Strand> lua_execution_strand_{};

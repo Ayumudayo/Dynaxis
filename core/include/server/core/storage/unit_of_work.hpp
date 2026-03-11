@@ -1,7 +1,5 @@
 #pragma once
 
-#include "server/core/storage/repositories.hpp"
-
 namespace server::core::storage {
 
 /**
@@ -9,6 +7,7 @@ namespace server::core::storage {
  *
  * 저장소 계층은 `IUnitOfWork` 경계를 기준으로 commit/rollback 책임을 분리해,
  * 실패 복구 시점과 범위를 명확하게 유지합니다.
+ * 이 코어 seam은 도메인 리포지터리 접근자를 소유하지 않고, 오직 트랜잭션 경계만 정의합니다.
  */
 class IUnitOfWork {
 public:
@@ -28,31 +27,6 @@ public:
      */
     virtual void rollback() = 0;
 
-    /**
-     * @brief 사용자 리포지터리 접근자를 반환합니다.
-     * @return 사용자 리포지터리 참조
-     */
-    virtual IUserRepository& users() = 0;
-    /**
-     * @brief 방 리포지터리 접근자를 반환합니다.
-     * @return 방 리포지터리 참조
-     */
-    virtual IRoomRepository& rooms() = 0;
-    /**
-     * @brief 메시지 리포지터리 접근자를 반환합니다.
-     * @return 메시지 리포지터리 참조
-     */
-    virtual IMessageRepository& messages() = 0;
-    /**
-     * @brief 세션 리포지터리 접근자를 반환합니다.
-     * @return 세션 리포지터리 참조
-     */
-    virtual ISessionRepository& sessions() = 0;
-    /**
-     * @brief 멤버십 리포지터리 접근자를 반환합니다.
-     * @return 멤버십 리포지터리 참조
-     */
-    virtual IMembershipRepository& memberships() = 0;
 };
 
 } // namespace server::core::storage

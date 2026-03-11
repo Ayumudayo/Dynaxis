@@ -15,7 +15,7 @@
 #include "chat_hook_plugin_chain.hpp"
 #include "wire.pb.h"
 // 저장소 연동 헤더
-#include "server/core/storage/connection_pool.hpp"
+#include "server/storage/connection_pool.hpp"
 #include "server/storage/redis/client.hpp"
 
 #include <openssl/sha.h>
@@ -145,13 +145,13 @@ std::string lua_session_event_name(SessionEventKindV2 kind) {
 // ChatService 생성자: 주요 의존성을 주입받고 환경 변수로부터 설정을 로드합니다.
 ChatService::ChatService(boost::asio::io_context& io,
                          server::core::JobQueue& job_queue,
-                         std::shared_ptr<server::core::storage::IConnectionPool> db_pool,
+                         std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool,
                          std::shared_ptr<server::storage::redis::IRedisClient> redis)
     : io_(&io), job_queue_(job_queue), db_pool_(std::move(db_pool)), redis_(std::move(redis)) {
     
     // 의존성이 주입되지 않은 경우 ServiceRegistry에서 가져옵니다.
     if (!db_pool_) {
-        db_pool_ = services::get<server::core::storage::IConnectionPool>();
+        db_pool_ = services::get<server::storage::IRepositoryConnectionPool>();
     }
     if (!redis_) {
         redis_ = services::get<server::storage::redis::IRedisClient>();
@@ -1241,7 +1241,7 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
                 if (itu != state_.user_uuid.end()) uid = itu->second;
             }
 
-            auto uow = db_pool_->make_unit_of_work();
+            auto uow = db_pool_->make_repository_unit_of_work();
             if (!uid.empty()) {
                 auto opt = uow->memberships().get_last_seen(uid, rid);
                 last_seen_value = opt.value_or(0);
@@ -1281,11 +1281,11 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
 
                 auto msgs = uow->messages().fetch_recent_by_room(rid, since_id, fetch_count);
                 // DB에서 가져온 것 중 이미 캐시에 있는 것은 제외
-                std::vector<server::core::storage::Message> filtered;
+                std::vector<server::storage::Message> filtered;
                 filtered.reserve(msgs.size());
                 for (const auto& m : msgs) {
                     if (added_ids.find(m.id) == added_ids.end()) {
-                        server::core::storage::Message m_copy = m;
+                        server::storage::Message m_copy = m;
                         filtered.push_back(std::move(m_copy));
                     }
                 }
@@ -2909,7 +2909,7 @@ std::string ChatService::ensure_room_id_ci(const std::string& room_name) {
         if (it != state_.room_ids.end()) return it->second;
     }
     try {
-        auto uow = db_pool_->make_unit_of_work();
+        auto uow = db_pool_->make_repository_unit_of_work();
         auto found = uow->rooms().find_by_name_exact_ci(room_name);
         std::string id;
         if (found) {

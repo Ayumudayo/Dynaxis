@@ -22,6 +22,10 @@ class IConnectionPool;
 class DbWorkerPool;
 }
 
+namespace server::storage {
+class IRepositoryConnectionPool;
+}
+
 namespace server::core::net {
 struct ConnectionRuntimeState;
 }
@@ -74,6 +78,14 @@ std::shared_ptr<SessionListenerHandle> make_session_listener_handle(
  * @return 공유 커넥션 풀 인터페이스
  */
 std::shared_ptr<server::core::storage::IConnectionPool> make_postgres_connection_pool(
+    const std::string& db_uri,
+    std::size_t min_size,
+    std::size_t max_size,
+    std::uint32_t connect_timeout_ms,
+    std::uint32_t query_timeout_ms,
+    bool prepare_statements);
+
+std::shared_ptr<server::storage::IRepositoryConnectionPool> make_repository_connection_pool(
     const std::string& db_uri,
     std::size_t min_size,
     std::size_t max_size,
@@ -136,6 +148,9 @@ void register_connection_runtime_state_service(
  */
 void register_connection_pool_service(
     const std::shared_ptr<server::core::storage::IConnectionPool>& connection_pool);
+
+void register_repository_connection_pool_service(
+    const std::shared_ptr<server::storage::IRepositoryConnectionPool>& connection_pool);
 
 /**
  * @brief DB worker 풀을 서비스 레지스트리에 등록합니다.

@@ -37,12 +37,14 @@
 #include "server/core/concurrent/task_scheduler.hpp"
 #include "server/core/memory/memory_pool.hpp"
 #include "server/core/runtime_metrics.hpp"
+#include "server/core/state/instance_registry.hpp"
 #include "server/core/scripting/lua_runtime.hpp"
 #include "server/core/scripting/script_watcher.hpp"
 #include "server/chat/chat_service.hpp"
 // Protobuf (수신 payload ts_ms 파싱용)
 #include "wire.pb.h"
 // 캐시/팬아웃: Redis 클라이언트(스켈레톤)
+#include "server/storage/connection_pool.hpp"
 #include "server/storage/redis/client.hpp"
 #include "server/state/instance_registry.hpp"
 
@@ -154,7 +156,7 @@ std::string to_lower_ascii(std::string_view value) {
 }
 
 struct AdminSelectorParseResult {
-    server::state::InstanceSelector selector;
+        server::core::state::InstanceSelector selector;
     bool selector_specified{false};
     bool valid{true};
 };
@@ -278,8 +280,8 @@ int run_server(int argc, char** argv) {
     std::shared_ptr<core::scripting::LuaRuntime> lua_runtime;
     std::shared_ptr<asio::strand<asio::io_context::executor_type>> lua_reload_strand;
     std::shared_ptr<core::scripting::ScriptWatcher> lua_script_watcher;
-    std::shared_ptr<server::state::RedisInstanceStateBackend> registry_backend;
-    server::state::InstanceRecord registry_record{};
+        std::shared_ptr<server::state::RedisInstanceStateBackend> registry_backend;
+        server::core::state::InstanceRecord registry_record{};
     bool registry_registered = false;
     server::core::app::AppHost app_host{"server_app"};
     app_host.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kBootstrapping);
@@ -609,15 +611,17 @@ int run_server(int argc, char** argv) {
 
         // 4. DB 커넥션 풀 구성
         std::shared_ptr<core::storage::IConnectionPool> db_pool;
+        std::shared_ptr<server::storage::IRepositoryConnectionPool> repository_pool;
         if (!config.db_uri.empty()) {
             corelog::info("Detected DB_URI (redacted)");
-            db_pool = core_internal::make_postgres_connection_pool(
+            repository_pool = core_internal::make_repository_connection_pool(
                 config.db_uri,
                 config.db_pool_min,
                 config.db_pool_max,
                 config.db_conn_timeout_ms,
                 config.db_query_timeout_ms,
                 config.db_prepare_statements);
+            db_pool = repository_pool;
             if (!core_internal::connection_pool_health_check(db_pool)) {
                 corelog::error("DB health check failed; please verify DB_URI.");
                 app_host.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kFailed);
@@ -632,6 +636,9 @@ int run_server(int argc, char** argv) {
 
         if (db_pool) {
             core_internal::register_connection_pool_service(db_pool);
+            if (repository_pool) {
+                core_internal::register_repository_connection_pool_service(repository_pool);
+            }
             std::size_t log_workers = config.db_worker_threads;
             if (log_workers == 0) {
                 log_workers = std::thread::hardware_concurrency();
@@ -751,7 +758,7 @@ int run_server(int argc, char** argv) {
         }
 
         // 6. 채팅 서비스 및 라우터 초기화
-        server::app::chat::ChatService chat(io, job_queue, db_pool, redis);
+        server::app::chat::ChatService chat(io, job_queue, repository_pool, redis);
         services::set(make_ref(chat));
         register_routes(dispatcher, chat);
 
@@ -811,7 +818,7 @@ int run_server(int argc, char** argv) {
             config.admin_command_signing_secret,
             admin_verify_options);
 
-        server::state::InstanceRecord local_instance_selector_context{};
+        server::core::state::InstanceRecord local_instance_selector_context{};
         local_instance_selector_context.instance_id = config.server_instance_id;
         local_instance_selector_context.role = config.server_role;
         local_instance_selector_context.game_mode = config.server_game_mode;
@@ -964,7 +971,7 @@ int run_server(int argc, char** argv) {
                         if (selector_parse.selector_specified) {
                             bool target_match = false;
                             if (selector_parse.valid) {
-                                target_match = server::state::matches_selector(
+                        target_match = server::core::state::matches_selector(
                                     local_instance_selector_context,
                                     selector_parse.selector);
                             }
@@ -982,8 +989,8 @@ int run_server(int argc, char** argv) {
 
                                 std::string layer = "invalid";
                                 if (selector_parse.valid) {
-                                    layer = std::string(server::state::selector_policy_layer_name(
-                                        server::state::classify_selector_policy_layer(selector_parse.selector)));
+                        layer = std::string(server::core::state::selector_policy_layer_name(
+                            server::core::state::classify_selector_policy_layer(selector_parse.selector)));
                                 }
 
                                 corelog::info(

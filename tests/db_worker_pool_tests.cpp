@@ -1,11 +1,8 @@
 #include <atomic>
 #include <chrono>
 #include <future>
-#include <optional>
-#include <string>
 #include <stdexcept>
 #include <thread>
-#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -17,62 +14,11 @@ using server::core::runtime_metrics::snapshot;
 using server::core::storage::DbWorkerPool;
 using server::core::storage::IConnectionPool;
 using server::core::storage::IUnitOfWork;
-using server::core::storage::IUserRepository;
-using server::core::storage::IRoomRepository;
-using server::core::storage::IMessageRepository;
-using server::core::storage::IMembershipRepository;
-using server::core::storage::ISessionRepository;
-using server::core::storage::User;
-using server::core::storage::Room;
-using server::core::storage::Message;
-using server::core::storage::Membership;
-using server::core::storage::Session;
 
 /**
  * @brief DbWorkerPool의 커밋/롤백/실패 메트릭 반영 동작을 검증합니다.
  */
 namespace {
-
-struct NullUserRepository final : IUserRepository {
-    std::optional<User> find_by_id(const std::string&) override { return std::nullopt; }
-    std::vector<User> find_by_name_ci(const std::string&, std::size_t) override { return {}; }
-    User create_guest(const std::string&) override { return {}; }
-    void update_last_login(const std::string&, const std::string&) override {}
-};
-
-struct NullRoomRepository final : IRoomRepository {
-    std::optional<Room> find_by_id(const std::string&) override { return std::nullopt; }
-    std::vector<Room> search_by_name_ci(const std::string&, std::size_t) override { return {}; }
-    std::optional<Room> find_by_name_exact_ci(const std::string&) override { return std::nullopt; }
-    Room create(const std::string&, bool) override { return {}; }
-    void close(const std::string&) override {}
-};
-
-struct NullMessageRepository final : IMessageRepository {
-    std::vector<Message> fetch_recent_by_room(const std::string&, std::uint64_t, std::size_t) override { return {}; }
-    Message create(const std::string&, const std::string&, const std::optional<std::string>&, const std::string&) override {
-        return {};
-    }
-    std::uint64_t get_last_id(const std::string&) override { return 0; }
-    void delete_by_room(const std::string&) override {}
-};
-
-struct NullMembershipRepository final : IMembershipRepository {
-    void upsert_join(const std::string&, const std::string&, const std::string&) override {}
-    void update_last_seen(const std::string&, const std::string&, std::uint64_t) override {}
-    void leave(const std::string&, const std::string&) override {}
-    std::optional<std::uint64_t> get_last_seen(const std::string&, const std::string&) override { return std::nullopt; }
-};
-
-struct NullSessionRepository final : ISessionRepository {
-    std::optional<Session> find_by_token_hash(const std::string&) override { return std::nullopt; }
-    Session create(const std::string&, const std::chrono::system_clock::time_point&,
-                   const std::optional<std::string>&, const std::optional<std::string>&,
-                   const std::string&) override {
-        return {};
-    }
-    void revoke(const std::string&) override {}
-};
 
 struct FakeUnitState {
     std::atomic<int> commit_calls{0};
@@ -87,19 +33,8 @@ public:
     void commit() override { state_->commit_calls.fetch_add(1); }
     void rollback() override { state_->rollback_calls.fetch_add(1); }
 
-    IUserRepository& users() override { return user_repo_; }
-    IRoomRepository& rooms() override { return room_repo_; }
-    IMessageRepository& messages() override { return message_repo_; }
-    ISessionRepository& sessions() override { return session_repo_; }
-    IMembershipRepository& memberships() override { return membership_repo_; }
-
 private:
     std::shared_ptr<FakeUnitState> state_;
-    NullUserRepository user_repo_;
-    NullRoomRepository room_repo_;
-    NullMessageRepository message_repo_;
-    NullSessionRepository session_repo_;
-    NullMembershipRepository membership_repo_;
 };
 
 class FakeConnectionPool final : public IConnectionPool {

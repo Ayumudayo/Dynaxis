@@ -5,9 +5,9 @@
 #include <utility>
 #include <vector>
 
-#include "server/core/storage/connection_pool.hpp"
-#include "server/core/storage/unit_of_work.hpp"
-#include "server/core/storage/repositories.hpp"
+#include "server/storage/connection_pool.hpp"
+#include "server/storage/unit_of_work.hpp"
+#include "server/storage/repositories.hpp"
 #include <pqxx/pqxx>
 
 /**
@@ -18,18 +18,19 @@
  */
 namespace server::storage::postgres {
 
-using server::core::storage::IConnectionPool;
 using server::core::storage::IUnitOfWork;
 using server::core::storage::PoolOptions;
-using server::core::storage::IUserRepository;
-using server::core::storage::IRoomRepository;
-using server::core::storage::IMessageRepository;
-using server::core::storage::ISessionRepository;
-using server::core::storage::IMembershipRepository;
-using server::core::storage::User;
-using server::core::storage::Room;
-using server::core::storage::Message;
-using server::core::storage::Session;
+using server::storage::IRepositoryConnectionPool;
+using server::storage::IRepositoryUnitOfWork;
+using server::storage::IUserRepository;
+using server::storage::IRoomRepository;
+using server::storage::IMessageRepository;
+using server::storage::ISessionRepository;
+using server::storage::IMembershipRepository;
+using server::storage::User;
+using server::storage::Room;
+using server::storage::Message;
+using server::storage::Session;
 
 // users 테이블을 다루는 PostgreSQL 전용 Repository.
 // SQL 쿼리를 직접 작성하여 DB와 상호작용합니다.
@@ -269,9 +270,9 @@ private:
 // pqxx::work 하나에 모든 Repository를 묶어 transaction을 관리한다.
 // UnitOfWork 패턴을 구현하여, 여러 리포지토리의 변경사항이 하나의 트랜잭션으로 묶이도록 보장합니다.
 // commit()을 호출하기 전까지는 DB에 반영되지 않으며, 예외 발생 시 자동 롤백됩니다.
-class PgUnitOfWork final : public IUnitOfWork {
+class PgRepositoryUnitOfWork final : public IRepositoryUnitOfWork {
 public:
-    explicit PgUnitOfWork(std::shared_ptr<pqxx::connection> conn)
+    explicit PgRepositoryUnitOfWork(std::shared_ptr<pqxx::connection> conn)
         : conn_(std::move(conn)), w_(*conn_),
           users_(&w_), rooms_(&w_), messages_(&w_), sessions_(&w_), memberships_(&w_) {}
 
@@ -295,19 +296,19 @@ private:
 };
 
 // 간단한 연결 팩토리 구현: 요청마다 pqxx connection을 생성한다.
-class PgConnectionPool final : public IConnectionPool {
+class PgConnectionPool final : public IRepositoryConnectionPool {
 public:
     PgConnectionPool(std::string db_uri, PoolOptions opts)
         : db_uri_(std::move(db_uri)), opts_(opts) {}
 
-    std::unique_ptr<IUnitOfWork> make_unit_of_work() override {
+    std::unique_ptr<IRepositoryUnitOfWork> make_repository_unit_of_work() override {
         // 요청마다 새로운 pqxx::connection을 열어 트랜잭션 경계를 분리한다.
         // 실제 운영 환경에서는 커넥션 풀링 라이브러리(예: pgBouncer)를 앞단에 두거나,
         // 내부적으로 커넥션 객체를 재사용하는 풀을 구현해야 성능 오버헤드를 줄일 수 있습니다.
         // 현재 구현은 단순함을 위해 매번 연결을 생성합니다.
         auto conn = std::make_shared<pqxx::connection>(db_uri_);
         if (!conn->is_open()) throw std::runtime_error("PQXX connection failed");
-        return std::make_unique<PgUnitOfWork>(std::move(conn));
+        return std::make_unique<PgRepositoryUnitOfWork>(std::move(conn));
     }
 
     bool health_check() override {
@@ -329,7 +330,7 @@ private:
     PoolOptions opts_{};
 };
 
-std::shared_ptr<IConnectionPool>
+std::shared_ptr<IRepositoryConnectionPool>
 make_connection_pool(const std::string& db_uri, const PoolOptions& opts) {
     return std::make_shared<PgConnectionPool>(db_uri, opts);
 }
