@@ -33,7 +33,7 @@ add_executable(server_app
     src/app/router.cpp
 )
 target_include_directories(server_app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
-target_link_libraries(server_app PRIVATE server_app_config server_chat_runtime server_core wire_proto server_storage_pg server_storage_redis server_state)
+target_link_libraries(server_app PRIVATE server_app_config server_chat_runtime server_core wire_proto server_storage_pg server_storage_redis server_state_redis)
 # dlopen/dlsym (Linux)
 target_link_libraries(server_app PRIVATE ${CMAKE_DL_LIBS})
 # protobuf 생성 헤더 경로 추가
