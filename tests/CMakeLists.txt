@@ -56,7 +56,9 @@ if (BUILD_GTEST_TESTS)
     target_link_libraries(server_state_tests PRIVATE
         GTest::gtest_main
         gateway_session_directory
-        server_state
+        server_state_common
+        server_state_redis
+        server_state_consul
     )
 
     add_executable(chat_history_tests
