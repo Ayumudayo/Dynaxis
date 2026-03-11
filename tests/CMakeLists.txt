@@ -208,6 +208,9 @@ if (BUILD_GTEST_TESTS)
         server_storage_redis
         wire_proto
     )
+    if (TARGET generate_game_opcodes)
+        add_dependencies(server_general_tests generate_game_opcodes)
+    endif()
 
     # Linux dynamic loader symbols (dlopen/dlsym)
     target_link_libraries(server_general_tests PRIVATE ${CMAKE_DL_LIBS})

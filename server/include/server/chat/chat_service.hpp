@@ -22,6 +22,7 @@
 #include "server/protocol/game_opcodes.hpp"
 #include "server/chat/chat_hook_plugin_abi.hpp"
 #include "server/scripting/chat_lua_bindings.hpp"
+#include "server/storage/redis/client.hpp"
 #include "wire.pb.h"
 
 namespace server::core { class JobQueue; }
@@ -30,7 +31,6 @@ class LuaRuntime;
 struct LuaHookContext;
 }
 namespace server::storage { class IRepositoryConnectionPool; }
-namespace server::storage::redis { class IRedisClient; }
 
 namespace server::app::chat {
 

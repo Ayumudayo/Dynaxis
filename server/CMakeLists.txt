@@ -26,7 +26,7 @@ target_include_directories(server_app PRIVATE ${CMAKE_BINARY_DIR}/proto)
 # Game Opcodes 생성
 if (Python3_Interpreter_FOUND)
     set(GAME_OPCODES_JSON ${CMAKE_SOURCE_DIR}/server/protocol/game_opcodes.json)
-    set(GAME_GENERATED_HEADER ${CMAKE_SOURCE_DIR}/server/include/server/protocol/game_opcodes.hpp)
+    set(GAME_GENERATED_HEADER ${CMAKE_SOURCE_DIR}/core/include/server/protocol/game_opcodes.hpp)
     add_custom_command(
         OUTPUT ${GAME_GENERATED_HEADER}
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/gen_opcodes.py ${GAME_OPCODES_JSON} ${GAME_GENERATED_HEADER}

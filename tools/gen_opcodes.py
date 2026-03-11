@@ -111,7 +111,9 @@ def parse_groups(data: dict):
         id_min = parse_id(g.get("id_min"))
         id_max = parse_id(g.get("id_max"))
         if not (0 <= id_min <= 0xFFFF and 0 <= id_max <= 0xFFFF and id_min <= id_max):
-            raise ValueError(f"유효하지 않은 그룹 범위: {name} [0x{id_min:04X}..0x{id_max:04X}]")
+            raise ValueError(
+                f"유효하지 않은 그룹 범위: {name} [0x{id_min:04X}..0x{id_max:04X}]"
+            )
 
         desc = str(g.get("desc", "")).strip()
         order.append(name)
@@ -136,27 +138,65 @@ def parse_groups(data: dict):
     return order, by_name
 
 
-def parse_policy_token(raw: Any, default_value: str, mapping: dict[str, str], field_name: str, opcode_name: str) -> str:
+def parse_policy_token(
+    raw: Any,
+    default_value: str,
+    mapping: dict[str, str],
+    field_name: str,
+    opcode_name: str,
+) -> str:
     token = str(default_value if raw is None else raw).strip().lower()
     if token not in mapping:
         valid = ", ".join(sorted(mapping.keys()))
-        raise ValueError(f"{opcode_name}의 {field_name} 값이 유효하지 않습니다: '{token}' (허용: {valid})")
+        raise ValueError(
+            f"{opcode_name}의 {field_name} 값이 유효하지 않습니다: '{token}' (허용: {valid})"
+        )
     return mapping[token]
 
 
 def main():
-    if len(sys.argv) != 3:
-        print("사용법: gen_opcodes.py <opcodes.json> <out_header>")
+    if len(sys.argv) < 3:
+        print(
+            "사용법: gen_opcodes.py <opcodes.json> <out_header> [--group <name>] [--namespace <ns>]"
+        )
         return 2
+
     spec_path = Path(sys.argv[1])
     out_header = Path(sys.argv[2])
 
+    selected_group = None
+    namespace_override = None
+    i = 3
+    while i < len(sys.argv):
+        arg = sys.argv[i]
+        if arg == "--group":
+            if i + 1 >= len(sys.argv):
+                raise ValueError("--group requires a value")
+            selected_group = sys.argv[i + 1]
+            i += 2
+            continue
+        if arg == "--namespace":
+            if i + 1 >= len(sys.argv):
+                raise ValueError("--namespace requires a value")
+            namespace_override = sys.argv[i + 1]
+            i += 2
+            continue
+        raise ValueError(f"알 수 없는 옵션: {arg}")
+
     data = json.loads(spec_path.read_text(encoding="utf-8"))
-    ns = data.get("namespace", "server::core::protocol")
+    ns = namespace_override or data.get("namespace", "server::core::protocol")
     items = data.get("opcodes", [])
 
     group_order, groups = parse_groups(data)
     require_group = bool(group_order)
+    if selected_group is not None:
+        if not require_group:
+            raise ValueError(
+                "--group 옵션은 groups 섹션이 있는 spec에서만 사용할 수 있습니다"
+            )
+        if selected_group not in groups:
+            raise ValueError(f"알 수 없는 group '{selected_group}'")
+        group_order = [selected_group]
     group_index = {name: i for i, name in enumerate(group_order)}
 
     # 검증 및 정렬
@@ -187,13 +227,25 @@ def main():
                     f"opcode id가 group 범위를 벗어났습니다: {name}=0x{val:04X}, group={group}"
                     f" [0x{g['id_min']:04X}..0x{g['id_max']:04X}]"
                 )
+            if selected_group is not None and group != selected_group:
+                continue
 
-        required_state = parse_policy_token(it.get("required_state"), "any", SESSION_STATUS_MAP, "required_state", name)
-        processing_place = parse_policy_token(
-            it.get("processing_place"), "inline", PROCESSING_PLACE_MAP, "processing_place", name
+        required_state = parse_policy_token(
+            it.get("required_state"), "any", SESSION_STATUS_MAP, "required_state", name
         )
-        transport = parse_policy_token(it.get("transport"), "tcp", TRANSPORT_MASK_MAP, "transport", name)
-        delivery = parse_policy_token(it.get("delivery"), "reliable_ordered", DELIVERY_CLASS_MAP, "delivery", name)
+        processing_place = parse_policy_token(
+            it.get("processing_place"),
+            "inline",
+            PROCESSING_PLACE_MAP,
+            "processing_place",
+            name,
+        )
+        transport = parse_policy_token(
+            it.get("transport"), "tcp", TRANSPORT_MASK_MAP, "transport", name
+        )
+        delivery = parse_policy_token(
+            it.get("delivery"), "reliable_ordered", DELIVERY_CLASS_MAP, "delivery", name
+        )
 
         channel = parse_id(it.get("channel", 0))
         if not (0 <= channel <= 0xFF):
@@ -229,7 +281,18 @@ def main():
     if require_group:
         parsed.sort(key=lambda x: (group_index[x[3]], x[0]))
         by_group = {g: [] for g in group_order}
-        for val, name, desc, group, direction, _required_state, _processing_place, _transport, _delivery, _channel in parsed:
+        for (
+            val,
+            name,
+            desc,
+            group,
+            direction,
+            _required_state,
+            _processing_place,
+            _transport,
+            _delivery,
+            _channel,
+        ) in parsed:
             by_group[group].append((val, name, desc, direction))
 
         lines = []
@@ -240,7 +303,11 @@ def main():
                 header += f": {g['desc']}"
             lines.append(header)
             for val, name, desc, direction in by_group[gname]:
-                lines.append(LINE_TEMPLATE.format(name=name, value=val, desc=fmt_desc(desc, direction)))
+                lines.append(
+                    LINE_TEMPLATE.format(
+                        name=name, value=val, desc=fmt_desc(desc, direction)
+                    )
+                )
             lines.append("")
     else:
         parsed.sort(key=lambda x: x[0])
@@ -252,7 +319,7 @@ def main():
     # opcode_name()이 숫자 ID 기준으로 안정적으로 정렬되도록 유지합니다.
     cases_src = sorted(parsed, key=lambda x: x[0])
     case_lines = [
-        f"    case 0x{val:04X}: return \"{name}\";"
+        f'    case 0x{val:04X}: return "{name}";'
         for val, name, _desc, _group, _direction, _required_state, _processing_place, _transport, _delivery, _channel in cases_src
     ]
     cases = "\n".join(case_lines)

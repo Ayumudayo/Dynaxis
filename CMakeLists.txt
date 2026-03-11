@@ -128,6 +128,7 @@ if (Python3_Interpreter_FOUND)
         COMMENT "Generating protocol system opcodes header"
         VERBATIM)
     add_custom_target(generate_opcodes DEPENDS ${GENERATED_HEADER})
+
     # wire codec header generation
     set(WIRE_MAP_JSON ${CMAKE_SOURCE_DIR}/protocol/wire_map.json)
     set(GENERATED_WIRE_CODEC ${CMAKE_SOURCE_DIR}/core/include/server/wire/codec.hpp)

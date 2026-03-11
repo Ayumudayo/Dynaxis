@@ -15,3 +15,7 @@ target_link_libraries(gateway_app PRIVATE
     server_state
     server_storage_redis
 )
+
+if (TARGET generate_game_opcodes)
+    add_dependencies(gateway_app generate_game_opcodes)
+endif()

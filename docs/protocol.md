@@ -27,7 +27,7 @@
   - game(server): `server/protocol/game_opcodes.json`
 - 생성 헤더(C++)
   - system(core): `core/include/server/core/protocol/system_opcodes.hpp`
-  - game(server): `server/include/server/protocol/game_opcodes.hpp`
+  - game(shared): `core/include/server/protocol/game_opcodes.hpp`
 - 생성기
   - C++ 헤더 생성: `tools/gen_opcodes.py` (CMake custom command로 빌드 시 자동 실행; Python3 필요)
   - 문서/검증: `tools/gen_opcode_docs.py` → `docs/protocol/opcodes.md` (system/game 전체 16-bit 공간 중복 검증 포함)
