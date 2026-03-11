@@ -249,7 +249,7 @@ if (BUILD_LOADGEN_TOOLS)
 endif()
 
 if (BUILD_ADMIN_APP)
-  add_executable(admin_app tools/admin_app/main.cpp)
+  add_executable(admin_app tools/admin_app/main.cpp tools/admin_app/redis_client_factory.cpp)
   target_link_libraries(admin_app PRIVATE server_core)
   if (TARGET nlohmann_json::nlohmann_json)
     target_link_libraries(admin_app PRIVATE nlohmann_json::nlohmann_json)

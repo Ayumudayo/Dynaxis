@@ -33,16 +33,17 @@
 
 #include <nlohmann/json.hpp>
 
+#include "redis_client_factory.hpp"
 #include "server/core/app/app_host.hpp"
 #include "server/core/app/termination_signals.hpp"
 #include "server/core/config/runtime_settings.hpp"
 #include "server/core/metrics/build_info.hpp"
 #include "server/core/metrics/http_server.hpp"
+#include "server/core/storage/redis/client.hpp"
 #include "server/core/security/admin_command_auth.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/util/paths.hpp"
 #include "server/state/instance_registry.hpp"
-#include "server/storage/redis/client.hpp"
 
 namespace corelog = server::core::log;
 
@@ -1533,9 +1534,9 @@ private:
 
     void init_backends() {
         if (!redis_uri_.empty()) {
-            server::storage::redis::Options options{};
+            server::core::storage::redis::Options options{};
             options.pool_max = read_env_u32("REDIS_POOL_MAX", 10, 1, 256);
-            redis_ = server::storage::redis::make_redis_client(redis_uri_, options);
+            redis_ = admin_app::make_redis_client(redis_uri_, options);
 
             if (redis_ && redis_->health_check()) {
                 app_host_.set_dependency_ok("redis", true);
@@ -5053,7 +5054,7 @@ private:
     std::string auth_bearer_actor_;
     std::string auth_bearer_role_;
 
-    std::shared_ptr<server::storage::redis::IRedisClient> redis_;
+    std::shared_ptr<server::core::storage::redis::IRedisClient> redis_;
     std::shared_ptr<server::state::RedisInstanceStateBackend> registry_backend_;
 
     std::thread poller_;
