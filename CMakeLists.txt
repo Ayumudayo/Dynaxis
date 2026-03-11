@@ -170,8 +170,6 @@ if (BUILD_WRITE_BEHIND_TOOLS)
   target_link_libraries(wb_check PRIVATE server_core)
 
   if (TARGET server_storage_pg)
-    target_link_libraries(wb_worker PRIVATE server_storage_pg)
-    target_link_libraries(wb_check PRIVATE server_storage_pg)
   endif()
   if (TARGET server_storage_redis)
     target_link_libraries(wb_worker PRIVATE server_storage_redis)
