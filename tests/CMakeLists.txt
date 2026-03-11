@@ -240,11 +240,6 @@ if (BUILD_GTEST_TESTS)
         add_executable(server_plugin_chain_tests
             server/test_chat_plugin_chain.cpp
         )
-        target_include_directories(server_plugin_chain_tests PRIVATE
-            ${CMAKE_SOURCE_DIR}/core/include
-            ${CMAKE_SOURCE_DIR}/server/include
-            ${CMAKE_SOURCE_DIR}/server/src/chat
-        )
         target_compile_definitions(server_plugin_chain_tests PRIVATE
             TEST_CHAT_HOOK_SAMPLE_PATH="$<TARGET_FILE:chat_hook_sample>"
             TEST_CHAT_HOOK_SAMPLE_V2_PATH="$<TARGET_FILE:chat_hook_sample_v2>"
@@ -264,11 +259,6 @@ if (BUILD_GTEST_TESTS)
 
         add_executable(server_plugin_chain_v2_tests
             server/test_chat_plugin_chain_v2.cpp
-        )
-        target_include_directories(server_plugin_chain_v2_tests PRIVATE
-            ${CMAKE_SOURCE_DIR}/core/include
-            ${CMAKE_SOURCE_DIR}/server/include
-            ${CMAKE_SOURCE_DIR}/server/src/chat
         )
         target_compile_definitions(server_plugin_chain_v2_tests PRIVATE
             TEST_CHAT_HOOK_SAMPLE_V2_PATH="$<TARGET_FILE:chat_hook_sample_v2>"
