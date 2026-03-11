@@ -1,6 +1,7 @@
 add_executable(gateway_app
     src/gateway_connection.cpp
     src/gateway_app.cpp
+    src/registry_backend_factory.cpp
     src/session_directory.cpp
     src/main.cpp
 )
