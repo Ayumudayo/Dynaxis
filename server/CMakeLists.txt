@@ -9,7 +9,7 @@ add_library(server_app_backends STATIC
 )
 target_include_directories(server_app_backends PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(server_app_backends PUBLIC server_core)
-target_link_libraries(server_app_backends PRIVATE server_storage_pg server_storage_redis server_state_redis)
+target_link_libraries(server_app_backends PRIVATE server_storage_pg server_storage_redis server_state_redis_factory)
 
 add_library(server_chat_runtime STATIC
     src/chat/chat_service_core.cpp
@@ -128,10 +128,16 @@ target_link_libraries(server_state_common PUBLIC server_core)
 
 add_library(server_state_redis STATIC
     src/state/instance_registry_redis.cpp
-    src/state/redis_backend_factory.cpp
 )
 target_include_directories(server_state_redis PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(server_state_redis PUBLIC server_state_common)
+
+add_library(server_state_redis_factory STATIC
+    src/state/redis_backend_factory.cpp
+)
+target_include_directories(server_state_redis_factory PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
+target_link_libraries(server_state_redis_factory PUBLIC server_core)
+target_link_libraries(server_state_redis_factory PRIVATE server_state_redis)
 
 add_library(server_state_consul STATIC
     src/state/instance_registry_consul.cpp
