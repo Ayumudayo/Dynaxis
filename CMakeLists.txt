@@ -159,9 +159,12 @@ if (BUILD_SERVER_TESTS)
 endif()
 
 if (BUILD_WRITE_BEHIND_TOOLS)
+  add_library(wb_common_redis_factory STATIC tools/wb_common/redis_client_factory.cpp)
+  target_link_libraries(wb_common_redis_factory PUBLIC server_core)
+
   add_executable(wb_worker tools/wb_worker/main.cpp tools/wb_worker/redis_client_factory.cpp)
-  add_executable(wb_dlq_replayer tools/wb_dlq_replayer/main.cpp tools/wb_common/redis_client_factory.cpp)
-  add_executable(wb_emit tools/wb_emit/main.cpp tools/wb_common/redis_client_factory.cpp)
+  add_executable(wb_dlq_replayer tools/wb_dlq_replayer/main.cpp)
+  add_executable(wb_emit tools/wb_emit/main.cpp)
   add_executable(wb_check tools/wb_check/main.cpp)
 
   target_link_libraries(wb_worker PRIVATE server_core)
@@ -173,9 +176,11 @@ if (BUILD_WRITE_BEHIND_TOOLS)
   endif()
   if (TARGET server_storage_redis)
     target_link_libraries(wb_worker PRIVATE server_storage_redis)
-    target_link_libraries(wb_dlq_replayer PRIVATE server_storage_redis)
-    target_link_libraries(wb_emit PRIVATE server_storage_redis)
+    target_link_libraries(wb_common_redis_factory PRIVATE server_storage_redis)
   endif()
+
+  target_link_libraries(wb_dlq_replayer PRIVATE wb_common_redis_factory)
+  target_link_libraries(wb_emit PRIVATE wb_common_redis_factory)
 
   if (TARGET nlohmann_json::nlohmann_json)
     target_link_libraries(wb_worker PRIVATE nlohmann_json::nlohmann_json)
