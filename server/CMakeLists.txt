@@ -9,7 +9,7 @@ add_library(server_app_backends STATIC
 )
 target_include_directories(server_app_backends PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(server_app_backends PUBLIC server_core)
-target_link_libraries(server_app_backends PRIVATE server_storage_pg server_storage_redis_factory server_state_redis_factory)
+target_link_libraries(server_app_backends PRIVATE server_storage_pg_factory server_storage_redis_factory server_state_redis_factory)
 
 add_library(server_chat_runtime STATIC
     src/chat/chat_service_core.cpp
@@ -76,28 +76,32 @@ add_library(server_storage_pg_objects OBJECT
 target_include_directories(server_storage_pg_objects PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(server_storage_pg_objects PUBLIC server_core)
 
-add_library(server_storage_pg STATIC
+add_library(server_storage_pg_factory STATIC
     src/storage/postgres/connection_pool_factory.cpp
     $<TARGET_OBJECTS:server_storage_pg_objects>
 )
-target_include_directories(server_storage_pg PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
-target_link_libraries(server_storage_pg PUBLIC server_core)
+target_include_directories(server_storage_pg_factory PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
+target_link_libraries(server_storage_pg_factory PUBLIC server_core)
+
+# Compatibility umbrella for broader legacy link points.
+add_library(server_storage_pg INTERFACE)
+target_link_libraries(server_storage_pg INTERFACE server_storage_pg_factory)
 
 # libpqxx 필수: provider가 libpqxx::pqxx 또는 unofficial::libpqxx::libpqxx를 제공해야 함
 find_package(libpqxx CONFIG QUIET)
 if (libpqxx_FOUND AND TARGET libpqxx::pqxx)
     target_link_libraries(server_storage_pg_objects PUBLIC libpqxx::pqxx)
-    target_link_libraries(server_storage_pg PUBLIC libpqxx::pqxx)
+    target_link_libraries(server_storage_pg_factory PUBLIC libpqxx::pqxx)
 else()
     pkg_check_modules(libpqxx QUIET IMPORTED_TARGET libpqxx)
     if (libpqxx_FOUND)
         target_link_libraries(server_storage_pg_objects PUBLIC PkgConfig::libpqxx)
-        target_link_libraries(server_storage_pg PUBLIC PkgConfig::libpqxx)
+        target_link_libraries(server_storage_pg_factory PUBLIC PkgConfig::libpqxx)
     else()
         find_package(unofficial-libpqxx CONFIG QUIET)
         if (unofficial-libpqxx_FOUND AND TARGET unofficial::libpqxx::libpqxx)
             target_link_libraries(server_storage_pg_objects PUBLIC unofficial::libpqxx::libpqxx)
-            target_link_libraries(server_storage_pg PUBLIC unofficial::libpqxx::libpqxx)
+            target_link_libraries(server_storage_pg_factory PUBLIC unofficial::libpqxx::libpqxx)
         else()
             message(FATAL_ERROR "libpqxx not found — PostgreSQL storage requires libpqxx")
         endif()
