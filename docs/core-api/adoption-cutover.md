@@ -66,6 +66,7 @@
   - `tools/admin_app/redis_client_factory.cpp`
   - `tools/wb_common/redis_client_factory.cpp`
 - 이 상태는 installed-package consumer 검증을 막지 않으므로, 현재 시점에서 raw source repo split을 다시 여는 것보다 package-first 경로가 더 안전합니다.
+- 첫 packageization milestone에서는 `server_storage_pg_factory`, `server_storage_redis_factory`의 install/export/config scaffolding과 installed-package consumer proof를 우선 확보했습니다.
 - 후속 extraction이 필요해지면 아래 순서를 우선합니다.
   1. `server_core`와 narrower backend factory package를 먼저 배포/버전화합니다.
   2. `gateway_backends`, `admin_app_backends`, `server_app_backends`, `wb_common_redis_factory` 같은 app-local helper는 integration repo에 남깁니다.

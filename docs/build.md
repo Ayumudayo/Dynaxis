@@ -43,6 +43,35 @@ ctest --preset windows-test
 - `build-windows/gateway/Debug/gateway_app.exe` (전체 Windows 빌드 시)
 - `build-windows/Debug/wb_worker.exe` (전체 Windows 빌드 시)
 
+## Factory Package Install Smoke
+
+`server_storage_pg_factory`와 `server_storage_redis_factory`는 install/export/package-consumer smoke를 지원한다.
+첫 단계의 package-first extraction surface이며, app-local helper target은 여전히 패키지 대상이 아니다.
+
+```powershell
+cmake --install build-windows --config Debug --prefix build-windows/install-smoke
+```
+
+Postgres factory consumer 예시:
+
+```powershell
+cmake -S tests/package/factory_pg_consumer -B build-windows/factory-pg-consumer/build --fresh `
+  -DCMAKE_PREFIX_PATH="${PWD}/build-windows/install-smoke" `
+  -DCMAKE_TOOLCHAIN_FILE="${PWD}/build-windows/conan/build/generators/conan_toolchain.cmake"
+cmake --build build-windows/factory-pg-consumer/build --config Debug
+```
+
+Redis factory consumer 예시:
+
+```powershell
+cmake -S tests/package/factory_redis_consumer -B build-windows/factory-redis-consumer/build --fresh `
+  -DCMAKE_PREFIX_PATH="${PWD}/build-windows/install-smoke" `
+  -DCMAKE_TOOLCHAIN_FILE="${PWD}/build-windows/conan/build/generators/conan_toolchain.cmake"
+cmake --build build-windows/factory-redis-consumer/build --config Debug
+```
+
+자동화된 검증에서는 `FactoryPgInstalledPackageConsumer`, `FactoryRedisInstalledPackageConsumer` contract test가 같은 흐름을 실행한다.
+
 ## 리눅스(Linux) (표준 런타임 = Docker 풀스택)
 
 `scripts/deploy_docker.ps1`를 통해 base 이미지/compose profile/포트 매핑을 일관되게 유지한다.
