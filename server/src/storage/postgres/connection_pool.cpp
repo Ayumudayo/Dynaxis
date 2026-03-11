@@ -331,7 +331,7 @@ private:
 };
 
 std::shared_ptr<IRepositoryConnectionPool>
-make_connection_pool(const std::string& db_uri, const PoolOptions& opts) {
+make_connection_pool_impl(const std::string& db_uri, const PoolOptions& opts) {
     return std::make_shared<PgConnectionPool>(db_uri, opts);
 }
 

@@ -70,8 +70,15 @@ if(WIN32 AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.21")
 endif()
 
 # Postgres storage adapter
-add_library(server_storage_pg STATIC
+add_library(server_storage_pg_objects OBJECT
     src/storage/postgres/connection_pool.cpp
+)
+target_include_directories(server_storage_pg_objects PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
+target_link_libraries(server_storage_pg_objects PUBLIC server_core)
+
+add_library(server_storage_pg STATIC
+    src/storage/postgres/connection_pool_factory.cpp
+    $<TARGET_OBJECTS:server_storage_pg_objects>
 )
 target_include_directories(server_storage_pg PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(server_storage_pg PUBLIC server_core)
@@ -79,14 +86,17 @@ target_link_libraries(server_storage_pg PUBLIC server_core)
 # libpqxx 필수: provider가 libpqxx::pqxx 또는 unofficial::libpqxx::libpqxx를 제공해야 함
 find_package(libpqxx CONFIG QUIET)
 if (libpqxx_FOUND AND TARGET libpqxx::pqxx)
+    target_link_libraries(server_storage_pg_objects PUBLIC libpqxx::pqxx)
     target_link_libraries(server_storage_pg PUBLIC libpqxx::pqxx)
 else()
     pkg_check_modules(libpqxx QUIET IMPORTED_TARGET libpqxx)
     if (libpqxx_FOUND)
+        target_link_libraries(server_storage_pg_objects PUBLIC PkgConfig::libpqxx)
         target_link_libraries(server_storage_pg PUBLIC PkgConfig::libpqxx)
     else()
         find_package(unofficial-libpqxx CONFIG QUIET)
         if (unofficial-libpqxx_FOUND AND TARGET unofficial::libpqxx::libpqxx)
+            target_link_libraries(server_storage_pg_objects PUBLIC unofficial::libpqxx::libpqxx)
             target_link_libraries(server_storage_pg PUBLIC unofficial::libpqxx::libpqxx)
         else()
             message(FATAL_ERROR "libpqxx not found — PostgreSQL storage requires libpqxx")
