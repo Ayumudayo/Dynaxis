@@ -114,10 +114,25 @@ else()
     message(WARNING "redis-plus-plus not found ? Redis client stays as stub")
 endif()
 
-add_library(server_state STATIC
-    src/state/instance_registry.cpp
+add_library(server_state_common STATIC
+    src/state/instance_registry_common.cpp
 )
-target_include_directories(server_state PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
-target_link_libraries(server_state PUBLIC server_core server_storage_redis)
+target_include_directories(server_state_common PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
+target_link_libraries(server_state_common PUBLIC server_core)
+
+add_library(server_state_redis STATIC
+    src/state/instance_registry_redis.cpp
+)
+target_include_directories(server_state_redis PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
+target_link_libraries(server_state_redis PUBLIC server_state_common)
+
+add_library(server_state_consul STATIC
+    src/state/instance_registry_consul.cpp
+)
+target_include_directories(server_state_consul PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
+target_link_libraries(server_state_consul PUBLIC server_state_common)
+
+add_library(server_state INTERFACE)
+target_link_libraries(server_state INTERFACE server_state_redis server_state_consul)
 
 add_subdirectory(plugins)

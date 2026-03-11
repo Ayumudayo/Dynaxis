@@ -9,7 +9,7 @@ add_library(gateway_backends STATIC
 )
 target_include_directories(gateway_backends PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(gateway_backends PUBLIC server_core)
-target_link_libraries(gateway_backends PRIVATE server_state)
+target_link_libraries(gateway_backends PRIVATE server_state_redis)
 
 add_executable(gateway_app
     src/gateway_connection.cpp
