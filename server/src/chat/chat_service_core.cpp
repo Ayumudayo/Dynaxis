@@ -1,6 +1,6 @@
 #include "server/chat/chat_service.hpp"
 #include "server/protocol/game_opcodes.hpp"
-#include "server/config/runtime_settings.hpp"
+#include "server/core/config/runtime_settings.hpp"
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/runtime_metrics.hpp"
@@ -2015,14 +2015,14 @@ void ChatService::admin_apply_runtime_setting(const std::string& key, const std:
             return;
         }
 
-        const auto* setting_rule = server::config::find_runtime_setting_rule(normalized_key);
+        const auto* setting_rule = server::core::config::find_runtime_setting_rule(normalized_key);
         if (setting_rule == nullptr) {
             finalize_failure("unsupported_key", normalized_key);
             return;
         }
 
         std::uint32_t min_allowed = setting_rule->min_value;
-        if (setting_rule->key_id == server::config::RuntimeSettingKey::kRoomRecentMaxlen) {
+        if (setting_rule->key_id == server::core::config::RuntimeSettingKey::kRoomRecentMaxlen) {
             min_allowed = std::max(min_allowed, static_cast<std::uint32_t>(history_.recent_limit));
         }
 
@@ -2032,31 +2032,31 @@ void ChatService::admin_apply_runtime_setting(const std::string& key, const std:
         }
 
         switch (setting_rule->key_id) {
-        case server::config::RuntimeSettingKey::kPresenceTtlSec:
+        case server::core::config::RuntimeSettingKey::kPresenceTtlSec:
             presence_.ttl = *parsed;
             break;
-        case server::config::RuntimeSettingKey::kRecentHistoryLimit:
+        case server::core::config::RuntimeSettingKey::kRecentHistoryLimit:
             history_.recent_limit = static_cast<std::size_t>(*parsed);
             if (history_.max_list_len < history_.recent_limit) {
                 history_.max_list_len = history_.recent_limit;
             }
             break;
-        case server::config::RuntimeSettingKey::kRoomRecentMaxlen:
+        case server::core::config::RuntimeSettingKey::kRoomRecentMaxlen:
             history_.max_list_len = static_cast<std::size_t>(*parsed);
             break;
-        case server::config::RuntimeSettingKey::kChatSpamThreshold:
+        case server::core::config::RuntimeSettingKey::kChatSpamThreshold:
             spam_message_threshold_ = static_cast<std::size_t>(*parsed);
             break;
-        case server::config::RuntimeSettingKey::kChatSpamWindowSec:
+        case server::core::config::RuntimeSettingKey::kChatSpamWindowSec:
             spam_window_sec_ = *parsed;
             break;
-        case server::config::RuntimeSettingKey::kChatSpamMuteSec:
+        case server::core::config::RuntimeSettingKey::kChatSpamMuteSec:
             spam_mute_sec_ = *parsed;
             break;
-        case server::config::RuntimeSettingKey::kChatSpamBanSec:
+        case server::core::config::RuntimeSettingKey::kChatSpamBanSec:
             spam_ban_sec_ = *parsed;
             break;
-        case server::config::RuntimeSettingKey::kChatSpamBanViolations:
+        case server::core::config::RuntimeSettingKey::kChatSpamBanViolations:
             spam_ban_violation_threshold_ = *parsed;
             break;
         }

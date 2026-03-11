@@ -35,7 +35,7 @@
 
 #include "server/core/app/app_host.hpp"
 #include "server/core/app/termination_signals.hpp"
-#include "server/config/runtime_settings.hpp"
+#include "server/core/config/runtime_settings.hpp"
 #include "server/core/metrics/build_info.hpp"
 #include "server/core/metrics/http_server.hpp"
 #include "server/core/security/admin_command_auth.hpp"
@@ -869,7 +869,7 @@ static constexpr std::array<ExactRoute, 19> kExactRoutes{{
     return "unknown";
 }
 
-std::string runtime_setting_range_error_message(const server::config::RuntimeSettingRule& rule) {
+std::string runtime_setting_range_error_message(const server::core::config::RuntimeSettingRule& rule) {
     return std::string(rule.key_name) + " must be " +
            std::to_string(rule.min_value) + ".." + std::to_string(rule.max_value);
 }
@@ -4690,7 +4690,7 @@ private:
                 json_details("value", value));
         }
 
-        const auto* setting_rule = server::config::find_runtime_setting_rule(key);
+        const auto* setting_rule = server::core::config::find_runtime_setting_rule(key);
         if (setting_rule == nullptr) {
             http_errors_total_.fetch_add(1, std::memory_order_relaxed);
             return json_error(request_id, "400 Bad Request", "BAD_REQUEST", "unsupported setting key");
