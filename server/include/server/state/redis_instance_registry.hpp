@@ -15,8 +15,10 @@
 
 namespace server::state {
 
+/** @brief Redis 키 공간을 인스턴스 레지스트리 백엔드로 사용하는 구현입니다. */
 class RedisInstanceStateBackend final : public IInstanceStateBackend {
 public:
+    /** @brief 상태 레지스트리 구현에 필요한 Redis 연산만 노출하는 축소 어댑터입니다. */
     class IRedisClient {
     public:
         virtual ~IRedisClient() = default;

@@ -11,6 +11,7 @@
 
 namespace server::state {
 
+/** @brief Consul KV를 인스턴스 레지스트리 백엔드로 어댑트합니다. */
 class ConsulInstanceStateBackend final : public IInstanceStateBackend {
 public:
     using http_callback = std::function<bool(const std::string& path, const std::string& payload)>;

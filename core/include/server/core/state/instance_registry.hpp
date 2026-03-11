@@ -11,6 +11,7 @@
 
 namespace server::core::state {
 
+/** @brief 인스턴스 레지스트리가 보관하는 서버 한 대의 상태 스냅샷입니다. */
 struct InstanceRecord {
     std::string instance_id;
     std::string host;
@@ -26,6 +27,7 @@ struct InstanceRecord {
     std::uint64_t last_heartbeat_ms{0};
 };
 
+/** @brief 라우팅 또는 운영 정책이 인스턴스 집합을 좁힐 때 사용하는 필터입니다. */
 struct InstanceSelector {
     bool all{false};
     std::vector<std::string> server_ids;
@@ -44,6 +46,7 @@ enum class SelectorPolicyLayer {
     kServer,
 };
 
+/** @brief 인스턴스 선택 과정에서의 매치/미스매치 통계를 기록합니다. */
 struct SelectorMatchStats {
     std::uint64_t scanned{0};
     std::uint64_t matched{0};
@@ -57,6 +60,7 @@ std::vector<InstanceRecord> select_instances(const std::vector<InstanceRecord>& 
                                              const InstanceSelector& selector,
                                              SelectorMatchStats* stats = nullptr);
 
+/** @brief 인스턴스 레지스트리 저장소 구현이 따라야 할 최소 계약입니다. */
 class IInstanceStateBackend {
 public:
     virtual ~IInstanceStateBackend() = default;
@@ -67,6 +71,7 @@ public:
     virtual std::vector<InstanceRecord> list_instances() const = 0;
 };
 
+/** @brief 테스트와 단일 프로세스 시나리오용 메모리 기반 레지스트리 구현입니다. */
 class InMemoryStateBackend final : public IInstanceStateBackend {
 public:
     bool upsert(const InstanceRecord& record) override;

@@ -56,11 +56,13 @@ public:
                       std::optional<std::size_t> maxlen = std::nullopt,
                       bool approximate = true) = 0;
 
+    /** @brief Redis Stream 한 항목의 ID와 필드 페이로드를 담습니다. */
     struct StreamEntry {
         std::string id;
         std::vector<std::pair<std::string, std::string>> fields;
     };
 
+    /** @brief XAUTOCLAIM 호출이 반환하는 후속 cursor와 회수된 항목 집합입니다. */
     struct StreamAutoClaimResult {
         std::string next_start_id;
         std::vector<StreamEntry> entries;

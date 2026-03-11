@@ -8,12 +8,14 @@
 
 namespace server::storage {
 
+/** @brief 영속 저장소에서 읽고 쓰는 사용자 레코드입니다. */
 struct User {
     std::string id;
     std::string name;
     std::int64_t created_at_ms{};
 };
 
+/** @brief 방 검색과 생성 흐름이 공유하는 채팅방 레코드입니다. */
 struct Room {
     std::string id;
     std::string name;
@@ -23,6 +25,7 @@ struct Room {
     std::int64_t created_at_ms{};
 };
 
+/** @brief 최근 메시지 조회와 적재가 공유하는 메시지 레코드입니다. */
 struct Message {
     std::uint64_t id{};
     std::string room_id;
@@ -33,6 +36,7 @@ struct Message {
     std::int64_t created_at_ms{};
 };
 
+/** @brief 사용자-방 관계와 읽음 위치를 함께 표현하는 멤버십 레코드입니다. */
 struct Membership {
     std::string user_id;
     std::string room_id;
@@ -43,6 +47,7 @@ struct Membership {
     bool is_member{true};
 };
 
+/** @brief 토큰 기반 인증 세션의 영속 레코드입니다. */
 struct Session {
     std::string id;
     std::string user_id;
@@ -54,6 +59,7 @@ struct Session {
     std::optional<std::int64_t> revoked_at_ms;
 };
 
+/** @brief 사용자 조회와 게스트 생성을 담당하는 저장소 계약입니다. */
 class IUserRepository {
 public:
     virtual ~IUserRepository() = default;
@@ -64,6 +70,7 @@ public:
     virtual void update_last_login(const std::string& user_id, const std::string& ip) = 0;
 };
 
+/** @brief 방 검색, 생성, 종료를 담당하는 저장소 계약입니다. */
 class IRoomRepository {
 public:
     virtual ~IRoomRepository() = default;
@@ -75,6 +82,7 @@ public:
     virtual void close(const std::string& room_id) = 0;
 };
 
+/** @brief 방 메시지 조회, 추가, 정리를 담당하는 저장소 계약입니다. */
 class IMessageRepository {
 public:
     virtual ~IMessageRepository() = default;
@@ -90,6 +98,7 @@ public:
     virtual void delete_by_room(const std::string& room_id) = 0;
 };
 
+/** @brief 입장/퇴장과 읽음 위치 갱신을 담당하는 저장소 계약입니다. */
 class IMembershipRepository {
 public:
     virtual ~IMembershipRepository() = default;
@@ -105,6 +114,7 @@ public:
                                                        const std::string& room_id) = 0;
 };
 
+/** @brief 세션 발급, 조회, 폐기를 담당하는 저장소 계약입니다. */
 class ISessionRepository {
 public:
     virtual ~ISessionRepository() = default;

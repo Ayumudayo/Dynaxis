@@ -5,6 +5,7 @@
 
 namespace server::storage {
 
+/** @brief 저장소 인터페이스 집합을 하나의 트랜잭션 경계로 묶는 계약입니다. */
 class IRepositoryUnitOfWork : public server::core::storage::IUnitOfWork {
 public:
     ~IRepositoryUnitOfWork() override = default;

@@ -7,6 +7,7 @@
 
 namespace server::storage {
 
+/** @brief 저장소 전용 unit-of-work를 생성할 수 있는 연결 풀 계약입니다. */
 class IRepositoryConnectionPool : public server::core::storage::IConnectionPool {
 public:
     ~IRepositoryConnectionPool() override = default;

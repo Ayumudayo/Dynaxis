@@ -17,6 +17,7 @@ enum class RuntimeSettingKey {
     kChatSpamBanViolations,
 };
 
+/** @brief 런타임에서 조정 가능한 설정 키의 허용 범위를 정의합니다. */
 struct RuntimeSettingRule {
     RuntimeSettingKey key_id;
     std::string_view key_name;
