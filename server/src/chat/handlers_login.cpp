@@ -165,6 +165,20 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             state_.rooms[room].insert(session_sp);
         }
 
+        // 로그인 응답은 메모리 상태가 일관되게 반영된 직후 전송한다.
+        // 후속 DB/Redis 감사 작업은 best-effort로 이어서 처리해도 된다.
+        server::wire::v1::LoginRes pb;
+        pb.set_effective_user(new_user);
+        pb.set_session_id(session_sp->session_id());
+        pb.set_message("ok");
+        pb.set_is_admin(admin_users_.count(new_user) > 0);
+        std::string bytes;
+        pb.SerializeToString(&bytes);
+        std::vector<std::uint8_t> res(bytes.begin(), bytes.end());
+
+        session_sp->set_session_status(server::core::protocol::SessionStatus::kAuthenticated);
+        session_sp->async_send(game_proto::MSG_LOGIN_RES, res, 0);
+
         // 게스트와 로그인 사용자를 모두 UUID로 일관되게 식별하고 IP/로그를 남긴다.
         if (db_pool_) {
             try {
@@ -245,18 +259,6 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             }
         }
         
-        // 로그인 응답 전송
-        server::wire::v1::LoginRes pb;
-        pb.set_effective_user(new_user);
-        pb.set_session_id(session_sp->session_id());
-        pb.set_message("ok");
-        pb.set_is_admin(admin_users_.count(new_user) > 0);
-        std::string bytes; pb.SerializeToString(&bytes);
-        std::vector<std::uint8_t> res(bytes.begin(), bytes.end());
-
-        session_sp->set_session_status(server::core::protocol::SessionStatus::kAuthenticated);
-        session_sp->async_send(game_proto::MSG_LOGIN_RES, res, 0);
-
         // presence:user:{uid} 키의 TTL을 주기적으로 갱신해 온라인 리스트를 유지한다.
         if (redis_) {
             try {

@@ -328,6 +328,7 @@ public:
     struct SessionState {
         TransportSessionPtr session;              ///< backend 전송 세션 핸들
         std::string client_id;                     ///< sticky 조회용 클라이언트 ID
+        std::string backend_instance_id;           ///< optimistic local load 추적용 backend ID
         bool udp_bound{false};                     ///< UDP endpoint 바인딩 완료 여부
         boost::asio::ip::udp::endpoint udp_endpoint; ///< 바인딩된 UDP endpoint
         std::uint64_t udp_nonce{0};                ///< 마지막 발급 nonce

@@ -14,8 +14,10 @@
 #include <algorithm>
 #include <deque>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 #include <openssl/crypto.h>
@@ -1196,6 +1198,7 @@ GatewayApp::BackendConnectionPtr GatewayApp::create_backend_connection(const std
         SessionState state{};
         state.session = session;
         state.client_id = client_id;
+        state.backend_instance_id = selected->record.instance_id;
         sessions_[session_id] = std::move(state);
     }
 
@@ -1566,22 +1569,55 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
         }
     }
 
-    // 2) 신규 선택: least-connections(active_sessions) 기반.
-    const server::core::state::InstanceRecord* selected = nullptr;
+    // 2) 신규 선택: registry active_sessions + gateway 로컬 optimistic load 기반.
+    std::unordered_map<std::string, std::size_t> local_backend_load;
+    {
+        std::lock_guard<std::mutex> lock(session_mutex_);
+        for (const auto& [session_id, state] : sessions_) {
+            (void)session_id;
+            if (!state.backend_instance_id.empty()) {
+                ++local_backend_load[state.backend_instance_id];
+            }
+        }
+    }
+
+    std::vector<const server::core::state::InstanceRecord*> candidates;
+    std::uint64_t min_effective_load = std::numeric_limits<std::uint64_t>::max();
     for (const auto& rec : instances) {
         if (!rec.ready || rec.instance_id.empty() || rec.host.empty() || rec.port == 0) {
             continue;
         }
-        if (selected == nullptr || rec.active_sessions < selected->active_sessions) {
-            selected = &rec;
+
+        const auto local_it = local_backend_load.find(rec.instance_id);
+        const std::uint64_t local_load =
+            local_it == local_backend_load.end() ? 0ull : static_cast<std::uint64_t>(local_it->second);
+        const std::uint64_t effective_load = static_cast<std::uint64_t>(rec.active_sessions) + local_load;
+
+        if (effective_load < min_effective_load) {
+            min_effective_load = effective_load;
+            candidates.clear();
+            candidates.push_back(&rec);
+        } else if (effective_load == min_effective_load) {
+            candidates.push_back(&rec);
         }
     }
 
-    if (selected == nullptr) {
+    if (candidates.empty()) {
         return std::nullopt;
     }
 
-    return SelectedBackend{*selected, false};
+    std::size_t selected_index = 0;
+    if (candidates.size() > 1) {
+        if (!client_id.empty() && client_id != "anonymous") {
+            selected_index = std::hash<std::string>{}(client_id) % candidates.size();
+        } else {
+            static std::atomic<std::uint64_t> rr_counter{0};
+            selected_index = static_cast<std::size_t>(
+                rr_counter.fetch_add(1, std::memory_order_relaxed) % candidates.size());
+        }
+    }
+
+    return SelectedBackend{*candidates[selected_index], false};
 }
 
 void GatewayApp::on_backend_connected(const std::string& client_id,

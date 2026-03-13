@@ -377,7 +377,9 @@ RunSummary run_scenario(const ScenarioConfig& scenario, const CliOptions& cli) {
         metrics.record_connected(assignment.transport);
 
         LoginResult login_result;
-        const auto user = scenario.login_prefix + "_" + std::to_string(session_index);
+        // Concurrent runs must not reuse the same login IDs, otherwise duplicate-name
+        // rejection masquerades as an overload/login-collapse signal.
+        const auto user = scenario.login_prefix + "_" + std::to_string(cli.seed) + "_" + std::to_string(session_index);
         if (!client->login(user, {}, &login_result)) {
             const bool authenticated = client->authentication_completed();
             if (authenticated) {

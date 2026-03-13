@@ -269,6 +269,7 @@ docker run --rm --network "dynaxis-stack_dynaxis-stack" \
 - `gateway_app` 경로는 접속 직후 `MSG_LOGIN_REQ`를 기다리므로, loadgen은 `HELLO`를 선행 조건으로 두지 않는다.
 - 커스텀 room을 여러 세션이 공유하려면 `room_password`를 지정하는 편이 안전하다. 현재 서버 정책상 초기에 만들어진 room은 owner/invite 제약이 생길 수 있다.
 - 기본값으로 `unique_room_per_run=true`를 사용해 run마다 room name에 seed suffix를 붙여 이전 run의 room history/state와 분리한다.
+- login ID도 run seed suffix를 포함하므로, 같은 scenario를 여러 프로세스로 동시에 실행해도 duplicate-login 충돌이 overload 신호로 오인되지 않는다.
 - chat rate는 기본 spam/mute 임계값 아래로 유지해야 한다. 제공된 샘플 시나리오는 이 기준을 반영한다.
 - UDP attach run prerequisites:
   - gateway에 `GATEWAY_UDP_LISTEN`과 `GATEWAY_UDP_BIND_SECRET`가 설정돼 있어야 한다.
