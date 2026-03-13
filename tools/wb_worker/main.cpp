@@ -217,7 +217,7 @@ public:
             app_host_.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kFailed);
             return 3;
         }
-        app_host_.set_dependency_ok("redis", true);
+        NoteRedisAvailability(true, "startup_health_check");
 
         // Consumer Group 생성 (이미 존재하면 무시됨)
         // Consumer Group은 여러 워커가 메시지를 중복 없이 나눠서 처리하게 해줍니다.
@@ -324,6 +324,22 @@ private:
         return ok;
     }
 
+    void NoteRedisAvailability(bool ok, std::string_view operation) {
+        const bool previous = redis_dependency_ok_.exchange(ok, std::memory_order_relaxed);
+        app_host_.set_dependency_ok("redis", ok);
+        if (ok) {
+            if (!previous) {
+                server::core::log::info("Redis dependency recovered after op=" + std::string(operation));
+            }
+            return;
+        }
+
+        wb_redis_unavailable_total_.fetch_add(1, std::memory_order_relaxed);
+        if (previous) {
+            server::core::log::warn("Redis dependency unavailable during op=" + std::string(operation));
+        }
+    }
+
     void ResetDbReconnectBackoff() {
         db_reconnect_attempt_ = 0;
         wb_db_reconnect_backoff_ms_last_.store(0, std::memory_order_relaxed);
@@ -383,11 +399,12 @@ private:
             std::vector<server::core::storage::redis::IRedisClient::StreamEntry> entries;
             if (!redis_->xreadgroup(config_.stream_key, config_.group, config_.consumer, 
                                   500, config_.batch_max_events, entries)) {
-                // 타임아웃 또는 에러 시 잠시 대기
+                NoteRedisAvailability(false, "xreadgroup");
+                // 장애 시 잠시 대기한 뒤 재시도한다.
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                // 에러 상황일 수 있으므로 continue
                 continue; 
             }
+            NoteRedisAvailability(true, "xreadgroup");
 
             // 2. 버퍼링
             if (!entries.empty()) {
@@ -417,8 +434,11 @@ private:
             if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_pending_log).count() >= 1000) {
                 long long pending = 0;
                 if (redis_->xpending(config_.stream_key, config_.group, pending)) {
+                    NoteRedisAvailability(true, "xpending");
                     wb_pending_.store(pending, std::memory_order_relaxed);
                     server::core::log::info("metric=wb_pending value=" + std::to_string(pending));
+                } else {
+                    NoteRedisAvailability(false, "xpending");
                 }
                 last_pending_log = now;
             }
@@ -442,9 +462,11 @@ private:
                                 reclaim_next_id_,
                                 config_.reclaim_count,
                                 claimed)) {
+            NoteRedisAvailability(false, "xautoclaim");
             wb_reclaim_error_total_.fetch_add(1, std::memory_order_relaxed);
             return;
         }
+        NoteRedisAvailability(true, "xautoclaim");
 
         if (!claimed.next_start_id.empty()) {
             reclaim_next_id_ = claimed.next_start_id;
@@ -681,12 +703,14 @@ private:
     bool db_prepared_{false};
 
     std::atomic<long long> wb_pending_{0};
+    std::atomic<bool> redis_dependency_ok_{false};
 
     std::string reclaim_next_id_{"0-0"};
     std::atomic<std::uint64_t> wb_reclaim_runs_total_{0};
     std::atomic<std::uint64_t> wb_reclaim_total_{0};
     std::atomic<std::uint64_t> wb_reclaim_error_total_{0};
     std::atomic<std::uint64_t> wb_reclaim_deleted_total_{0};
+    std::atomic<std::uint64_t> wb_redis_unavailable_total_{0};
 
     std::atomic<std::uint64_t> wb_db_unavailable_total_{0};
     std::atomic<std::uint64_t> wb_error_drop_total_{0};
@@ -755,6 +779,8 @@ private:
         stream << "wb_reclaim_error_total " << wb_reclaim_error_total_.load(std::memory_order_relaxed) << "\n";
         stream << "# TYPE wb_reclaim_deleted_total counter\n";
         stream << "wb_reclaim_deleted_total " << wb_reclaim_deleted_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE wb_redis_unavailable_total counter\n";
+        stream << "wb_redis_unavailable_total " << wb_redis_unavailable_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE wb_db_unavailable_total counter\n";
         stream << "wb_db_unavailable_total " << wb_db_unavailable_total_.load(std::memory_order_relaxed) << "\n";
