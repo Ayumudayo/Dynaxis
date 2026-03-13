@@ -21,6 +21,7 @@ This file exists so each executed checkpoint can leave a commit-visible summary.
 | 4 | gateway restart during live traffic | `build/engine-readiness/20260314-0212-gateway-restart/` | pass with caveat | stack recovered and new traffic stayed routable, but the live soak recorded `24` disconnects / `24` errors for sessions on the restarted gateway. |
 | 5 | server restart during live traffic | `build/engine-readiness/20260314-0216-server-restart/` | pass with caveat | stack recovered and probes kept passing, but the live soak recorded `26` disconnects / `26` errors for sessions routed to the restarted backend. |
 | 6 | worker restart during backlog processing | `build/engine-readiness/20260314-0219-worker-restart/` | pass with caveat | user-facing chat stayed clean and the worker drained backlog after restart, but backlog visibility came from flush logs more than from `wb_pending`/ready metrics. |
+| 7 | overload/backpressure rehearsal | `build/engine-readiness/20260314-0223-overload-rehearsal/` | fail | `192` connected sessions produced `156` login failures, while the intended gateway queue/circuit counters stayed flat and did not explain the overload path. |
 
 ## Active Caveats
 
@@ -28,7 +29,8 @@ This file exists so each executed checkpoint can leave a commit-visible summary.
 - Gateway restart currently causes bounded session loss rather than transparent continuity for in-flight sessions behind the restarted instance.
 - Server restart currently causes bounded backend-session loss rather than transparent continuity for in-flight sessions routed through the restarted instance.
 - Worker restart recovery is visible, but backlog depth signaling is still weaker than ideal because `wb_pending` did not spike in the sampled window.
+- Higher concurrent chat load triggers bounded but poorly explained login collapse; the current backpressure metrics do not expose the dominant failure path clearly enough.
 
 ## Next Checkpoint
 
-- `overload/backpressure rehearsal`
+- `baseline blocker classification and branch-cut decision`
