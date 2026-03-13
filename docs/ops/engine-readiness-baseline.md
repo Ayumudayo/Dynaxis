@@ -31,6 +31,12 @@ This file exists so each executed checkpoint can leave a commit-visible summary.
 - Worker restart recovery is visible, but backlog depth signaling is still weaker than ideal because `wb_pending` did not spike in the sampled window.
 - Higher concurrent chat load triggers bounded but poorly explained login collapse; the current backpressure metrics do not expose the dominant failure path clearly enough.
 
+## Current Decision
+
+- `ready to branch`: no
+- `reason`: overload/backpressure remains a common blocker, and worker Redis degraded-state visibility still needs tightening
+- detailed Phase 4 decision: `docs/ops/engine-readiness-decision.md`
+
 ## Next Checkpoint
 
-- `baseline blocker classification and branch-cut decision`
+- `common blocker remediation and branch-cut preparation`
