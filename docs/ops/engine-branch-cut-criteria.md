@@ -123,8 +123,8 @@ Open this branch only when all shared prerequisites above are met **and** the fi
 
 ## Current Status
 
-- `engine-roadmap-session-continuity`: first tranche complete on the active capability-first branch
+- `engine-roadmap-session-continuity`: first tranche complete and merged
 - `engine-roadmap-fps`: not cut yet
-- `engine-roadmap-mmorpg`: not cut yet
+- `engine-roadmap-mmorpg`: active branch cut from merged continuity head
 - `preferred first genre branch once the continuity tranche closes`: `engine-roadmap-mmorpg`
-- `next operational step after the continuity PR merges`: cut `engine-roadmap-mmorpg` from the merged continuity head
+- `current operational step`: execute the narrow MMORPG first tranche around world admission/residency

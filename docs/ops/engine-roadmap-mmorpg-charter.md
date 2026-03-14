@@ -1,14 +1,15 @@
 # Engine Roadmap MMORPG Charter
 
-This document is the prepared branch-start charter for `engine-roadmap-mmorpg`.
+This document is the branch-start charter for `engine-roadmap-mmorpg`.
 
-It is intentionally written after the first `engine-roadmap-session-continuity` tranche closed, so the branch can start from continuity primitives instead of rebuilding them.
+It is intentionally cut only after the first `engine-roadmap-session-continuity` tranche closed and merged, so this branch can start from continuity primitives instead of rebuilding them.
 
-## Planned Branch Cut
+## Branch Cut
 
-- planned branch: `engine-roadmap-mmorpg`
-- planned source: merged `engine-roadmap-session-continuity`
-- branch-cut precondition: the continuity tranche PR is accepted and merged
+- branch: `engine-roadmap-mmorpg`
+- cut from: merged `engine-roadmap-session-continuity`
+- cut commit: `db380b5`
+- continuity tranche closure: `docs/ops/engine-roadmap-session-continuity-first-tranche-closure.md`
 - branch-cut criteria reference: `docs/ops/engine-branch-cut-criteria.md`
 
 ## Why This Branch Exists
