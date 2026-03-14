@@ -26,12 +26,16 @@ def main() -> int:
         if not login["logical_session_id"] or not login["resume_token"] or login["resume_expires_unix_ms"] == 0:
             print(f"FAIL: continuity lease fields missing: {login}")
             return 1
+        if not login["world_id"]:
+            print(f"FAIL: world admission metadata missing: {login}")
+            return 1
         if login["resumed"]:
             print(f"FAIL: initial login unexpectedly marked resumed: {login}")
             return 1
 
         logical_session_id = login["logical_session_id"]
         resume_token = login["resume_token"]
+        world_id = login["world_id"]
 
         print(f"Joining continuity room {room}...")
         first.join_room(room, user)
@@ -46,6 +50,9 @@ def main() -> int:
             return 1
         if resumed["logical_session_id"] != logical_session_id:
             print(f"FAIL: logical session id changed across resume: {resumed}")
+            return 1
+        if resumed["world_id"] != world_id:
+            print(f"FAIL: world residency changed across resume: {resumed}")
             return 1
         if not resumed["resumed"]:
             print(f"FAIL: resumed login was not marked resumed: {resumed}")

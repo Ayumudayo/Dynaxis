@@ -7,9 +7,10 @@ import urllib.request
 from pathlib import Path
 
 from session_continuity_common import ChatClient
-from session_continuity_common import read_metric_sum
-from session_continuity_common import lp_utf8
 from session_continuity_common import MSG_CHAT_SEND
+from session_continuity_common import lp_utf8
+from session_continuity_common import read_metric_sum
+from session_continuity_common import MSG_ERR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_PROJECT_DIR = REPO_ROOT / "docker" / "stack"
@@ -18,6 +19,8 @@ COMPOSE_ENV_FILE = COMPOSE_PROJECT_DIR / ".env.rudp-attach.example"
 COMPOSE_PROJECT_NAME = "dynaxis-stack"
 SESSION_DIRECTORY_PREFIX = "gateway/session/"
 RESUME_LOCATOR_PREFIX = SESSION_DIRECTORY_PREFIX + "locator/"
+CONTINUITY_WORLD_PREFIX = "dynaxis:continuity:world:"
+ROOM_MISMATCH_ERRC = 0x0106
 
 GATEWAY_READY_PORTS = {
     "gateway-1": 36001,
@@ -102,6 +105,8 @@ def assert_initial_login(login: dict, user: str) -> tuple[str, str]:
         raise AssertionError(f"effective user mismatch: {login}")
     if not login["logical_session_id"] or not login["resume_token"] or login["resume_expires_unix_ms"] == 0:
         raise AssertionError(f"continuity lease fields missing: {login}")
+    if not login["world_id"]:
+        raise AssertionError(f"world admission metadata missing: {login}")
     if login["resumed"]:
         raise AssertionError(f"initial login unexpectedly marked resumed: {login}")
     return login["logical_session_id"], login["resume_token"]
@@ -293,6 +298,8 @@ def run_locator_fallback() -> None:
     second = ChatClient(host="127.0.0.1", port=36100)
     try:
         logical_session_id, resume_token = assert_initial_login(login, user)
+        if login["world_id"] != "starter-a":
+            raise AssertionError(f"unexpected initial world residency: {login}")
         first.join_room(room, user)
 
         routing_key = make_resume_routing_key(resume_token)
@@ -357,11 +364,60 @@ def run_locator_fallback() -> None:
         second.close()
 
 
+def run_world_residency_fallback() -> None:
+    room = f"resume_world_room_{int(time.time())}"
+    gateway_host = "127.0.0.1"
+    gateway_port = 36101
+
+    first, login, user = acquire_session_for_backend("server-1", gateway_host, gateway_port, "verify_resume_world")
+    second = ChatClient(host="127.0.0.1", port=36100)
+    try:
+        logical_session_id, resume_token = assert_initial_login(login, user)
+        if login["world_id"] != "starter-a":
+            raise AssertionError(f"unexpected initial world residency: {login}")
+        first.join_room(room, user)
+
+        world_key = f"{CONTINUITY_WORLD_PREFIX}{logical_session_id}"
+        print("Dropping persisted world residency and forcing safe fallback...")
+        if wait_for_redis_value(world_key) != "starter-a":
+            raise AssertionError("world residency key did not persist starter-a before fallback proof")
+
+        fallback_before = read_metric_sum("chat_continuity_world_restore_fallback_total", ports=(39091, 39092))
+        redis_del(world_key)
+        first.close()
+
+        second, resumed = resume_until_success("127.0.0.1", 36100, resume_token, user, logical_session_id)
+        if resumed["world_id"] != "starter-a":
+            raise AssertionError(f"world residency fallback did not land on safe default world: {resumed}")
+
+        second.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8("should_fail_after_world_fallback"))
+        error_code, error_message = second.wait_for_error(5.0)
+        if error_code != ROOM_MISMATCH_ERRC or error_message != "room mismatch":
+            raise AssertionError(
+                f"world fallback did not reset room residency to lobby: code={error_code} message={error_message!r}"
+            )
+
+        fallback_after = read_metric_sum("chat_continuity_world_restore_fallback_total", ports=(39091, 39092))
+        if fallback_after <= fallback_before:
+            raise AssertionError(
+                f"world restore fallback metric did not increase: before={fallback_before} after={fallback_after}"
+            )
+
+        print(
+            "PASS world-residency-fallback: "
+            f"logical_session_id={logical_session_id} world_id={resumed['world_id']} "
+            f"fallback_delta={fallback_after - fallback_before:.0f}"
+        )
+    finally:
+        first.close()
+        second.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--scenario",
-        choices=("gateway-restart", "server-restart", "locator-fallback", "both"),
+        choices=("gateway-restart", "server-restart", "locator-fallback", "world-residency-fallback", "both"),
         default="both",
     )
     args = parser.parse_args()
@@ -373,6 +429,8 @@ def main() -> int:
             run_server_restart()
         if args.scenario in {"locator-fallback", "both"}:
             run_locator_fallback()
+        if args.scenario in {"world-residency-fallback", "both"}:
+            run_world_residency_fallback()
         return 0
     except Exception as exc:
         print(f"FAIL: {exc}")

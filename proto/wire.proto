@@ -13,6 +13,7 @@ message LoginRes {
   string resume_token = 6;
   uint64 resume_expires_unix_ms = 7;
   bool resumed = 8;
+  string world_id = 9;
 }
 
 message ChatBroadcast {

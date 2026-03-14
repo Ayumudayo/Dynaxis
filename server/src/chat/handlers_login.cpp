@@ -78,6 +78,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         std::string lobby_room_id;
         std::string login_ip = session_sp->remote_ip();
         std::string current_room = "lobby";
+        std::string current_world = continuity_.default_world_id.empty() ? std::string("default") : continuity_.default_world_id;
         std::string continuity_session_id;
         std::string continuity_resume_token;
         std::uint64_t continuity_expires_unix_ms = 0;
@@ -110,6 +111,9 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             continuity_session_id = continuity_resume->logical_session_id;
             continuity_resume_token = continuity_resume->resume_token;
             continuity_expires_unix_ms = continuity_resume->expires_unix_ms;
+            current_world = continuity_resume->world_id.empty()
+                ? (continuity_.default_world_id.empty() ? std::string("default") : continuity_.default_world_id)
+                : continuity_resume->world_id;
             current_room = continuity_resume->room.empty() ? std::string("lobby") : continuity_resume->room;
             resumed_login = true;
         }
@@ -190,6 +194,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 state_.logical_session_id[session_sp.get()] = continuity_session_id;
                 state_.logical_session_expires_unix_ms[session_sp.get()] = continuity_expires_unix_ms;
             }
+            state_.cur_world[session_sp.get()] = current_world;
             // 기본적으로 로비에 입장시키고, continuity resume이면 마지막 방을 복원한다.
             std::string room = current_room.empty() ? std::string("lobby") : current_room;
             current_room = room;
@@ -280,18 +285,22 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             if (auto lease = issue_continuity_lease(
                     tracked_user_uuid,
                     new_user,
+                    current_world,
                     current_room,
                     login_ip.empty() ? std::optional<std::string>{} : std::optional<std::string>{login_ip});
                 lease.has_value()) {
                 continuity_session_id = lease->logical_session_id;
                 continuity_resume_token = lease->resume_token;
                 continuity_expires_unix_ms = lease->expires_unix_ms;
+                current_world = lease->world_id;
                 current_room = lease->room;
                 std::lock_guard<std::mutex> lk(state_.mu);
                 state_.logical_session_id[session_sp.get()] = continuity_session_id;
                 state_.logical_session_expires_unix_ms[session_sp.get()] = continuity_expires_unix_ms;
+                state_.cur_world[session_sp.get()] = current_world;
             }
         } else if (!continuity_session_id.empty()) {
+            persist_continuity_world(continuity_session_id, current_world, continuity_expires_unix_ms);
             persist_continuity_room(continuity_session_id, current_room, continuity_expires_unix_ms);
         }
 
@@ -309,6 +318,9 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         }
         if (continuity_expires_unix_ms > 0) {
             pb.set_resume_expires_unix_ms(continuity_expires_unix_ms);
+        }
+        if (!current_world.empty()) {
+            pb.set_world_id(current_world);
         }
         std::string bytes;
         pb.SerializeToString(&bytes);
@@ -330,6 +342,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 }
                 touch_user_presence(uid);
                 if (!continuity_session_id.empty()) {
+                    persist_continuity_world(continuity_session_id, current_world, continuity_expires_unix_ms);
                     persist_continuity_room(continuity_session_id, current_room, continuity_expires_unix_ms);
                 }
                 
@@ -357,6 +370,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         }
         std::vector<std::pair<std::string, std::string>> wb_fields;
         wb_fields.emplace_back("room", current_room);
+        wb_fields.emplace_back("world_id", current_world);
         wb_fields.emplace_back("user_name", new_user);
         if (resumed_login) {
             wb_fields.emplace_back("resumed", "1");

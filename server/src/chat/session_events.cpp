@@ -62,6 +62,7 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
             state_.session_uuid.erase(s.get());
             state_.logical_session_id.erase(s.get());
             state_.logical_session_expires_unix_ms.erase(s.get());
+            state_.cur_world.erase(s.get());
             state_.session_ip.erase(s.get());
             state_.session_hwid_hash.erase(s.get());
             auto itcr = state_.cur_room.find(s.get());

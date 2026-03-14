@@ -61,6 +61,7 @@ struct LoginResult {
     std::string resume_token;
     std::uint64_t resume_expires_unix_ms{0};
     bool resumed{false};
+    std::string world_id;
 };
 
 struct SnapshotResult {

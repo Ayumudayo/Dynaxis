@@ -10,6 +10,7 @@ MSG_LOGIN_RES = 0x0011
 MSG_CHAT_SEND = 0x0100
 MSG_CHAT_BROADCAST = 0x0101
 MSG_JOIN_ROOM = 0x0102
+MSG_ERR = 0x0004
 FLAG_SELF = 0x0100
 GATEWAY_METRICS_PORTS = (36001, 36002)
 
@@ -65,6 +66,7 @@ def parse_login_res(payload: bytes) -> dict:
         "resume_token": "",
         "resume_expires_unix_ms": 0,
         "resumed": False,
+        "world_id": "",
     }
     offset = 0
     while offset < len(payload):
@@ -72,7 +74,7 @@ def parse_login_res(payload: bytes) -> dict:
         field_number = tag >> 3
         wire_type = tag & 0x07
 
-        if wire_type == 2 and field_number in {1, 3, 5, 6}:
+        if wire_type == 2 and field_number in {1, 3, 5, 6, 9}:
             length, offset = read_varint(payload, offset)
             raw = payload[offset:offset + length]
             offset += length
@@ -85,6 +87,8 @@ def parse_login_res(payload: bytes) -> dict:
                 result["logical_session_id"] = value
             elif field_number == 6:
                 result["resume_token"] = value
+            elif field_number == 9:
+                result["world_id"] = value
             continue
 
         if wire_type == 0 and field_number in {2, 4, 7, 8}:
@@ -199,3 +203,19 @@ class ChatClient:
                 continue
             if room.encode("utf-8") in payload and text.encode("utf-8") in payload:
                 return
+
+    def wait_for_error(self, timeout_sec: float) -> tuple[int, str]:
+        deadline = time.monotonic() + timeout_sec
+        while True:
+            remain = deadline - time.monotonic()
+            if remain <= 0:
+                raise TimeoutError("error frame timeout")
+            msg_id, _flags, _seq, _ts, payload = self.recv_frame(remain)
+            if msg_id != MSG_ERR:
+                continue
+            if len(payload) < 4:
+                raise ValueError("invalid error payload")
+            code = int.from_bytes(payload[0:2], byteorder="big", signed=False)
+            message_len = int.from_bytes(payload[2:4], byteorder="big", signed=False)
+            message = payload[4:4 + message_len].decode("utf-8")
+            return code, message

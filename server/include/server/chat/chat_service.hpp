@@ -339,6 +339,10 @@ public:
         std::uint64_t state_write_fail_total{0};
         std::uint64_t state_restore_total{0};
         std::uint64_t state_restore_fallback_total{0};
+        std::uint64_t world_write_total{0};
+        std::uint64_t world_write_fail_total{0};
+        std::uint64_t world_restore_total{0};
+        std::uint64_t world_restore_fallback_total{0};
     };
 
     ContinuityMetrics continuity_metrics() const;
@@ -375,6 +379,7 @@ private:
         bool enabled{false};
         unsigned int lease_ttl_sec{15 * 60};
         std::string redis_prefix;
+        std::string default_world_id;
     };
 
     // 서버의 전체 상태를 관리하는 구조체
@@ -402,6 +407,7 @@ private:
         std::unordered_map<Session*, std::string> session_uuid;  // 세션 -> 세션 UUID
         std::unordered_map<Session*, std::string> logical_session_id; // 세션 -> logical continuity session ID
         std::unordered_map<Session*, std::uint64_t> logical_session_expires_unix_ms; // 세션 -> continuity lease 만료 시각
+        std::unordered_map<Session*, std::string> cur_world;     // 세션 -> 현재 소속 world residency ID
         std::unordered_map<Session*, std::string> cur_room;      // 세션 -> 현재 참여 중인 방 이름
         std::unordered_map<Session*, std::string> session_ip;     // 세션 -> 최근 로그인 IP
         std::unordered_map<Session*, std::string> session_hwid_hash; // 세션 -> HWID 해시(로그인 토큰 기반)
@@ -450,6 +456,10 @@ private:
     std::atomic<std::uint64_t> continuity_state_write_fail_total_{0};
     std::atomic<std::uint64_t> continuity_state_restore_total_{0};
     std::atomic<std::uint64_t> continuity_state_restore_fallback_total_{0};
+    std::atomic<std::uint64_t> continuity_world_write_total_{0};
+    std::atomic<std::uint64_t> continuity_world_write_fail_total_{0};
+    std::atomic<std::uint64_t> continuity_world_restore_total_{0};
+    std::atomic<std::uint64_t> continuity_world_restore_fallback_total_{0};
     mutable std::mutex lua_hook_metrics_mu_;
     std::unordered_map<std::string, std::uint64_t> lua_hook_consecutive_failures_;
     std::unordered_map<std::string, std::uint64_t> lua_hook_auto_disable_total_;
@@ -515,6 +525,7 @@ private:
         std::string resume_token;
         std::string user_id;
         std::string effective_user;
+        std::string world_id;
         std::string room;
         std::uint64_t expires_unix_ms{0};
         bool resumed{false};
@@ -524,15 +535,21 @@ private:
     std::string make_recent_list_key(const std::string& room_id) const;
     std::string make_recent_message_key(std::uint64_t message_id) const;
     std::string make_continuity_room_key(const std::string& logical_session_id) const;
+    std::string make_continuity_world_key(const std::string& logical_session_id) const;
     bool continuity_enabled() const;
     std::optional<std::string> extract_resume_token(std::string_view token) const;
     std::optional<std::string> load_continuity_room(const std::string& logical_session_id);
+    std::optional<std::string> load_continuity_world(const std::string& logical_session_id);
     void persist_continuity_room(const std::string& logical_session_id,
                                  const std::string& room,
                                  std::uint64_t expires_unix_ms);
+    void persist_continuity_world(const std::string& logical_session_id,
+                                  const std::string& world_id,
+                                  std::uint64_t expires_unix_ms);
     std::optional<ContinuityLease> try_resume_continuity_lease(std::string_view token);
     std::optional<ContinuityLease> issue_continuity_lease(const std::string& user_id,
                                                           const std::string& effective_user,
+                                                          const std::string& world_id,
                                                           const std::string& room,
                                                           const std::optional<std::string>& client_ip);
     

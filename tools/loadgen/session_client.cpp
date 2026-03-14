@@ -656,6 +656,7 @@ void TcpSessionClient::handle_frame(std::uint16_t msg_id,
             event.login.resume_token = message.resume_token();
             event.login.resume_expires_unix_ms = message.resume_expires_unix_ms();
             event.login.resumed = message.resumed();
+            event.login.world_id = message.world_id();
             push_event(std::move(event));
             return;
         }
