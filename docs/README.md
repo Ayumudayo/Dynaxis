@@ -24,6 +24,8 @@ Historical proposal/report docs were pruned from the active docs tree; use the f
 - `docs/ops/engine-roadmap-session-continuity-charter.md` - branch-start charter for the capability-first session continuity tranche.
 - `docs/ops/engine-roadmap-session-continuity-first-tranche-closure.md` - closure decision for the first session continuity tranche.
 - `docs/ops/engine-roadmap-mmorpg-charter.md` - prepared narrow charter for the next MMORPG-oriented branch after the continuity tranche merges.
+- `docs/ops/engine-roadmap-mmorpg-first-tranche-closure.md` - closure decision for the first MMORPG admission/residency tranche.
+- `docs/ops/engine-roadmap-mmorpg-world-lifecycle-charter.md` - next tranche charter for world lifecycle/control-plane orchestration on the MMORPG branch.
 - `docs/ops/session-continuity-contract.md` - current continuity ownership, resume rules, and restart proof targets.
 - `docs/ops/mmorpg-world-residency-contract.md` - current world admission, residency owner boundary, and safe fallback rules on the MMORPG branch.
 - `docs/core-api/overview.md` - current public core API docs entrypoint.
