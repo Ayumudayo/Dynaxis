@@ -160,6 +160,16 @@ std::string render_metrics() {
     append_counter(
         "chat_continuity_world_restore_fallback_total",
         continuity_metrics.world_restore_fallback_total);
+    append_counter("chat_continuity_world_owner_write_total", continuity_metrics.world_owner_write_total);
+    append_counter(
+        "chat_continuity_world_owner_write_fail_total",
+        continuity_metrics.world_owner_write_fail_total);
+    append_counter(
+        "chat_continuity_world_owner_restore_total",
+        continuity_metrics.world_owner_restore_total);
+    append_counter(
+        "chat_continuity_world_owner_restore_fallback_total",
+        continuity_metrics.world_owner_restore_fallback_total);
 
     append_counter("chat_accept_total", snap.accept_total);
     append_counter("chat_session_started_total", snap.session_started_total);

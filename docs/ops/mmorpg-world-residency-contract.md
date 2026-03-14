@@ -1,10 +1,10 @@
-# MMORPG World Residency Contract
+# MMORPG World Residency And Ownership Contract
 
-This document records the current world admission and residency contract on `engine-roadmap-mmorpg`.
+This document records the current world admission, residency, and owner-boundary contract on `engine-roadmap-mmorpg`.
 
 ## Scope
 
-- This slice adds durable world residency on top of the continuity substrate.
+- This slice adds durable world residency plus a world-scoped owner boundary on top of the continuity substrate.
 - It still does not implement:
   - live zone migration
   - gameplay simulation state continuity
@@ -21,14 +21,20 @@ This document records the current world admission and residency contract on `eng
 ### Server
 
 - server owns durable world residency state for a logical session
+- server also owns the current world-residency authority for its advertised world via `SERVER_INSTANCE_ID`
 - the residency key is persisted separately from room continuity
+- the owner key is persisted separately from both residency and room continuity
 - room continuity is now subordinate to world continuity:
   - if world residency is restored, the room may be restored
   - if world residency is missing, room restore is not trusted and the session falls back to `lobby`
+- room continuity is also subordinate to owner continuity:
+  - if the persisted world owner matches the current backend owner, room restore may proceed
+  - if the world owner is missing or mismatched, the session falls back to `default world + lobby`
 
 ### Storage
 
 - world residency lives at a dedicated continuity Redis key
+- world owner authority lives at a dedicated continuity Redis key keyed by `world_id`
 - room continuity still lives at its own continuity Redis key
 - both keys share the lease-shaped TTL window
 
@@ -42,13 +48,18 @@ This document records the current world admission and residency contract on `eng
   - otherwise `default`
 - persist both:
   - world residency
+  - world owner authority
   - room continuity
 
 ### Resume login
 
 - if the persisted world key exists:
-  - restore `world_id`
-  - attempt room restore from the room continuity key
+  - and the persisted world owner matches the current backend owner:
+    - restore `world_id`
+    - attempt room restore from the room continuity key
+- if the persisted world key exists but the owner key is missing or mismatched:
+  - fall back to the safe default world for the current backend
+  - force room to `lobby`
 - if the persisted world key is missing:
   - fall back to the safe default world for the current backend
   - force room to `lobby`
@@ -61,9 +72,14 @@ This document records the current world admission and residency contract on `eng
   - `chat_continuity_world_write_fail_total`
   - `chat_continuity_world_restore_total`
   - `chat_continuity_world_restore_fallback_total`
+  - `chat_continuity_world_owner_write_total`
+  - `chat_continuity_world_owner_write_fail_total`
+  - `chat_continuity_world_owner_restore_total`
+  - `chat_continuity_world_owner_restore_fallback_total`
 
 ## Proof Targets
 
 - `python tests/python/verify_session_continuity.py`
 - `python tests/python/verify_session_continuity_restart.py --scenario locator-fallback`
 - `python tests/python/verify_session_continuity_restart.py --scenario world-residency-fallback`
+- `python tests/python/verify_session_continuity_restart.py --scenario world-owner-fallback`

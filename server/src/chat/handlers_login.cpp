@@ -301,6 +301,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             }
         } else if (!continuity_session_id.empty()) {
             persist_continuity_world(continuity_session_id, current_world, continuity_expires_unix_ms);
+            persist_continuity_world_owner(current_world, continuity_.current_owner_id, continuity_expires_unix_ms);
             persist_continuity_room(continuity_session_id, current_room, continuity_expires_unix_ms);
         }
 
@@ -343,6 +344,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 touch_user_presence(uid);
                 if (!continuity_session_id.empty()) {
                     persist_continuity_world(continuity_session_id, current_world, continuity_expires_unix_ms);
+                    persist_continuity_world_owner(current_world, continuity_.current_owner_id, continuity_expires_unix_ms);
                     persist_continuity_room(continuity_session_id, current_room, continuity_expires_unix_ms);
                 }
                 

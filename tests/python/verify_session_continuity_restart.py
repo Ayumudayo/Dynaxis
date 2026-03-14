@@ -20,6 +20,7 @@ COMPOSE_PROJECT_NAME = "dynaxis-stack"
 SESSION_DIRECTORY_PREFIX = "gateway/session/"
 RESUME_LOCATOR_PREFIX = SESSION_DIRECTORY_PREFIX + "locator/"
 CONTINUITY_WORLD_PREFIX = "dynaxis:continuity:world:"
+CONTINUITY_WORLD_OWNER_PREFIX = "dynaxis:continuity:world-owner:"
 ROOM_MISMATCH_ERRC = 0x0106
 
 GATEWAY_READY_PORTS = {
@@ -71,6 +72,10 @@ def redis_get(key: str) -> str:
 
 def redis_del(key: str) -> None:
     run_compose("exec", "-T", "redis", "redis-cli", "DEL", key)
+
+
+def redis_setex(key: str, ttl_sec: int, value: str) -> None:
+    run_compose("exec", "-T", "redis", "redis-cli", "SETEX", key, str(ttl_sec), value)
 
 
 def make_resume_routing_key(resume_token: str) -> str:
@@ -205,7 +210,8 @@ def run_gateway_restart() -> None:
     room = f"resume_gateway_room_{int(time.time())}"
     message = f"resume_gateway_msg_{int(time.time() * 1000)}"
 
-    hit_before = read_metric_sum("gateway_resume_routing_hit_total")
+    surviving_gateway_ports = (GATEWAY_READY_PORTS["gateway-2"],)
+    hit_before = read_metric_sum("gateway_resume_routing_hit_total", ports=surviving_gateway_ports)
     first, login = connect_and_login(user, "", "127.0.0.1", 36100)
     second = ChatClient(host="127.0.0.1", port=36101)
     try:
@@ -232,7 +238,7 @@ def run_gateway_restart() -> None:
                 f"resume routing alias changed across gateway restart: before={alias_backend_before} after={alias_backend_after}"
             )
 
-        hit_after = read_metric_sum("gateway_resume_routing_hit_total")
+        hit_after = read_metric_sum("gateway_resume_routing_hit_total", ports=surviving_gateway_ports)
         if hit_after <= hit_before:
             raise AssertionError(f"resume routing hit counter did not increase: before={hit_before} after={hit_after}")
 
@@ -413,11 +419,75 @@ def run_world_residency_fallback() -> None:
         second.close()
 
 
+def run_world_owner_fallback() -> None:
+    room = f"resume_world_owner_room_{int(time.time())}"
+    gateway_host = "127.0.0.1"
+    gateway_port = 36101
+
+    first, login, user = acquire_session_for_backend("server-1", gateway_host, gateway_port, "verify_resume_world_owner")
+    second = ChatClient(host="127.0.0.1", port=36100)
+    try:
+        logical_session_id, resume_token = assert_initial_login(login, user)
+        if login["world_id"] != "starter-a":
+            raise AssertionError(f"unexpected initial world residency: {login}")
+        first.join_room(room, user)
+
+        world_owner_key = f"{CONTINUITY_WORLD_OWNER_PREFIX}{login['world_id']}"
+        print("Overwriting persisted world owner and forcing safe fallback...")
+        if wait_for_redis_value(world_owner_key) != "server-1":
+            raise AssertionError("world owner key did not persist server-1 before fallback proof")
+
+        fallback_before = read_metric_sum("chat_continuity_world_owner_restore_fallback_total", ports=(39091, 39092))
+        redis_setex(world_owner_key, 900, "server-2")
+        if wait_for_redis_value(world_owner_key) != "server-2":
+            raise AssertionError("world owner key did not update to mismatched owner before fallback proof")
+        first.close()
+
+        second, resumed = resume_until_success("127.0.0.1", 36100, resume_token, user, logical_session_id)
+        if resumed["world_id"] != "starter-a":
+            raise AssertionError(f"world owner fallback did not land on safe default world: {resumed}")
+
+        second.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8("should_fail_after_world_owner_fallback"))
+        error_code, error_message = second.wait_for_error(5.0)
+        if error_code != ROOM_MISMATCH_ERRC or error_message != "room mismatch":
+            raise AssertionError(
+                f"world owner fallback did not reset room residency to lobby: code={error_code} message={error_message!r}"
+            )
+
+        fallback_after = read_metric_sum("chat_continuity_world_owner_restore_fallback_total", ports=(39091, 39092))
+        if fallback_after <= fallback_before:
+            raise AssertionError(
+                f"world owner restore fallback metric did not increase: before={fallback_before} after={fallback_after}"
+            )
+
+        world_owner_after = wait_for_redis_value(world_owner_key)
+        if world_owner_after != "server-1":
+            raise AssertionError(
+                f"world owner key was not rewritten to the current backend owner: {world_owner_after!r}"
+            )
+
+        print(
+            "PASS world-owner-fallback: "
+            f"logical_session_id={logical_session_id} world_id={resumed['world_id']} "
+            f"fallback_delta={fallback_after - fallback_before:.0f}"
+        )
+    finally:
+        first.close()
+        second.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--scenario",
-        choices=("gateway-restart", "server-restart", "locator-fallback", "world-residency-fallback", "both"),
+        choices=(
+            "gateway-restart",
+            "server-restart",
+            "locator-fallback",
+            "world-residency-fallback",
+            "world-owner-fallback",
+            "both",
+        ),
         default="both",
     )
     args = parser.parse_args()
@@ -431,6 +501,8 @@ def main() -> int:
             run_locator_fallback()
         if args.scenario in {"world-residency-fallback", "both"}:
             run_world_residency_fallback()
+        if args.scenario in {"world-owner-fallback", "both"}:
+            run_world_owner_fallback()
         return 0
     except Exception as exc:
         print(f"FAIL: {exc}")
