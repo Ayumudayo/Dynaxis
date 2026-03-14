@@ -22,6 +22,7 @@ Historical proposal/report docs were pruned from the active docs tree; use the f
 - `docs/ops/engine-readiness-decision.md` - Phase 4 decision record for common blockers and branch readiness.
 - `docs/ops/engine-branch-cut-criteria.md` - Phase 5 criteria for FPS/MMORPG branch-cut timing and order.
 - `docs/ops/engine-roadmap-session-continuity-charter.md` - branch-start charter for the capability-first session continuity tranche.
+- `docs/ops/session-continuity-contract.md` - current continuity ownership, resume rules, and restart proof targets.
 - `docs/core-api/overview.md` - current public core API docs entrypoint.
 
 ## Tool-Specific Canonical Docs
