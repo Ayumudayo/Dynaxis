@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -328,6 +329,20 @@ public:
 
     LuaHooksMetrics lua_hooks_metrics() const;
 
+    /** @brief continuity lease/state handoff 집계 메트릭입니다. */
+    struct ContinuityMetrics {
+        std::uint64_t lease_issue_total{0};
+        std::uint64_t lease_issue_fail_total{0};
+        std::uint64_t lease_resume_total{0};
+        std::uint64_t lease_resume_fail_total{0};
+        std::uint64_t state_write_total{0};
+        std::uint64_t state_write_fail_total{0};
+        std::uint64_t state_restore_total{0};
+        std::uint64_t state_restore_fallback_total{0};
+    };
+
+    ContinuityMetrics continuity_metrics() const;
+
 private:
     using Session = NetSession;
     using WeakSession = std::weak_ptr<Session>;
@@ -427,6 +442,14 @@ private:
     std::uint32_t spam_ban_violation_threshold_{3};
     std::uint64_t lua_auto_disable_threshold_{3};
     std::uint64_t lua_hook_warn_budget_us_{0};
+    std::atomic<std::uint64_t> continuity_lease_issue_total_{0};
+    std::atomic<std::uint64_t> continuity_lease_issue_fail_total_{0};
+    std::atomic<std::uint64_t> continuity_lease_resume_total_{0};
+    std::atomic<std::uint64_t> continuity_lease_resume_fail_total_{0};
+    std::atomic<std::uint64_t> continuity_state_write_total_{0};
+    std::atomic<std::uint64_t> continuity_state_write_fail_total_{0};
+    std::atomic<std::uint64_t> continuity_state_restore_total_{0};
+    std::atomic<std::uint64_t> continuity_state_restore_fallback_total_{0};
     mutable std::mutex lua_hook_metrics_mu_;
     std::unordered_map<std::string, std::uint64_t> lua_hook_consecutive_failures_;
     std::unordered_map<std::string, std::uint64_t> lua_hook_auto_disable_total_;

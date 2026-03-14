@@ -107,6 +107,7 @@ Lua cold-hook 작성 기준:
 | `GATEWAY_BACKEND_CONNECT_RETRY_BUDGET_PER_MIN` | `120` | gateway 전체 backend connect 재시도 예산(분당) |
 | `GATEWAY_BACKEND_CONNECT_RETRY_BACKOFF_MS` | `200` | backend connect 재시도 백오프 시작값(ms) |
 | `GATEWAY_BACKEND_CONNECT_RETRY_BACKOFF_MAX_MS` | `2000` | backend connect 재시도 백오프 상한(ms) |
+| `SESSION_CONTINUITY_LEASE_TTL_SEC` | `900` | continuity lease TTL과 맞춰 gateway resume locator hint TTL을 결정한다. exact backend sticky binding이 사라졌을 때 같은 locator(`role/game_mode/region/shard`) 후보로 resume fallback을 좁히는 데 사용한다 |
 | `GATEWAY_INGRESS_TOKENS_PER_SEC` | `200` | ingress 토큰 버킷 초당 토큰 수 |
 | `GATEWAY_INGRESS_BURST_TOKENS` | `400` | ingress 토큰 버킷 burst 용량 |
 | `GATEWAY_INGRESS_MAX_ACTIVE_SESSIONS` | `50000` | gateway의 동시 backend 세션 상한 |

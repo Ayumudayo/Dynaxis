@@ -140,6 +140,21 @@ std::string render_metrics() {
     append_gauge("chat_shutdown_drain_elapsed_ms", static_cast<long double>(g_shutdown_drain_elapsed_ms.load()));
     append_gauge("chat_shutdown_drain_timeout_ms", static_cast<long double>(g_shutdown_drain_timeout_ms.load()));
 
+    server::app::chat::ChatService::ContinuityMetrics continuity_metrics{};
+    if (auto chat = services::get<server::app::chat::ChatService>()) {
+        continuity_metrics = chat->continuity_metrics();
+    }
+    append_counter("chat_continuity_lease_issue_total", continuity_metrics.lease_issue_total);
+    append_counter("chat_continuity_lease_issue_fail_total", continuity_metrics.lease_issue_fail_total);
+    append_counter("chat_continuity_lease_resume_total", continuity_metrics.lease_resume_total);
+    append_counter("chat_continuity_lease_resume_fail_total", continuity_metrics.lease_resume_fail_total);
+    append_counter("chat_continuity_state_write_total", continuity_metrics.state_write_total);
+    append_counter("chat_continuity_state_write_fail_total", continuity_metrics.state_write_fail_total);
+    append_counter("chat_continuity_state_restore_total", continuity_metrics.state_restore_total);
+    append_counter(
+        "chat_continuity_state_restore_fallback_total",
+        continuity_metrics.state_restore_fallback_total);
+
     append_counter("chat_accept_total", snap.accept_total);
     append_counter("chat_session_started_total", snap.session_started_total);
     append_counter("chat_session_stopped_total", snap.session_stopped_total);

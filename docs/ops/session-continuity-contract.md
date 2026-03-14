@@ -33,12 +33,20 @@ This document records the current capability-first session continuity contract o
 - The hashed alias is the routing key used during reconnect selection.
 - After a successful login response, the gateway extracts `resume_token` from `MSG_LOGIN_RES` and binds the hashed alias to the backend instance that issued the lease.
 - The alias is stored through the existing `SessionDirectory` so it survives local gateway restarts.
+- The gateway also stores a minimal locator hint next to the alias:
+  - `role`
+  - `game_mode`
+  - `region`
+  - `shard`
+  - `backend_instance_id`
+- If the exact alias -> backend sticky binding disappears before reconnect, the gateway uses the locator hint to constrain fallback selection before falling back to the global least-load path.
 
 ### Storage
 
 - The persisted lease owner is the existing `sessions` repository path.
 - The last lightweight room/location is mirrored to Redis continuity keys.
 - Join/leave/login updates refresh the continuity room snapshot TTL alongside the lease window.
+- The gateway persists the resume locator hint under a sibling Redis key with the same lease-shaped TTL window.
 
 ## Decision Rules
 
@@ -68,6 +76,7 @@ This document records the current capability-first session continuity contract o
 
 - A client may reconnect through a different surviving gateway.
 - The resume alias remains available through `SessionDirectory`.
+- If the exact alias binding is missing, locator metadata still narrows the reconnect target back toward the same shard boundary.
 - The reconnect path should preserve logical identity and last room.
 
 ### Server restart
@@ -80,3 +89,4 @@ This document records the current capability-first session continuity contract o
 - `python tests/python/verify_session_continuity.py`
 - `python tests/python/verify_session_continuity_restart.py --scenario gateway-restart`
 - `python tests/python/verify_session_continuity_restart.py --scenario server-restart`
+- `python tests/python/verify_session_continuity_restart.py --scenario locator-fallback`

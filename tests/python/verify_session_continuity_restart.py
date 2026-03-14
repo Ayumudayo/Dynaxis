@@ -17,6 +17,7 @@ COMPOSE_FILE = COMPOSE_PROJECT_DIR / "docker-compose.yml"
 COMPOSE_ENV_FILE = COMPOSE_PROJECT_DIR / ".env.rudp-attach.example"
 COMPOSE_PROJECT_NAME = "dynaxis-stack"
 SESSION_DIRECTORY_PREFIX = "gateway/session/"
+RESUME_LOCATOR_PREFIX = SESSION_DIRECTORY_PREFIX + "locator/"
 
 GATEWAY_READY_PORTS = {
     "gateway-1": 36001,
@@ -63,6 +64,10 @@ def run_compose(*args: str) -> str:
 
 def redis_get(key: str) -> str:
     return run_compose("exec", "-T", "redis", "redis-cli", "--raw", "GET", key).strip()
+
+
+def redis_del(key: str) -> None:
+    run_compose("exec", "-T", "redis", "redis-cli", "DEL", key)
 
 
 def make_resume_routing_key(resume_token: str) -> str:
@@ -125,6 +130,11 @@ def current_backend_for_user(user: str) -> str:
 def current_backend_for_resume_token(resume_token: str) -> str:
     routing_key = make_resume_routing_key(resume_token)
     return redis_get(f"{SESSION_DIRECTORY_PREFIX}{routing_key}")
+
+
+def current_locator_for_resume_token(resume_token: str) -> str:
+    routing_key = make_resume_routing_key(resume_token)
+    return redis_get(f"{RESUME_LOCATOR_PREFIX}{routing_key}")
 
 
 def wait_for_redis_value(key: str, timeout_sec: float = 10.0) -> str:
@@ -263,11 +273,82 @@ def run_server_restart() -> None:
         second.close()
 
 
+def run_locator_fallback() -> None:
+    room = f"resume_locator_room_{int(time.time())}"
+    message = f"resume_locator_msg_{int(time.time() * 1000)}"
+    gateway_host = "127.0.0.1"
+    gateway_port = 36101
+
+    first, login, user = acquire_session_for_backend("server-1", gateway_host, gateway_port, "verify_resume_locator")
+    second = ChatClient(host="127.0.0.1", port=36100)
+    try:
+        logical_session_id, resume_token = assert_initial_login(login, user)
+        first.join_room(room, user)
+
+        routing_key = make_resume_routing_key(resume_token)
+        alias_key = f"{SESSION_DIRECTORY_PREFIX}{routing_key}"
+        locator_key = f"{RESUME_LOCATOR_PREFIX}{routing_key}"
+
+        print("Dropping exact resume alias binding and forcing locator-based reconnect...")
+        alias_backend_before = wait_for_redis_value(alias_key)
+        locator_before = wait_for_redis_value(locator_key)
+        if alias_backend_before != "server-1":
+            raise AssertionError(f"resume alias was not attached to server-1 before locator fallback: {alias_backend_before}")
+        if "shard=stack-shard-a" not in locator_before:
+            raise AssertionError(f"resume locator hint did not capture shard boundary: {locator_before!r}")
+
+        routing_hit_before = read_metric_sum("gateway_resume_routing_hit_total")
+        selector_hit_before = read_metric_sum("gateway_resume_locator_selector_hit_total")
+        selector_fallback_before = read_metric_sum("gateway_resume_locator_selector_fallback_total")
+
+        redis_del(alias_key)
+        if redis_get(alias_key):
+            raise AssertionError("exact resume alias binding still exists after delete")
+        first.close()
+
+        second, resumed = resume_until_success("127.0.0.1", 36100, resume_token, user, logical_session_id)
+
+        second.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8(message))
+        second.wait_for_self_chat(room, message, 5.0)
+
+        alias_backend_after = wait_for_redis_value(alias_key)
+        if alias_backend_after != "server-1":
+            raise AssertionError(
+                f"locator fallback did not restore the same shard/backend boundary: before={alias_backend_before} after={alias_backend_after}"
+            )
+
+        routing_hit_after = read_metric_sum("gateway_resume_routing_hit_total")
+        selector_hit_after = read_metric_sum("gateway_resume_locator_selector_hit_total")
+        selector_fallback_after = read_metric_sum("gateway_resume_locator_selector_fallback_total")
+
+        if routing_hit_after != routing_hit_before:
+            raise AssertionError(
+                f"exact sticky hit counter changed during locator fallback: before={routing_hit_before} after={routing_hit_after}"
+            )
+        if selector_hit_after <= selector_hit_before:
+            raise AssertionError(
+                f"locator selector hit counter did not increase: before={selector_hit_before} after={selector_hit_after}"
+            )
+        if selector_fallback_after != selector_fallback_before:
+            raise AssertionError(
+                f"locator selector unexpectedly fell back to global routing: before={selector_fallback_before} after={selector_fallback_after}"
+            )
+
+        print(
+            "PASS locator-fallback: "
+            f"logical_session_id={logical_session_id} alias_backend_after={alias_backend_after} "
+            f"selector_hit_delta={selector_hit_after - selector_hit_before:.0f}"
+        )
+    finally:
+        first.close()
+        second.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--scenario",
-        choices=("gateway-restart", "server-restart", "both"),
+        choices=("gateway-restart", "server-restart", "locator-fallback", "both"),
         default="both",
     )
     args = parser.parse_args()
@@ -277,6 +358,8 @@ def main() -> int:
             run_gateway_restart()
         if args.scenario in {"server-restart", "both"}:
             run_server_restart()
+        if args.scenario in {"locator-fallback", "both"}:
+            run_locator_fallback()
         return 0
     except Exception as exc:
         print(f"FAIL: {exc}")
