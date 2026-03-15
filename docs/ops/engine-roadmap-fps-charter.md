@@ -4,6 +4,9 @@ This document is the branch-start charter for `engine-roadmap-fps`.
 
 It is intentionally narrow. The first value is gameplay-frequency transport/runtime proof beyond attach-only UDP/RUDP visibility, not a broad shooter feature set.
 
+This charter remains the branch entry contract.
+For the full remaining execution area after the first slice, use `docs/ops/engine-roadmap-fps-working-scope.md`.
+
 ## Branch Entry
 
 - branch: `engine-roadmap-fps`
@@ -13,8 +16,15 @@ It is intentionally narrow. The first value is gameplay-frequency transport/runt
 ## Canonical References
 
 - `docs/ops/engine-fps-fixed-step-boundary.md`
+- `docs/ops/engine-roadmap-fps-working-scope.md`
 - `docs/protocol/rudp.md`
 - `tools/loadgen/README.md`
+
+## Current Branch Status
+
+- first ping-path slice: implemented and verified
+- branch status today: active, not PR-ready
+- remaining work stays inside the FPS substrate area defined in `docs/ops/engine-roadmap-fps-working-scope.md`
 
 ## Why This Branch Exists
 
