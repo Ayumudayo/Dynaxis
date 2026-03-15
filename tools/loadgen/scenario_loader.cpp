@@ -73,9 +73,10 @@ void validate_group(const GroupConfig& group) {
     }
 
     if (group.transport != TransportKind::kTcp) {
-        if (group.mode != SessionMode::kLoginOnly) {
+        if (group.mode == SessionMode::kChat) {
             throw std::runtime_error(
-                "transport '" + transport_name(group.transport) + "' currently supports only login_only groups");
+                "transport '" + transport_name(group.transport)
+                + "' currently supports only login_only or ping groups");
         }
         if (group.join_room) {
             throw std::runtime_error(

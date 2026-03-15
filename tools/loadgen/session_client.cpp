@@ -208,7 +208,7 @@ std::vector<std::uint8_t> make_frame(std::uint16_t msg_id,
 
 std::string unsupported_operation_message(std::string_view transport, std::string_view operation) {
     return "transport '" + std::string(transport)
-        + "' currently only supports login_only attach validation; "
+        + "' currently supports only login_only attach validation or direct ping proof; "
         + std::string(operation)
         + " requires tcp";
 }
@@ -485,7 +485,11 @@ bool TcpSessionClient::send_chat_and_wait_echo(const std::string& room, const st
 
 bool TcpSessionClient::send_ping_and_wait_pong() {
     enqueue_packet(proto::MSG_PING, 0);
-    return wait_for_event(std::chrono::milliseconds(options_.read_timeout_ms),
+    return wait_for_pong(std::chrono::milliseconds(options_.read_timeout_ms));
+}
+
+bool TcpSessionClient::wait_for_pong(std::chrono::milliseconds timeout) {
+    return wait_for_event(timeout,
                           [](const Event& event) { return event.type == EventType::kPong; },
                           "pong");
 }
@@ -896,7 +900,14 @@ bool UdpSessionClient::send_chat_and_wait_echo(const std::string&, const std::st
 }
 
 bool UdpSessionClient::send_ping_and_wait_pong() {
-    return unsupported_operation("ping");
+    if (!send_direct_ping_frame()) {
+        return false;
+    }
+    if (!tcp_client_.wait_for_pong(std::chrono::milliseconds(options_.read_timeout_ms))) {
+        set_last_error(tcp_client_.last_error());
+        return false;
+    }
+    return true;
 }
 
 void UdpSessionClient::close() {
@@ -1067,6 +1078,31 @@ bool UdpSessionClient::wait_for_udp_bind_response(std::uint32_t expected_seq, Ud
     }
 }
 
+bool UdpSessionClient::send_direct_ping_frame() {
+    if (!udp_bound_) {
+        set_last_error("udp ping requires completed bind");
+        return false;
+    }
+
+    const auto seq = udp_seq_++;
+    const auto frame = make_frame(proto::MSG_PING, seq, {});
+
+    boost::system::error_code ec;
+    trace_udp_attach(
+        options_,
+        "udp",
+        "ping-send",
+        "target=" + endpoint_to_string(remote_endpoint_)
+            + " " + frame_summary(std::span<const std::uint8_t>(frame.data(), frame.size())));
+    socket_.send_to(asio::buffer(frame), remote_endpoint_, 0, ec);
+    if (ec) {
+        set_last_error("udp ping send failed: " + ec.message());
+        return false;
+    }
+
+    return true;
+}
+
 bool UdpSessionClient::unsupported_operation(const char* operation) {
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -1120,6 +1156,7 @@ bool RudpSessionClient::connect(const std::string& host, unsigned short port) {
 
     udp_bound_ = false;
     udp_seq_ = 1;
+    rudp_established_ = false;
     rudp_engine_.reset();
     return true;
 }
@@ -1144,11 +1181,33 @@ bool RudpSessionClient::send_chat_and_wait_echo(const std::string&, const std::s
 }
 
 bool RudpSessionClient::send_ping_and_wait_pong() {
-    return unsupported_operation("ping");
+    if (!rudp_established_) {
+        if (!tcp_client_.send_ping_and_wait_pong()) {
+            set_last_error(tcp_client_.last_error());
+            return false;
+        }
+        return true;
+    }
+
+    if (!send_reliable_ping_frame()) {
+        return false;
+    }
+    if (!drain_rudp_control(std::chrono::milliseconds(50))) {
+        return false;
+    }
+    if (!tcp_client_.wait_for_pong(std::chrono::milliseconds(options_.read_timeout_ms))) {
+        set_last_error(tcp_client_.last_error());
+        return false;
+    }
+    if (!drain_rudp_control(std::chrono::milliseconds(50))) {
+        return false;
+    }
+    return true;
 }
 
 void RudpSessionClient::close() {
     udp_bound_ = false;
+    rudp_established_ = false;
     rudp_engine_.reset();
 
     boost::system::error_code ec;
@@ -1386,11 +1445,13 @@ bool RudpSessionClient::wait_for_rudp_attach_result() {
             }
         }
         if (process_result.handshake_established) {
+            rudp_established_ = true;
             std::lock_guard<std::mutex> lock(mu_);
             ++transport_.rudp_attach_successes;
             return true;
         }
         if (process_result.fallback_required) {
+            rudp_established_ = false;
             std::lock_guard<std::mutex> lock(mu_);
             ++transport_.rudp_attach_fallbacks;
             return true;
@@ -1406,6 +1467,7 @@ bool RudpSessionClient::wait_for_rudp_attach_result() {
             }
         }
         if (poll_result.fallback_required) {
+            rudp_established_ = false;
             std::lock_guard<std::mutex> lock(mu_);
             ++transport_.rudp_attach_fallbacks;
             return true;
@@ -1415,11 +1477,13 @@ bool RudpSessionClient::wait_for_rudp_attach_result() {
     const auto now_unix_ms = unix_time_ms64();
     auto poll_result = rudp_engine_.poll(now_unix_ms);
     if (poll_result.fallback_required) {
+        rudp_established_ = false;
         std::lock_guard<std::mutex> lock(mu_);
         ++transport_.rudp_attach_fallbacks;
         return true;
     }
 
+    rudp_established_ = false;
     std::lock_guard<std::mutex> lock(mu_);
     ++transport_.rudp_attach_fallbacks;
     return true;
@@ -1435,6 +1499,101 @@ bool RudpSessionClient::wait_for_datagram(std::vector<std::uint8_t>& datagram,
         datagram,
         timeout,
         error_message);
+}
+
+bool RudpSessionClient::send_reliable_ping_frame() {
+    if (!udp_bound_) {
+        set_last_error("rudp ping requires completed udp bind");
+        return false;
+    }
+    if (!rudp_established_) {
+        set_last_error("rudp ping requires established attach");
+        return false;
+    }
+
+    const auto seq = udp_seq_++;
+    const auto inner_frame = make_frame(proto::MSG_PING, seq, {});
+    std::vector<std::uint8_t> datagram;
+    const auto channel = proto::opcode_policy(proto::MSG_PING).channel;
+    if (!rudp_engine_.queue_reliable_payload(inner_frame, channel, unix_time_ms64(), datagram)) {
+        set_last_error("rudp ping queue failed");
+        return false;
+    }
+
+    boost::system::error_code ec;
+    trace_udp_attach(
+        options_,
+        "rudp",
+        "ping-send",
+        "target=" + endpoint_to_string(remote_endpoint_)
+            + " inner=" + frame_summary(std::span<const std::uint8_t>(inner_frame.data(), inner_frame.size())));
+    socket_.send_to(asio::buffer(datagram), remote_endpoint_, 0, ec);
+    if (ec) {
+        set_last_error("rudp ping send failed: " + ec.message());
+        return false;
+    }
+
+    return true;
+}
+
+bool RudpSessionClient::drain_rudp_control(std::chrono::milliseconds budget) {
+    const auto deadline = std::chrono::steady_clock::now() + budget;
+    while (std::chrono::steady_clock::now() < deadline) {
+        const auto now = std::chrono::steady_clock::now();
+        const auto remaining = std::min<std::chrono::milliseconds>(
+            std::chrono::milliseconds(25),
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now));
+
+        std::vector<std::uint8_t> datagram;
+        std::string error_message;
+        if (!wait_for_datagram(datagram, remaining, error_message)) {
+            if (error_message == "timeout waiting for udp response") {
+                break;
+            }
+            set_last_error(std::move(error_message));
+            return false;
+        }
+
+        trace_udp_attach(
+            options_,
+            "rudp",
+            "ping-recv",
+            frame_summary(std::span<const std::uint8_t>(datagram.data(), datagram.size())));
+
+        if (!rudp::looks_like_rudp(datagram)) {
+            trace_udp_attach(options_, "rudp", "ping-ignore", "reason=not-rudp-frame");
+            continue;
+        }
+
+        auto process_result = rudp_engine_.process_datagram(datagram, unix_time_ms64());
+        for (auto& egress : process_result.egress_datagrams) {
+            boost::system::error_code send_ec;
+            socket_.send_to(asio::buffer(egress), remote_endpoint_, 0, send_ec);
+            if (send_ec) {
+                set_last_error("rudp ping response send failed: " + send_ec.message());
+                return false;
+            }
+        }
+
+        if (process_result.fallback_required) {
+            rudp_established_ = false;
+            return true;
+        }
+    }
+
+    auto poll_result = rudp_engine_.poll(unix_time_ms64());
+    for (auto& egress : poll_result.egress_datagrams) {
+        boost::system::error_code send_ec;
+        socket_.send_to(asio::buffer(egress), remote_endpoint_, 0, send_ec);
+        if (send_ec) {
+            set_last_error("rudp ping poll send failed: " + send_ec.message());
+            return false;
+        }
+    }
+    if (poll_result.fallback_required) {
+        rudp_established_ = false;
+    }
+    return true;
 }
 
 bool RudpSessionClient::unsupported_operation(const char* operation) {

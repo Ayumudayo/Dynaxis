@@ -15,7 +15,7 @@
 | ID | 이름 | 방향 | 상태 | 처리 위치 | 전송 | 전달 보장 | 채널 | 설명 |
 |---:|------|:---:|:-----:|:---------:|:----:|:---------:|-------:|------|
 | 0x0001 | `MSG_HELLO` | `s2c` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 버전/서버 정보 |
-| 0x0002 | `MSG_PING` | `c2s` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 하트비트 핑 |
+| 0x0002 | `MSG_PING` | `c2s` | `any` | `inline` | `both` | `reliable` | 0 | 하트비트 핑 |
 | 0x0003 | `MSG_PONG` | `c2s` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 하트비트 퐁 |
 | 0x0004 | `MSG_ERR` | `s2c` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 에러 응답 |
 

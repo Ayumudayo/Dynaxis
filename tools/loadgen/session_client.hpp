@@ -121,6 +121,7 @@ public:
     bool join(const std::string& room, const std::string& password, SnapshotResult* result = nullptr) override;
     bool send_chat_and_wait_echo(const std::string& room, const std::string& text) override;
     bool send_ping_and_wait_pong() override;
+    bool wait_for_pong(std::chrono::milliseconds timeout);
     void close() override;
 
     bool is_connected() const noexcept override { return connected_.load(); }
@@ -219,6 +220,7 @@ private:
     bool perform_udp_bind();
     bool send_udp_bind_request(const UdpBindTicket& ticket);
     bool wait_for_udp_bind_response(std::uint32_t expected_seq, UdpBindTicket& ticket);
+    bool send_direct_ping_frame();
     bool unsupported_operation(const char* operation);
     void set_last_error(std::string message);
 
@@ -268,6 +270,8 @@ private:
     bool wait_for_datagram(std::vector<std::uint8_t>& datagram,
                            std::chrono::milliseconds timeout,
                            std::string& error_message);
+    bool send_reliable_ping_frame();
+    bool drain_rudp_control(std::chrono::milliseconds budget);
     bool unsupported_operation(const char* operation);
     void set_last_error(std::string message);
 
@@ -282,6 +286,7 @@ private:
     std::uint16_t udp_port_{0};
     std::uint32_t udp_seq_{1};
     bool udp_bound_{false};
+    bool rudp_established_{false};
     server::core::net::rudp::RudpEngine rudp_engine_;
 
     mutable std::mutex mu_;
