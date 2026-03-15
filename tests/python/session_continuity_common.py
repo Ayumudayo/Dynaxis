@@ -119,6 +119,25 @@ def read_metric_sum(metric_name: str, ports: tuple[int, ...] = GATEWAY_METRICS_P
     return total
 
 
+def read_metric_sum_labeled(
+    metric_name: str,
+    labels: dict[str, str],
+    ports: tuple[int, ...] = GATEWAY_METRICS_PORTS,
+) -> float:
+    ordered_labels = ",".join(
+        f'{key}="{labels[key]}"' for key in sorted(labels.keys())
+    )
+    prefix = f"{metric_name}{{{ordered_labels}}} "
+    total = 0.0
+    for port in ports:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=5.0) as response:
+            text = response.read().decode("utf-8")
+        for line in text.splitlines():
+            if line.startswith(prefix):
+                total += float(line.split(" ", 1)[1])
+    return total
+
+
 class ChatClient:
     def __init__(self, host: str = HOST, port: int = PORT) -> None:
         self.host = host

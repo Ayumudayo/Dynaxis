@@ -32,6 +32,10 @@ public:
         store_.erase(key);
         return true;
     }
+    bool set(const std::string& key, const std::string& value) override {
+        store_[key] = value;
+        return true;
+    }
     std::optional<std::string> get(const std::string& key) override {
         ++get_calls;
         auto it = store_.find(key);

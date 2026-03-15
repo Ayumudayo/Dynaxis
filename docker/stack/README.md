@@ -5,6 +5,7 @@
 구성:
 - Client(호스트) -> HAProxy(container) -> gateway_app(containers) -> server_app(containers)
 - Redis/Postgres는 compose로 함께 띄운다.
+- `server_app` service topology는 committed manifest에서 생성된다.
 
 ## 실행
 
@@ -24,9 +25,33 @@ pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build
 # 스택 기동 + 관측성(Observability: Prometheus/Grafana)
 pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build -Observability
 
+# same-world replacement proof topology
+pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build -TopologyConfig docker/stack/topologies/mmorpg-same-world-proof.json
+
 # 또는 wrapper 사용
 pwsh scripts/run_full_stack_observability.ps1
+pwsh scripts/run_full_stack_observability.ps1 -TopologyConfig docker/stack/topologies/mmorpg-same-world-proof.json
 ```
+
+## Topology manifests
+
+- 기본 topology manifest: `docker/stack/topologies/default.json`
+- same-world proof manifest: `docker/stack/topologies/mmorpg-same-world-proof.json`
+- generator output:
+  - `docker/stack/docker-compose.topology.generated.yml` (gitignored)
+  - `docker/stack/topology.active.json` (gitignored)
+
+`scripts/deploy_docker.ps1`는 base compose 뒤에 generated compose를 자동 포함하고,
+`docker compose config --quiet`로 topology 결과를 검증한 뒤에만 기동한다.
+
+현재 이 surface는 startup-only다.
+
+- manifest 선택은 stack 시작 시점에만 적용된다
+- 운영 중 live scale out/in semantics는 제공하지 않는다
+- future desired-topology/live scaling design은:
+  - `docs/ops/mmorpg-desired-topology-contract.md`
+  - `docs/ops/mmorpg-scaling-orchestration-charter.md`
+- 현재 startup manifest는 dev/proof용 concrete topology artifact이며, future desired-topology contract와 동일하지 않다
 
 접속:
 - 게임 트래픽: `127.0.0.1:6000` (HAProxy)
@@ -40,6 +65,14 @@ pwsh scripts/run_full_stack_observability.ps1
 - (옵션) Grafana: `http://127.0.0.1:33000/` (admin password: `GRAFANA_ADMIN_PASSWORD`, 기본 `admin`)
 
 포트는 `docker/stack/docker-compose.yml`의 `*_HOST_PORT` 환경 변수로 재지정할 수 있다. (`ADMIN_APP_HOST_PORT` 포함)
+server topology manifest는 각 server의 `tcp_host_port`, `metrics_host_port`를 직접 선언한다.
+
+기본 topology의 server metrics 포트:
+- `server-1`: `39091`
+- `server-2`: `39092`
+
+same-world proof topology는 추가로:
+- `server-3`: `39094`
 
 UDP canary/rollback 리허설은 env override로 실행한다:
 

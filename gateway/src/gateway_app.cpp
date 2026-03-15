@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <random>
 #include <algorithm>
@@ -18,6 +19,7 @@
 #include <sstream>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <openssl/crypto.h>
@@ -32,6 +34,7 @@
 #include "gateway/registry_backend_factory.hpp"
 #include "server/core/net/queue_budget.hpp"
 #include "server/core/state/instance_registry.hpp"
+#include "server/core/state/world_lifecycle_policy.hpp"
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
@@ -56,6 +59,8 @@ constexpr const char* kEnvGatewayId = "GATEWAY_ID";
 constexpr const char* kEnvRedisUri = "REDIS_URI";
 constexpr const char* kEnvServerRegistryPrefix = "SERVER_REGISTRY_PREFIX";
 constexpr const char* kEnvServerRegistryTtl = "SERVER_REGISTRY_TTL";
+constexpr const char* kEnvRedisChannelPrefix = "REDIS_CHANNEL_PREFIX";
+constexpr const char* kEnvSessionContinuityRedisPrefix = "SESSION_CONTINUITY_REDIS_PREFIX";
 constexpr const char* kEnvGatewayBackendConnectTimeoutMs = "GATEWAY_BACKEND_CONNECT_TIMEOUT_MS";
 constexpr const char* kEnvGatewayBackendSendQueueMaxBytes = "GATEWAY_BACKEND_SEND_QUEUE_MAX_BYTES";
 constexpr const char* kEnvGatewayBackendCircuitEnabled = "GATEWAY_BACKEND_CIRCUIT_BREAKER_ENABLED";
@@ -306,6 +311,99 @@ std::optional<std::string> extract_world_id_from_tags(const std::vector<std::str
         }
     }
     return std::nullopt;
+}
+
+std::string make_world_policy_key(std::string_view continuity_prefix, std::string_view world_id) {
+    return std::string(continuity_prefix) + "world-policy:" + std::string(world_id);
+}
+
+std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy>
+load_world_policy_index(server::core::storage::redis::IRedisClient* redis_client,
+                        std::string_view continuity_prefix,
+                        const std::vector<server::core::state::InstanceRecord>& items) {
+    std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy> out;
+    if (!redis_client || continuity_prefix.empty()) {
+        return out;
+    }
+
+    std::vector<std::string> world_ids;
+    std::vector<std::string> policy_keys;
+    for (const auto& item : items) {
+        const auto world_id = extract_world_id_from_tags(item.tags);
+        if (!world_id.has_value()) {
+            continue;
+        }
+        if (out.contains(*world_id)) {
+            continue;
+        }
+        world_ids.push_back(*world_id);
+        policy_keys.push_back(make_world_policy_key(continuity_prefix, *world_id));
+        out.emplace(*world_id, server::core::state::WorldLifecyclePolicy{});
+    }
+
+    if (policy_keys.empty()) {
+        return out;
+    }
+
+    std::vector<std::optional<std::string>> payloads(policy_keys.size());
+    bool mget_ok = false;
+    try {
+        mget_ok = redis_client->mget(policy_keys, payloads);
+    } catch (...) {
+        mget_ok = false;
+    }
+
+    if (!mget_ok || payloads.size() != policy_keys.size()) {
+        payloads.clear();
+        payloads.reserve(policy_keys.size());
+        for (const auto& key : policy_keys) {
+            try {
+                payloads.push_back(redis_client->get(key));
+            } catch (...) {
+                payloads.push_back(std::nullopt);
+            }
+        }
+    }
+
+    for (std::size_t i = 0; i < world_ids.size() && i < payloads.size(); ++i) {
+        if (!payloads[i].has_value() || payloads[i]->empty()) {
+            continue;
+        }
+        if (const auto parsed = server::core::state::parse_world_lifecycle_policy(*payloads[i])) {
+            out[world_ids[i]] = *parsed;
+        }
+    }
+
+    return out;
+}
+
+struct WorldPolicyBackendDecision {
+    bool allowed{true};
+    bool draining_filtered{false};
+    bool replacement_match{false};
+    std::optional<std::string> world_id;
+};
+
+WorldPolicyBackendDecision evaluate_world_policy_backend(
+    const server::core::state::InstanceRecord& record,
+    const std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy>& world_policy_index) {
+    WorldPolicyBackendDecision decision;
+    const auto world_id = extract_world_id_from_tags(record.tags);
+    if (!world_id.has_value()) {
+        return decision;
+    }
+    decision.world_id = *world_id;
+
+    const auto policy_it = world_policy_index.find(*world_id);
+    if (policy_it == world_policy_index.end() || !policy_it->second.draining) {
+        return decision;
+    }
+
+    decision.draining_filtered = true;
+    decision.replacement_match = !policy_it->second.replacement_owner_instance_id.empty()
+        && policy_it->second.replacement_owner_instance_id == record.instance_id;
+    decision.allowed = decision.replacement_match;
+    return decision;
 }
 
 std::string serialize_resume_locator_hint(const GatewayApp::ResumeLocatorHint& hint) {
@@ -1063,6 +1161,16 @@ GatewayApp::GatewayApp()
         stream << "gateway_rudp_fallback_total "
                << rudp_fallback_total_.load(std::memory_order_relaxed) << "\n";
 
+        stream << "# TYPE gateway_world_policy_filtered_total counter\n";
+        stream << "gateway_world_policy_filtered_total{source=\"sticky\"} "
+               << world_policy_filtered_sticky_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "gateway_world_policy_filtered_total{source=\"candidate\"} "
+               << world_policy_filtered_candidate_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE gateway_world_policy_replacement_selected_total counter\n";
+        stream << "gateway_world_policy_replacement_selected_total "
+               << world_policy_replacement_selected_total_.load(std::memory_order_relaxed) << "\n";
+
         stream << app_host_.dependency_metrics_text();
         stream << app_host_.lifecycle_metrics_text();
         return stream.str();
@@ -1657,6 +1765,11 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
         return std::nullopt;
     }
 
+    const auto world_policy_index = load_world_policy_index(redis_client_.get(), continuity_prefix_, instances);
+    const auto backend_policy_decision = [&](const server::core::state::InstanceRecord& record) {
+        return evaluate_world_policy_backend(record, world_policy_index);
+    };
+
     // 1) 세션 스티키니스: 기존 바인딩이 유효하면 우선 사용한다.
     if (session_directory_ && !client_id.empty() && client_id != "anonymous") {
         if (auto backend_id = session_directory_->find_backend(client_id)) {
@@ -1664,10 +1777,16 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
                 return rec.instance_id == *backend_id && rec.ready;
             });
             if (it != instances.end()) {
-                if (is_resume_routing_key(client_id)) {
-                    (void)resume_routing_hit_total_.fetch_add(1, std::memory_order_relaxed);
+                const auto policy_decision = backend_policy_decision(*it);
+                if (policy_decision.allowed) {
+                    if (is_resume_routing_key(client_id)) {
+                        (void)resume_routing_hit_total_.fetch_add(1, std::memory_order_relaxed);
+                    }
+                    return SelectedBackend{*it, true};
                 }
-                return SelectedBackend{*it, true};
+                if (policy_decision.draining_filtered) {
+                    (void)world_policy_filtered_sticky_total_.fetch_add(1, std::memory_order_relaxed);
+                }
             }
             // 바인딩된 인스턴스가 사라졌거나 비활성화되었으므로 바인딩을 해제한다.
             session_directory_->release_backend(client_id, *backend_id);
@@ -1699,12 +1818,23 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
     const auto build_candidates =
         [&](const std::optional<server::core::state::InstanceSelector>& selector) {
             std::vector<const server::core::state::InstanceRecord*> candidates;
+            std::unordered_set<std::string> filtered_world_ids;
             std::uint64_t min_effective_load = std::numeric_limits<std::uint64_t>::max();
             for (const auto& rec : instances) {
                 if (!rec.ready || rec.instance_id.empty() || rec.host.empty() || rec.port == 0) {
                     continue;
                 }
                 if (selector.has_value() && !server::core::state::matches_selector(rec, *selector)) {
+                    continue;
+                }
+                const auto policy_decision = backend_policy_decision(rec);
+                if (!policy_decision.allowed) {
+                    if (policy_decision.draining_filtered) {
+                        (void)world_policy_filtered_candidate_total_.fetch_add(1, std::memory_order_relaxed);
+                        if (policy_decision.world_id.has_value()) {
+                            filtered_world_ids.insert(*policy_decision.world_id);
+                        }
+                    }
                     continue;
                 }
 
@@ -1721,13 +1851,13 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
                     candidates.push_back(&rec);
                 }
             }
-            return candidates;
+            return std::pair{std::move(candidates), std::move(filtered_world_ids)};
         };
 
-    auto candidates = build_candidates(resume_locator_selector);
+    auto [candidates, filtered_world_ids] = build_candidates(resume_locator_selector);
     if (candidates.empty() && resume_locator_selector.has_value()) {
         (void)resume_locator_selector_fallback_total_.fetch_add(1, std::memory_order_relaxed);
-        candidates = build_candidates(std::nullopt);
+        std::tie(candidates, filtered_world_ids) = build_candidates(std::nullopt);
     } else if (!candidates.empty() && resume_locator_selector.has_value()) {
         (void)resume_locator_selector_hit_total_.fetch_add(1, std::memory_order_relaxed);
     }
@@ -1747,7 +1877,15 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
         }
     }
 
-    return SelectedBackend{*candidates[selected_index], false};
+    const auto& selected = *candidates[selected_index];
+    const auto selected_policy_decision = backend_policy_decision(selected);
+    if (selected_policy_decision.replacement_match
+        && selected_policy_decision.world_id.has_value()
+        && filtered_world_ids.contains(*selected_policy_decision.world_id)) {
+        (void)world_policy_replacement_selected_total_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    return SelectedBackend{selected, false};
 }
 
 void GatewayApp::register_resume_routing_key(const std::string& routing_key,
@@ -2211,6 +2349,17 @@ void GatewayApp::configure_gateway() {
 void GatewayApp::configure_infrastructure() {
     const char* redis_env = std::getenv(kEnvRedisUri);
     redis_uri_ = redis_env ? redis_env : kDefaultRedisUri;
+    if (const char* prefix = std::getenv(kEnvSessionContinuityRedisPrefix); prefix && *prefix) {
+        continuity_prefix_ = prefix;
+    } else if (const char* prefix = std::getenv(kEnvRedisChannelPrefix); prefix && *prefix) {
+        continuity_prefix_ = prefix;
+    } else {
+        continuity_prefix_.clear();
+    }
+    if (!continuity_prefix_.empty() && continuity_prefix_.back() != ':') {
+        continuity_prefix_.push_back(':');
+    }
+    continuity_prefix_ += "continuity:";
     session_directory_prefix_ = kDefaultSessionDirectoryPrefix;
     if (!session_directory_prefix_.empty() && session_directory_prefix_.back() != '/') {
         session_directory_prefix_.push_back('/');

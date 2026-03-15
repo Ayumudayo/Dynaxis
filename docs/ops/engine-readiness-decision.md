@@ -1,6 +1,6 @@
 # Engine Readiness Baseline Decision
 
-This document records the current Phase 4 decision for the `engine-readiness-baseline` branch.
+This document records the accepted Phase 4 decision for the `engine-readiness-baseline` branch.
 
 Raw evidence for each rehearsal lives under `build/engine-readiness/<run_id>/`.
 The checkpoint ledger is tracked in `docs/ops/engine-readiness-baseline.md`.
@@ -124,13 +124,11 @@ Likely future owner:
 
 - `engine-roadmap-fps`
 
-## Baseline Conclusion
+## Historical Baseline Conclusion
 
 - `ready to branch`: yes
 - `baseline decision`: ready to split once the first branch charter is chosen
-- `active execution branch`: `engine-roadmap-mmorpg`
-- `preferred first genre branch after the continuity tranche`: `engine-roadmap-mmorpg`
-- `current continuity tranche status`: complete and merged
+- `historical preferred first genre branch after the continuity tranche`: `engine-roadmap-mmorpg`
 
 Reason:
 
@@ -139,6 +137,19 @@ Reason:
 - The overload blocker is closed after correcting the concurrent-run identity collision in loadgen and rerunning the rehearsal with clean results.
 - The remaining caveats are narrower restart/backlog-visibility concerns that can be carried into later branch-specific work without invalidating the shared baseline.
 - Because the current runtime is still fundamentally a chat/control stack, the first post-baseline branch is intentionally capability-first (`engine-roadmap-session-continuity`) rather than a broad genre-branded MMORPG branch.
+
+## Current Downstream Ownership
+
+This document preserves the accepted shared-baseline conclusion. It does not act as a live branch tracker.
+
+- transparent in-flight continuity across gateway/server restart
+  - downstream owner: session-continuity / MMORPG-oriented follow-up
+- worker backlog-depth visibility quality
+  - downstream owner: shared engine/runtime follow-up if it becomes operationally necessary
+- gameplay-grade UDP/RUDP transport maturity beyond attach/fallback proof
+  - downstream owner: FPS-oriented follow-up
+
+The accepted March 14, 2026 conclusion remains unchanged unless a later branch produces evidence that invalidates the shared baseline itself.
 
 ## Guardrail For Branch Cut
 

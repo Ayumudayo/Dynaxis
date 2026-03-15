@@ -160,6 +160,16 @@ std::string render_metrics() {
     append_counter(
         "chat_continuity_world_restore_fallback_total",
         continuity_metrics.world_restore_fallback_total);
+    stream << "# TYPE chat_continuity_world_restore_fallback_reason_total counter\n";
+    stream << "chat_continuity_world_restore_fallback_reason_total{reason=\"missing_world\"} "
+           << continuity_metrics.world_restore_fallback_missing_world_total << "\n";
+    stream << "chat_continuity_world_restore_fallback_reason_total{reason=\"missing_owner\"} "
+           << continuity_metrics.world_restore_fallback_missing_owner_total << "\n";
+    stream << "chat_continuity_world_restore_fallback_reason_total{reason=\"owner_mismatch\"} "
+           << continuity_metrics.world_restore_fallback_owner_mismatch_total << "\n";
+    stream
+        << "chat_continuity_world_restore_fallback_reason_total{reason=\"draining_replacement_unhonored\"} "
+        << continuity_metrics.world_restore_fallback_draining_replacement_unhonored_total << "\n";
     append_counter("chat_continuity_world_owner_write_total", continuity_metrics.world_owner_write_total);
     append_counter(
         "chat_continuity_world_owner_write_fail_total",

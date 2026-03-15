@@ -545,6 +545,8 @@ log.txt
 
 # Env
 .env
+docker/stack/docker-compose.topology.generated.yml
+docker/stack/topology.active.json
 
 # OpenCode (local config)
 .opencode/
@@ -559,3 +561,4 @@ external-refs/
 
 # Internal docs
 tasks/
+tmp/

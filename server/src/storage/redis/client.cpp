@@ -307,6 +307,19 @@ public:
         try { redis_->del(key); return true; } catch (const std::exception& e) { server::core::log::warn(std::string("Redis DEL failed: ") + e.what()); return false; } catch (...) { server::core::log::warn("Redis DEL failed: unknown"); return false; }
     }
 
+    bool set(const std::string& key, const std::string& value) override {
+        try {
+            redis_->set(key, value);
+            return true;
+        } catch (const std::exception& e) {
+            server::core::log::warn(std::string("Redis SET failed: ") + e.what());
+            return false;
+        } catch (...) {
+            server::core::log::warn("Redis SET failed: unknown");
+            return false;
+        }
+    }
+
     std::optional<std::string> get(const std::string& key) override {
         try {
             auto value = redis_->get(key);
@@ -583,6 +596,7 @@ public:
     bool xreadgroup(const std::string& key, const std::string& group, const std::string& consumer, long long block_ms, std::size_t count, std::vector<StreamEntry>& out) override { (void)key; (void)group; (void)consumer; (void)block_ms; (void)count; out.clear(); return true; }
     bool xack(const std::string& /*key*/, const std::string& /*group*/, const std::string& /*id*/) override { return true; }
     bool del(const std::string& key) override { (void)key; return true; }
+    bool set(const std::string& key, const std::string& value) override { (void)key; (void)value; return true; }
     std::optional<std::string> get(const std::string& key) override { (void)key; return std::optional<std::string>{}; }
     bool mget(const std::vector<std::string>& keys, std::vector<std::optional<std::string>>& out) override {
         out.assign(keys.size(), std::nullopt);

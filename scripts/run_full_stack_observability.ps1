@@ -7,7 +7,8 @@ param(
   [switch]$NoBuild,
   [switch]$NoCache,
   [switch]$NoBase,
-  [string]$ProjectName = ""
+  [string]$ProjectName = "",
+  [string]$TopologyConfig = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,5 +21,5 @@ if (-not (Test-Path $deploy)) {
 
 $build = -not $NoBuild
 
-& $deploy -Action up -Detached -Build:$build -Observability -NoCache:$NoCache -NoBase:$NoBase -ProjectName $ProjectName
+& $deploy -Action up -Detached -Build:$build -Observability -NoCache:$NoCache -NoBase:$NoBase -ProjectName $ProjectName -TopologyConfig $TopologyConfig
 exit $LASTEXITCODE

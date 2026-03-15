@@ -657,6 +657,14 @@ ChatService::ContinuityMetrics ChatService::continuity_metrics() const {
     out.world_write_fail_total = continuity_world_write_fail_total_.load(std::memory_order_relaxed);
     out.world_restore_total = continuity_world_restore_total_.load(std::memory_order_relaxed);
     out.world_restore_fallback_total = continuity_world_restore_fallback_total_.load(std::memory_order_relaxed);
+    out.world_restore_fallback_missing_world_total =
+        continuity_world_restore_fallback_missing_world_total_.load(std::memory_order_relaxed);
+    out.world_restore_fallback_missing_owner_total =
+        continuity_world_restore_fallback_missing_owner_total_.load(std::memory_order_relaxed);
+    out.world_restore_fallback_owner_mismatch_total =
+        continuity_world_restore_fallback_owner_mismatch_total_.load(std::memory_order_relaxed);
+    out.world_restore_fallback_draining_replacement_unhonored_total =
+        continuity_world_restore_fallback_draining_replacement_unhonored_total_.load(std::memory_order_relaxed);
     out.world_owner_write_total = continuity_world_owner_write_total_.load(std::memory_order_relaxed);
     out.world_owner_write_fail_total = continuity_world_owner_write_fail_total_.load(std::memory_order_relaxed);
     out.world_owner_restore_total = continuity_world_owner_restore_total_.load(std::memory_order_relaxed);
@@ -811,6 +819,10 @@ std::string ChatService::make_continuity_world_owner_key(const std::string& worl
     return continuity_.redis_prefix + "world-owner:" + world_id;
 }
 
+std::string ChatService::make_continuity_world_policy_key(const std::string& world_id) const {
+    return continuity_.redis_prefix + "world-policy:" + world_id;
+}
+
 bool ChatService::continuity_enabled() const {
     return continuity_.enabled && static_cast<bool>(db_pool_);
 }
@@ -847,6 +859,19 @@ std::optional<std::string> ChatService::load_continuity_world_owner(const std::s
         return std::nullopt;
     }
     return redis_->get(make_continuity_world_owner_key(world_id));
+}
+
+std::optional<server::core::state::WorldLifecyclePolicy>
+ChatService::load_continuity_world_policy(const std::string& world_id) {
+    if (!redis_ || world_id.empty()) {
+        return std::nullopt;
+    }
+
+    const auto payload = redis_->get(make_continuity_world_policy_key(world_id));
+    if (!payload.has_value() || payload->empty()) {
+        return std::nullopt;
+    }
+    return server::core::state::parse_world_lifecycle_policy(*payload);
 }
 
 void ChatService::persist_continuity_room(const std::string& logical_session_id,
@@ -963,25 +988,53 @@ std::optional<ChatService::ContinuityLease> ChatService::try_resume_continuity_l
         lease.resume_token = *raw_token;
         lease.user_id = session->user_id;
         lease.effective_user = user->name;
+        const std::string fallback_world_id =
+            continuity_.default_world_id.empty() ? std::string("default") : continuity_.default_world_id;
         bool world_restore_ok = false;
         const auto continuity_world = load_continuity_world(session->id);
         if (continuity_world.has_value() && !continuity_world->empty()) {
+            const auto continuity_world_policy = load_continuity_world_policy(*continuity_world);
+            const bool world_draining =
+                continuity_world_policy.has_value() && continuity_world_policy->draining;
+            const bool replacement_owner_matches_current =
+                continuity_world_policy.has_value()
+                && continuity_world_policy->replacement_owner_instance_id == continuity_.current_owner_id;
             const auto continuity_world_owner = load_continuity_world_owner(*continuity_world);
-            if (continuity_world_owner.has_value()
+            const bool owner_present =
+                continuity_world_owner.has_value() && !continuity_world_owner->empty();
+            const bool owner_matches_current = continuity_world_owner.has_value()
                 && !continuity_world_owner->empty()
-                && *continuity_world_owner == continuity_.current_owner_id) {
+                && *continuity_world_owner == continuity_.current_owner_id;
+            if (owner_matches_current && (!world_draining || replacement_owner_matches_current)) {
                 lease.world_id = *continuity_world;
                 world_restore_ok = true;
                 (void)continuity_world_restore_total_.fetch_add(1, std::memory_order_relaxed);
                 (void)continuity_world_owner_restore_total_.fetch_add(1, std::memory_order_relaxed);
             } else {
-                lease.world_id = continuity_.default_world_id.empty() ? std::string("default") : continuity_.default_world_id;
+                lease.world_id = fallback_world_id;
                 (void)continuity_world_restore_fallback_total_.fetch_add(1, std::memory_order_relaxed);
-                (void)continuity_world_owner_restore_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+                if (world_draining && !replacement_owner_matches_current) {
+                    (void)continuity_world_restore_fallback_draining_replacement_unhonored_total_.fetch_add(
+                        1,
+                        std::memory_order_relaxed);
+                } else if (!owner_present) {
+                    (void)continuity_world_restore_fallback_missing_owner_total_.fetch_add(
+                        1,
+                        std::memory_order_relaxed);
+                    (void)continuity_world_owner_restore_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+                } else if (!owner_matches_current) {
+                    (void)continuity_world_restore_fallback_owner_mismatch_total_.fetch_add(
+                        1,
+                        std::memory_order_relaxed);
+                    (void)continuity_world_owner_restore_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+                }
             }
         } else {
-            lease.world_id = continuity_.default_world_id.empty() ? std::string("default") : continuity_.default_world_id;
+            lease.world_id = fallback_world_id;
             (void)continuity_world_restore_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+            (void)continuity_world_restore_fallback_missing_world_total_.fetch_add(
+                1,
+                std::memory_order_relaxed);
         }
 
         const auto continuity_room = load_continuity_room(session->id);

@@ -227,6 +227,7 @@ public:
     }
     
     bool del(const std::string& key) override { return true; }
+    bool set(const std::string&, const std::string&) override { return true; }
     
     std::optional<std::string> get(const std::string&) override { return std::nullopt; }
     bool mget(const std::vector<std::string>& keys, std::vector<std::optional<std::string>>& out) override {

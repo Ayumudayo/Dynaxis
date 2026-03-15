@@ -40,6 +40,7 @@
 #include "server/core/metrics/build_info.hpp"
 #include "server/core/metrics/http_server.hpp"
 #include "server/core/state/instance_registry.hpp"
+#include "server/core/state/world_lifecycle_policy.hpp"
 #include "server/core/storage/redis/client.hpp"
 #include "server/core/security/admin_command_auth.hpp"
 #include "server/core/util/log.hpp"
@@ -353,6 +354,7 @@ constexpr std::string_view kRoleRequiredDisconnect = "admin";
 constexpr std::string_view kRoleRequiredAnnouncement = "operator";
 constexpr std::string_view kRoleRequiredSettings = "admin";
 constexpr std::string_view kRoleRequiredModeration = "admin";
+constexpr std::string_view kRoleRequiredWorldPolicy = "admin";
 
 std::string url_decode(std::string_view raw) {
     std::string out;
@@ -671,6 +673,71 @@ WriteParamsResult merge_write_params_from_request(
     return result;
 }
 
+struct WorldPolicyWriteRequest {
+    bool ok{false};
+    bool draining{false};
+    std::optional<std::string> replacement_owner_instance_id;
+    std::string error_status{"400 Bad Request"};
+    std::string error_code{"BAD_REQUEST"};
+    std::string error_message{"malformed JSON body"};
+    std::string error_details{"{}"};
+};
+
+WorldPolicyWriteRequest parse_world_policy_write_request(
+    const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+    WorldPolicyWriteRequest result;
+    if (request.body.empty()) {
+        result.error_message = "world policy endpoint requires a JSON body";
+        return result;
+    }
+
+    std::string content_type;
+    if (const auto it = request.headers.find("content-type"); it != request.headers.end()) {
+        content_type = to_lower_ascii(trim_ascii(it->second));
+    }
+    if (content_type.rfind("application/json", 0) != 0) {
+        result.error_status = "415 Unsupported Media Type";
+        result.error_code = "UNSUPPORTED_CONTENT_TYPE";
+        result.error_message = "world policy endpoint requires application/json";
+        return result;
+    }
+
+    const auto parsed = nlohmann::json::parse(request.body, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object()) {
+        result.error_message = "malformed JSON body";
+        return result;
+    }
+
+    if (!parsed.contains("draining") || !parsed["draining"].is_boolean()) {
+        result.error_message = "draining must be a boolean";
+        result.error_details = "{\"parameter\":\"draining\"}";
+        return result;
+    }
+    result.draining = parsed["draining"].get<bool>();
+
+    if (parsed.contains("replacement_owner_instance_id")) {
+        const auto& replacement = parsed["replacement_owner_instance_id"];
+        if (replacement.is_null()) {
+            result.replacement_owner_instance_id = std::nullopt;
+        } else if (replacement.is_string()) {
+            const std::string normalized = trim_ascii(replacement.get<std::string>());
+            if (!normalized.empty()) {
+                result.replacement_owner_instance_id = normalized;
+            } else {
+                result.replacement_owner_instance_id = std::nullopt;
+            }
+        } else {
+            result.error_message = "replacement_owner_instance_id must be a string or null";
+            result.error_details = "{\"parameter\":\"replacement_owner_instance_id\"}";
+            return result;
+        }
+    }
+
+    result.ok = true;
+    result.error_details = "{}";
+    return result;
+}
+
 QueryParseResult parse_common_query_options(std::string_view query) {
     QueryParseResult result;
     if (query.empty()) {
@@ -829,10 +896,11 @@ std::string resource_from_path(std::string_view path) {
         std::string_view resource;
     };
 
-static constexpr std::array<ExactRoute, 19> kExactRoutes{{
+static constexpr std::array<ExactRoute, 20> kExactRoutes{{
         {"/api/v1/auth/context", "auth_context"},
         {"/api/v1/overview", "overview"},
         {"/api/v1/instances", "instances"},
+        {"/api/v1/worlds", "worlds"},
         {"/api/v1/users", "users"},
         {"/api/v1/ext/inventory", "ext_inventory"},
         {"/api/v1/ext/precheck", "ext_precheck"},
@@ -859,6 +927,14 @@ static constexpr std::array<ExactRoute, 19> kExactRoutes{{
 
     if (path == "/admin/") {
         return "admin_ui";
+    }
+
+    constexpr std::string_view kWorldPolicyPrefix = "/api/v1/worlds/";
+    constexpr std::string_view kWorldPolicySuffix = "/policy";
+    if (path.starts_with(kWorldPolicyPrefix)
+        && path.ends_with(kWorldPolicySuffix)
+        && path.size() > (kWorldPolicyPrefix.size() + kWorldPolicySuffix.size())) {
+        return "world_policy";
     }
 
     struct PrefixRoute {
@@ -1519,6 +1595,10 @@ private:
         return continuity_prefix_ + "world-owner:" + std::string(world_id);
     }
 
+    std::string make_world_policy_key(std::string_view world_id) const {
+        return continuity_prefix_ + "world-policy:" + std::string(world_id);
+    }
+
     std::unordered_map<std::string, std::string>
     load_world_owner_index(const std::vector<server::core::state::InstanceRecord>& items) const {
         std::unordered_map<std::string, std::string> out;
@@ -1572,9 +1652,178 @@ private:
         return out;
     }
 
+    std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy>
+    load_world_policy_index(const std::vector<server::core::state::InstanceRecord>& items) const {
+        std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy> out;
+        if (!redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            return out;
+        }
+
+        std::vector<std::string> world_ids;
+        std::vector<std::string> policy_keys;
+        for (const auto& item : items) {
+            const auto world_id = extract_world_id_from_tags(item.tags);
+            if (!world_id.has_value()) {
+                continue;
+            }
+            if (out.contains(*world_id)) {
+                continue;
+            }
+            world_ids.push_back(*world_id);
+            policy_keys.push_back(make_world_policy_key(*world_id));
+            out.emplace(*world_id, server::core::state::WorldLifecyclePolicy{});
+        }
+
+        if (policy_keys.empty()) {
+            return out;
+        }
+
+        std::vector<std::optional<std::string>> payloads(policy_keys.size());
+        bool mget_ok = false;
+        try {
+            mget_ok = redis_->mget(policy_keys, payloads);
+        } catch (...) {
+            mget_ok = false;
+        }
+
+        if (!mget_ok || payloads.size() != policy_keys.size()) {
+            payloads.clear();
+            payloads.reserve(policy_keys.size());
+            for (const auto& key : policy_keys) {
+                try {
+                    payloads.push_back(redis_->get(key));
+                } catch (...) {
+                    payloads.push_back(std::nullopt);
+                }
+            }
+        }
+
+        for (std::size_t i = 0; i < world_ids.size() && i < payloads.size(); ++i) {
+            if (!payloads[i].has_value() || payloads[i]->empty()) {
+                continue;
+            }
+            if (const auto parsed = server::core::state::parse_world_lifecycle_policy(*payloads[i])) {
+                out[world_ids[i]] = *parsed;
+            }
+        }
+        return out;
+    }
+
+    std::string make_world_policy_json(const server::core::state::WorldLifecyclePolicy& policy) const {
+        std::ostringstream data;
+        data << "{";
+        data << "\"draining\":" << bool_json(policy.draining) << ",";
+        data << "\"replacement_owner_instance_id\":";
+        if (policy.reassignment_declared()) {
+            data << "\"" << json_escape(policy.replacement_owner_instance_id) << "\"";
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"reassignment_declared\":" << bool_json(policy.reassignment_declared());
+        data << "}";
+        return data.str();
+    }
+
+    std::string make_world_policy_json(
+        std::string_view world_id,
+        const std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy>& world_policy_index) const {
+        const auto policy_it = world_policy_index.find(std::string(world_id));
+        const server::core::state::WorldLifecyclePolicy empty_policy{};
+        const auto& policy = policy_it == world_policy_index.end() ? empty_policy : policy_it->second;
+        return make_world_policy_json(policy);
+    }
+
+    struct WorldInventoryEntry {
+        std::string world_id;
+        std::string owner_instance_id;
+        server::core::state::WorldLifecyclePolicy policy;
+        std::vector<server::core::state::InstanceRecord> instances;
+    };
+
+    std::vector<WorldInventoryEntry>
+    collect_world_inventory(const std::vector<server::core::state::InstanceRecord>& items) const {
+        const auto world_owner_index = load_world_owner_index(items);
+        const auto world_policy_index = load_world_policy_index(items);
+
+        std::unordered_map<std::string, std::size_t> world_positions;
+        std::vector<WorldInventoryEntry> worlds;
+        for (const auto& item : items) {
+            const auto world_id = extract_world_id_from_tags(item.tags);
+            if (!world_id.has_value()) {
+                continue;
+            }
+
+            std::size_t index = 0;
+            if (const auto it = world_positions.find(*world_id); it != world_positions.end()) {
+                index = it->second;
+            } else {
+                WorldInventoryEntry entry;
+                entry.world_id = *world_id;
+                if (const auto owner_it = world_owner_index.find(*world_id);
+                    owner_it != world_owner_index.end() && !owner_it->second.empty()) {
+                    entry.owner_instance_id = owner_it->second;
+                }
+                if (const auto policy_it = world_policy_index.find(*world_id); policy_it != world_policy_index.end()) {
+                    entry.policy = policy_it->second;
+                }
+                worlds.push_back(std::move(entry));
+                index = worlds.size() - 1;
+                world_positions.emplace(*world_id, index);
+            }
+
+            worlds[index].instances.push_back(item);
+        }
+
+        std::sort(worlds.begin(), worlds.end(), [](const auto& lhs, const auto& rhs) {
+            return lhs.world_id < rhs.world_id;
+        });
+        for (auto& world : worlds) {
+            std::sort(world.instances.begin(), world.instances.end(), [](const auto& lhs, const auto& rhs) {
+                return lhs.instance_id < rhs.instance_id;
+            });
+        }
+        return worlds;
+    }
+
+    std::string make_world_inventory_json(const WorldInventoryEntry& world) const {
+        const bool has_owner = !world.owner_instance_id.empty();
+        std::ostringstream data;
+        data << "{";
+        data << "\"world_id\":\"" << json_escape(world.world_id) << "\",";
+        data << "\"owner_instance_id\":";
+        if (has_owner) {
+            data << "\"" << json_escape(world.owner_instance_id) << "\"";
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"policy\":" << make_world_policy_json(world.policy) << ",";
+        data << "\"instances\":[";
+        for (std::size_t instance_index = 0; instance_index < world.instances.size(); ++instance_index) {
+            const auto& instance = world.instances[instance_index];
+            if (instance_index != 0) {
+                data << ",";
+            }
+            data << "{";
+            data << "\"instance_id\":\"" << json_escape(instance.instance_id) << "\",";
+            data << "\"ready\":" << bool_json(instance.ready) << ",";
+            data << "\"owner_match\":" << bool_json(has_owner && world.owner_instance_id == instance.instance_id);
+            data << "}";
+        }
+        data << "],";
+        data << "\"source\":{";
+        data << "\"owner_key\":\"" << json_escape(make_world_owner_key(world.world_id)) << "\",";
+        data << "\"policy_key\":\"" << json_escape(make_world_policy_key(world.world_id)) << "\"";
+        data << "}";
+        data << "}";
+        return data.str();
+    }
+
     std::string make_world_scope_json(
         const server::core::state::InstanceRecord& item,
-        const std::unordered_map<std::string, std::string>& world_owner_index) const {
+        const std::unordered_map<std::string, std::string>& world_owner_index,
+        const std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy>& world_policy_index) const {
         const auto world_id = extract_world_id_from_tags(item.tags);
         if (!world_id.has_value()) {
             return "null";
@@ -1594,8 +1843,10 @@ private:
         }
         data << ",";
         data << "\"owner_match\":" << bool_json(has_owner && owner_it->second == item.instance_id) << ",";
+        data << "\"policy\":" << make_world_policy_json(*world_id, world_policy_index) << ",";
         data << "\"source\":{";
-        data << "\"owner_key\":\"" << json_escape(make_world_owner_key(*world_id)) << "\"";
+        data << "\"owner_key\":\"" << json_escape(make_world_owner_key(*world_id)) << "\",";
+        data << "\"policy_key\":\"" << json_escape(make_world_policy_key(*world_id)) << "\"";
         data << "}";
         data << "}";
         return data.str();
@@ -2891,6 +3142,28 @@ private:
         stream << "# TYPE admin_instances_requests_total counter\n";
         stream << "admin_instances_requests_total " << instances_requests_total_.load(std::memory_order_relaxed) << "\n";
 
+        stream << "# TYPE admin_worlds_requests_total counter\n";
+        stream << "admin_worlds_requests_total " << worlds_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_policy_requests_total counter\n";
+        stream << "admin_world_policy_requests_total " << world_policy_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_policy_write_total counter\n";
+        stream << "admin_world_policy_write_total "
+               << world_policy_write_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_policy_write_fail_total counter\n";
+        stream << "admin_world_policy_write_fail_total "
+               << world_policy_write_fail_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_policy_clear_total counter\n";
+        stream << "admin_world_policy_clear_total "
+               << world_policy_clear_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_policy_clear_fail_total counter\n";
+        stream << "admin_world_policy_clear_fail_total "
+               << world_policy_clear_fail_total_.load(std::memory_order_relaxed) << "\n";
+
         stream << "# TYPE admin_instances_selector_requests_total counter\n";
         stream << "admin_instances_selector_requests_total "
                << instances_selector_requests_total_.load(std::memory_order_relaxed) << "\n";
@@ -3119,12 +3392,18 @@ private:
         const bool is_ban = (path == "/api/v1/users/ban");
         const bool is_unban = (path == "/api/v1/users/unban");
         const bool is_kick = (path == "/api/v1/users/kick");
+        constexpr std::string_view kWorldPolicyPrefix = "/api/v1/worlds/";
+        constexpr std::string_view kWorldPolicySuffix = "/policy";
+        const bool is_world_policy = path.starts_with(kWorldPolicyPrefix)
+            && path.ends_with(kWorldPolicySuffix)
+            && path.size() > (kWorldPolicyPrefix.size() + kWorldPolicySuffix.size());
         const bool is_user_moderation = is_mute || is_unmute || is_ban || is_unban || is_kick;
         const bool is_legacy_write_endpoint = is_disconnect || is_announce || is_settings || is_user_moderation;
         const bool is_ext_deployments_write = is_ext_deployments && method == "POST";
         const bool is_ext_write_endpoint = is_ext_precheck || is_ext_deployments_write || is_ext_schedules;
-        const bool is_readonly_blocked_endpoint = is_legacy_write_endpoint || is_ext_deployments_write || is_ext_schedules;
-        const bool is_write_endpoint = is_legacy_write_endpoint || is_ext_write_endpoint;
+        const bool is_readonly_blocked_endpoint =
+            is_legacy_write_endpoint || is_ext_deployments_write || is_ext_schedules || is_world_policy;
+        const bool is_write_endpoint = is_legacy_write_endpoint || is_ext_write_endpoint || is_world_policy;
 
         if (!is_write_endpoint && method != "GET") {
             http_errors_total_.fetch_add(1, std::memory_order_relaxed);
@@ -3207,6 +3486,15 @@ private:
                 "ext schedules endpoint requires POST"));
         }
 
+        if (is_world_policy && method != "PUT" && method != "DELETE") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "world policy endpoint requires PUT or DELETE"));
+        }
+
         if (is_readonly_blocked_endpoint && admin_read_only_) {
             http_errors_total_.fetch_add(1, std::memory_order_relaxed);
             return finalize(json_error(
@@ -3275,6 +3563,22 @@ private:
         if (path == "/api/v1/instances") {
             instances_requests_total_.fetch_add(1, std::memory_order_relaxed);
             return finalize(handle_instances(request_id, query_options, split.query));
+        }
+
+        if (path == "/api/v1/worlds") {
+            worlds_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(handle_worlds(request_id, query_options));
+        }
+
+        if (is_world_policy) {
+            if (auto forbidden = require_role(kRoleRequiredWorldPolicy)) {
+                return finalize(std::move(*forbidden));
+            }
+            world_policy_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            const std::size_t world_id_begin = kWorldPolicyPrefix.size();
+            const std::size_t world_id_length = path.size() - world_id_begin - kWorldPolicySuffix.size();
+            const std::string world_id = std::string(path.substr(world_id_begin, world_id_length));
+            return finalize(handle_world_policy(request_id, auth, world_id, request));
         }
 
         constexpr std::string_view kInstancesPrefix = "/api/v1/instances/";
@@ -3403,6 +3707,7 @@ private:
         const bool allow_announce = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredAnnouncement);
         const bool allow_settings = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredSettings);
         const bool allow_moderation = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredModeration);
+        const bool allow_world_policy = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredWorldPolicy);
         const bool allow_ext_deploy = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredSettings);
 
         data << "\"capabilities\":{";
@@ -3410,6 +3715,7 @@ private:
         data << "\"announce\":" << bool_json(allow_announce) << ",";
         data << "\"settings\":" << bool_json(allow_settings) << ",";
         data << "\"moderation\":" << bool_json(allow_moderation) << ",";
+        data << "\"world_policy\":" << bool_json(allow_world_policy) << ",";
         data << "\"ext_deploy\":" << bool_json(allow_ext_deploy);
         data << "}";
         data << "}";
@@ -3505,6 +3811,7 @@ private:
         data << "},";
         data << "\"links\":{";
         data << "\"instances\":\"/api/v1/instances\",";
+        data << "\"worlds\":\"/api/v1/worlds\",";
         data << "\"users\":\"/api/v1/users\",";
         data << "\"worker\":\"/api/v1/worker/write-behind\",";
         data << "\"ext_inventory\":\"/api/v1/ext/inventory\",";
@@ -3605,6 +3912,7 @@ private:
             page_items.push_back(items[i]);
         }
         const auto world_owner_index = load_world_owner_index(page_items);
+        const auto world_policy_index = load_world_policy_index(page_items);
 
         std::ostringstream data;
         data << "{";
@@ -3633,7 +3941,7 @@ private:
             data << "\"ready\":" << bool_json(it.ready) << ",";
             data << "\"active_sessions\":" << it.active_sessions << ",";
             data << "\"last_heartbeat_ms\":" << it.last_heartbeat_ms << ",";
-            data << "\"world_scope\":" << make_world_scope_json(it, world_owner_index) << ",";
+            data << "\"world_scope\":" << make_world_scope_json(it, world_owner_index, world_policy_index) << ",";
             data << "\"source\":{";
             data << "\"registry_key\":\"" << json_escape(registry_prefix_ + it.instance_id) << "\"";
             data << "}";
@@ -3712,6 +4020,7 @@ private:
             ? detail->ready_reason
             : (item->ready ? std::string("ready (registry)") : std::string("not ready (registry)"));
         const auto world_owner_index = load_world_owner_index({*item});
+        const auto world_policy_index = load_world_policy_index({*item});
 
         std::ostringstream data;
         data << "{";
@@ -3735,13 +4044,241 @@ private:
         data << "\"active_sessions\":" << item->active_sessions << ",";
         data << "\"last_heartbeat_ms\":" << item->last_heartbeat_ms << ",";
         data << "\"metrics_url\":\"" << json_escape(metrics_url) << "\",";
-        data << "\"world_scope\":" << make_world_scope_json(*item, world_owner_index) << ",";
+        data << "\"world_scope\":" << make_world_scope_json(*item, world_owner_index, world_policy_index) << ",";
         data << "\"source\":{";
         data << "\"registry_key\":\"" << json_escape(registry_prefix_ + item->instance_id) << "\"";
         data << "}";
         data << "}";
 
         return json_ok(request_id, data.str());
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_worlds(std::uint64_t request_id, const QueryOptions& options) {
+        if (!registry_backend_ || !redis_available_.load(std::memory_order_relaxed)) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_UNAVAILABLE",
+                "redis registry unavailable");
+        }
+
+        std::vector<server::core::state::InstanceRecord> items;
+        std::uint64_t updated_ms = 0;
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            items = instances_cache_;
+            updated_ms = instances_updated_at_ms_;
+        }
+
+        if (options.timeout_overridden) {
+            const std::uint64_t now = now_ms();
+            const std::uint64_t age = (updated_ms > 0 && now >= updated_ms) ? (now - updated_ms) : now;
+            if (updated_ms == 0 || age > options.timeout_ms) {
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "504 Gateway Timeout",
+                    "TIMEOUT",
+                    "instances cache is older than timeout_ms",
+                    json_details("timeout_ms", std::to_string(options.timeout_ms)));
+            }
+        }
+
+        const auto worlds = collect_world_inventory(items);
+
+        std::size_t cursor_index = 0;
+        if (!options.cursor.empty()) {
+            std::uint32_t parsed_cursor = 0;
+            if (!parse_u32_strict(options.cursor, parsed_cursor)) {
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "400 Bad Request",
+                    "BAD_REQUEST",
+                    "cursor must be a non-negative integer",
+                    json_details("cursor", options.cursor));
+            }
+            cursor_index = static_cast<std::size_t>(parsed_cursor);
+            if (cursor_index > worlds.size()) {
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "400 Bad Request",
+                    "BAD_REQUEST",
+                    "cursor is out of range",
+                    json_details("cursor", options.cursor));
+            }
+        }
+
+        const std::size_t remaining = worlds.size() - cursor_index;
+        const std::size_t take = std::min<std::size_t>(remaining, static_cast<std::size_t>(options.limit));
+        const std::size_t end_index = cursor_index + take;
+
+        std::ostringstream data;
+        data << "{";
+        data << "\"items\":[";
+        for (std::size_t i = cursor_index; i < end_index; ++i) {
+            if (i != cursor_index) {
+                data << ",";
+            }
+            data << make_world_inventory_json(worlds[i]);
+        }
+        data << "],";
+        data << "\"paging\":{";
+        data << "\"limit\":" << options.limit << ",";
+        data << "\"cursor\":";
+        if (options.cursor.empty()) {
+            data << "null";
+        } else {
+            data << "\"" << json_escape(options.cursor) << "\"";
+        }
+        data << ",";
+        data << "\"next_cursor\":";
+        if (end_index < worlds.size()) {
+            data << "\"" << end_index << "\"";
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"total\":" << worlds.size();
+        data << "},";
+        data << "\"updated_at_ms\":" << updated_ms;
+        data << "}";
+
+        return json_ok(request_id, data.str());
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_world_policy(std::uint64_t request_id,
+                        const AuthContext& auth,
+                        const std::string& world_id,
+                        const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+        (void)auth;
+        if (world_id.empty() || world_id.find('/') != std::string::npos) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(request_id, "400 Bad Request", "BAD_REQUEST", "invalid world id");
+        }
+
+        if (!registry_backend_ || !redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_UNAVAILABLE",
+                "redis registry unavailable");
+        }
+
+        std::vector<server::core::state::InstanceRecord> items;
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            items = instances_cache_;
+        }
+
+        const auto worlds = collect_world_inventory(items);
+        const auto world_it = std::find_if(worlds.begin(), worlds.end(), [&](const auto& entry) {
+            return entry.world_id == world_id;
+        });
+        if (world_it == worlds.end()) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "400 Bad Request",
+                "BAD_REQUEST",
+                "world_id does not exist in current inventory",
+                json_details("world_id", world_id));
+        }
+
+        const std::string policy_key = make_world_policy_key(world_id);
+        if (request.method == "DELETE") {
+            if (!redis_->del(policy_key)) {
+                world_policy_clear_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "503 Service Unavailable",
+                    "UPSTREAM_WRITE_FAILED",
+                    "failed to clear world policy");
+            }
+            world_policy_clear_total_.fetch_add(1, std::memory_order_relaxed);
+
+            const auto refreshed_worlds = collect_world_inventory(items);
+            const auto refreshed_it = std::find_if(refreshed_worlds.begin(), refreshed_worlds.end(), [&](const auto& entry) {
+                return entry.world_id == world_id;
+            });
+            if (refreshed_it == refreshed_worlds.end()) {
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "500 Internal Server Error",
+                    "INTERNAL_ERROR",
+                    "world inventory disappeared after policy delete");
+            }
+            return json_ok(request_id, make_world_inventory_json(*refreshed_it));
+        }
+
+        const auto parsed = parse_world_policy_write_request(request);
+        if (!parsed.ok) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                parsed.error_status,
+                parsed.error_code,
+                parsed.error_message,
+                parsed.error_details);
+        }
+
+        if (parsed.replacement_owner_instance_id.has_value()) {
+            const bool replacement_found = std::any_of(
+                world_it->instances.begin(),
+                world_it->instances.end(),
+                [&](const auto& instance) {
+                    return instance.role == "server"
+                        && instance.instance_id == *parsed.replacement_owner_instance_id;
+                });
+            if (!replacement_found) {
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "400 Bad Request",
+                    "BAD_REQUEST",
+                    "replacement_owner_instance_id must reference a known same-world server instance",
+                    json_details("replacement_owner_instance_id", *parsed.replacement_owner_instance_id));
+            }
+        }
+
+        server::core::state::WorldLifecyclePolicy policy;
+        policy.draining = parsed.draining;
+        if (parsed.replacement_owner_instance_id.has_value()) {
+            policy.replacement_owner_instance_id = *parsed.replacement_owner_instance_id;
+        }
+
+        if (!redis_->set(policy_key, server::core::state::serialize_world_lifecycle_policy(policy))) {
+            world_policy_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_WRITE_FAILED",
+                "failed to persist world policy");
+        }
+        world_policy_write_total_.fetch_add(1, std::memory_order_relaxed);
+
+        const auto refreshed_worlds = collect_world_inventory(items);
+        const auto refreshed_it = std::find_if(refreshed_worlds.begin(), refreshed_worlds.end(), [&](const auto& entry) {
+            return entry.world_id == world_id;
+        });
+        if (refreshed_it == refreshed_worlds.end()) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "500 Internal Server Error",
+                "INTERNAL_ERROR",
+                "world inventory disappeared after policy write");
+        }
+
+        return json_ok(request_id, make_world_inventory_json(*refreshed_it));
     }
 
     server::core::metrics::MetricsHttpServer::RouteResponse
@@ -4269,6 +4806,9 @@ private:
         const auto world_owner_index = backend
             ? load_world_owner_index({*backend})
             : std::unordered_map<std::string, std::string>{};
+        const auto world_policy_index = backend
+            ? load_world_policy_index({*backend})
+            : std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy>{};
 
         std::ostringstream data;
         data << "{";
@@ -4292,7 +4832,7 @@ private:
             data << "\"role\":\"" << json_escape(backend->role) << "\",";
             data << "\"ready\":" << bool_json(backend->ready) << ",";
             data << "\"active_sessions\":" << backend->active_sessions << ",";
-            data << "\"world_scope\":" << make_world_scope_json(*backend, world_owner_index);
+            data << "\"world_scope\":" << make_world_scope_json(*backend, world_owner_index, world_policy_index);
             data << "}";
         } else {
             data << "null";
@@ -4432,6 +4972,7 @@ private:
             instance_records.push_back(record);
         }
         const auto world_owner_index = load_world_owner_index(instance_records);
+        const auto world_policy_index = load_world_policy_index(instance_records);
 
         std::ostringstream data;
         data << "{";
@@ -4474,7 +5015,7 @@ private:
                     data << "\"port\":" << backend.port << ",";
                     data << "\"ready\":" << bool_json(backend.ready) << ",";
                     data << "\"active_sessions\":" << backend.active_sessions << ",";
-                    data << "\"world_scope\":" << make_world_scope_json(backend, world_owner_index);
+                    data << "\"world_scope\":" << make_world_scope_json(backend, world_owner_index, world_policy_index);
                     data << "}";
                 } else {
                     data << "null";
@@ -5207,6 +5748,12 @@ private:
     std::atomic<std::uint64_t> overview_requests_total_{0};
     std::atomic<std::uint64_t> auth_context_requests_total_{0};
     std::atomic<std::uint64_t> instances_requests_total_{0};
+    std::atomic<std::uint64_t> worlds_requests_total_{0};
+    std::atomic<std::uint64_t> world_policy_requests_total_{0};
+    std::atomic<std::uint64_t> world_policy_write_total_{0};
+    std::atomic<std::uint64_t> world_policy_write_fail_total_{0};
+    std::atomic<std::uint64_t> world_policy_clear_total_{0};
+    std::atomic<std::uint64_t> world_policy_clear_fail_total_{0};
     std::atomic<std::uint64_t> instances_selector_requests_total_{0};
     std::atomic<std::uint64_t> instances_selector_mismatch_total_{0};
     std::atomic<std::uint64_t> session_lookup_requests_total_{0};

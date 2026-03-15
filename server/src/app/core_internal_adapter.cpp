@@ -16,7 +16,7 @@
 #include "server/storage/connection_pool.hpp"
 #include "server/storage/postgres/connection_pool.hpp"
 #include "server/storage/redis/factory.hpp"
-#include "server/state/redis_backend_factory.hpp"
+#include "server/core/state/redis_backend_factory.hpp"
 
 /**
  * @brief server_app와 server_core 내부 구현을 연결하는 부트스트랩 어댑터 구현부입니다.
@@ -110,7 +110,7 @@ std::shared_ptr<server::core::state::IInstanceStateBackend> make_registry_backen
         return {};
     }
 
-    return server::state::make_redis_registry_backend(redis_client, key_prefix, ttl);
+    return server::core::state::make_redis_registry_backend(redis_client, key_prefix, ttl);
 }
 
 bool connection_pool_health_check(
