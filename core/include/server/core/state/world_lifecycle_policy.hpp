@@ -8,6 +8,7 @@
 
 namespace server::core::state {
 
+/** @brief world drain/replacement owner 정책의 최소 제어면 상태입니다. */
 struct WorldLifecyclePolicy {
     bool draining{false};
     std::string replacement_owner_instance_id;
