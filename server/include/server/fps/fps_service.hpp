@@ -16,6 +16,7 @@ namespace server::core { class Session; }
 
 namespace server::app::fps {
 
+/** @brief Fixed-step accumulator that bounds catch-up work for the FPS runtime. */
 class FixedStepDriver {
 public:
     using Clock = std::chrono::steady_clock;
@@ -34,6 +35,7 @@ private:
     std::size_t max_catch_up_steps_{4};
 };
 
+/** @brief Static tuning knobs for FPS tick, interest, snapshot, and history behavior. */
 struct RuntimeConfig {
     std::uint32_t tick_rate_hz{30};
     std::uint32_t snapshot_refresh_ticks{30};
@@ -43,6 +45,7 @@ struct RuntimeConfig {
     std::uint32_t history_ticks{64};
 };
 
+/** @brief Sequenced neutral movement input staged for the next authoritative tick. */
 struct InputCommand {
     std::uint32_t input_seq{0};
     std::int32_t move_x_mm{0};
@@ -50,6 +53,7 @@ struct InputCommand {
     std::int32_t yaw_mdeg{0};
 };
 
+/** @brief Authoritative actor transform sample retained for replication and history queries. */
 struct ActorTransformSample {
     std::uint32_t actor_id{0};
     std::int32_t x_mm{0};
@@ -59,6 +63,7 @@ struct ActorTransformSample {
     std::uint32_t server_tick{0};
 };
 
+/** @brief Lightweight runtime counters exposed for verification and tests. */
 struct RuntimeSnapshot {
     std::uint32_t server_tick{0};
     std::uint64_t tick_total{0};
@@ -67,12 +72,14 @@ struct RuntimeSnapshot {
     std::size_t actor_count{0};
 };
 
+/** @brief Encoded outbound FPS replication payload targeted at one authenticated session. */
 struct OutboundMessage {
     std::uint32_t session_id{0};
     std::uint16_t msg_id{0};
     std::vector<std::uint8_t> payload;
 };
 
+/** @brief Authoritative per-tick world state, replication fanout, and history retention. */
 class WorldRuntime {
 public:
     explicit WorldRuntime(RuntimeConfig config = {});
@@ -88,11 +95,13 @@ public:
     RuntimeSnapshot snapshot() const;
 
 private:
+    /** @brief Latest staged command slot for a session before the next tick consumes it. */
     struct StagedInput {
         InputCommand input;
         bool present{false};
     };
 
+    /** @brief Mutable authoritative state for a spawned neutral actor. */
     struct ActorState {
         std::uint32_t actor_id{0};
         std::uint32_t session_id{0};
@@ -106,6 +115,7 @@ private:
         std::deque<ActorTransformSample> history;
     };
 
+    /** @brief Per-viewer replication bookkeeping for visibility and snapshot refresh. */
     struct ViewerState {
         std::optional<std::uint32_t> actor_id;
         std::set<std::uint32_t> visible_actor_ids;
@@ -131,6 +141,7 @@ private:
     std::set<std::uint32_t> removed_actor_ids_;
 };
 
+/** @brief Session-facing FPS entrypoint that decodes input and dispatches replication output. */
 class FpsService {
 public:
     using Session = server::core::Session;

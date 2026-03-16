@@ -12,6 +12,7 @@ enum class DirectEgressRoute : std::uint8_t {
     kRudp,
 };
 
+/** @brief Direct UDP/RUDP egress eligibility inputs for a backend payload. */
 struct DirectEgressContext {
     std::uint16_t msg_id{0};
     bool udp_bound{false};
