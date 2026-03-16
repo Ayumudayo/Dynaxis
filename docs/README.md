@@ -1,41 +1,61 @@
 # Documentation Index
 
 This is the canonical entrypoint for repository documentation.
-Historical proposal/report docs were pruned from the active docs tree; use the files below as the live source of truth.
+Only current-state guides, contracts, and reference docs belong here. Historical branch/tranche notes are intentionally kept in git history instead of the active docs tree.
 
-## Canonical Docs
+## Start Here
 
-- `README.md` - top-level project overview and entry links.
-- `docs/getting-started.md` - local setup and basic run flow.
-- `docs/rename_boundary.md` - canonical rename policy, affected surfaces, and allowed legacy record.
-- `docs/build.md` - build guidance.
-- `docs/configuration.md` - runtime config surface.
-- `docs/core-design.md` - core/runtime layering and composition ownership notes.
-- `docs/tests.md` - verification/test entrypoint.
-- `docs/protocol.md` - protocol overview.
-- `docs/protocol/rudp.md` - current RUDP/dual-transport behavior.
-- `docs/db/write-behind.md` - write-behind runtime and ops behavior.
-- `docs/ops/observability.md` - observability setup and dashboards.
-- `docs/ops/gateway-and-lb.md` - gateway/load-balancer operations.
-- `docs/ops/runbook.md` - current runbook-oriented operational notes.
-- `docs/ops/engine-readiness-baseline.md` - tracked checkpoint ledger for phase-by-phase engine readiness proof.
-- `docs/ops/engine-readiness-decision.md` - Phase 4 decision record for common blockers and branch readiness.
-- `docs/ops/engine-branch-cut-criteria.md` - Phase 5 criteria for FPS/MMORPG branch-cut timing and order.
-- `docs/ops/engine-roadmap-fps-charter.md` - prepared branch-start charter for the first FPS-oriented transport/runtime tranche.
-- `docs/ops/engine-roadmap-session-continuity-charter.md` - branch-start charter for the capability-first session continuity tranche.
-- `docs/ops/engine-roadmap-session-continuity-first-tranche-closure.md` - closure decision for the first session continuity tranche.
-- `docs/ops/engine-roadmap-mmorpg-charter.md` - prepared narrow charter for the next MMORPG-oriented branch after the continuity tranche merges.
-- `docs/ops/engine-roadmap-mmorpg-first-tranche-closure.md` - closure decision for the first MMORPG admission/residency tranche.
-- `docs/ops/engine-roadmap-mmorpg-world-lifecycle-charter.md` - next tranche charter for world lifecycle/control-plane orchestration on the MMORPG branch.
-- `docs/ops/session-continuity-contract.md` - current continuity ownership, resume rules, and restart proof targets.
-- `docs/ops/mmorpg-world-residency-contract.md` - current world admission, residency owner boundary, and safe fallback rules on the MMORPG branch.
-- `docs/ops/mmorpg-desired-topology-contract.md` - future pool-based desired-topology contract for live scaling work on the MMORPG branch.
-- `docs/ops/mmorpg-scaling-orchestration-charter.md` - orchestrator-agnostic charter for a future live scaling tranche on the MMORPG branch.
-- `docs/core-api/overview.md` - current public core API docs entrypoint.
+- `README.md` - repository overview and top-level entry links
+- `docs/getting-started.md` - local setup and first-run flow
+- `docs/build.md` - build and environment guidance
+- `docs/configuration.md` - runtime configuration surface
+- `docs/tests.md` - verification entrypoint and local preflight gates
+- `docs/rename_boundary.md` - rename policy and allowed legacy record
+- `docs/naming-conventions.md` - naming and commenting conventions
 
-## Tool-Specific Canonical Docs
+## Runtime And Operations
 
-- `tools/loadgen/README.md` - unified load generator usage and scenario catalog.
-- `tools/admin_app/README.md` - live admin control-plane behavior and endpoints.
-- `tools/migrations/README.md` - migration runner usage.
-- `tools/wb_worker/README.md` - write-behind worker runtime guidance.
+- `docs/core-design.md` - core/runtime layering and ownership
+- `docs/protocol.md` - protocol overview
+- `docs/protocol/snapshot.md` - room snapshot, recent-history cache, and join-to-fanout flow
+- `docs/protocol/rudp.md` - current UDP/RUDP behavior
+- `docs/db/architecture.md` - current DB/runtime storage architecture
+- `docs/db/redis-strategy.md` - current Redis cache/session/fanout strategy
+- `docs/db/migrations.md` - current migration entrypoint
+- `docs/db/write-behind.md` - write-behind runtime and operations
+- `docs/ops/observability.md` - observability setup and dashboards
+- `docs/ops/gateway-and-lb.md` - gateway and load-balancer operations
+- `docs/ops/runbook.md` - current runbook-oriented operational notes
+- `docs/ops/architecture-diagrams.md` - control-plane and failure-path diagrams
+- `docs/ops/engine-readiness-baseline.md` - accepted common-baseline checkpoint ledger
+- `docs/ops/engine-readiness-decision.md` - accepted baseline decision and downstream ownership notes
+- `docs/ops/session-continuity-contract.md` - current continuity ownership and restore rules
+- `docs/ops/mmorpg-world-residency-contract.md` - current world residency/lifecycle/runtime contract
+- `docs/ops/mmorpg-desired-topology-contract.md` - future desired-topology/orchestration contract
+- `docs/ops/fps-runtime-contract.md` - current FPS transport/runtime substrate contract
+
+## Extensibility
+
+- `docs/extensibility/overview.md` - current extensibility capability overview and entrypoints
+- `docs/extensibility/governance.md` - ownership and compatibility rules
+- `docs/extensibility/control-plane-api.md` - admin/control-plane API contract
+- `docs/extensibility/conflict-policy.md` - rollout/conflict policy
+- `docs/extensibility/plugin-quickstart.md` - plugin quickstart
+- `docs/extensibility/lua-quickstart.md` - Lua quickstart
+- `docs/extensibility/recipes.md` - implementation and rollout recipes
+
+## Core API
+
+- `docs/core-api/overview.md` - public `server_core` API entrypoint
+- `docs/core-api/quickstart.md` - minimal consumer setup
+- `docs/core-api/compatibility-policy.md` - compatibility rules
+- `docs/core-api/checklists.md` - review and release checklists
+- `docs/core-api/extensions.md` - extensibility-related public API notes
+
+## Tooling
+
+- `tools/README.md` - tool entry index
+- `tools/loadgen/README.md` - load generator scenarios and transport proof catalog
+- `tools/admin_app/README.md` - admin control-plane behavior and endpoints
+- `tools/migrations/README.md` - migration runner usage
+- `tools/wb_worker/README.md` - write-behind worker runtime guidance

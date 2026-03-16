@@ -8,6 +8,16 @@
 - **운영 표준화**: CrashHandler, ServiceRegistry, metrics exporter 등 운영 필수 기능을 기본 제공한다.
 - **테스트 용이성**: ServiceRegistry와 추상화 레이어 덕분에 gRPC/DB/Redis 컴포넌트를 쉽게 mock 할 수 있다.
 
+## 1.1 식별자(Identity) 계약
+
+- 시스템 식별자는 UUID를 기준으로 한다:
+  - `user_id`
+  - `room_id`
+  - `session_id`
+- 이름(`user.name`, `room.name`)은 라벨이며, 프로토콜/키/저장소의 canonical 식별자가 아니다.
+- 프로토콜, Redis 키, 저장소 조인 경계에서는 이름 의존 대신 UUID를 우선 사용한다.
+- 룸/사용자/세션의 검색 편의는 이름 인덱스로 해결하고, 정합성은 UUID에 의존한다.
+
 ## 2. 주요 모듈
 ### 2.1 네트워크(`core::net`)
 - `Hive`/`SessionListener`/`Session` 조합은 `server_app` 중심으로 사용한다.
@@ -87,6 +97,7 @@
 - PowerShell/Bash smoke 스크립트(`scripts/smoke_*.ps1`)로 Redis·Write-behind 경로를 CI에 포함한다.
 
 ## 6. 참고 문서
-- 전체 아키텍처: `docs/server-architecture.md`
+- 저장소 개요: `README.md`
+- 운영 토폴로지/다이어그램: `docs/ops/gateway-and-lb.md`, `docs/ops/architecture-diagrams.md`
 - Gateway & HAProxy 운영: `docs/ops/gateway-and-lb.md`
 - Redis/Write-behind 전략: `docs/db/redis-strategy.md`, `docs/db/write-behind.md`

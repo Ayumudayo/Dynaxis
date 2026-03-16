@@ -1,58 +1,53 @@
 # Engine Readiness Baseline Checkpoints
 
-This document is the closed checkpoint ledger for the accepted `engine-readiness-baseline` branch.
-
-The detailed working runbooks and raw artifact notes live under local-only `tasks/` and ignored `build/engine-readiness/`.
-This file exists so the accepted common-baseline evidence remains visible after downstream branches move on.
+This document records the accepted common-baseline evidence that was established before the downstream continuity/MMORPG/FPS tranches merged.
+The baseline itself is closed; this file remains as the retained checkpoint ledger.
 
 ## Baseline Status
 
 - `accepted shared-proof baseline`: yes
-- `ready to branch`: yes
-- `preferred first downstream genre branch`: `engine-roadmap-mmorpg`
-- remaining restart/backlog caveats are deferred follow-up, not active baseline blockers
+- `branch split`: completed historically
+- `downstream work on top of the baseline`: merged into `main`
+- remaining restart/backlog caveats are follow-up quality concerns, not baseline blockers
 
 ## Historical Execution Rule
 
-- Checkpoints were executed strictly in runbook order.
-- Each completed checkpoint was kept small enough to be committed independently.
-- The run root under `build/engine-readiness/<run_id>/` is the raw evidence bundle for the matching checkpoint summary here.
+- checkpoints were executed in bounded, reviewable slices
+- raw evidence lived under `build/engine-readiness/<run_id>/`
+- detailed working notes were kept in local-only `tasks/`
 
-## Phase 3 Checkpoints
+## Checkpoint Ledger
 
 | Order | Checkpoint | Run Root | Verdict | Key Outcome |
 | --- | --- | --- | --- | --- |
 | 1 | Control baseline rerun | `build/engine-readiness/20260312-0228-control-baseline/` | pass | TCP/UDP/RUDP control comparator stayed clean enough to begin failure/recovery rehearsals. |
 | 2 | Redis outage/recovery | `build/engine-readiness/20260314-0150-redis-recovery/` | pass with caveat | gateway/server degraded visibly and recovered automatically; worker Redis outage signaling stayed weaker than gateway/server signaling. |
-| 3 | Postgres outage/recovery | `build/engine-readiness/20260314-0155-postgres-recovery/` | pass | server/worker advertised DB degradation cleanly, worker retry/reconnect signals were explicit, and recovery completed automatically. |
-| 4 | gateway restart during live traffic | `build/engine-readiness/20260314-0212-gateway-restart/` | pass with caveat | stack recovered and new traffic stayed routable, but the live soak recorded `24` disconnects / `24` errors for sessions on the restarted gateway. |
-| 5 | server restart during live traffic | `build/engine-readiness/20260314-0216-server-restart/` | pass with caveat | stack recovered and probes kept passing, but the live soak recorded `26` disconnects / `26` errors for sessions routed to the restarted backend. |
-| 6 | worker restart during backlog processing | `build/engine-readiness/20260314-0219-worker-restart/` | pass with caveat | user-facing chat stayed clean and the worker drained backlog after restart, but backlog visibility came from flush logs more than from `wb_pending`/ready metrics. |
-| 7 | overload/backpressure rehearsal | `build/engine-readiness/20260314-0223-overload-rehearsal/` | fail | Initial rehearsal was later superseded: concurrent loadgen runs reused the same login IDs and produced an invalid duplicate-login collapse. |
+| 3 | Postgres outage/recovery | `build/engine-readiness/20260314-0155-postgres-recovery/` | pass | server/worker advertised DB degradation cleanly and recovered automatically. |
+| 4 | gateway restart during live traffic | `build/engine-readiness/20260314-0212-gateway-restart/` | pass with caveat | stack recovered and new traffic stayed routable, but sessions on the restarted gateway were lost. |
+| 5 | server restart during live traffic | `build/engine-readiness/20260314-0216-server-restart/` | pass with caveat | stack recovered and probes kept passing, but sessions on the restarted backend were lost. |
+| 6 | worker restart during backlog processing | `build/engine-readiness/20260314-0219-worker-restart/` | pass with caveat | backlog drained after restart, though visibility was stronger in flush logs than in backlog-depth metrics. |
+| 7 | overload/backpressure rehearsal | `build/engine-readiness/20260314-0223-overload-rehearsal/` | superseded | initial run was invalidated by duplicate-login collisions across concurrent loadgen processes. |
+| 8 | Redis worker degraded-state remediation | `build/engine-readiness/20260314-024138-redis-remediation/` | pass | worker Redis dependency signaling became explicit and aligned with gateway/server behavior. |
+| 9 | overload/backpressure remediation rerun | `build/engine-readiness/20260314-025202-overload-remediation-v3/` | pass | identity-safe rerun completed with `0` login failures and `0` total errors. |
 
-## Phase 6 Remediation Checkpoints
+## Accepted Conclusion
 
-| Order | Checkpoint | Run Root | Verdict | Key Outcome |
-| --- | --- | --- | --- | --- |
-| 8 | Redis worker degraded-state remediation | `build/engine-readiness/20260314-024138-redis-remediation/` | pass | `wb_worker` now drops to `503 not ready: deps=redis` during outage, flips `runtime_dependency_ready{name="redis",required="true"}` to `0`, and recovers automatically after Redis restart. |
-| 9 | overload/backpressure remediation rerun | `build/engine-readiness/20260314-025202-overload-remediation-v3/` | pass | Identity-safe `8 x steady_chat` completed with `192` connected / authenticated / joined sessions, `0` login failures, and `0` total errors; both servers handled live traffic. |
+- the shared baseline was accepted on 2026-03-14
+- later downstream work was allowed to proceed without reopening common-baseline blockers
+- the following downstream lines have since merged:
+  - session continuity substrate
+  - MMORPG world residency/lifecycle substrate
+  - FPS transport/runtime substrate
 
 ## Deferred Caveats
 
-- Gateway restart currently causes bounded session loss rather than transparent continuity for in-flight sessions behind the restarted instance.
-- Server restart currently causes bounded backend-session loss rather than transparent continuity for in-flight sessions routed through the restarted instance.
-- Worker restart recovery is visible, but backlog depth signaling is still weaker than ideal because `wb_pending` did not spike in the sampled window.
+- transparent in-flight continuity across gateway/server restart remained deferred beyond the baseline bar
+- worker backlog-depth visibility remained weaker than ideal
+- gameplay-grade UDP/RUDP maturity remained a downstream FPS concern rather than a common-baseline blocker
 
-## Accepted Baseline Output
+## Related Docs
 
-- `ready to branch`: yes
-- `reason`: the remaining shared-runtime caveats are bounded restart/backlog-visibility concerns, not baseline blockers; the previous overload blocker was closed by fixing concurrent loadgen identity collisions and tightening gateway equal-load backend selection.
-- detailed Phase 4 decision: `docs/ops/engine-readiness-decision.md`
-- Phase 5 branch-cut criteria: `docs/ops/engine-branch-cut-criteria.md`
-- historical preferred first genre branch after the capability-first tranche: `engine-roadmap-mmorpg`
-
-## Downstream Follow-Up Ownership
-
-- transparent in-flight continuity caveats belong to downstream session-continuity / MMORPG work, not to this closed baseline ledger
-- gameplay-grade UDP/RUDP follow-up belongs to downstream FPS work, not to this closed baseline ledger
-- no further checkpoints are planned here unless a later branch exposes a new shared blocker that invalidates the accepted baseline
+- `docs/ops/engine-readiness-decision.md`
+- `docs/ops/session-continuity-contract.md`
+- `docs/ops/mmorpg-world-residency-contract.md`
+- `docs/ops/fps-runtime-contract.md`

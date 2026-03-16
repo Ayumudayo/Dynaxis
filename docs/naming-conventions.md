@@ -104,7 +104,7 @@ scripts/...                   # 빌드/운영 스크립트
 - **알람/대시보드**: Grafana 패널명은 기능 중심("Gateway Sessions Active", "Write-behind Commit Latency")으로 작성한다.
 
 ## 9. 문서/산출물
-- 문서 파일명은 소문자 snake_case (`docs/ops/fallback-and-alerts.md`, `docs/chat/recent-history.md`).
+- 문서 파일명은 소문자 snake_case (`docs/ops/fallback-and-alerts.md`, `docs/protocol/snapshot.md`).
 - README는 `<project>/README.md` 형식을 유지하고, 최상위 제목은 역할 중심(`server_core`, `gateway_app`)으로 맞춘다.
 
 ## 10. 명명 체크리스트
