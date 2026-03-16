@@ -2,6 +2,8 @@
 
 이 문서는 plugin/Lua extensibility를 `server_core`의 **platform capability**로 다루기 위한 현재 거버넌스 규칙을 정의한다.
 
+현재 상태와 entrypoint는 `docs/extensibility/overview.md`를 기준으로 본다.
+
 핵심 분류:
 
 - `core/include/server/core/plugin/*`, `core/include/server/core/scripting/*`는 서비스 재사용을 위한 메커니즘 계층이다.

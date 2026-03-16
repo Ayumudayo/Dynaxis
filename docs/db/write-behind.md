@@ -142,6 +142,24 @@
 ## 모니터링
 - 레이턴시 p50/p95, 배치 크기, 커밋율, 실패율, 재시도/펜딩 길이, DLQ 길이
 
+## DLQ Replay Operations
+
+- `wb_worker`가 실패 이벤트를 DLQ로 보낼 때, `wb_dlq_replayer`가 후속 재처리를 담당한다.
+- 핵심 설정:
+  - `WB_DLQ_STREAM`
+  - `WB_RETRY_MAX`
+  - `WB_RETRY_BACKOFF_MS`
+- 운영 흐름:
+  1. DLQ에서 오래된 항목을 읽는다.
+  2. 재시도 예산 이내면 재처리한다.
+  3. 성공 시 정리하고, 실패 시 재시도 카운트를 증가시킨다.
+  4. 예산을 초과한 항목은 dead stream 또는 명시적 운영자 검토 대상으로 넘긴다.
+- 모니터링 포인트:
+  - DLQ backlog length
+  - replay success/retry/dead counters
+  - 원인 로그(SQL/네트워크/validation failure)
+- 운영자는 DLQ 급증 시 DB 가용성, 최근 배포 변경, payload 손상 여부를 먼저 본다.
+
 ## 점진 도입 전략
 - 1단계: write-through + cache-aside(기본)
 - 2단계: 비핵심 이벤트부터 write-behind(typing/presence/acks)

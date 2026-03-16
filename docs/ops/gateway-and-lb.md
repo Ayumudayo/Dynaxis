@@ -16,6 +16,11 @@ Client --TCP--> HAProxy --TCP--> Gateway --TCP--> server_app
 3. Gateway는 선택된 backend로 TCP 연결(`BackendConnection`)을 생성하고 payload를 중계한다.
 4. Sticky routing은 Redis SessionDirectory(`gateway/session/<client_id>`)를 통해 유지된다.
 
+server 역할 요약:
+
+- `server_app`은 chat/runtime state, Redis Pub/Sub fanout, Redis Streams write-behind 발행을 소유한다.
+- gateway/L4 계층은 연결과 라우팅을 담당하고, room/runtime state는 server가 소유한다.
+
 > 구현 경계: shared instance-discovery contract(`InstanceRecord`, selector, backend interface)는 `server_core`의 internal `core::state`에 있고, Redis registry adapter는 `server_state`, sticky `SessionDirectory` 구현은 `gateway`에 남아 있다.
 
 ## 2. Gateway 세부

@@ -191,6 +191,6 @@ Response 202:
 
 ## 6) Related Documents
 
-- `docs/runtime-extensibility-plan.md`
+- `docs/extensibility/overview.md`
 - `docs/extensibility/conflict-policy.md`
 - `docs/extensibility/recipes.md`

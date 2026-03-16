@@ -93,9 +93,40 @@
 - 플러그인 로더 동작 변경은 운영 안전성(lock/sentinel, reload 의미)을 유지하거나 명시적 마이그레이션 가이드를 포함해야 합니다.
 - Lua host API 또는 `ctx` 필드 의미를 깨는 변경도 동일한 수준의 마이그레이션 노트를 요구합니다.
 
-## 다음 계약 후보(설계 목표)
-- Gateway 확장 인터페이스 설계: `docs/core-api/gateway-extension-interface.md`
-- Write-behind 확장 인터페이스 설계: `docs/core-api/write-behind-extension-interface.md`
+## Future Candidate Surfaces
+
+이 항목들은 현재 구현된 공개 계약이 아니라, 향후 확장 가능성 후보를 추적하기 위한 메모다.
+active docs tree에서는 별도 leaf 문서를 두지 않고 여기서만 유지한다.
+
+### Gateway-side candidates
+
+- routing policy hook
+  - frontend session metadata와 backend 후보 집합을 받아 선택 backend를 반환하는 후보
+- admission policy hook
+  - 연결 메타데이터를 받아 allow/deny와 사유 코드를 반환하는 후보
+- session lifecycle hook
+  - connect/disconnect/reconnect 이벤트에 대한 관측/정책 후보
+
+원칙:
+
+- 요청 경로에서 실행되는 훅은 논블로킹이어야 한다.
+- 실패/타임아웃 시 gateway는 내장 기본 정책으로 폴백해야 한다.
+- Stable 승급 전에는 입력 DTO, 결과 스키마, timeout 의미를 고정해야 한다.
+
+### Write-behind candidates
+
+- pre-write transform hook
+  - 디코딩된 stream event를 변환하는 후보
+- filter hook
+  - DB write 전 keep/drop 결정을 내리는 후보
+- failure classification hook
+  - write/validation 실패를 retry/DLQ/drop 정책으로 매핑하는 후보
+
+원칙:
+
+- 훅 실패 시 기존 write-behind 오류 정책(`WB_ACK_ON_ERROR`, DLQ 설정)으로 보수적 폴백을 유지해야 한다.
+- drop/fallback 결정은 이유 태그가 포함된 관측 신호를 남겨야 한다.
+- Stable 승급 전에는 고정 event DTO와 결과 스키마가 필요하다.
 
 ## 이번 단계 비목표
 - 새 런타임 확장 메커니즘 구현 없음

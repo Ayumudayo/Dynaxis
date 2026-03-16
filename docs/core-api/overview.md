@@ -28,8 +28,22 @@
 - 구현 경로(`core/src/**`)나 `Internal` 헤더를 포함하지 않습니다.
 - 내부 헤더 목록은 `docs/core-api-boundary.md`에서만 관리합니다.
 
+## 현재 사용 지침
+
+- Concurrency surface는 현재 `TaskScheduler`, `JobQueue`, `ThreadManager`의 기본 계약만 유지한다.
+  - `TaskScheduler`는 호출자가 poll 루프와 실행 주기를 직접 소유한다.
+  - `JobQueue`와 `ThreadManager`는 명시적 종료 순서를 전제로 한다.
+  - 내부 큐 구성요소는 런타임 배선용이며 공개 예제 surface로 취급하지 않는다.
+- Extensibility 관련 미래 후보는 별도 candidate 문서가 아니라 `docs/core-api/extensions.md`의 "future candidate surfaces" 아래에서만 추적한다.
+
 ## 관련 문서
 - 경계 정의: `docs/core-api-boundary.md`
 - 호환성 정책: `docs/core-api/compatibility-policy.md`
 - 채택/컷오버: `docs/core-api/adoption-cutover.md`
 - 빠른 시작: `docs/core-api/quickstart.md`
+- 리뷰/릴리스 체크리스트: `docs/core-api/checklists.md`
+- 세부 가이드:
+  - `docs/core-api/net.md`
+  - `docs/core-api/metrics-and-lifecycle.md`
+  - `docs/core-api/storage.md`
+  - `docs/core-api/extensions.md`
