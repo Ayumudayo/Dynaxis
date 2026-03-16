@@ -1,5 +1,6 @@
 import argparse
 import hashlib
+import json
 import subprocess
 import time
 import urllib.error
@@ -10,7 +11,15 @@ from session_continuity_common import ChatClient
 from session_continuity_common import MSG_CHAT_SEND
 from session_continuity_common import lp_utf8
 from session_continuity_common import read_metric_sum
+from session_continuity_common import read_metric_sum_labeled
 from session_continuity_common import MSG_ERR
+from stack_topology import ensure_stack_topology_artifacts
+from stack_topology import first_server_for_other_world
+from stack_topology import GENERATED_COMPOSE_PATH
+from stack_topology import same_world_peer
+from stack_topology import server_by_instance
+from stack_topology import server_metrics_ports
+from stack_topology import server_ready_ports
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_PROJECT_DIR = REPO_ROOT / "docker" / "stack"
@@ -22,16 +31,25 @@ RESUME_LOCATOR_PREFIX = SESSION_DIRECTORY_PREFIX + "locator/"
 CONTINUITY_WORLD_PREFIX = "dynaxis:continuity:world:"
 CONTINUITY_WORLD_OWNER_PREFIX = "dynaxis:continuity:world-owner:"
 ROOM_MISMATCH_ERRC = 0x0106
+ADMIN_BASE_URL = "http://127.0.0.1:39200"
 
 GATEWAY_READY_PORTS = {
     "gateway-1": 36001,
     "gateway-2": 36002,
 }
 
-SERVER_READY_PORTS = {
-    "server-1": 39091,
-    "server-2": 39092,
-}
+TOPOLOGY = ensure_stack_topology_artifacts()
+SERVER_READY_PORTS = server_ready_ports(TOPOLOGY)
+SERVER_METRICS_PORTS = server_metrics_ports(TOPOLOGY)
+GATEWAY_METRICS_PORTS = (36001, 36002)
+PRIMARY_SERVER_ID = "server-1"
+PRIMARY_SERVER = server_by_instance(TOPOLOGY, PRIMARY_SERVER_ID)
+if PRIMARY_SERVER is None:
+    raise RuntimeError("active topology does not define server-1")
+PRIMARY_WORLD_ID = str(PRIMARY_SERVER["world_id"])
+PRIMARY_WORLD_SHARD = str(PRIMARY_SERVER["shard"])
+FALLBACK_SERVER = first_server_for_other_world(TOPOLOGY, PRIMARY_WORLD_ID)
+SAME_WORLD_PEER = same_world_peer(TOPOLOGY, PRIMARY_SERVER_ID, PRIMARY_WORLD_ID)
 
 
 def compose_base_args() -> list[str]:
@@ -44,6 +62,8 @@ def compose_base_args() -> list[str]:
         str(COMPOSE_PROJECT_DIR),
         "-f",
         str(COMPOSE_FILE),
+        "-f",
+        str(GENERATED_COMPOSE_PATH),
     ]
     if COMPOSE_ENV_FILE.exists():
         args.extend(["--env-file", str(COMPOSE_ENV_FILE)])
@@ -76,6 +96,35 @@ def redis_del(key: str) -> None:
 
 def redis_setex(key: str, ttl_sec: int, value: str) -> None:
     run_compose("exec", "-T", "redis", "redis-cli", "SETEX", key, str(ttl_sec), value)
+
+def admin_request_json(path: str, method: str = "GET", body_obj=None):
+    payload_bytes = None
+    headers = {}
+    if body_obj is not None:
+        payload_bytes = json.dumps(body_obj).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+        headers["Content-Length"] = str(len(payload_bytes))
+
+    req = urllib.request.Request(
+        f"{ADMIN_BASE_URL}{path}",
+        method=method,
+        headers=headers,
+        data=payload_bytes,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5.0) as response:
+            status = response.status
+            content_type = response.getheader("Content-Type", "")
+            body = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        content_type = exc.headers.get("Content-Type", "")
+        body = exc.read().decode("utf-8", errors="replace")
+
+    payload = None
+    if body and "application/json" in content_type:
+        payload = json.loads(body)
+    return status, payload
 
 
 def make_resume_routing_key(resume_token: str) -> str:
@@ -167,15 +216,44 @@ def wait_for_redis_value(key: str, timeout_sec: float = 10.0) -> str:
     return redis_get(key)
 
 
+def read_world_restore_reason_metric(reason: str) -> float:
+    return read_metric_sum_labeled(
+        "chat_continuity_world_restore_fallback_reason_total",
+        {"reason": reason},
+        ports=SERVER_METRICS_PORTS,
+    )
+
+
+def require_fallback_server() -> dict:
+    if FALLBACK_SERVER is None:
+        raise RuntimeError(
+            f"active topology does not define a fallback server outside world {PRIMARY_WORLD_ID}"
+        )
+    return FALLBACK_SERVER
+
+
+def require_same_world_peer_server() -> dict:
+    if SAME_WORLD_PEER is None:
+        raise RuntimeError(
+            f"active topology does not define a same-world peer for {PRIMARY_SERVER_ID} in {PRIMARY_WORLD_ID}"
+        )
+    return SAME_WORLD_PEER
+
+
 def acquire_session_for_backend(target_backend: str, host: str, port: int, prefix: str) -> tuple[ChatClient, dict, str]:
-    for attempt in range(1, 9):
+    observed_backends: list[str] = []
+    for attempt in range(1, 25):
         user = f"{prefix}_{int(time.time())}_{attempt}"
         client, login = connect_and_login(user, "", host, port)
         backend = current_backend_for_user(user)
         if backend == target_backend:
             return client, login, user
+        if backend:
+            observed_backends.append(backend)
         client.close()
-    raise RuntimeError(f"failed to land on backend {target_backend}")
+    raise RuntimeError(
+        f"failed to land on backend {target_backend}; observed={observed_backends}"
+    )
 
 
 def resume_until_success(host: str,
@@ -258,22 +336,22 @@ def run_server_restart() -> None:
     gateway_host = "127.0.0.1"
     gateway_port = 36101
 
-    first, login, user = acquire_session_for_backend("server-1", gateway_host, gateway_port, "verify_resume_server")
+    first, login, user = acquire_session_for_backend(PRIMARY_SERVER_ID, gateway_host, gateway_port, "verify_resume_server")
     second = ChatClient(host=gateway_host, port=gateway_port)
     try:
         logical_session_id, resume_token = assert_initial_login(login, user)
         first.join_room(room, user)
 
-        print("Restarting server-1 and waiting for continuity resume...")
+        print(f"Restarting {PRIMARY_SERVER_ID} and waiting for continuity resume...")
         backend_before = wait_for_redis_value(f"{SESSION_DIRECTORY_PREFIX}{user}")
         alias_backend_before = wait_for_redis_value(f"{SESSION_DIRECTORY_PREFIX}{make_resume_routing_key(resume_token)}")
-        if backend_before != "server-1":
-            raise AssertionError(f"session was not attached to server-1 before restart: {backend_before}")
-        if alias_backend_before != "server-1":
-            raise AssertionError(f"resume alias was not attached to server-1 before restart: {alias_backend_before}")
+        if backend_before != PRIMARY_SERVER_ID:
+            raise AssertionError(f"session was not attached to {PRIMARY_SERVER_ID} before restart: {backend_before}")
+        if alias_backend_before != PRIMARY_SERVER_ID:
+            raise AssertionError(f"resume alias was not attached to {PRIMARY_SERVER_ID} before restart: {alias_backend_before}")
 
-        restart_service("server-1")
-        wait_ready(SERVER_READY_PORTS["server-1"])
+        restart_service(PRIMARY_SERVER_ID)
+        wait_ready(SERVER_READY_PORTS[PRIMARY_SERVER_ID])
         first.close()
 
         second, resumed = resume_until_success(gateway_host, gateway_port, resume_token, user, logical_session_id)
@@ -300,11 +378,11 @@ def run_locator_fallback() -> None:
     gateway_host = "127.0.0.1"
     gateway_port = 36101
 
-    first, login, user = acquire_session_for_backend("server-1", gateway_host, gateway_port, "verify_resume_locator")
+    first, login, user = acquire_session_for_backend(PRIMARY_SERVER_ID, gateway_host, gateway_port, "verify_resume_locator")
     second = ChatClient(host="127.0.0.1", port=36100)
     try:
         logical_session_id, resume_token = assert_initial_login(login, user)
-        if login["world_id"] != "starter-a":
+        if login["world_id"] != PRIMARY_WORLD_ID:
             raise AssertionError(f"unexpected initial world residency: {login}")
         first.join_room(room, user)
 
@@ -316,11 +394,11 @@ def run_locator_fallback() -> None:
         alias_backend_before = wait_for_redis_value(alias_key)
         locator_before = wait_for_redis_value(locator_key)
         locator_fields = parse_locator_payload(locator_before)
-        if alias_backend_before != "server-1":
-            raise AssertionError(f"resume alias was not attached to server-1 before locator fallback: {alias_backend_before}")
-        if locator_fields.get("shard") != "stack-shard-a":
+        if alias_backend_before != PRIMARY_SERVER_ID:
+            raise AssertionError(f"resume alias was not attached to {PRIMARY_SERVER_ID} before locator fallback: {alias_backend_before}")
+        if locator_fields.get("shard") != PRIMARY_WORLD_SHARD:
             raise AssertionError(f"resume locator hint did not capture shard boundary: {locator_before!r}")
-        if locator_fields.get("world_id") != "starter-a":
+        if locator_fields.get("world_id") != PRIMARY_WORLD_ID:
             raise AssertionError(f"resume locator hint did not capture world admission metadata: {locator_before!r}")
 
         routing_hit_before = read_metric_sum("gateway_resume_routing_hit_total")
@@ -338,7 +416,7 @@ def run_locator_fallback() -> None:
         second.wait_for_self_chat(room, message, 5.0)
 
         alias_backend_after = wait_for_redis_value(alias_key)
-        if alias_backend_after != "server-1":
+        if alias_backend_after != PRIMARY_SERVER_ID:
             raise AssertionError(
                 f"locator fallback did not restore the same shard/backend boundary: before={alias_backend_before} after={alias_backend_after}"
             )
@@ -375,25 +453,29 @@ def run_world_residency_fallback() -> None:
     gateway_host = "127.0.0.1"
     gateway_port = 36101
 
-    first, login, user = acquire_session_for_backend("server-1", gateway_host, gateway_port, "verify_resume_world")
+    first, login, user = acquire_session_for_backend(PRIMARY_SERVER_ID, gateway_host, gateway_port, "verify_resume_world")
     second = ChatClient(host="127.0.0.1", port=36100)
     try:
         logical_session_id, resume_token = assert_initial_login(login, user)
-        if login["world_id"] != "starter-a":
+        if login["world_id"] != PRIMARY_WORLD_ID:
             raise AssertionError(f"unexpected initial world residency: {login}")
         first.join_room(room, user)
 
         world_key = f"{CONTINUITY_WORLD_PREFIX}{logical_session_id}"
         print("Dropping persisted world residency and forcing safe fallback...")
-        if wait_for_redis_value(world_key) != "starter-a":
-            raise AssertionError("world residency key did not persist starter-a before fallback proof")
+        if wait_for_redis_value(world_key) != PRIMARY_WORLD_ID:
+            raise AssertionError(f"world residency key did not persist {PRIMARY_WORLD_ID} before fallback proof")
 
-        fallback_before = read_metric_sum("chat_continuity_world_restore_fallback_total", ports=(39091, 39092))
+        fallback_before = read_metric_sum(
+            "chat_continuity_world_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        missing_world_before = read_world_restore_reason_metric("missing_world")
         redis_del(world_key)
         first.close()
 
         second, resumed = resume_until_success("127.0.0.1", 36100, resume_token, user, logical_session_id)
-        if resumed["world_id"] != "starter-a":
+        if resumed["world_id"] != PRIMARY_WORLD_ID:
             raise AssertionError(f"world residency fallback did not land on safe default world: {resumed}")
 
         second.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8("should_fail_after_world_fallback"))
@@ -403,16 +485,26 @@ def run_world_residency_fallback() -> None:
                 f"world fallback did not reset room residency to lobby: code={error_code} message={error_message!r}"
             )
 
-        fallback_after = read_metric_sum("chat_continuity_world_restore_fallback_total", ports=(39091, 39092))
+        fallback_after = read_metric_sum(
+            "chat_continuity_world_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        missing_world_after = read_world_restore_reason_metric("missing_world")
         if fallback_after <= fallback_before:
             raise AssertionError(
                 f"world restore fallback metric did not increase: before={fallback_before} after={fallback_after}"
+            )
+        if missing_world_after <= missing_world_before:
+            raise AssertionError(
+                "world restore missing_world reason metric did not increase: "
+                f"before={missing_world_before} after={missing_world_after}"
             )
 
         print(
             "PASS world-residency-fallback: "
             f"logical_session_id={logical_session_id} world_id={resumed['world_id']} "
-            f"fallback_delta={fallback_after - fallback_before:.0f}"
+            f"fallback_delta={fallback_after - fallback_before:.0f} "
+            f"reason_delta={missing_world_after - missing_world_before:.0f}"
         )
     finally:
         first.close()
@@ -424,27 +516,36 @@ def run_world_owner_fallback() -> None:
     gateway_host = "127.0.0.1"
     gateway_port = 36101
 
-    first, login, user = acquire_session_for_backend("server-1", gateway_host, gateway_port, "verify_resume_world_owner")
+    fallback_server = require_fallback_server()
+    first, login, user = acquire_session_for_backend(PRIMARY_SERVER_ID, gateway_host, gateway_port, "verify_resume_world_owner")
     second = ChatClient(host="127.0.0.1", port=36100)
     try:
         logical_session_id, resume_token = assert_initial_login(login, user)
-        if login["world_id"] != "starter-a":
+        if login["world_id"] != PRIMARY_WORLD_ID:
             raise AssertionError(f"unexpected initial world residency: {login}")
         first.join_room(room, user)
 
         world_owner_key = f"{CONTINUITY_WORLD_OWNER_PREFIX}{login['world_id']}"
         print("Overwriting persisted world owner and forcing safe fallback...")
-        if wait_for_redis_value(world_owner_key) != "server-1":
-            raise AssertionError("world owner key did not persist server-1 before fallback proof")
+        if wait_for_redis_value(world_owner_key) != PRIMARY_SERVER_ID:
+            raise AssertionError(f"world owner key did not persist {PRIMARY_SERVER_ID} before fallback proof")
 
-        fallback_before = read_metric_sum("chat_continuity_world_owner_restore_fallback_total", ports=(39091, 39092))
-        redis_setex(world_owner_key, 900, "server-2")
-        if wait_for_redis_value(world_owner_key) != "server-2":
+        world_fallback_before = read_metric_sum(
+            "chat_continuity_world_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        owner_fallback_before = read_metric_sum(
+            "chat_continuity_world_owner_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        owner_mismatch_before = read_world_restore_reason_metric("owner_mismatch")
+        redis_setex(world_owner_key, 900, str(fallback_server["instance_id"]))
+        if wait_for_redis_value(world_owner_key) != str(fallback_server["instance_id"]):
             raise AssertionError("world owner key did not update to mismatched owner before fallback proof")
         first.close()
 
         second, resumed = resume_until_success("127.0.0.1", 36100, resume_token, user, logical_session_id)
-        if resumed["world_id"] != "starter-a":
+        if resumed["world_id"] != PRIMARY_WORLD_ID:
             raise AssertionError(f"world owner fallback did not land on safe default world: {resumed}")
 
         second.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8("should_fail_after_world_owner_fallback"))
@@ -454,14 +555,33 @@ def run_world_owner_fallback() -> None:
                 f"world owner fallback did not reset room residency to lobby: code={error_code} message={error_message!r}"
             )
 
-        fallback_after = read_metric_sum("chat_continuity_world_owner_restore_fallback_total", ports=(39091, 39092))
-        if fallback_after <= fallback_before:
+        world_fallback_after = read_metric_sum(
+            "chat_continuity_world_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        owner_fallback_after = read_metric_sum(
+            "chat_continuity_world_owner_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        owner_mismatch_after = read_world_restore_reason_metric("owner_mismatch")
+        if world_fallback_after <= world_fallback_before:
             raise AssertionError(
-                f"world owner restore fallback metric did not increase: before={fallback_before} after={fallback_after}"
+                "world restore fallback metric did not increase during owner mismatch fallback: "
+                f"before={world_fallback_before} after={world_fallback_after}"
+            )
+        if owner_fallback_after <= owner_fallback_before:
+            raise AssertionError(
+                "world owner restore fallback metric did not increase: "
+                f"before={owner_fallback_before} after={owner_fallback_after}"
+            )
+        if owner_mismatch_after <= owner_mismatch_before:
+            raise AssertionError(
+                "world restore owner_mismatch reason metric did not increase: "
+                f"before={owner_mismatch_before} after={owner_mismatch_after}"
             )
 
         world_owner_after = wait_for_redis_value(world_owner_key)
-        if world_owner_after != "server-1":
+        if world_owner_after != PRIMARY_SERVER_ID:
             raise AssertionError(
                 f"world owner key was not rewritten to the current backend owner: {world_owner_after!r}"
             )
@@ -469,11 +589,471 @@ def run_world_owner_fallback() -> None:
         print(
             "PASS world-owner-fallback: "
             f"logical_session_id={logical_session_id} world_id={resumed['world_id']} "
-            f"fallback_delta={fallback_after - fallback_before:.0f}"
+            f"world_fallback_delta={world_fallback_after - world_fallback_before:.0f} "
+            f"owner_fallback_delta={owner_fallback_after - owner_fallback_before:.0f} "
+            f"reason_delta={owner_mismatch_after - owner_mismatch_before:.0f}"
         )
     finally:
         first.close()
         second.close()
+
+
+def run_world_owner_missing_fallback() -> None:
+    room = f"resume_world_owner_missing_room_{int(time.time())}"
+    gateway_host = "127.0.0.1"
+    gateway_port = 36101
+
+    first, login, user = acquire_session_for_backend(
+        PRIMARY_SERVER_ID,
+        gateway_host,
+        gateway_port,
+        "verify_resume_world_owner_missing",
+    )
+    second = ChatClient(host="127.0.0.1", port=36100)
+    try:
+        logical_session_id, resume_token = assert_initial_login(login, user)
+        if login["world_id"] != PRIMARY_WORLD_ID:
+            raise AssertionError(f"unexpected initial world residency: {login}")
+        first.join_room(room, user)
+
+        world_owner_key = f"{CONTINUITY_WORLD_OWNER_PREFIX}{login['world_id']}"
+        print("Deleting persisted world owner and forcing safe fallback...")
+        if wait_for_redis_value(world_owner_key) != PRIMARY_SERVER_ID:
+            raise AssertionError(f"world owner key did not persist {PRIMARY_SERVER_ID} before missing-owner proof")
+
+        world_fallback_before = read_metric_sum(
+            "chat_continuity_world_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        owner_fallback_before = read_metric_sum(
+            "chat_continuity_world_owner_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        missing_owner_before = read_world_restore_reason_metric("missing_owner")
+        redis_del(world_owner_key)
+        if redis_get(world_owner_key):
+            raise AssertionError("world owner key still exists after delete")
+        first.close()
+
+        second, resumed = resume_until_success("127.0.0.1", 36100, resume_token, user, logical_session_id)
+        if resumed["world_id"] != PRIMARY_WORLD_ID:
+            raise AssertionError(f"missing-owner fallback did not land on safe default world: {resumed}")
+
+        second.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8("should_fail_after_world_owner_missing_fallback"))
+        error_code, error_message = second.wait_for_error(5.0)
+        if error_code != ROOM_MISMATCH_ERRC or error_message != "room mismatch":
+            raise AssertionError(
+                "missing-owner fallback did not reset room residency to lobby: "
+                f"code={error_code} message={error_message!r}"
+            )
+
+        world_fallback_after = read_metric_sum(
+            "chat_continuity_world_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        owner_fallback_after = read_metric_sum(
+            "chat_continuity_world_owner_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        missing_owner_after = read_world_restore_reason_metric("missing_owner")
+        if world_fallback_after <= world_fallback_before:
+            raise AssertionError(
+                "world restore fallback metric did not increase during missing-owner fallback: "
+                f"before={world_fallback_before} after={world_fallback_after}"
+            )
+        if owner_fallback_after <= owner_fallback_before:
+            raise AssertionError(
+                "world owner restore fallback metric did not increase during missing-owner fallback: "
+                f"before={owner_fallback_before} after={owner_fallback_after}"
+            )
+        if missing_owner_after <= missing_owner_before:
+            raise AssertionError(
+                "world restore missing_owner reason metric did not increase: "
+                f"before={missing_owner_before} after={missing_owner_after}"
+            )
+
+        world_owner_after = wait_for_redis_value(world_owner_key)
+        if world_owner_after != PRIMARY_SERVER_ID:
+            raise AssertionError(
+                f"world owner key was not rewritten after missing-owner fallback: {world_owner_after!r}"
+            )
+
+        print(
+            "PASS world-owner-missing-fallback: "
+            f"logical_session_id={logical_session_id} world_id={resumed['world_id']} "
+            f"world_fallback_delta={world_fallback_after - world_fallback_before:.0f} "
+            f"owner_fallback_delta={owner_fallback_after - owner_fallback_before:.0f} "
+            f"reason_delta={missing_owner_after - missing_owner_before:.0f}"
+        )
+    finally:
+        first.close()
+        second.close()
+
+
+def run_world_drain_fallback() -> None:
+    room = f"resume_world_drain_room_{int(time.time())}"
+    gateway_host = "127.0.0.1"
+    gateway_port = 36101
+    fallback_server = require_fallback_server()
+    fallback_server_id = str(fallback_server["instance_id"])
+    fallback_world_id = str(fallback_server["world_id"])
+
+    first, login, user = acquire_session_for_backend(PRIMARY_SERVER_ID, gateway_host, gateway_port, "verify_world_drain")
+    second = ChatClient(host="127.0.0.1", port=36100)
+    fresh = None
+    world_policy_path = ""
+    try:
+        logical_session_id, resume_token = assert_initial_login(login, user)
+        if login["world_id"] != PRIMARY_WORLD_ID:
+            raise AssertionError(f"unexpected initial world residency: {login}")
+        first.join_room(room, user)
+
+        routing_key = make_resume_routing_key(resume_token)
+        alias_key = f"{SESSION_DIRECTORY_PREFIX}{routing_key}"
+        world_policy_path = f"/api/v1/worlds/{login['world_id']}/policy"
+
+        print("Declaring world drain policy and forcing fresh admission/resume away from draining owner...")
+        if wait_for_redis_value(alias_key) != PRIMARY_SERVER_ID:
+            raise AssertionError(f"resume alias was not attached to {PRIMARY_SERVER_ID} before drain proof")
+
+        status, payload = admin_request_json(
+            world_policy_path,
+            method="PUT",
+            body_obj={
+                "draining": True,
+                "replacement_owner_instance_id": None,
+            },
+        )
+        if status != 200:
+            raise AssertionError(f"world policy PUT failed: status={status} payload={payload}")
+        policy_payload = (payload or {}).get("data", {}).get("policy", {})
+        if policy_payload.get("draining") is not True or policy_payload.get("replacement_owner_instance_id") is not None:
+            raise AssertionError(f"world policy PUT did not persist expected state: {payload}")
+
+        fallback_before = read_metric_sum(
+            "chat_continuity_world_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        owner_fallback_before = read_metric_sum(
+            "chat_continuity_world_owner_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        drain_reason_before = read_world_restore_reason_metric("draining_replacement_unhonored")
+        sticky_filtered_before = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "sticky"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        candidate_filtered_before = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "candidate"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        replacement_selected_before = read_metric_sum(
+            "gateway_world_policy_replacement_selected_total",
+            ports=GATEWAY_METRICS_PORTS,
+        )
+
+        fresh_user = f"verify_world_drain_fresh_{int(time.time())}"
+        fresh, fresh_login = connect_and_login(fresh_user, "", "127.0.0.1", 36100)
+        fresh_backend = current_backend_for_user(fresh_user)
+        if fresh_backend != fallback_server_id:
+            raise AssertionError(
+                f"fresh admission did not avoid draining owner: expected {fallback_server_id}, got {fresh_backend!r}"
+            )
+        if fresh_login["world_id"] != fallback_world_id:
+            raise AssertionError(f"fresh admission did not land on fallback world {fallback_world_id}: {fresh_login}")
+        fresh.close()
+        fresh = None
+
+        first.close()
+        second, resumed = resume_until_success("127.0.0.1", 36100, resume_token, user, logical_session_id)
+        resumed_backend = current_backend_for_resume_token(resume_token)
+        if resumed_backend != fallback_server_id:
+            raise AssertionError(
+                f"resume routing did not rebind away from the draining owner: {resumed_backend!r}"
+            )
+        if resumed["world_id"] != fallback_world_id:
+            raise AssertionError(f"resume did not fall back to world {fallback_world_id}: {resumed}")
+
+        second.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8("should_fail_after_world_drain_fallback"))
+        error_code, error_message = second.wait_for_error(5.0)
+        if error_code != ROOM_MISMATCH_ERRC or error_message != "room mismatch":
+            raise AssertionError(
+                f"world drain fallback did not reset room residency to lobby: code={error_code} message={error_message!r}"
+            )
+
+        fallback_after = read_metric_sum(
+            "chat_continuity_world_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        owner_fallback_after = read_metric_sum(
+            "chat_continuity_world_owner_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        drain_reason_after = read_world_restore_reason_metric("draining_replacement_unhonored")
+        sticky_filtered_after = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "sticky"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        candidate_filtered_after = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "candidate"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        replacement_selected_after = read_metric_sum(
+            "gateway_world_policy_replacement_selected_total",
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        if fallback_after <= fallback_before:
+            raise AssertionError(
+                f"world drain restore fallback metric did not increase: before={fallback_before} after={fallback_after}"
+            )
+        if owner_fallback_after != owner_fallback_before:
+            raise AssertionError(
+                "world owner fallback aggregate changed during drain fallback: "
+                f"before={owner_fallback_before} after={owner_fallback_after}"
+            )
+        if drain_reason_after <= drain_reason_before:
+            raise AssertionError(
+                "draining_replacement_unhonored reason metric did not increase: "
+                f"before={drain_reason_before} after={drain_reason_after}"
+            )
+        if sticky_filtered_after <= sticky_filtered_before:
+            raise AssertionError(
+                "gateway sticky world-policy filter metric did not increase during drain resume: "
+                f"before={sticky_filtered_before} after={sticky_filtered_after}"
+            )
+        if candidate_filtered_after <= candidate_filtered_before:
+            raise AssertionError(
+                "gateway candidate world-policy filter metric did not increase during drain routing: "
+                f"before={candidate_filtered_before} after={candidate_filtered_after}"
+            )
+        if replacement_selected_after != replacement_selected_before:
+            raise AssertionError(
+                "gateway replacement-selected metric changed without a declared replacement owner: "
+                f"before={replacement_selected_before} after={replacement_selected_after}"
+            )
+
+        alias_backend_after = wait_for_redis_value(alias_key)
+        if alias_backend_after != fallback_server_id:
+            raise AssertionError(
+                f"resume alias was not rewritten to the replacement backend: {alias_backend_after!r}"
+            )
+
+        print(
+            "PASS world-drain-fallback: "
+            f"logical_session_id={logical_session_id} resumed_backend={resumed_backend} "
+            f"fallback_delta={fallback_after - fallback_before:.0f} "
+            f"reason_delta={drain_reason_after - drain_reason_before:.0f} "
+            f"sticky_delta={sticky_filtered_after - sticky_filtered_before:.0f} "
+            f"candidate_delta={candidate_filtered_after - candidate_filtered_before:.0f}"
+        )
+    finally:
+        if world_policy_path:
+            status, payload = admin_request_json(world_policy_path, method="DELETE")
+            if status not in (0, 200):
+                raise AssertionError(f"world policy DELETE failed: status={status} payload={payload}")
+        first.close()
+        second.close()
+        if fresh is not None:
+            fresh.close()
+
+
+def run_world_drain_reassignment() -> None:
+    room = f"resume_world_reassignment_room_{int(time.time())}"
+    message = f"resume_world_reassignment_msg_{int(time.time() * 1000)}"
+    gateway_host = "127.0.0.1"
+    gateway_port = 36101
+    replacement_server = require_same_world_peer_server()
+    replacement_server_id = str(replacement_server["instance_id"])
+    world_owner_key = f"{CONTINUITY_WORLD_OWNER_PREFIX}{PRIMARY_WORLD_ID}"
+
+    first, login, user = acquire_session_for_backend(PRIMARY_SERVER_ID, gateway_host, gateway_port, "verify_world_reassignment")
+    second = ChatClient(host="127.0.0.1", port=36100)
+    fresh = None
+    world_policy_path = ""
+    try:
+        logical_session_id, resume_token = assert_initial_login(login, user)
+        if login["world_id"] != PRIMARY_WORLD_ID:
+            raise AssertionError(f"unexpected initial world residency: {login}")
+        first.join_room(room, user)
+
+        routing_key = make_resume_routing_key(resume_token)
+        alias_key = f"{SESSION_DIRECTORY_PREFIX}{routing_key}"
+        world_policy_path = f"/api/v1/worlds/{login['world_id']}/policy"
+
+        print("Declaring world drain policy and proving honored same-world replacement...")
+        if wait_for_redis_value(alias_key) != PRIMARY_SERVER_ID:
+            raise AssertionError(f"resume alias was not attached to {PRIMARY_SERVER_ID} before reassignment proof")
+
+        status, payload = admin_request_json(
+            world_policy_path,
+            method="PUT",
+            body_obj={
+                "draining": True,
+                "replacement_owner_instance_id": replacement_server_id,
+            },
+        )
+        if status != 200:
+            raise AssertionError(f"world policy PUT failed: status={status} payload={payload}")
+        policy_payload = (payload or {}).get("data", {}).get("policy", {})
+        if (
+            policy_payload.get("draining") is not True
+            or policy_payload.get("replacement_owner_instance_id") != replacement_server_id
+        ):
+            raise AssertionError(f"world policy PUT did not persist reassignment target: {payload}")
+
+        world_restore_before = read_metric_sum(
+            "chat_continuity_world_restore_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        world_owner_restore_before = read_metric_sum(
+            "chat_continuity_world_owner_restore_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        fallback_before = read_metric_sum(
+            "chat_continuity_world_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        drain_reason_before = read_world_restore_reason_metric("draining_replacement_unhonored")
+        sticky_filtered_before = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "sticky"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        candidate_filtered_before = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "candidate"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        replacement_selected_before = read_metric_sum(
+            "gateway_world_policy_replacement_selected_total",
+            ports=GATEWAY_METRICS_PORTS,
+        )
+
+        fresh, fresh_login, fresh_user = acquire_session_for_backend(
+            replacement_server_id,
+            "127.0.0.1",
+            36100,
+            "verify_world_reassignment_fresh",
+        )
+        fresh_backend = current_backend_for_user(fresh_user)
+        if fresh_backend != replacement_server_id:
+            raise AssertionError(
+                f"fresh admission did not reach replacement backend {replacement_server_id}: {fresh_backend!r}"
+            )
+        if fresh_login["world_id"] != PRIMARY_WORLD_ID:
+            raise AssertionError(f"fresh admission did not preserve same-world residency: {fresh_login}")
+        if wait_for_redis_value(world_owner_key) != replacement_server_id:
+            raise AssertionError(
+                f"world owner key was not reasserted to replacement backend {replacement_server_id}"
+            )
+        fresh.close()
+        fresh = None
+
+        first.close()
+        second, resumed = resume_until_success("127.0.0.1", 36100, resume_token, user, logical_session_id)
+        resumed_backend = current_backend_for_resume_token(resume_token)
+        if resumed_backend != replacement_server_id:
+            raise AssertionError(
+                f"resume routing did not bind to the replacement backend: {resumed_backend!r}"
+            )
+        if resumed["world_id"] != PRIMARY_WORLD_ID:
+            raise AssertionError(f"resume did not preserve same-world residency: {resumed}")
+
+        second.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8(message))
+        second.wait_for_self_chat(room, message, 5.0)
+
+        world_restore_after = read_metric_sum(
+            "chat_continuity_world_restore_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        world_owner_restore_after = read_metric_sum(
+            "chat_continuity_world_owner_restore_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        fallback_after = read_metric_sum(
+            "chat_continuity_world_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        drain_reason_after = read_world_restore_reason_metric("draining_replacement_unhonored")
+        sticky_filtered_after = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "sticky"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        candidate_filtered_after = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "candidate"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        replacement_selected_after = read_metric_sum(
+            "gateway_world_policy_replacement_selected_total",
+            ports=GATEWAY_METRICS_PORTS,
+        )
+
+        if world_restore_after <= world_restore_before:
+            raise AssertionError(
+                f"world restore success counter did not increase: before={world_restore_before} after={world_restore_after}"
+            )
+        if world_owner_restore_after <= world_owner_restore_before:
+            raise AssertionError(
+                "world owner restore success counter did not increase: "
+                f"before={world_owner_restore_before} after={world_owner_restore_after}"
+            )
+        if fallback_after != fallback_before:
+            raise AssertionError(
+                f"world restore fallback counter changed during honored reassignment: before={fallback_before} after={fallback_after}"
+            )
+        if drain_reason_after != drain_reason_before:
+            raise AssertionError(
+                "draining_replacement_unhonored reason changed during honored reassignment: "
+                f"before={drain_reason_before} after={drain_reason_after}"
+            )
+        if sticky_filtered_after <= sticky_filtered_before:
+            raise AssertionError(
+                "gateway sticky world-policy filter metric did not increase during reassignment resume: "
+                f"before={sticky_filtered_before} after={sticky_filtered_after}"
+            )
+        if candidate_filtered_after <= candidate_filtered_before:
+            raise AssertionError(
+                "gateway candidate world-policy filter metric did not increase during reassignment routing: "
+                f"before={candidate_filtered_before} after={candidate_filtered_after}"
+            )
+        if replacement_selected_after <= replacement_selected_before:
+            raise AssertionError(
+                "gateway replacement-selected metric did not increase during honored reassignment: "
+                f"before={replacement_selected_before} after={replacement_selected_after}"
+            )
+
+        alias_backend_after = wait_for_redis_value(alias_key)
+        if alias_backend_after != replacement_server_id:
+            raise AssertionError(
+                f"resume alias was not rewritten to the replacement backend: {alias_backend_after!r}"
+            )
+        if wait_for_redis_value(world_owner_key) != replacement_server_id:
+            raise AssertionError(
+                f"world owner key drifted after reassignment restore: expected {replacement_server_id}"
+            )
+
+        print(
+            "PASS world-drain-reassignment: "
+            f"logical_session_id={logical_session_id} resumed_backend={resumed_backend} "
+            f"world_restore_delta={world_restore_after - world_restore_before:.0f} "
+            f"owner_restore_delta={world_owner_restore_after - world_owner_restore_before:.0f} "
+            f"replacement_selected_delta={replacement_selected_after - replacement_selected_before:.0f}"
+        )
+    finally:
+        if world_policy_path:
+            status, payload = admin_request_json(world_policy_path, method="DELETE")
+            if status not in (0, 200):
+                raise AssertionError(f"world policy DELETE failed: status={status} payload={payload}")
+        first.close()
+        second.close()
+        if fresh is not None:
+            fresh.close()
 
 
 def main() -> int:
@@ -486,6 +1066,9 @@ def main() -> int:
             "locator-fallback",
             "world-residency-fallback",
             "world-owner-fallback",
+            "world-owner-missing-fallback",
+            "world-drain-fallback",
+            "world-drain-reassignment",
             "both",
         ),
         default="both",
@@ -503,6 +1086,12 @@ def main() -> int:
             run_world_residency_fallback()
         if args.scenario in {"world-owner-fallback", "both"}:
             run_world_owner_fallback()
+        if args.scenario in {"world-owner-missing-fallback", "both"}:
+            run_world_owner_missing_fallback()
+        if args.scenario in {"world-drain-fallback", "both"}:
+            run_world_drain_fallback()
+        if args.scenario == "world-drain-reassignment":
+            run_world_drain_reassignment()
         return 0
     except Exception as exc:
         print(f"FAIL: {exc}")

@@ -540,6 +540,7 @@
           <button type="button" class="nav-btn" data-nav-target="section-overview">Overview</button>
           <button type="button" class="nav-btn" data-nav-target="section-worker">Write-behind</button>
           <button type="button" class="nav-btn" data-nav-target="section-instances">Instances</button>
+          <button type="button" class="nav-btn" data-nav-target="section-worlds">Worlds</button>
           <button type="button" class="nav-btn" data-nav-target="section-users">Users</button>
           <button type="button" class="nav-btn" data-nav-target="section-session">Session</button>
           <button type="button" class="nav-btn" data-nav-target="section-actions">Actions</button>
@@ -622,6 +623,36 @@
           </div>
           <div id="instance-detail" style="margin-top:10px;" class="muted">Select an instance to see detail.</div>
           <div id="instances-error"></div>
+        </div>
+      </article>
+
+      <article id="section-worlds" class="panel col-12 panel-anchor">
+        <div class="panel-head">
+          <h2>World Lifecycle</h2>
+          <div class="row-right">
+            <span id="worlds-summary" class="muted">showing 0 worlds</span>
+            <span id="worlds-chip" class="pill">unknown</span>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="muted">Source: <span class="mono">dynaxis:continuity:world-owner:* + dynaxis:continuity:world-policy:*</span></div>
+          <div style="overflow-x:auto;margin-top:8px;">
+            <table>
+              <thead>
+                <tr>
+                  <th>World</th>
+                  <th>Owner</th>
+                  <th>Draining</th>
+                  <th>Replacement</th>
+                  <th>Instances</th>
+                  <th>Policy Key</th>
+                </tr>
+              </thead>
+              <tbody id="worlds-body"></tbody>
+            </table>
+          </div>
+          <div id="world-detail" style="margin-top:10px;" class="muted">Select a world to inspect or edit lifecycle policy.</div>
+          <div id="worlds-error"></div>
         </div>
       </article>
 
@@ -779,6 +810,11 @@
       instancesPage: document.getElementById('instances-page'),
       instancesChip: document.getElementById('instances-chip'),
       instancesError: document.getElementById('instances-error'),
+      worldsBody: document.getElementById('worlds-body'),
+      worldDetail: document.getElementById('world-detail'),
+      worldsSummary: document.getElementById('worlds-summary'),
+      worldsChip: document.getElementById('worlds-chip'),
+      worldsError: document.getElementById('worlds-error'),
       usersLimit: document.getElementById('users-limit'),
       usersNext: document.getElementById('users-next'),
       usersReset: document.getElementById('users-reset'),
@@ -822,6 +858,8 @@
       inFlight: false,
       authMode: 'unknown',
       authRole: 'viewer',
+      authReadOnly: false,
+      authCapabilities: {},
       selectedInstanceId: null,
       instancesItems: [],
       instancesById: {},
@@ -832,6 +870,9 @@
       instancesTotal: null,
       instancesSort: 'load',
       instancesFilter: '',
+      selectedWorldId: null,
+      worldsItems: [],
+      worldsById: {},
       usersItems: [],
       usersLimit: 100,
       usersCursor: null,
@@ -1033,42 +1074,66 @@
       return state.authRole === 'admin';
     }
 
-    function updateAccessUi() {
-      const canWrite = isOperatorRole();
-      const canSettings = isAdminRole();
+    function canCapability(name) {
+      return !!(state.authCapabilities && state.authCapabilities[name]);
+    }
 
-      if (canSettings) {
+    function updateAccessUi() {
+      const canAnnounce = canCapability('announce');
+      const canDisconnect = canCapability('disconnect');
+      const canSettings = canCapability('settings');
+      const canModeration = canCapability('moderation');
+      const canWorldPolicy = canCapability('world_policy');
+      const canAnyWrite = canAnnounce || canDisconnect || canSettings || canModeration || canWorldPolicy;
+
+      if (state.authReadOnly) {
+        setChip(dom.actionsChip, 'read-only mode', 'warn');
+      } else if (canSettings || canWorldPolicy) {
         setChip(dom.actionsChip, 'admin write enabled', 'ok');
-      } else if (canWrite) {
+      } else if (canAnyWrite) {
         setChip(dom.actionsChip, 'operator write enabled', 'warn');
       } else {
         setChip(dom.actionsChip, 'viewer mode', 'warn');
       }
 
-      dom.announceSend.disabled = !canWrite;
-      dom.disconnectSelected.disabled = !canSettings || state.selectedUsers.size === 0;
+      dom.announceSend.disabled = !canAnnounce;
+      dom.disconnectSelected.disabled = !canDisconnect || state.selectedUsers.size === 0;
       dom.settingApply.disabled = !canSettings;
       dom.settingKey.disabled = !canSettings;
       dom.settingValue.disabled = !canSettings;
-      dom.modTargets.disabled = !canSettings;
-      dom.modDuration.disabled = !canSettings;
-      dom.modReason.disabled = !canSettings;
-      dom.modMute.disabled = !canSettings;
-      dom.modUnmute.disabled = !canSettings;
-      dom.modBan.disabled = !canSettings;
-      dom.modUnban.disabled = !canSettings;
-      dom.modKick.disabled = !canSettings;
+      dom.modTargets.disabled = !canModeration;
+      dom.modDuration.disabled = !canModeration;
+      dom.modReason.disabled = !canModeration;
+      dom.modMute.disabled = !canModeration;
+      dom.modUnmute.disabled = !canModeration;
+      dom.modBan.disabled = !canModeration;
+      dom.modUnban.disabled = !canModeration;
+      dom.modKick.disabled = !canModeration;
+
+      const worldDraining = dom.worldDetail.querySelector('#world-policy-draining');
+      const worldReplacement = dom.worldDetail.querySelector('#world-policy-replacement');
+      const worldSave = dom.worldDetail.querySelector('#world-policy-save');
+      const worldClear = dom.worldDetail.querySelector('#world-policy-clear');
+      if (worldDraining) worldDraining.disabled = !canWorldPolicy;
+      if (worldReplacement) worldReplacement.disabled = !canWorldPolicy;
+      if (worldSave) worldSave.disabled = !canWorldPolicy;
+      if (worldClear) worldClear.disabled = !canWorldPolicy;
     }
 
     function updateDisconnectButtonState() {
-      dom.disconnectSelected.disabled = !isAdminRole() || state.selectedUsers.size === 0;
+      dom.disconnectSelected.disabled = !canCapability('disconnect') || state.selectedUsers.size === 0;
     }
 
-    async function apiRequest(method, path) {
+    async function apiRequest(method, path, body) {
       try {
+        const headers = { 'Accept': 'application/json' };
+        const init = { method, headers };
+        if (body !== undefined) {
+          headers['Content-Type'] = 'application/json';
+          init.body = JSON.stringify(body);
+        }
         const res = await fetch(path, {
-          method,
-          headers: { 'Accept': 'application/json' }
+          ...init
         });
         let payload = null;
         try {
@@ -1116,6 +1181,8 @@
         : 'Authentication is required.';
       const suffix = detail ? (' Details: ' + detail + '.') : '';
       state.authRole = 'viewer';
+      state.authReadOnly = true;
+      state.authCapabilities = {};
       setChip(dom.authChip, res.status === 403 ? 'Forbidden' : 'Unauthorized', 'err');
       dom.authHint.textContent = source + ': ' + reason + suffix + ' Configure trusted proxy headers or bearer token.';
       dom.authHint.className = 'hero-note err';
@@ -1142,6 +1209,8 @@
       const mode = data.mode || 'unknown';
       state.authMode = mode;
       state.authRole = role;
+      state.authReadOnly = !!data.read_only;
+      state.authCapabilities = data.capabilities || {};
 
       const userHeader = data.headers && data.headers.user ? data.headers.user : 'x-admin-user';
       const roleHeader = data.headers && data.headers.role ? data.headers.role : 'x-admin-role';
@@ -1149,7 +1218,10 @@
       const chipKind = mode === 'off' ? 'warn' : 'ok';
       setChip(dom.authChip, role + ' @ ' + actor, chipKind);
 
-      if (mode === 'off') {
+      if (state.authReadOnly) {
+        dom.authHint.textContent = 'Auth mode: ' + mode + ' (read-only control plane).';
+        dom.authHint.className = 'hero-note warn';
+      } else if (mode === 'off') {
         dom.authHint.textContent = 'Auth mode: off (internal network only).';
         dom.authHint.className = 'hero-note warn';
       } else {
@@ -1368,6 +1440,198 @@
       if (items.length > 0) {
         renderInstances(items);
       }
+      return true;
+    }
+
+    function renderWorlds(items) {
+      state.worldsItems = Array.isArray(items) ? items.slice() : [];
+      state.worldsById = {};
+
+      if (!Array.isArray(items) || items.length === 0) {
+        dom.worldsSummary.textContent = 'showing 0 worlds';
+        dom.worldsBody.innerHTML = '<tr><td colspan="6" class="muted">No world inventory is currently available</td></tr>';
+        if (!state.selectedWorldId) {
+          dom.worldDetail.textContent = 'Select a world to inspect or edit lifecycle policy.';
+        }
+        return;
+      }
+
+      for (const item of state.worldsItems) {
+        if (item && item.world_id) {
+          state.worldsById[item.world_id] = item;
+        }
+      }
+
+      dom.worldsSummary.textContent =
+        'showing ' + fmtNum(state.worldsItems.length) + ' worlds';
+
+      dom.worldsBody.innerHTML = state.worldsItems.map((world) => {
+        const worldId = world && world.world_id ? String(world.world_id) : '';
+        const policy = world && world.policy ? world.policy : {};
+        const instances = Array.isArray(world && world.instances) ? world.instances : [];
+        const selected = state.selectedWorldId && state.selectedWorldId === worldId;
+        return '<tr class="' + (selected ? 'selected' : '') + '">' +
+          '<td class="mono"><button type="button" class="table-link" data-world-id="' + safeText(worldId) + '">' + safeText(worldId || '-') + '</button></td>' +
+          '<td class="mono">' + safeText(world.owner_instance_id || '-') + '</td>' +
+          '<td><span class="pill ' + (policy.draining ? 'warn' : 'ok') + '">' + (policy.draining ? 'draining' : 'steady') + '</span></td>' +
+          '<td class="mono">' + safeText(policy.replacement_owner_instance_id || '-') + '</td>' +
+          '<td>' + fmtNum(instances.length) + '</td>' +
+          '<td class="mono">' + safeText((world.source && world.source.policy_key) || '-') + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    function setWorldPolicyMessage(message, isError) {
+      const node = dom.worldDetail.querySelector('#world-policy-status');
+      if (!node) {
+        return;
+      }
+      if (!message) {
+        node.innerHTML = '';
+        return;
+      }
+      node.innerHTML = isError ? asError(message) : ('<div class="muted">' + safeText(message) + '</div>');
+    }
+
+    function renderWorldDetail(world) {
+      if (!world) {
+        dom.worldDetail.textContent = 'Select a world to inspect or edit lifecycle policy.';
+        return;
+      }
+
+      const policy = world.policy || {};
+      const instances = Array.isArray(world.instances) ? world.instances : [];
+      const owner = world.owner_instance_id || '-';
+      const canWritePolicy = canCapability('world_policy');
+      const replacementOptions = ['<option value="">None</option>']
+        .concat(instances.map((instance) => {
+          const id = instance && instance.instance_id ? String(instance.instance_id) : '';
+          const selected = policy.replacement_owner_instance_id && policy.replacement_owner_instance_id === id;
+          const ownerMatch = instance && instance.owner_match ? ' (owner)' : '';
+          return '<option value="' + safeText(id) + '" ' + (selected ? 'selected' : '') + '>' +
+            safeText(id + ownerMatch) +
+            '</option>';
+        })).join('');
+
+      dom.worldDetail.innerHTML =
+        '<div class="panel-head" style="margin:-1px -1px 0;border:1px solid var(--line);border-radius:10px 10px 0 0;background:#f8fcfd;"><h2>World Detail</h2><span class="pill ' + (policy.draining ? 'warn' : 'ok') + '">' + (policy.draining ? 'draining' : 'steady') + '</span></div>' +
+        '<div class="detail-grid">' +
+          '<div class="detail-item"><div class="k">World</div><div class="v mono">' + safeText(world.world_id || '-') + '</div></div>' +
+          '<div class="detail-item"><div class="k">Owner</div><div class="v mono">' + safeText(owner) + '</div></div>' +
+          '<div class="detail-item"><div class="k">Replacement</div><div class="v mono">' + safeText(policy.replacement_owner_instance_id || '-') + '</div></div>' +
+          '<div class="detail-item"><div class="k">Policy Key</div><div class="v mono">' + safeText((world.source && world.source.policy_key) || '-') + '</div></div>' +
+        '</div>' +
+        '<div class="action-grid" style="margin-top:10px;">' +
+          '<section class="action-card">' +
+            '<h3 style="margin:0;font-size:13px;">Lifecycle Policy (Admin)</h3>' +
+            '<label class="row-left" style="gap:8px;"><input id="world-policy-draining" class="check" type="checkbox" ' + (policy.draining ? 'checked ' : '') + (canWritePolicy ? '' : 'disabled ') + '/><span>Draining</span></label>' +
+            '<label class="muted" for="world-policy-replacement">Replacement owner</label>' +
+            '<select id="world-policy-replacement" class="input" ' + (canWritePolicy ? '' : 'disabled') + '>' + replacementOptions + '</select>' +
+            '<div class="row-left" style="gap:6px;flex-wrap:wrap;">' +
+              '<button id="world-policy-save" type="button" class="action" ' + (canWritePolicy ? '' : 'disabled') + '>Save Policy</button>' +
+              '<button id="world-policy-clear" type="button" class="action ghost" ' + (canWritePolicy ? '' : 'disabled') + '>Clear Policy</button>' +
+            '</div>' +
+            '<div class="muted">Direct control-plane write to the world policy key. No fanout command is published.</div>' +
+            '<div id="world-policy-status"></div>' +
+          '</section>' +
+        '</div>';
+      updateAccessUi();
+    }
+
+    async function loadWorldDetail(worldId) {
+      if (!worldId) {
+        return false;
+      }
+      const world = state.worldsById[worldId];
+      if (!world) {
+        dom.worldDetail.innerHTML = asError('World detail is unavailable for ' + safeText(worldId));
+        return false;
+      }
+      state.selectedWorldId = worldId;
+      renderWorldDetail(world);
+      renderWorlds(state.worldsItems);
+      return true;
+    }
+
+    async function saveWorldPolicy() {
+      if (!canCapability('world_policy')) {
+        setWorldPolicyMessage('Current access context cannot change world policy.', true);
+        return;
+      }
+      const worldId = state.selectedWorldId;
+      if (!worldId) {
+        setWorldPolicyMessage('Select a world first.', true);
+        return;
+      }
+      const draining = !!(dom.worldDetail.querySelector('#world-policy-draining') || {}).checked;
+      const replacementSelect = dom.worldDetail.querySelector('#world-policy-replacement');
+      const replacement = replacementSelect ? String(replacementSelect.value || '').trim() : '';
+      const res = await apiRequest(
+        'PUT',
+        '/api/v1/worlds/' + encodeURIComponent(worldId) + '/policy',
+        {
+          draining,
+          replacement_owner_instance_id: replacement || null,
+        });
+      if (!res.ok) {
+        applyAuthError('World policy', res);
+        setWorldPolicyMessage('World policy update failed: ' + res.code + ' - ' + res.message, true);
+        return;
+      }
+
+      await refreshWorlds();
+      await loadWorldDetail(worldId);
+      setWorldPolicyMessage('World policy saved.', false);
+    }
+
+    async function clearWorldPolicy() {
+      if (!canCapability('world_policy')) {
+        setWorldPolicyMessage('Current access context cannot clear world policy.', true);
+        return;
+      }
+      const worldId = state.selectedWorldId;
+      if (!worldId) {
+        setWorldPolicyMessage('Select a world first.', true);
+        return;
+      }
+      const confirmed = window.confirm('Clear world policy for ' + worldId + '?');
+      if (!confirmed) {
+        return;
+      }
+      const res = await apiRequest('DELETE', '/api/v1/worlds/' + encodeURIComponent(worldId) + '/policy');
+      if (!res.ok) {
+        applyAuthError('World policy', res);
+        setWorldPolicyMessage('World policy clear failed: ' + res.code + ' - ' + res.message, true);
+        return;
+      }
+
+      await refreshWorlds();
+      await loadWorldDetail(worldId);
+      setWorldPolicyMessage('World policy cleared.', false);
+    }
+
+    async function refreshWorlds() {
+      const res = await apiGet('/api/v1/worlds?limit=100');
+      if (!res.ok) {
+        applyAuthError('Worlds', res);
+        setChip(dom.worldsChip, 'degraded', 'warn');
+        dom.worldsError.innerHTML = asError('Worlds: ' + res.code + ' - ' + res.message);
+        renderWorlds([]);
+        return false;
+      }
+
+      const data = res.data || {};
+      renderWorlds(data.items || []);
+      if (state.selectedWorldId && state.worldsById[state.selectedWorldId]) {
+        renderWorldDetail(state.worldsById[state.selectedWorldId]);
+      } else if (!state.selectedWorldId && state.worldsItems.length > 0) {
+        dom.worldDetail.textContent = 'Select a world to inspect or edit lifecycle policy.';
+      } else if (state.selectedWorldId && !state.worldsById[state.selectedWorldId]) {
+        state.selectedWorldId = null;
+        dom.worldDetail.textContent = 'Select a world to inspect or edit lifecycle policy.';
+      }
+      setChip(dom.worldsChip, 'ok', 'ok');
+      dom.worldsError.innerHTML = '';
       return true;
     }
 
@@ -1791,9 +2055,9 @@
       if (state.inFlight) return;
       state.inFlight = true;
       const authOk = await refreshAuthContext();
-      const results = await Promise.all([refreshOverview(), refreshInstances(), refreshUsers(), refreshWorker()]);
+      const results = await Promise.all([refreshOverview(), refreshInstances(), refreshWorlds(), refreshUsers(), refreshWorker()]);
       await refreshLinks();
-      const ok = authOk && results[0] && results[1] && results[2] && results[3];
+      const ok = authOk && results[0] && results[1] && results[2] && results[3] && results[4];
       setChip(dom.overallChip, ok ? 'Healthy' : 'Degraded', ok ? 'ok' : 'warn');
       const now = new Date();
       dom.lastUpdated.textContent = now.toLocaleTimeString();
@@ -1847,6 +2111,30 @@
         return;
       }
       loadInstanceDetail(instanceId);
+    });
+
+    dom.worldsBody.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-world-id]');
+      if (!btn) {
+        return;
+      }
+      const worldId = btn.getAttribute('data-world-id');
+      if (!worldId) {
+        return;
+      }
+      loadWorldDetail(worldId);
+    });
+
+    dom.worldDetail.addEventListener('click', (e) => {
+      const target = e.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      if (target.id === 'world-policy-save') {
+        saveWorldPolicy();
+      } else if (target.id === 'world-policy-clear') {
+        clearWorldPolicy();
+      }
     });
 
     dom.instancesLimit.addEventListener('change', () => {

@@ -1,6 +1,6 @@
 # Engine Genre Branch-Cut Criteria
 
-This document records the Phase 5 branch preparation decision for the `engine-readiness-baseline` branch.
+This document records the frozen Phase 5 branch-entry criteria produced by the `engine-readiness-baseline` branch.
 
 The current baseline decision is now `ready to branch`; see `docs/ops/engine-readiness-decision.md`.
 
@@ -8,11 +8,11 @@ The current baseline decision is now `ready to branch`; see `docs/ops/engine-rea
 
 Open either `engine-roadmap-fps` or `engine-roadmap-mmorpg` only while all shared prerequisites below remain satisfied.
 
-Current execution note:
+Historical execution note:
 
-- the accepted baseline is currently being exploited through the narrower capability-first branch `engine-roadmap-session-continuity`
+- the accepted baseline was first exploited through the narrower capability-first branch `engine-roadmap-session-continuity`
 - that branch exists because the stack is still chat/control oriented, so a direct genre-branded branch would overstate the current scope
-- the first `engine-roadmap-session-continuity` tranche is now complete; the remaining gate is review/merge rather than more shared continuity work on the same branch
+- the first `engine-roadmap-session-continuity` tranche is now complete and no longer belongs to the common baseline decision itself
 
 ### 1. Common baseline blockers are closed
 
@@ -121,10 +121,11 @@ Open this branch only when all shared prerequisites above are met **and** the fi
 - That means the present architecture is already closer to MMORPG-style backend concerns than to FPS-style authoritative realtime simulation.
 - FPS work will almost certainly reopen the transport/runtime model more aggressively, especially around gameplay-frequency UDP/RUDP semantics.
 
-## Current Status
+## Historical Output
 
 - `engine-roadmap-session-continuity`: first tranche complete and merged
 - `engine-roadmap-fps`: not cut yet
-- `engine-roadmap-mmorpg`: active branch cut from merged continuity head
+- `engine-roadmap-mmorpg`: first preferred genre branch after baseline closure
 - `preferred first genre branch once the continuity tranche closes`: `engine-roadmap-mmorpg`
-- `current operational step`: execute the narrow MMORPG first tranche around world admission/residency
+
+This document is intentionally frozen as a branch-entry contract. Downstream execution should be tracked in branch-specific charters and handoffs, not by mutating this baseline-era criteria set into a live status board.

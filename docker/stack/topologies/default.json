@@ -1,0 +1,19 @@
+{
+  "name": "default",
+  "servers": [
+    {
+      "instance_id": "server-1",
+      "world_id": "starter-a",
+      "shard": "stack-shard-a",
+      "tcp_host_port": 30001,
+      "metrics_host_port": 39091
+    },
+    {
+      "instance_id": "server-2",
+      "world_id": "starter-b",
+      "shard": "stack-shard-b",
+      "tcp_host_port": 30002,
+      "metrics_host_port": 39092
+    }
+  ]
+}

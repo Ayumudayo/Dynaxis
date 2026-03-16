@@ -32,8 +32,8 @@ def wait_ready(base_url: str, timeout_sec: float = 30.0) -> None:
     raise RuntimeError(f"admin read-only test container not ready: {last_error}")
 
 
-def request_with_payload(url: str, headers=None, method: str = "GET"):
-    req = urllib.request.Request(url, headers=headers or {}, method=method)
+def request_with_payload(url: str, headers=None, method: str = "GET", data: bytes | None = None):
+    req = urllib.request.Request(url, headers=headers or {}, method=method, data=data)
     try:
         with urllib.request.urlopen(req, timeout=5) as response:
             status = response.status
@@ -56,6 +56,21 @@ def request_text(url: str, headers=None, method: str = "GET"):
         return response.status, response.read().decode("utf-8", errors="replace")
 
 
+def parse_prometheus_counter(metrics_text: str, metric_name: str) -> int:
+    for line in metrics_text.splitlines():
+        if not line or line.startswith("#"):
+            continue
+        if not line.startswith(metric_name):
+            continue
+        tail = line[len(metric_name) :]
+        if tail and tail[0] not in (" ", "\t"):
+            continue
+        value = tail.strip().split(" ", 1)[0]
+        if value:
+            return int(float(value))
+    raise RuntimeError(f"metric not found: {metric_name}")
+
+
 def expect_error(
     base_url: str,
     path: str,
@@ -63,11 +78,13 @@ def expect_error(
     expected_code: str,
     headers=None,
     method: str = "GET",
+    data: bytes | None = None,
 ) -> None:
     status, content_type, payload, _ = request_with_payload(
         f"{base_url}{path}",
         headers=headers,
         method=method,
+        data=data,
     )
     if status != expected_status:
         raise RuntimeError(f"{method} {path} expected {expected_status}, got {status}")
@@ -78,11 +95,12 @@ def expect_error(
         raise RuntimeError(f"{method} {path} expected error code {expected_code}, got {error.get('code')}")
 
 
-def expect_not_forbidden(base_url: str, path: str, headers=None, method: str = "GET") -> int:
+def expect_not_forbidden(base_url: str, path: str, headers=None, method: str = "GET", data: bytes | None = None) -> int:
     status, _, payload, body = request_with_payload(
         f"{base_url}{path}",
         headers=headers,
         method=method,
+        data=data,
     )
     if status == 403:
         raise RuntimeError(f"{method} {path} should not be forbidden")
@@ -119,6 +137,14 @@ def run_case(read_only: bool) -> None:
     announce_path = "/api/v1/announcements?text=read-only-announcement&priority=info"
     settings_path = "/api/v1/settings?key=recent_history_limit&value=35"
     moderation_path = "/api/v1/users/mute?client_id=read-only-user&duration_sec=30&reason=read-only-check"
+    world_policy_path = "/api/v1/worlds/test-world/policy"
+    world_policy_body = json.dumps(
+        {"draining": True, "replacement_owner_instance_id": None}
+    ).encode("utf-8")
+    world_policy_headers = {
+        "Content-Type": "application/json",
+        "Content-Length": str(len(world_policy_body)),
+    }
 
     started = False
     try:
@@ -141,7 +167,7 @@ def run_case(read_only: bool) -> None:
             raise RuntimeError(f"auth context read_only expected {read_only}, got {read_only_value}")
 
         if read_only:
-            for key in ("disconnect", "announce", "settings", "moderation"):
+            for key in ("disconnect", "announce", "settings", "moderation", "world_policy"):
                 if capabilities.get(key) is not False:
                     raise RuntimeError(f"read-only capability {key} should be false")
 
@@ -149,8 +175,35 @@ def run_case(read_only: bool) -> None:
             expect_error(base_url, announce_path, 403, "READ_ONLY", headers=admin_headers, method="POST")
             expect_error(base_url, settings_path, 403, "READ_ONLY", headers=admin_headers, method="PATCH")
             expect_error(base_url, moderation_path, 403, "READ_ONLY", headers=admin_headers, method="POST")
+            expect_error(
+                base_url,
+                world_policy_path,
+                403,
+                "READ_ONLY",
+                headers={**admin_headers, **world_policy_headers},
+                method="PUT",
+                data=world_policy_body,
+            )
             expect_error(base_url, announce_path, 403, "READ_ONLY", headers=operator_headers, method="POST")
             expect_error(base_url, announce_path, 403, "READ_ONLY", headers=viewer_headers, method="POST")
+            expect_error(
+                base_url,
+                world_policy_path,
+                403,
+                "READ_ONLY",
+                headers={**operator_headers, **world_policy_headers},
+                method="PUT",
+                data=world_policy_body,
+            )
+            expect_error(
+                base_url,
+                world_policy_path,
+                403,
+                "READ_ONLY",
+                headers={**viewer_headers, **world_policy_headers},
+                method="PUT",
+                data=world_policy_body,
+            )
 
             metrics_status, metrics_body = request_text(
                 f"{base_url}/metrics",
@@ -160,12 +213,23 @@ def run_case(read_only: bool) -> None:
                 raise RuntimeError(f"metrics expected 200, got {metrics_status}")
             if "admin_read_only_mode 1" not in metrics_body:
                 raise RuntimeError("metrics missing admin_read_only_mode 1")
+            for metric_name in (
+                "admin_world_policy_write_total",
+                "admin_world_policy_write_fail_total",
+                "admin_world_policy_clear_total",
+                "admin_world_policy_clear_fail_total",
+            ):
+                if parse_prometheus_counter(metrics_body, metric_name) != 0:
+                    raise RuntimeError(
+                        f"{metric_name} should remain 0 while admin read-only is enabled"
+                    )
         else:
             expected_caps = {
                 "disconnect": True,
                 "announce": True,
                 "settings": True,
                 "moderation": True,
+                "world_policy": True,
             }
             for key, expected in expected_caps.items():
                 if capabilities.get(key) is not expected:
@@ -175,8 +239,24 @@ def run_case(read_only: bool) -> None:
             expect_not_forbidden(base_url, announce_path, headers=admin_headers, method="POST")
             expect_not_forbidden(base_url, settings_path, headers=admin_headers, method="PATCH")
             expect_not_forbidden(base_url, moderation_path, headers=admin_headers, method="POST")
+            expect_not_forbidden(
+                base_url,
+                world_policy_path,
+                headers={**admin_headers, **world_policy_headers},
+                method="PUT",
+                data=world_policy_body,
+            )
             expect_not_forbidden(base_url, announce_path, headers=operator_headers, method="POST")
             expect_error(base_url, announce_path, 403, "FORBIDDEN", headers=viewer_headers, method="POST")
+            expect_error(
+                base_url,
+                world_policy_path,
+                403,
+                "FORBIDDEN",
+                headers={**viewer_headers, **world_policy_headers},
+                method="PUT",
+                data=world_policy_body,
+            )
 
             metrics_status, metrics_body = request_text(
                 f"{base_url}/metrics",
@@ -186,6 +266,16 @@ def run_case(read_only: bool) -> None:
                 raise RuntimeError(f"metrics expected 200, got {metrics_status}")
             if "admin_read_only_mode 0" not in metrics_body:
                 raise RuntimeError("metrics missing admin_read_only_mode 0")
+            for metric_name in (
+                "admin_world_policy_write_total",
+                "admin_world_policy_write_fail_total",
+                "admin_world_policy_clear_total",
+                "admin_world_policy_clear_fail_total",
+            ):
+                if parse_prometheus_counter(metrics_body, metric_name) != 0:
+                    raise RuntimeError(
+                        f"{metric_name} should remain 0 in standalone read-only smoke container"
+                    )
     finally:
         if started:
             subprocess.run(["docker", "rm", "-f", container_name], check=False)

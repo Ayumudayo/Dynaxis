@@ -20,6 +20,7 @@
 
 #include "server/core/net/session.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
+#include "server/core/state/world_lifecycle_policy.hpp"
 #include "server/core/storage/redis/client.hpp"
 #include "server/protocol/game_opcodes.hpp"
 #include "server/chat/chat_hook_plugin_abi.hpp"
@@ -343,6 +344,10 @@ public:
         std::uint64_t world_write_fail_total{0};
         std::uint64_t world_restore_total{0};
         std::uint64_t world_restore_fallback_total{0};
+        std::uint64_t world_restore_fallback_missing_world_total{0};
+        std::uint64_t world_restore_fallback_missing_owner_total{0};
+        std::uint64_t world_restore_fallback_owner_mismatch_total{0};
+        std::uint64_t world_restore_fallback_draining_replacement_unhonored_total{0};
         std::uint64_t world_owner_write_total{0};
         std::uint64_t world_owner_write_fail_total{0};
         std::uint64_t world_owner_restore_total{0};
@@ -465,6 +470,10 @@ private:
     std::atomic<std::uint64_t> continuity_world_write_fail_total_{0};
     std::atomic<std::uint64_t> continuity_world_restore_total_{0};
     std::atomic<std::uint64_t> continuity_world_restore_fallback_total_{0};
+    std::atomic<std::uint64_t> continuity_world_restore_fallback_missing_world_total_{0};
+    std::atomic<std::uint64_t> continuity_world_restore_fallback_missing_owner_total_{0};
+    std::atomic<std::uint64_t> continuity_world_restore_fallback_owner_mismatch_total_{0};
+    std::atomic<std::uint64_t> continuity_world_restore_fallback_draining_replacement_unhonored_total_{0};
     std::atomic<std::uint64_t> continuity_world_owner_write_total_{0};
     std::atomic<std::uint64_t> continuity_world_owner_write_fail_total_{0};
     std::atomic<std::uint64_t> continuity_world_owner_restore_total_{0};
@@ -546,11 +555,13 @@ private:
     std::string make_continuity_room_key(const std::string& logical_session_id) const;
     std::string make_continuity_world_key(const std::string& logical_session_id) const;
     std::string make_continuity_world_owner_key(const std::string& world_id) const;
+    std::string make_continuity_world_policy_key(const std::string& world_id) const;
     bool continuity_enabled() const;
     std::optional<std::string> extract_resume_token(std::string_view token) const;
     std::optional<std::string> load_continuity_room(const std::string& logical_session_id);
     std::optional<std::string> load_continuity_world(const std::string& logical_session_id);
     std::optional<std::string> load_continuity_world_owner(const std::string& world_id);
+    std::optional<server::core::state::WorldLifecyclePolicy> load_continuity_world_policy(const std::string& world_id);
     void persist_continuity_room(const std::string& logical_session_id,
                                  const std::string& room,
                                  std::uint64_t expires_unix_ms);

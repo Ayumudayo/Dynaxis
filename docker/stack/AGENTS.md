@@ -6,13 +6,15 @@ Client (host) -> `haproxy` (TCP) -> `gateway-*` -> `server-*`.
 
 ## Key Files
 - `docker/stack/docker-compose.yml`: service graph + host port mappings.
+- `docker/stack/topologies/*.json`: committed server topology manifests.
+- `docker/stack/docker-compose.topology.generated.yml`: generated server service compose overlay.
 - `docker/stack/haproxy/haproxy.cfg`: TCP LB configuration.
 - `docker/stack/README.md`: quick start + default URLs.
 
 ## Services (Core)
 - `postgres`, `redis`: state/storage.
 - `migrator`: runs schema migrations before app services start.
-- `server-1`, `server-2`: chat servers (`METRICS_PORT=9090` mapped to host `39091/39092`).
+- `server-*`: chat servers generated from the selected topology manifest (`METRICS_PORT=9090` mapped per manifest).
 - `gateway-1`, `gateway-2`: gateways (`METRICS_PORT=6001` mapped to host `36001/36002`).
 - `wb_worker`: write-behind worker (`METRICS_PORT=9090` mapped to host `39093`).
 - `admin-app`: read-only admin control-plane (`METRICS_PORT=39200` mapped to host `39200`, UI at `/admin`).
@@ -33,8 +35,14 @@ Enables: `prometheus`, `grafana`, `redis_exporter`, `postgres_exporter`.
 ```powershell
 pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build
 pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build -Observability
+pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build -TopologyConfig docker/stack/topologies/mmorpg-same-world-proof.json
 pwsh scripts/deploy_docker.ps1 -Action down
 ```
+
+## Boundary
+- `-TopologyConfig` is startup-only.
+- These manifests are local/proof topology artifacts, not the future desired-topology/live-scaling contract.
+- Live scaling/orchestration is documented separately and is not implemented in the current stack.
 
 ## Port Overrides
 Most host ports are configurable via env vars in `docker/stack/docker-compose.yml`:

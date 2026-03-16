@@ -4,8 +4,12 @@ import time
 import urllib.error
 import urllib.request
 
+from stack_topology import load_stack_topology
+from stack_topology import same_world_peer
+
 
 BASE_URL = "http://127.0.0.1:39200"
+STACK_TOPOLOGY = load_stack_topology()
 
 
 def http_request(
@@ -167,6 +171,8 @@ def main() -> int:
             raise RuntimeError("/admin missing audit trend container")
         if "HTTP 5xx" not in html:
             raise RuntimeError("/admin missing HTTP 5xx overview card label")
+        if "World Lifecycle" not in html:
+            raise RuntimeError("/admin missing world lifecycle section")
 
         overview = load_json("/api/v1/overview")
         data = overview.get("data", {})
@@ -238,7 +244,7 @@ def main() -> int:
         if role not in ("viewer", "operator", "admin"):
             raise RuntimeError("auth context role mismatch")
         capabilities = auth_data.get("capabilities", {})
-        for key in ("disconnect", "announce", "settings", "moderation", "ext_deploy"):
+        for key in ("disconnect", "announce", "settings", "moderation", "world_policy", "ext_deploy"):
             if key not in capabilities:
                 raise RuntimeError(f"auth context capabilities missing '{key}'")
             if not isinstance(capabilities[key], bool):
@@ -638,9 +644,20 @@ def main() -> int:
             raise RuntimeError("instances world_scope missing owner_instance_id")
         if not isinstance(world_scope.get("owner_match"), bool):
             raise RuntimeError("instances world_scope.owner_match expected bool")
+        policy = world_scope.get("policy", {})
+        if not isinstance(policy, dict):
+            raise RuntimeError("instances world_scope.policy missing")
+        if not isinstance(policy.get("draining"), bool):
+            raise RuntimeError("instances world_scope.policy.draining expected bool")
+        if not isinstance(policy.get("reassignment_declared"), bool):
+            raise RuntimeError(
+                "instances world_scope.policy.reassignment_declared expected bool"
+            )
         source = world_scope.get("source", {})
         if not isinstance(source, dict) or not source.get("owner_key"):
             raise RuntimeError("instances world_scope.source.owner_key missing")
+        if not source.get("policy_key"):
+            raise RuntimeError("instances world_scope.source.policy_key missing")
 
         detail = load_json(f"/api/v1/instances/{instance_id}")
         detail_data = detail.get("data", {})
@@ -660,9 +677,322 @@ def main() -> int:
             raise RuntimeError("instance detail world_scope missing owner_instance_id")
         if not isinstance(detail_scope.get("owner_match"), bool):
             raise RuntimeError("instance detail world_scope.owner_match expected bool")
+        detail_policy = detail_scope.get("policy", {})
+        if not isinstance(detail_policy, dict):
+            raise RuntimeError("instance detail world_scope.policy missing")
+        if not isinstance(detail_policy.get("draining"), bool):
+            raise RuntimeError("instance detail world_scope.policy.draining expected bool")
+        if not isinstance(detail_policy.get("reassignment_declared"), bool):
+            raise RuntimeError(
+                "instance detail world_scope.policy.reassignment_declared expected bool"
+            )
         detail_source = detail_scope.get("source", {})
         if not isinstance(detail_source, dict) or not detail_source.get("owner_key"):
             raise RuntimeError("instance detail world_scope.source.owner_key missing")
+        if not detail_source.get("policy_key"):
+            raise RuntimeError("instance detail world_scope.source.policy_key missing")
+
+        replacement_peer = same_world_peer(
+            STACK_TOPOLOGY,
+            str(world_server["instance_id"]),
+            str(world_scope.get("world_id")),
+        )
+        replacement_owner = (
+            str(replacement_peer["instance_id"])
+            if replacement_peer is not None
+            else str(world_server["instance_id"])
+        )
+        world_policy_path = f"/api/v1/worlds/{world_scope.get('world_id')}/policy"
+        metrics_before = load_text("/metrics")
+        world_policy_write_before = parse_prometheus_counter(
+            metrics_before, "admin_world_policy_write_total"
+        )
+        world_policy_write_fail_before = parse_prometheus_counter(
+            metrics_before, "admin_world_policy_write_fail_total"
+        )
+        world_policy_clear_before = parse_prometheus_counter(
+            metrics_before, "admin_world_policy_clear_total"
+        )
+        world_policy_clear_fail_before = parse_prometheus_counter(
+            metrics_before, "admin_world_policy_clear_fail_total"
+        )
+        world_policy_write_after_put = world_policy_write_before
+        try:
+            status, _, payload = request_json_body(
+                world_policy_path,
+                method="PUT",
+                body_obj={
+                    "draining": True,
+                    "replacement_owner_instance_id": replacement_owner,
+                },
+            )
+            if status != 200:
+                raise RuntimeError(
+                    f"PUT {world_policy_path} expected 200, got {status}"
+                )
+            policy_response = (payload or {}).get("data", {})
+            if policy_response.get("world_id") != world_scope.get("world_id"):
+                raise RuntimeError("world policy PUT response world_id mismatch")
+            if policy_response.get("owner_instance_id") != world_scope.get("owner_instance_id"):
+                raise RuntimeError("world policy PUT response owner_instance_id mismatch")
+            response_policy = policy_response.get("policy", {})
+            if response_policy.get("draining") is not True:
+                raise RuntimeError("world policy PUT response draining mismatch")
+            if response_policy.get("replacement_owner_instance_id") != replacement_owner:
+                raise RuntimeError(
+                    "world policy PUT response replacement_owner_instance_id mismatch"
+                )
+            response_source = policy_response.get("source", {})
+            if response_source.get("policy_key") != detail_source["policy_key"]:
+                raise RuntimeError("world policy PUT response policy_key mismatch")
+
+            metrics_after_put = load_text("/metrics")
+            world_policy_write_after_put = parse_prometheus_counter(
+                metrics_after_put, "admin_world_policy_write_total"
+            )
+            if world_policy_write_after_put <= world_policy_write_before:
+                raise RuntimeError(
+                    "admin world policy write metric did not increase after PUT"
+                )
+            if (
+                parse_prometheus_counter(
+                    metrics_after_put, "admin_world_policy_write_fail_total"
+                )
+                != world_policy_write_fail_before
+            ):
+                raise RuntimeError(
+                    "admin world policy write_fail metric changed after successful PUT"
+                )
+            if (
+                parse_prometheus_counter(
+                    metrics_after_put, "admin_world_policy_clear_total"
+                )
+                != world_policy_clear_before
+            ):
+                raise RuntimeError(
+                    "admin world policy clear metric changed before DELETE"
+                )
+            if (
+                parse_prometheus_counter(
+                    metrics_after_put, "admin_world_policy_clear_fail_total"
+                )
+                != world_policy_clear_fail_before
+            ):
+                raise RuntimeError(
+                    "admin world policy clear_fail metric changed after successful PUT"
+                )
+
+            updated_instances = load_json("/api/v1/instances?limit=100")
+            updated_items = updated_instances.get("data", {}).get("items", [])
+            updated_world_server = next(
+                (
+                    item
+                    for item in updated_items
+                    if item.get("instance_id") == world_server["instance_id"]
+                ),
+                None,
+            )
+            if not isinstance(updated_world_server, dict):
+                raise RuntimeError("updated instances payload missing world server item")
+            updated_policy = updated_world_server.get("world_scope", {}).get("policy", {})
+            if updated_policy.get("draining") is not True:
+                raise RuntimeError("instances world_scope policy.draining was not refreshed")
+            if updated_policy.get("replacement_owner_instance_id") != replacement_owner:
+                raise RuntimeError(
+                    "instances world_scope policy.replacement_owner_instance_id mismatch"
+                )
+
+            worlds = load_json("/api/v1/worlds?limit=100")
+            world_items = worlds.get("data", {}).get("items", [])
+            world_item = next(
+                (
+                    item
+                    for item in world_items
+                    if item.get("world_id") == world_scope.get("world_id")
+                ),
+                None,
+            )
+            if not isinstance(world_item, dict):
+                raise RuntimeError("worlds payload missing world inventory item")
+            if world_item.get("owner_instance_id") != world_scope.get("owner_instance_id"):
+                raise RuntimeError("world inventory owner_instance_id mismatch")
+            world_policy = world_item.get("policy", {})
+            if world_policy.get("draining") is not True:
+                raise RuntimeError("world inventory policy.draining mismatch")
+            if world_policy.get("replacement_owner_instance_id") != replacement_owner:
+                raise RuntimeError(
+                    "world inventory replacement_owner_instance_id mismatch"
+                )
+            world_instances = world_item.get("instances", [])
+            if not isinstance(world_instances, list) or not any(
+                isinstance(entry, dict)
+                and entry.get("instance_id") == world_server["instance_id"]
+                and isinstance(entry.get("owner_match"), bool)
+                for entry in world_instances
+            ):
+                raise RuntimeError("world inventory instances missing owner_match state")
+            world_source = world_item.get("source", {})
+            if (
+                not isinstance(world_source, dict)
+                or world_source.get("policy_key") != detail_source["policy_key"]
+            ):
+                raise RuntimeError("world inventory source.policy_key mismatch")
+
+            status, _, payload = request_json_body(
+                "/api/v1/worlds/not-a-real-world/policy",
+                method="PUT",
+                body_obj={
+                    "draining": True,
+                    "replacement_owner_instance_id": replacement_owner,
+                },
+            )
+            if status != 400:
+                raise RuntimeError(
+                    f"PUT invalid world_id expected 400, got {status}"
+                )
+            if (payload or {}).get("error", {}).get("code") != "BAD_REQUEST":
+                raise RuntimeError("invalid world_id expected BAD_REQUEST")
+
+            status, _, payload = request_json_body(
+                world_policy_path,
+                method="PUT",
+                body_obj={
+                    "draining": True,
+                    "replacement_owner_instance_id": "not-a-real-instance",
+                },
+            )
+            if status != 400:
+                raise RuntimeError(
+                    f"PUT invalid replacement owner expected 400, got {status}"
+                )
+            if (payload or {}).get("error", {}).get("code") != "BAD_REQUEST":
+                raise RuntimeError("invalid replacement owner expected BAD_REQUEST")
+
+            metrics_after_invalid = load_text("/metrics")
+            if (
+                parse_prometheus_counter(
+                    metrics_after_invalid, "admin_world_policy_write_total"
+                )
+                != world_policy_write_after_put
+            ):
+                raise RuntimeError(
+                    "admin world policy write metric changed after validation failures"
+                )
+            if (
+                parse_prometheus_counter(
+                    metrics_after_invalid, "admin_world_policy_write_fail_total"
+                )
+                != world_policy_write_fail_before
+            ):
+                raise RuntimeError(
+                    "admin world policy write_fail metric changed after validation failures"
+                )
+            if (
+                parse_prometheus_counter(
+                    metrics_after_invalid, "admin_world_policy_clear_total"
+                )
+                != world_policy_clear_before
+            ):
+                raise RuntimeError(
+                    "admin world policy clear metric changed after validation failures"
+                )
+            if (
+                parse_prometheus_counter(
+                    metrics_after_invalid, "admin_world_policy_clear_fail_total"
+                )
+                != world_policy_clear_fail_before
+            ):
+                raise RuntimeError(
+                    "admin world policy clear_fail metric changed after validation failures"
+                )
+        finally:
+            status, _, payload = request_json(world_policy_path, method="DELETE")
+            if status != 200:
+                raise RuntimeError(
+                    f"DELETE {world_policy_path} expected 200, got {status}"
+                )
+            cleared = (payload or {}).get("data", {})
+            cleared_policy = cleared.get("policy", {})
+            if cleared_policy.get("draining") is not False:
+                raise RuntimeError("world policy DELETE response draining mismatch")
+            if cleared_policy.get("replacement_owner_instance_id") is not None:
+                raise RuntimeError(
+                    "world policy DELETE response replacement_owner_instance_id mismatch"
+                )
+            metrics_after_delete = load_text("/metrics")
+            world_policy_clear_after = parse_prometheus_counter(
+                metrics_after_delete, "admin_world_policy_clear_total"
+            )
+            if world_policy_clear_after <= world_policy_clear_before:
+                raise RuntimeError(
+                    "admin world policy clear metric did not increase after DELETE"
+                )
+            if (
+                parse_prometheus_counter(
+                    metrics_after_delete, "admin_world_policy_write_total"
+                )
+                != world_policy_write_after_put
+            ):
+                raise RuntimeError(
+                    "admin world policy write metric changed unexpectedly after DELETE"
+                )
+            if (
+                parse_prometheus_counter(
+                    metrics_after_delete, "admin_world_policy_write_fail_total"
+                )
+                != world_policy_write_fail_before
+            ):
+                raise RuntimeError(
+                    "admin world policy write_fail metric changed after DELETE"
+                )
+            if (
+                parse_prometheus_counter(
+                    metrics_after_delete, "admin_world_policy_clear_fail_total"
+                )
+                != world_policy_clear_fail_before
+            ):
+                raise RuntimeError(
+                    "admin world policy clear_fail metric changed after DELETE"
+                )
+
+        cleared_instances = load_json("/api/v1/instances?limit=100")
+        cleared_items = cleared_instances.get("data", {}).get("items", [])
+        cleared_world_server = next(
+            (
+                item
+                for item in cleared_items
+                if item.get("instance_id") == world_server["instance_id"]
+            ),
+            None,
+        )
+        if not isinstance(cleared_world_server, dict):
+            raise RuntimeError("cleared instances payload missing world server item")
+        cleared_policy = cleared_world_server.get("world_scope", {}).get("policy", {})
+        if cleared_policy.get("draining") is not False:
+            raise RuntimeError("instances world_scope policy.draining did not clear")
+        if cleared_policy.get("replacement_owner_instance_id") is not None:
+            raise RuntimeError(
+                "instances world_scope replacement_owner_instance_id did not clear"
+            )
+        cleared_worlds = load_json("/api/v1/worlds?limit=100")
+        cleared_world_items = cleared_worlds.get("data", {}).get("items", [])
+        cleared_world_item = next(
+            (
+                item
+                for item in cleared_world_items
+                if item.get("world_id") == world_scope.get("world_id")
+            ),
+            None,
+        )
+        if not isinstance(cleared_world_item, dict):
+            raise RuntimeError("world inventory item missing after policy clear")
+        cleared_world_policy = cleared_world_item.get("policy", {})
+        if cleared_world_policy.get("draining") is not False:
+            raise RuntimeError("world inventory policy.draining did not clear")
+        if cleared_world_policy.get("replacement_owner_instance_id") is not None:
+            raise RuntimeError(
+                "world inventory replacement_owner_instance_id did not clear"
+            )
 
         links = load_json("/api/v1/metrics/links")
         links_data = links.get("data", {})

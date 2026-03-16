@@ -381,6 +381,9 @@ public:
     std::atomic<std::uint64_t> resume_locator_lookup_miss_total_{0};
     std::atomic<std::uint64_t> resume_locator_selector_hit_total_{0};
     std::atomic<std::uint64_t> resume_locator_selector_fallback_total_{0};
+    std::atomic<std::uint64_t> world_policy_filtered_sticky_total_{0};
+    std::atomic<std::uint64_t> world_policy_filtered_candidate_total_{0};
+    std::atomic<std::uint64_t> world_policy_replacement_selected_total_{0};
 
     std::atomic<std::uint64_t> ingress_reject_not_ready_total_{0};
     std::atomic<std::uint64_t> ingress_reject_rate_limit_total_{0};
@@ -429,6 +432,7 @@ public:
     std::shared_ptr<server::core::state::IInstanceStateBackend> backend_registry_;
     std::unique_ptr<SessionDirectory> session_directory_;
     std::string redis_uri_;
+    std::string continuity_prefix_;
     std::string session_directory_prefix_{"gateway/session/"};
     std::string resume_locator_prefix_{"gateway/session/locator/"};
     std::uint32_t resume_locator_ttl_sec_{900};
