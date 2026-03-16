@@ -28,7 +28,6 @@ on:
       - "tests/python/verify_chat_hook_behavior.py"
       - "tests/python/verify_runtime_toggle_metrics.py"
       - "docs/extensibility/**"
-      - "docs/runtime-extensibility-plan.md"
   pull_request:
     paths:
       - "CMakeLists.txt"
@@ -54,7 +53,6 @@ on:
       - "tests/python/verify_chat_hook_behavior.py"
       - "tests/python/verify_runtime_toggle_metrics.py"
       - "docs/extensibility/**"
-      - "docs/runtime-extensibility-plan.md"
   merge_group:
     types:
       - checks_requested
