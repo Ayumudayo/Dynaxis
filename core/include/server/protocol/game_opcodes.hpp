@@ -32,6 +32,9 @@ static constexpr std::uint16_t MSG_ROOMS_REQ            = 0x0202; // [c2s] 방 �
 static constexpr std::uint16_t MSG_ROOM_USERS_REQ       = 0x0203; // [c2s] 특정 방 사용자 목록 요청
 static constexpr std::uint16_t MSG_REFRESH_REQ          = 0x0204; // [c2s] 현재 방 스냅샷 요청
 static constexpr std::uint16_t MSG_REFRESH_NOTIFY       = 0x0205; // [s2c] 상태 변경 알림 (클라이언트가 REFRESH_REQ를 보내도록 유도)
+static constexpr std::uint16_t MSG_FPS_INPUT            = 0x0206; // [c2s] FPS fixed-step 입력 프레임
+static constexpr std::uint16_t MSG_FPS_STATE_SNAPSHOT   = 0x0207; // [s2c] FPS authoritative 상태 스냅샷
+static constexpr std::uint16_t MSG_FPS_STATE_DELTA      = 0x0208; // [s2c] FPS authoritative 상태 델타
 
 
 /**
@@ -60,6 +63,9 @@ inline constexpr std::string_view opcode_name( std::uint16_t id ) noexcept
     case 0x0203: return "MSG_ROOM_USERS_REQ";
     case 0x0204: return "MSG_REFRESH_REQ";
     case 0x0205: return "MSG_REFRESH_NOTIFY";
+    case 0x0206: return "MSG_FPS_INPUT";
+    case 0x0207: return "MSG_FPS_STATE_SNAPSHOT";
+    case 0x0208: return "MSG_FPS_STATE_DELTA";
     default: return std::string_view{};
   }
 }
@@ -90,6 +96,9 @@ inline constexpr server::core::protocol::OpcodePolicy opcode_policy( std::uint16
     case 0x0203: return server::core::protocol::OpcodePolicy{server::core::protocol::SessionStatus::kAuthenticated, server::core::protocol::ProcessingPlace::kInline, server::core::protocol::TransportMask::kTcp, server::core::protocol::DeliveryClass::kReliableOrdered, 0};
     case 0x0204: return server::core::protocol::OpcodePolicy{server::core::protocol::SessionStatus::kAuthenticated, server::core::protocol::ProcessingPlace::kInline, server::core::protocol::TransportMask::kTcp, server::core::protocol::DeliveryClass::kReliableOrdered, 0};
     case 0x0205: return server::core::protocol::OpcodePolicy{server::core::protocol::SessionStatus::kAny, server::core::protocol::ProcessingPlace::kInline, server::core::protocol::TransportMask::kTcp, server::core::protocol::DeliveryClass::kReliableOrdered, 0};
+    case 0x0206: return server::core::protocol::OpcodePolicy{server::core::protocol::SessionStatus::kAuthenticated, server::core::protocol::ProcessingPlace::kInline, server::core::protocol::TransportMask::kBoth, server::core::protocol::DeliveryClass::kUnreliableSequenced, 1};
+    case 0x0207: return server::core::protocol::OpcodePolicy{server::core::protocol::SessionStatus::kAny, server::core::protocol::ProcessingPlace::kInline, server::core::protocol::TransportMask::kTcp, server::core::protocol::DeliveryClass::kReliableOrdered, 1};
+    case 0x0208: return server::core::protocol::OpcodePolicy{server::core::protocol::SessionStatus::kAny, server::core::protocol::ProcessingPlace::kInline, server::core::protocol::TransportMask::kBoth, server::core::protocol::DeliveryClass::kUnreliableSequenced, 1};
     default: return server::core::protocol::default_opcode_policy();
   }
 }

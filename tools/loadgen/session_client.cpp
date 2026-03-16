@@ -208,9 +208,95 @@ std::vector<std::uint8_t> make_frame(std::uint16_t msg_id,
 
 std::string unsupported_operation_message(std::string_view transport, std::string_view operation) {
     return "transport '" + std::string(transport)
-        + "' currently supports only login_only attach validation or direct ping proof; "
+        + "' currently supports only login_only attach validation, direct ping proof, or fps_input proof; "
         + std::string(operation)
         + " requires tcp";
+}
+
+std::vector<std::uint8_t> encode_fps_input_payload(std::uint32_t input_seq) {
+    server::wire::v1::FpsInput message;
+    message.set_input_seq(input_seq);
+    message.set_move_x_mm(100);
+    message.set_move_y_mm((input_seq % 2u) == 0 ? 25 : -25);
+    message.set_yaw_mdeg(static_cast<std::int32_t>((input_seq * 9000u) % 360000u));
+    return server::wire::codec::Encode(message);
+}
+
+bool parse_fps_update_payload(std::uint16_t msg_id,
+                              std::span<const std::uint8_t> payload,
+                              bool direct_transport,
+                              FpsUpdateResult& out) {
+    out = {};
+    out.direct_transport = direct_transport;
+    if (msg_id == game_proto::MSG_FPS_STATE_SNAPSHOT) {
+        server::wire::v1::FpsStateSnapshot snapshot;
+        if (!server::wire::codec::Decode(payload.data(), payload.size(), snapshot)) {
+            return false;
+        }
+        out.is_snapshot = true;
+        out.server_tick = snapshot.server_tick();
+        out.self_actor_id = snapshot.self_actor_id();
+        out.actor_count = static_cast<std::uint32_t>(snapshot.actors_size());
+        out.removed_actor_count = static_cast<std::uint32_t>(snapshot.removed_actor_ids_size());
+        return true;
+    }
+    if (msg_id == game_proto::MSG_FPS_STATE_DELTA) {
+        server::wire::v1::FpsStateDelta delta;
+        if (!server::wire::codec::Decode(payload.data(), payload.size(), delta)) {
+            return false;
+        }
+        out.is_snapshot = false;
+        out.server_tick = delta.server_tick();
+        out.self_actor_id = delta.self_actor_id();
+        out.actor_count = static_cast<std::uint32_t>(delta.actors_size());
+        out.removed_actor_count = static_cast<std::uint32_t>(delta.removed_actor_ids_size());
+        return true;
+    }
+    return false;
+}
+
+bool parse_direct_udp_fps_update(std::span<const std::uint8_t> datagram, FpsUpdateResult& out) {
+    if (datagram.size() < proto::k_header_bytes) {
+        return false;
+    }
+
+    proto::PacketHeader header{};
+    proto::decode_header(datagram.data(), header);
+    const auto payload_size = static_cast<std::size_t>(header.length);
+    if (payload_size != (datagram.size() - proto::k_header_bytes)) {
+        return false;
+    }
+
+    return parse_fps_update_payload(
+        header.msg_id,
+        datagram.subspan(proto::k_header_bytes, payload_size),
+        true,
+        out);
+}
+
+void drain_udp_socket_pending(udp::socket& socket) {
+    boost::system::error_code ec;
+    const bool was_non_blocking = socket.non_blocking();
+    socket.non_blocking(true, ec);
+    if (ec) {
+        return;
+    }
+
+    std::array<std::uint8_t, 2048> buffer{};
+    udp::endpoint sender_endpoint;
+    for (;;) {
+        const auto received = socket.receive_from(asio::buffer(buffer), sender_endpoint, 0, ec);
+        (void)received;
+        if (ec == asio::error::would_block || ec == asio::error::try_again) {
+            ec.clear();
+            break;
+        }
+        if (ec) {
+            break;
+        }
+    }
+
+    socket.non_blocking(was_non_blocking, ec);
 }
 
 bool open_udp_socket(udp::resolver& resolver,
@@ -488,10 +574,75 @@ bool TcpSessionClient::send_ping_and_wait_pong() {
     return wait_for_pong(std::chrono::milliseconds(options_.read_timeout_ms));
 }
 
+bool TcpSessionClient::prepare_fps_session(FpsUpdateResult* result) {
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        clear_pending_fps_updates_locked();
+    }
+
+    enqueue_packet(game_proto::MSG_FPS_INPUT, 0, encode_fps_input_payload(fps_input_seq_++));
+    return wait_for_fps_snapshot(std::chrono::milliseconds(options_.read_timeout_ms), result);
+}
+
+bool TcpSessionClient::send_fps_input_and_wait_state(FpsUpdateResult* result) {
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        clear_pending_fps_updates_locked();
+    }
+
+    enqueue_packet(game_proto::MSG_FPS_INPUT, 0, encode_fps_input_payload(fps_input_seq_++));
+    return wait_for_fps_update(std::chrono::milliseconds(options_.read_timeout_ms), result);
+}
+
 bool TcpSessionClient::wait_for_pong(std::chrono::milliseconds timeout) {
     return wait_for_event(timeout,
                           [](const Event& event) { return event.type == EventType::kPong; },
                           "pong");
+}
+
+bool TcpSessionClient::wait_for_fps_snapshot(std::chrono::milliseconds timeout, FpsUpdateResult* result) {
+    Event fps_event;
+    if (!wait_for_event(timeout,
+                        [](const Event& event) { return event.type == EventType::kFpsSnapshot; },
+                        "fps snapshot",
+                        &fps_event)) {
+        return false;
+    }
+    if (result != nullptr) {
+        *result = fps_event.fps;
+    }
+    return true;
+}
+
+bool TcpSessionClient::wait_for_fps_update(std::chrono::milliseconds timeout, FpsUpdateResult* result) {
+    Event fps_event;
+    if (!wait_for_event(timeout,
+                        [](const Event& event) {
+                            return event.type == EventType::kFpsSnapshot || event.type == EventType::kFpsDelta;
+                        },
+                        "fps state update",
+                        &fps_event)) {
+        return false;
+    }
+    if (result != nullptr) {
+        *result = fps_event.fps;
+    }
+    return true;
+}
+
+bool TcpSessionClient::try_pop_fps_update(FpsUpdateResult* result) {
+    Event fps_event;
+    if (!try_pop_event(
+            [](const Event& event) {
+                return event.type == EventType::kFpsSnapshot || event.type == EventType::kFpsDelta;
+            },
+            &fps_event)) {
+        return false;
+    }
+    if (result != nullptr) {
+        *result = fps_event.fps;
+    }
+    return true;
 }
 
 void TcpSessionClient::close() {
@@ -544,6 +695,7 @@ void TcpSessionClient::reset_state() {
     last_error_.clear();
     current_user_.clear();
     transport_ = {};
+    fps_input_seq_ = 1;
 }
 
 void TcpSessionClient::start_read_header() {
@@ -695,6 +847,19 @@ void TcpSessionClient::handle_frame(std::uint16_t msg_id,
         return;
     }
 
+    FpsUpdateResult fps_update;
+    if (parse_fps_update_payload(
+            msg_id,
+            std::span<const std::uint8_t>(payload.data(), payload.size()),
+            false,
+            fps_update)) {
+        Event event;
+        event.type = fps_update.is_snapshot ? EventType::kFpsSnapshot : EventType::kFpsDelta;
+        event.fps = fps_update;
+        push_event(std::move(event));
+        return;
+    }
+
     if (msg_id == game_proto::MSG_CHAT_BROADCAST) {
         server::wire::v1::ChatBroadcast broadcast;
         if (!server::wire::codec::Decode(payload.data(), payload.size(), broadcast)) {
@@ -837,8 +1002,33 @@ bool TcpSessionClient::wait_for_event(std::chrono::milliseconds timeout,
     }
 }
 
+bool TcpSessionClient::try_pop_event(const std::function<bool(const Event&)>& predicate, Event* out) {
+    std::lock_guard<std::mutex> lock(mu_);
+    auto match_it = std::find_if(events_.begin(), events_.end(), predicate);
+    if (match_it == events_.end()) {
+        return false;
+    }
+
+    if (out != nullptr) {
+        *out = *match_it;
+    }
+    events_.erase(match_it);
+    return true;
+}
+
 void TcpSessionClient::set_last_error_locked(std::string message) {
     last_error_ = std::move(message);
+}
+
+void TcpSessionClient::clear_pending_fps_updates_locked() {
+    events_.erase(
+        std::remove_if(
+            events_.begin(),
+            events_.end(),
+            [](const Event& event) {
+                return event.type == EventType::kFpsSnapshot || event.type == EventType::kFpsDelta;
+            }),
+        events_.end());
 }
 
 UdpSessionClient::UdpSessionClient(ClientOptions options)
@@ -879,6 +1069,7 @@ bool UdpSessionClient::connect(const std::string& host, unsigned short port) {
 
     udp_bound_ = false;
     udp_seq_ = 1;
+    fps_input_seq_ = 1;
     return true;
 }
 
@@ -908,6 +1099,75 @@ bool UdpSessionClient::send_ping_and_wait_pong() {
         return false;
     }
     return true;
+}
+
+bool UdpSessionClient::prepare_fps_session(FpsUpdateResult* result) {
+    clear_pending_direct_updates();
+    FpsUpdateResult ignored;
+    while (tcp_client_.try_pop_fps_update(&ignored)) {
+    }
+    if (!send_direct_fps_input_frame()) {
+        return false;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(options_.read_timeout_ms);
+    for (;;) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            set_last_error("timeout waiting for fps snapshot");
+            return false;
+        }
+
+        FpsUpdateResult update;
+        if (tcp_client_.try_pop_fps_update(&update) && update.is_snapshot) {
+            if (result != nullptr) {
+                *result = update;
+            }
+            return true;
+        }
+
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+        FpsUpdateResult direct_update;
+        if (wait_for_direct_fps_update(std::min<std::chrono::milliseconds>(remaining, std::chrono::milliseconds(10)), direct_update)) {
+            continue;
+        }
+    }
+}
+
+bool UdpSessionClient::send_fps_input_and_wait_state(FpsUpdateResult* result) {
+    clear_pending_direct_updates();
+    FpsUpdateResult ignored;
+    while (tcp_client_.try_pop_fps_update(&ignored)) {
+    }
+    if (!send_direct_fps_input_frame()) {
+        return false;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(options_.read_timeout_ms);
+    for (;;) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            set_last_error("timeout waiting for fps update");
+            return false;
+        }
+
+        FpsUpdateResult update;
+        if (tcp_client_.try_pop_fps_update(&update)) {
+            if (result != nullptr) {
+                *result = update;
+            }
+            return true;
+        }
+
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+        FpsUpdateResult direct_update;
+        if (wait_for_direct_fps_update(std::min<std::chrono::milliseconds>(remaining, std::chrono::milliseconds(10)), direct_update)) {
+            if (result != nullptr) {
+                *result = direct_update;
+            }
+            return true;
+        }
+    }
 }
 
 void UdpSessionClient::close() {
@@ -1103,6 +1363,68 @@ bool UdpSessionClient::send_direct_ping_frame() {
     return true;
 }
 
+bool UdpSessionClient::send_direct_fps_input_frame() {
+    if (!udp_bound_) {
+        set_last_error("udp fps input requires completed bind");
+        return false;
+    }
+
+    const auto seq = udp_seq_++;
+    const auto payload = encode_fps_input_payload(fps_input_seq_++);
+    const auto frame = make_frame(game_proto::MSG_FPS_INPUT, seq, payload);
+
+    boost::system::error_code ec;
+    trace_udp_attach(
+        options_,
+        "udp",
+        "fps-send",
+        "target=" + endpoint_to_string(remote_endpoint_)
+            + " " + frame_summary(std::span<const std::uint8_t>(frame.data(), frame.size())));
+    socket_.send_to(asio::buffer(frame), remote_endpoint_, 0, ec);
+    if (ec) {
+        set_last_error("udp fps input send failed: " + ec.message());
+        return false;
+    }
+
+    return true;
+}
+
+bool UdpSessionClient::wait_for_direct_fps_update(std::chrono::milliseconds timeout, FpsUpdateResult& result) {
+    if (timeout <= std::chrono::milliseconds::zero()) {
+        return false;
+    }
+
+    std::vector<std::uint8_t> datagram;
+    udp::endpoint sender_endpoint;
+    std::string error_message;
+    if (!wait_for_udp_datagram(socket_, sender_endpoint, datagram, timeout, error_message)) {
+        if (error_message == "timeout waiting for udp response") {
+            return false;
+        }
+        set_last_error(std::move(error_message));
+        return false;
+    }
+
+    if (!parse_direct_udp_fps_update(std::span<const std::uint8_t>(datagram.data(), datagram.size()), result)) {
+        return false;
+    }
+
+    result.direct_transport = true;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        ++transport_.fps_direct_updates;
+    }
+    return true;
+}
+
+void UdpSessionClient::clear_pending_direct_updates() {
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        last_error_.clear();
+    }
+    drain_udp_socket_pending(socket_);
+}
+
 bool UdpSessionClient::unsupported_operation(const char* operation) {
     {
         std::lock_guard<std::mutex> lock(mu_);
@@ -1156,6 +1478,7 @@ bool RudpSessionClient::connect(const std::string& host, unsigned short port) {
 
     udp_bound_ = false;
     udp_seq_ = 1;
+    fps_input_seq_ = 1;
     rudp_established_ = false;
     rudp_engine_.reset();
     return true;
@@ -1203,6 +1526,88 @@ bool RudpSessionClient::send_ping_and_wait_pong() {
         return false;
     }
     return true;
+}
+
+bool RudpSessionClient::prepare_fps_session(FpsUpdateResult* result) {
+    if (!rudp_established_) {
+        return tcp_client_.prepare_fps_session(result);
+    }
+
+    clear_pending_direct_updates();
+    FpsUpdateResult ignored;
+    while (tcp_client_.try_pop_fps_update(&ignored)) {
+    }
+
+    if (!send_fps_input_frame()) {
+        return false;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(options_.read_timeout_ms);
+    for (;;) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            set_last_error("timeout waiting for fps snapshot");
+            return false;
+        }
+
+        FpsUpdateResult update;
+        if (tcp_client_.try_pop_fps_update(&update) && update.is_snapshot) {
+            if (result != nullptr) {
+                *result = update;
+            }
+            return true;
+        }
+
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+        if (wait_for_fps_update(std::min<std::chrono::milliseconds>(remaining, std::chrono::milliseconds(10)), update)) {
+            if (update.is_snapshot) {
+                if (result != nullptr) {
+                    *result = update;
+                }
+                return true;
+            }
+        }
+    }
+}
+
+bool RudpSessionClient::send_fps_input_and_wait_state(FpsUpdateResult* result) {
+    if (!rudp_established_) {
+        return tcp_client_.send_fps_input_and_wait_state(result);
+    }
+
+    clear_pending_direct_updates();
+    FpsUpdateResult ignored;
+    while (tcp_client_.try_pop_fps_update(&ignored)) {
+    }
+
+    if (!send_fps_input_frame()) {
+        return false;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(options_.read_timeout_ms);
+    for (;;) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            set_last_error("timeout waiting for fps update");
+            return false;
+        }
+
+        FpsUpdateResult update;
+        if (tcp_client_.try_pop_fps_update(&update)) {
+            if (result != nullptr) {
+                *result = update;
+            }
+            return true;
+        }
+
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+        if (wait_for_fps_update(std::min<std::chrono::milliseconds>(remaining, std::chrono::milliseconds(10)), update)) {
+            if (result != nullptr) {
+                *result = update;
+            }
+            return true;
+        }
+    }
 }
 
 void RudpSessionClient::close() {
@@ -1534,6 +1939,109 @@ bool RudpSessionClient::send_reliable_ping_frame() {
     }
 
     return true;
+}
+
+bool RudpSessionClient::send_fps_input_frame() {
+    if (!udp_bound_) {
+        set_last_error("rudp fps input requires completed udp bind");
+        return false;
+    }
+    if (!rudp_established_) {
+        set_last_error("rudp fps input requires established attach");
+        return false;
+    }
+
+    const auto seq = udp_seq_++;
+    const auto inner_payload = encode_fps_input_payload(fps_input_seq_++);
+    const auto inner_frame = make_frame(game_proto::MSG_FPS_INPUT, seq, inner_payload);
+    std::vector<std::uint8_t> datagram;
+    const auto channel = game_proto::opcode_policy(game_proto::MSG_FPS_INPUT).channel;
+    if (!rudp_engine_.queue_unreliable_payload(inner_frame, channel, unix_time_ms64(), datagram)) {
+        set_last_error("rudp fps input queue failed");
+        return false;
+    }
+
+    boost::system::error_code ec;
+    socket_.send_to(asio::buffer(datagram), remote_endpoint_, 0, ec);
+    if (ec) {
+        set_last_error("rudp fps input send failed: " + ec.message());
+        return false;
+    }
+
+    return true;
+}
+
+bool RudpSessionClient::wait_for_fps_update(std::chrono::milliseconds timeout, FpsUpdateResult& result) {
+    if (timeout <= std::chrono::milliseconds::zero()) {
+        return false;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::vector<std::uint8_t> datagram;
+        std::string error_message;
+        const auto remaining = std::min<std::chrono::milliseconds>(
+            std::chrono::milliseconds(10),
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()));
+        if (!wait_for_datagram(datagram, remaining, error_message)) {
+            if (error_message == "timeout waiting for udp response") {
+                continue;
+            }
+            set_last_error(std::move(error_message));
+            return false;
+        }
+
+        if (!rudp::looks_like_rudp(datagram)) {
+            continue;
+        }
+
+        const auto now_unix_ms = unix_time_ms64();
+        auto process_result = rudp_engine_.process_datagram(datagram, now_unix_ms);
+        for (auto& egress : process_result.egress_datagrams) {
+            boost::system::error_code send_ec;
+            socket_.send_to(asio::buffer(egress), remote_endpoint_, 0, send_ec);
+            if (send_ec) {
+                set_last_error("rudp fps update send failed: " + send_ec.message());
+                return false;
+            }
+        }
+        if (process_result.fallback_required) {
+            rudp_established_ = false;
+            return false;
+        }
+
+        for (const auto& inner_frame : process_result.inner_frames) {
+            if (parse_direct_udp_fps_update(std::span<const std::uint8_t>(inner_frame.data(), inner_frame.size()), result)) {
+                result.direct_transport = true;
+                std::lock_guard<std::mutex> lock(mu_);
+                ++transport_.fps_direct_updates;
+                return true;
+            }
+        }
+
+        auto poll_result = rudp_engine_.poll(now_unix_ms);
+        for (auto& egress : poll_result.egress_datagrams) {
+            boost::system::error_code send_ec;
+            socket_.send_to(asio::buffer(egress), remote_endpoint_, 0, send_ec);
+            if (send_ec) {
+                set_last_error("rudp fps update poll send failed: " + send_ec.message());
+                return false;
+            }
+        }
+        if (poll_result.fallback_required) {
+            rudp_established_ = false;
+            return false;
+        }
+    }
+    return false;
+}
+
+void RudpSessionClient::clear_pending_direct_updates() {
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        last_error_.clear();
+    }
+    drain_udp_socket_pending(socket_);
 }
 
 bool RudpSessionClient::drain_rudp_control(std::chrono::milliseconds budget) {

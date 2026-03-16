@@ -224,6 +224,42 @@
             "transport": "tcp",
             "delivery": "reliable_ordered",
             "channel": 0
+        },
+        {
+            "group": "state",
+            "dir": "c2s",
+            "name": "MSG_FPS_INPUT",
+            "id": "0x0206",
+            "desc": "FPS fixed-step 입력 프레임",
+            "required_state": "authenticated",
+            "processing_place": "inline",
+            "transport": "both",
+            "delivery": "unreliable_sequenced",
+            "channel": 1
+        },
+        {
+            "group": "state",
+            "dir": "s2c",
+            "name": "MSG_FPS_STATE_SNAPSHOT",
+            "id": "0x0207",
+            "desc": "FPS authoritative 상태 스냅샷",
+            "required_state": "any",
+            "processing_place": "inline",
+            "transport": "tcp",
+            "delivery": "reliable_ordered",
+            "channel": 1
+        },
+        {
+            "group": "state",
+            "dir": "s2c",
+            "name": "MSG_FPS_STATE_DELTA",
+            "id": "0x0208",
+            "desc": "FPS authoritative 상태 델타",
+            "required_state": "any",
+            "processing_place": "inline",
+            "transport": "both",
+            "delivery": "unreliable_sequenced",
+            "channel": 1
         }
     ]
 }

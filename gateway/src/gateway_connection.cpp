@@ -150,8 +150,53 @@ void GatewayConnection::handle_backend_payload(std::vector<std::uint8_t> payload
     if (payload.empty() || closing_.load(std::memory_order_relaxed)) {
         return;
     }
-    inspect_backend_payload(std::span<const std::uint8_t>(payload.data(), payload.size()));
-    async_send(std::move(payload));
+
+    constexpr std::size_t kMaxInspectableBytes = 256 * 1024;
+    if (backend_prebuffer_.size() + payload.size() > kMaxInspectableBytes) {
+        backend_prebuffer_.clear();
+    }
+
+    backend_prebuffer_.insert(backend_prebuffer_.end(), payload.begin(), payload.end());
+
+    std::vector<std::uint8_t> tcp_payload;
+    while (backend_prebuffer_.size() >= core_proto::k_header_bytes) {
+        core_proto::PacketHeader header{};
+        core_proto::decode_header(backend_prebuffer_.data(), header);
+        const std::size_t frame_bytes =
+            core_proto::k_header_bytes + static_cast<std::size_t>(header.length);
+        if (backend_prebuffer_.size() < frame_bytes) {
+            break;
+        }
+
+        const auto frame_span = std::span<const std::uint8_t>(backend_prebuffer_.data(), frame_bytes);
+        const auto body = std::span<const std::uint8_t>(
+            backend_prebuffer_.data() + core_proto::k_header_bytes,
+            static_cast<std::size_t>(header.length));
+
+        if (header.msg_id == game_proto::MSG_LOGIN_RES && backend_connection_) {
+            if (const auto resume_token = parse_resume_token_from_login_res(body);
+                resume_token.has_value() && !resume_token->empty()) {
+                const std::string routing_key = make_resume_routing_key(*resume_token);
+                if (!routing_key.empty()) {
+                    app_.register_resume_routing_key(routing_key, backend_connection_->backend_instance_id());
+                }
+            }
+        }
+
+        const bool delivered_direct =
+            !session_id_.empty() && app_.try_send_direct_client_frame(session_id_, header.msg_id, frame_span);
+        if (!delivered_direct) {
+            tcp_payload.insert(tcp_payload.end(), frame_span.begin(), frame_span.end());
+        }
+
+        backend_prebuffer_.erase(
+            backend_prebuffer_.begin(),
+            backend_prebuffer_.begin() + static_cast<std::ptrdiff_t>(frame_bytes));
+    }
+
+    if (!tcp_payload.empty()) {
+        async_send(std::move(tcp_payload));
+    }
 }
 
 void GatewayConnection::handle_backend_close(const std::string& reason) {

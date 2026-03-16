@@ -4,7 +4,10 @@
     { "id": "0x0011", "type": "server::wire::v1::LoginRes",       "name": "LoginRes" },
     { "id": "0x0101", "type": "server::wire::v1::ChatBroadcast",  "name": "ChatBroadcast" },
     { "id": "0x0200", "type": "server::wire::v1::StateSnapshot",  "name": "StateSnapshot" },
-    { "id": "0x0201", "type": "server::wire::v1::RoomUsers",      "name": "RoomUsers" }
+    { "id": "0x0201", "type": "server::wire::v1::RoomUsers",      "name": "RoomUsers" },
+    { "id": "0x0206", "type": "server::wire::v1::FpsInput",       "name": "FpsInput" },
+    { "id": "0x0207", "type": "server::wire::v1::FpsStateSnapshot", "name": "FpsStateSnapshot" },
+    { "id": "0x0208", "type": "server::wire::v1::FpsStateDelta",  "name": "FpsStateDelta" }
   ]
 }
 

@@ -72,6 +72,16 @@ public:
                                 std::uint64_t now_unix_ms,
                                 std::vector<std::uint8_t>& out_datagram);
 
+    /**
+     * @brief inner frame을 재전송 없이 RUDP DATA로 감싸 즉시 송신합니다.
+     * @param out_datagram 즉시 송신할 datagram 출력
+     * @return 패킷 생성에 성공하면 `true`
+     */
+    bool queue_unreliable_payload(std::span<const std::uint8_t> inner_frame,
+                                  std::uint8_t channel,
+                                  std::uint64_t now_unix_ms,
+                                  std::vector<std::uint8_t>& out_datagram);
+
     /** @brief 현재 피어 상태를 반환합니다. */
     const RudpPeerState& state() const noexcept { return state_; }
 

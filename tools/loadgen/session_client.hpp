@@ -30,6 +30,7 @@ struct TransportStats {
     std::uint64_t rudp_attach_attempts{0};
     std::uint64_t rudp_attach_successes{0};
     std::uint64_t rudp_attach_fallbacks{0};
+    std::uint64_t fps_direct_updates{0};
 };
 
 inline void accumulate_transport_stats(TransportStats& target, const TransportStats& source) noexcept {
@@ -44,6 +45,7 @@ inline void accumulate_transport_stats(TransportStats& target, const TransportSt
     target.rudp_attach_attempts += source.rudp_attach_attempts;
     target.rudp_attach_successes += source.rudp_attach_successes;
     target.rudp_attach_fallbacks += source.rudp_attach_fallbacks;
+    target.fps_direct_updates += source.fps_direct_updates;
 }
 
 struct ClientOptions {
@@ -77,6 +79,15 @@ struct UdpBindTicket {
     std::string message;
 };
 
+struct FpsUpdateResult {
+    bool is_snapshot{false};
+    bool direct_transport{false};
+    std::uint32_t server_tick{0};
+    std::uint32_t self_actor_id{0};
+    std::uint32_t actor_count{0};
+    std::uint32_t removed_actor_count{0};
+};
+
 enum class TransportKind {
     kTcp,
     kUdp,
@@ -98,6 +109,8 @@ public:
     virtual bool join(const std::string& room, const std::string& password, SnapshotResult* result = nullptr) = 0;
     virtual bool send_chat_and_wait_echo(const std::string& room, const std::string& text) = 0;
     virtual bool send_ping_and_wait_pong() = 0;
+    virtual bool prepare_fps_session(FpsUpdateResult* result = nullptr) = 0;
+    virtual bool send_fps_input_and_wait_state(FpsUpdateResult* result = nullptr) = 0;
     virtual void close() = 0;
 
     virtual bool is_connected() const noexcept = 0;
@@ -121,7 +134,12 @@ public:
     bool join(const std::string& room, const std::string& password, SnapshotResult* result = nullptr) override;
     bool send_chat_and_wait_echo(const std::string& room, const std::string& text) override;
     bool send_ping_and_wait_pong() override;
+    bool prepare_fps_session(FpsUpdateResult* result = nullptr) override;
+    bool send_fps_input_and_wait_state(FpsUpdateResult* result = nullptr) override;
     bool wait_for_pong(std::chrono::milliseconds timeout);
+    bool wait_for_fps_snapshot(std::chrono::milliseconds timeout, FpsUpdateResult* result = nullptr);
+    bool wait_for_fps_update(std::chrono::milliseconds timeout, FpsUpdateResult* result = nullptr);
+    bool try_pop_fps_update(FpsUpdateResult* result = nullptr);
     void close() override;
 
     bool is_connected() const noexcept override { return connected_.load(); }
@@ -134,6 +152,8 @@ private:
         kHello,
         kLoginRes,
         kSnapshot,
+        kFpsSnapshot,
+        kFpsDelta,
         kPong,
         kSelfChat,
         kUdpBindTicket,
@@ -147,6 +167,7 @@ private:
         LoginResult login;
         UdpBindTicket bind_ticket;
         SnapshotResult snapshot;
+        FpsUpdateResult fps;
         std::string room;
         std::string sender;
         std::string text;
@@ -170,7 +191,9 @@ private:
                         const std::function<bool(const Event&)>& predicate,
                         const char* wait_label,
                         Event* out = nullptr);
+    bool try_pop_event(const std::function<bool(const Event&)>& predicate, Event* out = nullptr);
     void set_last_error_locked(std::string message);
+    void clear_pending_fps_updates_locked();
 
     ClientOptions options_;
     boost::asio::io_context io_;
@@ -194,6 +217,7 @@ private:
     std::string last_error_;
     std::string current_user_;
     TransportStats transport_;
+    std::uint32_t fps_input_seq_{1};
 };
 
 class UdpSessionClient final : public SessionClient {
@@ -207,6 +231,8 @@ public:
     bool join(const std::string& room, const std::string& password, SnapshotResult* result = nullptr) override;
     bool send_chat_and_wait_echo(const std::string& room, const std::string& text) override;
     bool send_ping_and_wait_pong() override;
+    bool prepare_fps_session(FpsUpdateResult* result = nullptr) override;
+    bool send_fps_input_and_wait_state(FpsUpdateResult* result = nullptr) override;
     void close() override;
 
     bool is_connected() const noexcept override;
@@ -221,6 +247,9 @@ private:
     bool send_udp_bind_request(const UdpBindTicket& ticket);
     bool wait_for_udp_bind_response(std::uint32_t expected_seq, UdpBindTicket& ticket);
     bool send_direct_ping_frame();
+    bool send_direct_fps_input_frame();
+    bool wait_for_direct_fps_update(std::chrono::milliseconds timeout, FpsUpdateResult& result);
+    void clear_pending_direct_updates();
     bool unsupported_operation(const char* operation);
     void set_last_error(std::string message);
 
@@ -234,6 +263,7 @@ private:
     std::uint16_t tcp_port_{0};
     std::uint16_t udp_port_{0};
     std::uint32_t udp_seq_{1};
+    std::uint32_t fps_input_seq_{1};
     bool udp_bound_{false};
 
     mutable std::mutex mu_;
@@ -252,6 +282,8 @@ public:
     bool join(const std::string& room, const std::string& password, SnapshotResult* result = nullptr) override;
     bool send_chat_and_wait_echo(const std::string& room, const std::string& text) override;
     bool send_ping_and_wait_pong() override;
+    bool prepare_fps_session(FpsUpdateResult* result = nullptr) override;
+    bool send_fps_input_and_wait_state(FpsUpdateResult* result = nullptr) override;
     void close() override;
 
     bool is_connected() const noexcept override;
@@ -271,6 +303,9 @@ private:
                            std::chrono::milliseconds timeout,
                            std::string& error_message);
     bool send_reliable_ping_frame();
+    bool send_fps_input_frame();
+    bool wait_for_fps_update(std::chrono::milliseconds timeout, FpsUpdateResult& result);
+    void clear_pending_direct_updates();
     bool drain_rudp_control(std::chrono::milliseconds budget);
     bool unsupported_operation(const char* operation);
     void set_last_error(std::string message);
@@ -285,6 +320,7 @@ private:
     std::uint16_t tcp_port_{0};
     std::uint16_t udp_port_{0};
     std::uint32_t udp_seq_{1};
+    std::uint32_t fps_input_seq_{1};
     bool udp_bound_{false};
     bool rudp_established_{false};
     server::core::net::rudp::RudpEngine rudp_engine_;

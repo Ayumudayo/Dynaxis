@@ -5,16 +5,18 @@
 현재 구현 단계:
 
 - `tcp`: login / join / chat / ping workload 지원
-- `udp`: TCP bootstrap + UDP bind 이후 direct `ping` proof 지원 (`login_only`, `ping`)
-- `rudp`: TCP bootstrap + UDP bind + RUDP HELLO 이후 direct `ping` proof 지원 (`login_only`, `ping`)
+- `udp`: TCP bootstrap + UDP bind 이후 direct `ping` / `fps_input` proof 지원 (`login_only`, `ping`, `fps_input`)
+- `rudp`: TCP bootstrap + UDP bind + RUDP HELLO 이후 direct `ping` / `fps_input` proof 지원 (`login_only`, `ping`, `fps_input`)
 
 현재 확인된 경계:
 
 - 생성된 opcode policy 기준으로 direct UDP/RUDP proof frame은 `MSG_UDP_BIND_REQ/RES`와 `MSG_PING`까지 확장되었다.
+- direct gameplay-frequency proof frame은 `MSG_FPS_INPUT` ingress와 `MSG_FPS_STATE_DELTA` egress까지 확장되었다.
 - 따라서 `udp` / `rudp` transport는 아직 `join`, `chat` workload를 실행하지 않는다.
 - unsupported workload는 scenario validation 단계에서 명시적으로 실패한다.
 - UDP/RUDP attach 검증은 gateway-local bind ticket을 사용하므로 HAProxy 대신 같은 gateway의 TCP+UDP 포트를 직접 지정해야 한다.
 - direct ping proof는 request만 UDP/RUDP direct path를 사용하고, `MSG_PONG` response는 기존 TCP bridge 경로를 유지한다.
+- direct FPS proof는 request만 `MSG_FPS_INPUT` direct path를 사용하고, reliable resync snapshot은 TCP bridge 경로를 유지한다.
 
 ## Build
 
@@ -56,6 +58,14 @@ cmake --build build-linux --target stack_loadgen
   - direct same-gateway 경로에서 TCP workload + UDP direct ping 세션을 24세션 / 60초로 유지하는 gameplay-rate sample
 - `tools/loadgen/scenarios/mixed_direct_rudp_ping_soak.json`
   - direct same-gateway 경로에서 TCP workload + RUDP direct ping 세션을 24세션 / 60초로 유지하는 gameplay-rate sample
+- `tools/loadgen/scenarios/udp_fps_input_only.json`
+  - TCP snapshot + direct UDP delta를 포함한 deterministic FPS input proof
+- `tools/loadgen/scenarios/rudp_fps_input_only.json`
+  - TCP snapshot + direct RUDP delta 또는 fallback/OFF TCP delta를 포함한 deterministic FPS input proof
+- `tools/loadgen/scenarios/mixed_direct_udp_fps_soak.json`
+  - direct same-gateway 경로에서 TCP workload + UDP FPS input 세션을 24세션 / 60초로 유지하는 gameplay-rate sample
+- `tools/loadgen/scenarios/mixed_direct_rudp_fps_soak.json`
+  - direct same-gateway 경로에서 TCP workload + RUDP FPS input 세션을 24세션 / 60초로 유지하는 gameplay-rate sample
 
 필드:
 
@@ -96,6 +106,7 @@ transport:
 
 - `chat`
 - `ping`
+- `fps_input`
 - `login_only`
 
 ## Run

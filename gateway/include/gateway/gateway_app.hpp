@@ -21,6 +21,7 @@
 #include <boost/asio/steady_timer.hpp>
 
 #include "gateway/auth/authenticator.hpp"
+#include "gateway/direct_egress_route.hpp"
 #include "gateway/rudp_rollout_policy.hpp"
 #include "gateway/resilience_controls.hpp"
 #include "gateway/udp_bind_abuse_guard.hpp"
@@ -280,6 +281,9 @@ public:
      * @return 생성된 `MSG_UDP_BIND_RES` 프레임, 발급 불가 시 std::nullopt
      */
     std::optional<std::vector<std::uint8_t>> make_udp_bind_ticket_frame(const std::string& session_id);
+    bool try_send_direct_client_frame(std::string_view session_id,
+                                      std::uint16_t msg_id,
+                                      std::span<const std::uint8_t> frame);
 
     boost::asio::io_context io_;
     std::shared_ptr<server::core::net::Hive> hive_;
@@ -450,6 +454,7 @@ public:
     std::atomic<std::uint64_t> udp_forward_reliable_ordered_total_{0};
     std::atomic<std::uint64_t> udp_forward_reliable_total_{0};
     std::atomic<std::uint64_t> udp_forward_unreliable_sequenced_total_{0};
+    std::atomic<std::uint64_t> udp_direct_state_delta_total_{0};
     std::atomic<std::uint64_t> udp_replay_drop_total_{0};
     std::atomic<std::uint64_t> udp_reorder_drop_total_{0};
     std::atomic<std::uint64_t> udp_duplicate_drop_total_{0};
@@ -461,6 +466,8 @@ public:
     std::atomic<std::uint64_t> rudp_packets_reject_total_{0};
     std::atomic<std::uint64_t> rudp_inner_forward_total_{0};
     std::atomic<std::uint64_t> rudp_fallback_total_{0};
+    std::atomic<std::uint64_t> rudp_direct_state_delta_total_{0};
+    std::atomic<std::uint64_t> direct_state_delta_tcp_fallback_total_{0};
     std::atomic<bool> udp_enabled_{false};
 };
 

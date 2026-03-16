@@ -95,6 +95,23 @@ TEST(RudpEngineTest, PollRetransmitsQueuedPayload) {
     ASSERT_EQ(retransmit.egress_datagrams.size(), 1u);
 }
 
+TEST(RudpEngineTest, UnreliableQueueDoesNotCreateRetransmitDebt) {
+    server::core::net::rudp::RudpEngine engine;
+
+    const auto hello = make_rudp_packet(server::core::net::rudp::PacketType::kHello, 8, 0);
+    const auto hello_result = engine.process_datagram(hello, 1000);
+    ASSERT_TRUE(hello_result.handshake_established);
+
+    std::vector<std::uint8_t> outbound;
+    const std::vector<std::uint8_t> payload = {0x0A, 0x0B, 0x0C};
+    ASSERT_TRUE(engine.queue_unreliable_payload(payload, 1, 1010, outbound));
+    EXPECT_FALSE(outbound.empty());
+
+    const auto retransmit = engine.poll(1300);
+    EXPECT_EQ(retransmit.retransmit_count, 0u);
+    EXPECT_TRUE(retransmit.egress_datagrams.empty());
+}
+
 TEST(RudpEngineTest, RuntimeMetricsSignalsIncrease) {
     const auto before = server::core::runtime_metrics::snapshot();
 

@@ -44,6 +44,16 @@ if (TARGET generate_game_opcodes)
     add_dependencies(server_chat_runtime generate_game_opcodes)
 endif()
 
+add_library(server_fps_runtime STATIC
+    src/fps/fps_service.cpp
+)
+target_include_directories(server_fps_runtime PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
+target_include_directories(server_fps_runtime PRIVATE ${CMAKE_BINARY_DIR}/proto)
+target_link_libraries(server_fps_runtime PUBLIC server_core wire_proto)
+if (TARGET generate_game_opcodes)
+    add_dependencies(server_fps_runtime generate_game_opcodes)
+endif()
+
 add_executable(server_app
     src/main.cpp
     src/app/bootstrap.cpp
@@ -51,7 +61,7 @@ add_executable(server_app
     src/app/router.cpp
 )
 target_include_directories(server_app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
-target_link_libraries(server_app PRIVATE server_app_config server_app_backends server_chat_runtime server_core wire_proto)
+target_link_libraries(server_app PRIVATE server_app_config server_app_backends server_chat_runtime server_fps_runtime server_core wire_proto)
 # dlopen/dlsym (Linux)
 target_link_libraries(server_app PRIVATE ${CMAKE_DL_LIBS})
 # protobuf 생성 헤더 경로 추가
