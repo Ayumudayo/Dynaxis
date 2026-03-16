@@ -4,8 +4,7 @@
 #include <memory>
 #include <string>
 
-#include "server/core/state/instance_registry.hpp"
-#include "server/core/storage/redis/client.hpp"
+#include "server/core/state/redis_backend_factory.hpp"
 
 namespace server::state {
 

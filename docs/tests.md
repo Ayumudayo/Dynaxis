@@ -30,6 +30,27 @@ scripts/smoke_wb.ps1 -Config Debug -BuildDir build-windows
   2. `wb_flush`, `wb_pending` 로그 모니터링
   3. Postgres `session_events` 확인: `select id,event_id,type,ts,user_id,session_id,room_id from session_events order by id desc limit 20;`
 
+### 3.1 Session Continuity Proof
+
+- continuity lease/runtime을 검증하려면 `SESSION_CONTINUITY_ENABLED=1` 상태로 stack을 띄운다.
+- 기본 continuity proof:
+  - `python tests/python/verify_session_continuity.py`
+- restart rehearsal proof:
+  - `python tests/python/verify_session_continuity_restart.py --scenario gateway-restart`
+  - `python tests/python/verify_session_continuity_restart.py --scenario server-restart`
+- locator fallback proof:
+  - `python tests/python/verify_session_continuity_restart.py --scenario locator-fallback`
+- world residency fallback proof:
+  - `python tests/python/verify_session_continuity_restart.py --scenario world-residency-fallback`
+- world owner fallback proof:
+  - `python tests/python/verify_session_continuity_restart.py --scenario world-owner-fallback`
+- restart/locator rehearsal은 live stack을 직접 restart하거나 sticky keys를 지우므로 서로 병렬 실행하지 말고 순차 실행한다.
+- gateway proof는 surviving gateway를 통한 resume alias routing hit를 확인한다.
+- server proof는 restarted backend 이후에도 logical session / room continuity가 유지되는지 확인한다.
+- locator fallback proof는 exact resume alias binding을 제거한 뒤에도 same shard locator hint로 resume가 복원되는지 확인한다.
+- world residency fallback proof는 persisted world key를 제거한 뒤 `default world + lobby` safe fallback이 적용되는지 확인한다.
+- world owner fallback proof는 persisted world owner key를 다른 backend owner로 바꾼 뒤에도 restore가 `default world + lobby` safe fallback으로 접히고 owner key가 현재 backend로 복구되는지 확인한다.
+
 ## 4. Redis 통합 테스트(권장)
 - Docker Compose로 Redis/DB를 띄우고 `tests/redis_integration_tests`(추가 예정)를 작성해 Presence/Room membership 캐시를 검증한다.
 - 주요 시나리오: Presence TTL 만료, Sticky Session 재바인딩, Streams pending 복구.

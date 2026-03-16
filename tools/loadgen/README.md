@@ -5,15 +5,18 @@
 현재 구현 단계:
 
 - `tcp`: login / join / chat / ping workload 지원
-- `udp`: TCP bootstrap + UDP bind attach 검증 지원 (`login_only`만 허용)
-- `rudp`: TCP bootstrap + UDP bind + RUDP HELLO attach visibility 지원 (`login_only`만 허용)
+- `udp`: TCP bootstrap + UDP bind 이후 direct `ping` / `fps_input` proof 지원 (`login_only`, `ping`, `fps_input`)
+- `rudp`: TCP bootstrap + UDP bind + RUDP HELLO 이후 direct `ping` / `fps_input` proof 지원 (`login_only`, `ping`, `fps_input`)
 
 현재 확인된 경계:
 
-- 생성된 opcode policy 기준으로 `MSG_UDP_BIND_REQ/RES`만 UDP-capable이다.
-- 따라서 `udp` / `rudp` transport는 아직 `join`, `chat`, `ping` workload를 실행하지 않는다.
+- 생성된 opcode policy 기준으로 direct UDP/RUDP proof frame은 `MSG_UDP_BIND_REQ/RES`와 `MSG_PING`까지 확장되었다.
+- direct gameplay-frequency proof frame은 `MSG_FPS_INPUT` ingress와 `MSG_FPS_STATE_DELTA` egress까지 확장되었다.
+- 따라서 `udp` / `rudp` transport는 아직 `join`, `chat` workload를 실행하지 않는다.
 - unsupported workload는 scenario validation 단계에서 명시적으로 실패한다.
 - UDP/RUDP attach 검증은 gateway-local bind ticket을 사용하므로 HAProxy 대신 같은 gateway의 TCP+UDP 포트를 직접 지정해야 한다.
+- direct ping proof는 request만 UDP/RUDP direct path를 사용하고, `MSG_PONG` response는 기존 TCP bridge 경로를 유지한다.
+- direct FPS proof는 request만 `MSG_FPS_INPUT` direct path를 사용하고, reliable resync snapshot은 TCP bridge 경로를 유지한다.
 
 ## Build
 
@@ -47,6 +50,22 @@ cmake --build build-linux --target stack_loadgen
   - TCP bootstrap 이후 UDP bind attach를 deterministic하게 검증
 - `tools/loadgen/scenarios/rudp_attach_login_only.json`
   - TCP bootstrap 이후 RUDP HELLO attach success/fallback visibility를 검증
+- `tools/loadgen/scenarios/udp_ping_only.json`
+  - TCP bootstrap + UDP bind 이후 direct UDP `ping` proof를 deterministic하게 검증
+- `tools/loadgen/scenarios/rudp_ping_only.json`
+  - TCP bootstrap + UDP bind + RUDP attach/fallback 이후 direct RUDP `ping` proof를 deterministic하게 검증
+- `tools/loadgen/scenarios/mixed_direct_udp_ping_soak.json`
+  - direct same-gateway 경로에서 TCP workload + UDP direct ping 세션을 24세션 / 60초로 유지하는 gameplay-rate sample
+- `tools/loadgen/scenarios/mixed_direct_rudp_ping_soak.json`
+  - direct same-gateway 경로에서 TCP workload + RUDP direct ping 세션을 24세션 / 60초로 유지하는 gameplay-rate sample
+- `tools/loadgen/scenarios/udp_fps_input_only.json`
+  - TCP snapshot + direct UDP delta를 포함한 deterministic FPS input proof
+- `tools/loadgen/scenarios/rudp_fps_input_only.json`
+  - TCP snapshot + direct RUDP delta 또는 fallback/OFF TCP delta를 포함한 deterministic FPS input proof
+- `tools/loadgen/scenarios/mixed_direct_udp_fps_soak.json`
+  - direct same-gateway 경로에서 TCP workload + UDP FPS input 세션을 24세션 / 60초로 유지하는 gameplay-rate sample
+- `tools/loadgen/scenarios/mixed_direct_rudp_fps_soak.json`
+  - direct same-gateway 경로에서 TCP workload + RUDP FPS input 세션을 24세션 / 60초로 유지하는 gameplay-rate sample
 
 필드:
 
@@ -87,6 +106,7 @@ transport:
 
 - `chat`
 - `ping`
+- `fps_input`
 - `login_only`
 
 ## Run
@@ -149,6 +169,19 @@ build-windows\Release\stack_loadgen.exe `
   --report build/loadgen/mixed_direct_udp_soak.host.json
 ```
 
+Deterministic UDP ping proof:
+
+```powershell
+pwsh scripts/deploy_docker.ps1 -Action up -Detached -EnvFile "docker/stack/.env.rudp-attach.example"
+build-windows\Release\stack_loadgen.exe `
+  --host 127.0.0.1 `
+  --port 36100 `
+  --udp-port 7000 `
+  --scenario tools/loadgen/scenarios/udp_ping_only.json `
+  --report build/loadgen/udp_ping_only.host.json `
+  --verbose
+```
+
 Long direct same-gateway mixed TCP+UDP soak:
 
 ```powershell
@@ -161,6 +194,18 @@ build-windows\Release\stack_loadgen.exe `
   --report build/loadgen/mixed_direct_udp_soak_long.host.json
 ```
 
+Mixed direct TCP+UDP ping soak:
+
+```powershell
+pwsh scripts/deploy_docker.ps1 -Action up -Detached -EnvFile "docker/stack/.env.rudp-attach.example"
+build-windows\Release\stack_loadgen.exe `
+  --host 127.0.0.1 `
+  --port 36100 `
+  --udp-port 7000 `
+  --scenario tools/loadgen/scenarios/mixed_direct_udp_ping_soak.json `
+  --report build/loadgen/mixed_direct_udp_ping_soak.host.json
+```
+
 Long direct same-gateway mixed TCP+RUDP soak:
 
 ```powershell
@@ -171,6 +216,31 @@ build-windows\Release\stack_loadgen.exe `
   --udp-port 7000 `
   --scenario tools/loadgen/scenarios/mixed_direct_rudp_soak_long.json `
   --report build/loadgen/mixed_direct_rudp_soak_long.host.json
+```
+
+Deterministic RUDP ping proof:
+
+```powershell
+pwsh scripts/deploy_docker.ps1 -Action up -Detached -EnvFile "docker/stack/.env.rudp-attach.example"
+build-windows\Release\stack_loadgen.exe `
+  --host 127.0.0.1 `
+  --port 36100 `
+  --udp-port 7000 `
+  --scenario tools/loadgen/scenarios/rudp_ping_only.json `
+  --report build/loadgen/rudp_ping_only.host.json `
+  --verbose
+```
+
+Mixed direct TCP+RUDP ping soak:
+
+```powershell
+pwsh scripts/deploy_docker.ps1 -Action up -Detached -EnvFile "docker/stack/.env.rudp-attach.example"
+build-windows\Release\stack_loadgen.exe `
+  --host 127.0.0.1 `
+  --port 36100 `
+  --udp-port 7000 `
+  --scenario tools/loadgen/scenarios/mixed_direct_rudp_ping_soak.json `
+  --report build/loadgen/mixed_direct_rudp_ping_soak.host.json
 ```
 
 Long direct same-gateway mixed TCP+RUDP fallback policy:
@@ -269,14 +339,18 @@ docker run --rm --network "dynaxis-stack_dynaxis-stack" \
 - `gateway_app` 경로는 접속 직후 `MSG_LOGIN_REQ`를 기다리므로, loadgen은 `HELLO`를 선행 조건으로 두지 않는다.
 - 커스텀 room을 여러 세션이 공유하려면 `room_password`를 지정하는 편이 안전하다. 현재 서버 정책상 초기에 만들어진 room은 owner/invite 제약이 생길 수 있다.
 - 기본값으로 `unique_room_per_run=true`를 사용해 run마다 room name에 seed suffix를 붙여 이전 run의 room history/state와 분리한다.
+- login ID도 run seed suffix를 포함하므로, 같은 scenario를 여러 프로세스로 동시에 실행해도 duplicate-login 충돌이 overload 신호로 오인되지 않는다.
 - chat rate는 기본 spam/mute 임계값 아래로 유지해야 한다. 제공된 샘플 시나리오는 이 기준을 반영한다.
 - UDP attach run prerequisites:
   - gateway에 `GATEWAY_UDP_LISTEN`과 `GATEWAY_UDP_BIND_SECRET`가 설정돼 있어야 한다.
+  - direct UDP ping proof를 쓰려면 `GATEWAY_UDP_OPCODE_ALLOWLIST`에 `0x0012,0x0002`가 포함돼 있어야 한다.
   - `docker/stack/.env.rudp-*.example` 파일의 `GATEWAY_UDP_BIND_SECRET=replace-with-non-empty-secret`는 실제 실행 전에 non-empty 값으로 교체해야 한다.
 - RUDP attach success prerequisites:
   - `GATEWAY_RUDP_ENABLE=1`
   - `GATEWAY_RUDP_CANARY_PERCENT=100`
   - non-empty `GATEWAY_RUDP_OPCODE_ALLOWLIST`
+- direct ping proof uses `MSG_PING (0x0002)` in both UDP/RUDP allowlists together with `MSG_UDP_BIND_REQ (0x0012)`
+- `rudp_ping_only.json`은 `RUDP` fallback/OFF에서도 실제 ping iteration이 실행되도록 10초 duration을 사용한다.
 - RUDP forced fallback example:
   - `docker/stack/.env.rudp-fallback.example`
   - expected summary shape: `rudp_attach_ok=0 rudp_attach_fallback>0 errors=0`
@@ -296,4 +370,18 @@ docker run --rm --network "dynaxis-stack_dynaxis-stack" \
   - long direct mixed TCP+RUDP OFF proof: `success=1131 errors=0 udp_bind_ok=8 udp_bind_fail=0 rudp_attach_ok=0 rudp_attach_fallback=8 throughput_rps=8.96 p95_ms=12.95`
   - full matrix env restore proof: `build/loadgen/mixed_direct_rudp_soak_long.final.matrix.host.json`, `build/loadgen/rudp_attach_login_only.final.matrix.host.json`
   - RUDP OFF invariance proof: `rudp_attach_ok=0 rudp_attach_fallback=4 errors=0`
-- 현재 protocol policy 기준으로 UDP-capable opcode는 `MSG_UDP_BIND_REQ/RES`만 존재한다.
+- 2026-03-16 FPS ping-path verification snapshot:
+  - direct UDP attach regression: `udp_bind_ok=4 udp_bind_fail=0 errors=0`
+  - direct RUDP attach regression: `udp_bind_ok=4 udp_bind_fail=0 rudp_attach_ok=4 rudp_attach_fallback=0 errors=0`
+  - `udp_ping_only`: `success=21 errors=0 udp_bind_ok=4 throughput_rps=3.49 p95_ms=1.50`
+  - `rudp_ping_only` success path: `success=37 errors=0 udp_bind_ok=4 rudp_attach_ok=4 throughput_rps=3.36 p95_ms=78.65`
+  - `mixed_direct_udp_ping_soak`: `success=518 errors=0 udp_bind_ok=4 throughput_rps=8.19 p95_ms=11.89`
+  - `mixed_direct_rudp_ping_soak` success path: `success=501 errors=0 udp_bind_ok=4 rudp_attach_ok=4 throughput_rps=7.93 p95_ms=78.26`
+  - `rudp_ping_only` fallback path: `success=6 errors=0 udp_bind_ok=4 rudp_attach_ok=0 rudp_attach_fallback=4 throughput_rps=0.28 p95_ms=1.43`
+  - `mixed_direct_rudp_ping_soak` fallback path: `success=469 errors=0 udp_bind_ok=4 rudp_attach_ok=0 rudp_attach_fallback=4 throughput_rps=7.43 p95_ms=11.95`
+  - `rudp_ping_only` OFF path: `success=6 errors=0 udp_bind_ok=4 rudp_attach_ok=0 rudp_attach_fallback=4 throughput_rps=0.28 p95_ms=1.32`
+  - `mixed_direct_rudp_ping_soak` OFF path: `success=467 errors=0 udp_bind_ok=4 rudp_attach_ok=0 rudp_attach_fallback=4 throughput_rps=7.39 p95_ms=11.83`
+  - retained metrics/log artifacts live under `build/engine-roadmap-fps/metrics/` and `build/engine-roadmap-fps/logs/`
+- current FPS first-slice contract:
+  - direct UDP/RUDP proof frame: `MSG_PING`
+  - response path for that proof: TCP `MSG_PONG`

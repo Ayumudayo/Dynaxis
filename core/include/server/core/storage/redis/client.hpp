@@ -32,6 +32,7 @@ public:
     virtual bool scard_many(const std::vector<std::string>& keys,
                             std::vector<std::size_t>& out) = 0;
     virtual bool del(const std::string& key) = 0;
+    virtual bool set(const std::string& key, const std::string& value) = 0;
     virtual std::optional<std::string> get(const std::string& key) = 0;
     virtual bool mget(const std::vector<std::string>& keys,
                       std::vector<std::optional<std::string>>& out) = 0;

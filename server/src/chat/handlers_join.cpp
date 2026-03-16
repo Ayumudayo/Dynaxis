@@ -49,6 +49,8 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
         std::string previous_room;
         std::string sender;
         std::string room_to_join = room;
+        std::string logical_session_id;
+        std::uint64_t logical_session_expires_unix_ms = 0;
         if (room_to_join.empty()) room_to_join = "lobby";
         corelog::info(std::string("JOIN_ROOM: ") + room_to_join);
 
@@ -210,6 +212,13 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
             
             // 입장 알림 브로드캐스트 메시지를 구성한다.
             if (auto it_uuid = state_.user_uuid.find(session_sp.get()); it_uuid != state_.user_uuid.end()) { user_uuid = it_uuid->second; }
+            if (auto it_logical = state_.logical_session_id.find(session_sp.get()); it_logical != state_.logical_session_id.end()) {
+                logical_session_id = it_logical->second;
+            }
+            if (auto it_expires = state_.logical_session_expires_unix_ms.find(session_sp.get());
+                it_expires != state_.logical_session_expires_unix_ms.end()) {
+                logical_session_expires_unix_ms = it_expires->second;
+            }
             
             server::wire::v1::ChatBroadcast pb; 
             pb.set_room(room_to_join); 
@@ -251,6 +260,9 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
         // Redis 비밀번호 설정 (Lock 해제 후 수행)
         if (should_set_redis_password && redis_) {
             redis_->setex("room:password:" + room_to_join, new_hashed_password, 86400); // 24시간 TTL
+        }
+        if (!logical_session_id.empty()) {
+            persist_continuity_room(logical_session_id, room_to_join, logical_session_expires_unix_ms);
         }
 
         // 로컬 세션들에게 입장 알림 전송

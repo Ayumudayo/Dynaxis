@@ -73,6 +73,14 @@ struct ServerConfig {
     // 메트릭 설정
     unsigned short metrics_port = 0;
 
+    // FPS runtime 설정
+    std::uint32_t fps_tick_rate_hz = 30;
+    std::uint32_t fps_snapshot_refresh_ticks = 30;
+    std::int32_t fps_interest_cell_size_mm = 10'000;
+    std::int32_t fps_interest_radius_cells = 1;
+    std::uint32_t fps_max_interest_recipients_per_tick = 64;
+    std::uint32_t fps_history_ticks = 64;
+
     /**
      * @brief 환경 변수로부터 설정을 로드합니다.
      * @param argc 커맨드라인 인자 개수

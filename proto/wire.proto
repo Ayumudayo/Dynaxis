@@ -9,6 +9,11 @@ message LoginRes {
   uint32 session_id = 2;
   string message = 3;
   bool is_admin = 4;
+  string logical_session_id = 5;
+  string resume_token = 6;
+  uint64 resume_expires_unix_ms = 7;
+  bool resumed = 8;
+  string world_id = 9;
 }
 
 message ChatBroadcast {
@@ -55,4 +60,34 @@ message WhisperNotice {
 message WhisperResult {
   bool ok = 1;
   string reason = 2;
+}
+
+message FpsInput {
+  uint32 input_seq = 1;
+  sint32 move_x_mm = 2;
+  sint32 move_y_mm = 3;
+  sint32 yaw_mdeg = 4;
+}
+
+message FpsActorTransform {
+  uint32 actor_id = 1;
+  sint32 x_mm = 2;
+  sint32 y_mm = 3;
+  sint32 yaw_mdeg = 4;
+  uint32 last_applied_input_seq = 5;
+  uint32 server_tick = 6;
+}
+
+message FpsStateSnapshot {
+  uint32 server_tick = 1;
+  uint32 self_actor_id = 2;
+  repeated FpsActorTransform actors = 3;
+  repeated uint32 removed_actor_ids = 4;
+}
+
+message FpsStateDelta {
+  uint32 server_tick = 1;
+  uint32 self_actor_id = 2;
+  repeated FpsActorTransform actors = 3;
+  repeated uint32 removed_actor_ids = 4;
 }

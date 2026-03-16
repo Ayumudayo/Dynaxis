@@ -77,6 +77,12 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         std::string tracked_user_uuid;
         std::string lobby_room_id;
         std::string login_ip = session_sp->remote_ip();
+        std::string current_room = "lobby";
+        std::string current_world = continuity_.default_world_id.empty() ? std::string("default") : continuity_.default_world_id;
+        std::string continuity_session_id;
+        std::string continuity_resume_token;
+        std::uint64_t continuity_expires_unix_ms = 0;
+        bool resumed_login = false;
         corelog::info("LOGIN_REQ handling started (worker thread)");
 
         {
@@ -84,11 +90,33 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             state_.by_session_id[session_sp->session_id()] = session_sp;
         }
 
+        const auto requested_resume_token = extract_resume_token(token);
+        const auto continuity_resume = try_resume_continuity_lease(token);
+        if (requested_resume_token.has_value() && !continuity_resume.has_value()) {
+            session_sp->send_error(proto::errc::UNAUTHORIZED, "invalid resume token");
+            return;
+        }
+
         // 게스트 모드 판별: 닉네임이 없거나 "guest"인 경우
-        bool guest_mode = (user.empty() || user == "guest");
-        std::string new_user = ensure_unique_or_error(*session_sp, user);
+        const std::string requested_user =
+            continuity_resume.has_value() ? continuity_resume->effective_user : user;
+        bool guest_mode = continuity_resume.has_value() ? false : (user.empty() || user == "guest");
+        std::string new_user = ensure_unique_or_error(*session_sp, requested_user);
         if (new_user.empty()) return; // 중복 등으로 실패 시 종료
-        const std::string hwid_hash = hash_hwid_token(token);
+        const std::string hwid_hash = hash_hwid_token(
+            continuity_resume.has_value() ? std::string_view{} : std::string_view(token));
+
+        if (continuity_resume.has_value()) {
+            tracked_user_uuid = continuity_resume->user_id;
+            continuity_session_id = continuity_resume->logical_session_id;
+            continuity_resume_token = continuity_resume->resume_token;
+            continuity_expires_unix_ms = continuity_resume->expires_unix_ms;
+            current_world = continuity_resume->world_id.empty()
+                ? (continuity_.default_world_id.empty() ? std::string("default") : continuity_.default_world_id)
+                : continuity_resume->world_id;
+            current_room = continuity_resume->room.empty() ? std::string("lobby") : continuity_resume->room;
+            resumed_login = true;
+        }
 
         if (maybe_handle_login_hook(*session_sp, new_user)) {
             return;
@@ -159,8 +187,17 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             if (!hwid_hash.empty()) {
                 state_.user_last_hwid_hash[new_user] = hwid_hash;
             }
-            // 기본적으로 로비에 입장시킵니다.
-            std::string room = "lobby";
+            if (!tracked_user_uuid.empty()) {
+                state_.user_uuid[session_sp.get()] = tracked_user_uuid;
+            }
+            if (!continuity_session_id.empty()) {
+                state_.logical_session_id[session_sp.get()] = continuity_session_id;
+                state_.logical_session_expires_unix_ms[session_sp.get()] = continuity_expires_unix_ms;
+            }
+            state_.cur_world[session_sp.get()] = current_world;
+            // 기본적으로 로비에 입장시키고, continuity resume이면 마지막 방을 복원한다.
+            std::string room = current_room.empty() ? std::string("lobby") : current_room;
+            current_room = room;
             state_.cur_room[session_sp.get()] = room;
             state_.rooms[room].insert(session_sp);
         }
@@ -230,33 +267,69 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                     uow3->commit();
                 }
                 // 현재 방의 room_id를 확보한 뒤 시스템 메시지로 IP를 남긴다.
-                // 로비 채팅창에 접속 로그를 남깁니다 (관리 목적).
-                auto rid = ensure_room_id_ci("lobby");
+                auto rid = ensure_room_id_ci(current_room);
                 if (!rid.empty()) {
                     lobby_room_id = rid; // write-behind 이벤트에 활용한다.
                     auto ip = login_ip;
                     auto uow2 = db_pool_->make_repository_unit_of_work();
                     std::string sys = std::string("(login ip=") + ip + ")";
-                    (void)uow2->messages().create(rid, std::string("lobby"), std::nullopt, sys);
+                    (void)uow2->messages().create(rid, current_room, std::nullopt, sys);
                     uow2->commit();
                 }
             } catch (const std::exception& e) {
                 corelog::warn(std::string("login audit persist failed: ") + e.what());
             }
         }
-        
-        // 로그인 응답 전송
+
+        if (continuity_session_id.empty() && !tracked_user_uuid.empty()) {
+            if (auto lease = issue_continuity_lease(
+                    tracked_user_uuid,
+                    new_user,
+                    current_world,
+                    current_room,
+                    login_ip.empty() ? std::optional<std::string>{} : std::optional<std::string>{login_ip});
+                lease.has_value()) {
+                continuity_session_id = lease->logical_session_id;
+                continuity_resume_token = lease->resume_token;
+                continuity_expires_unix_ms = lease->expires_unix_ms;
+                current_world = lease->world_id;
+                current_room = lease->room;
+                std::lock_guard<std::mutex> lk(state_.mu);
+                state_.logical_session_id[session_sp.get()] = continuity_session_id;
+                state_.logical_session_expires_unix_ms[session_sp.get()] = continuity_expires_unix_ms;
+                state_.cur_world[session_sp.get()] = current_world;
+            }
+        } else if (!continuity_session_id.empty()) {
+            persist_continuity_world(continuity_session_id, current_world, continuity_expires_unix_ms);
+            persist_continuity_world_owner(current_world, continuity_.current_owner_id, continuity_expires_unix_ms);
+            persist_continuity_room(continuity_session_id, current_room, continuity_expires_unix_ms);
+        }
+
         server::wire::v1::LoginRes pb;
         pb.set_effective_user(new_user);
         pb.set_session_id(session_sp->session_id());
-        pb.set_message("ok");
+        pb.set_message(resumed_login ? "resumed" : "ok");
         pb.set_is_admin(admin_users_.count(new_user) > 0);
-        std::string bytes; pb.SerializeToString(&bytes);
+        pb.set_resumed(resumed_login);
+        if (!continuity_session_id.empty()) {
+            pb.set_logical_session_id(continuity_session_id);
+        }
+        if (!continuity_resume_token.empty()) {
+            pb.set_resume_token(continuity_resume_token);
+        }
+        if (continuity_expires_unix_ms > 0) {
+            pb.set_resume_expires_unix_ms(continuity_expires_unix_ms);
+        }
+        if (!current_world.empty()) {
+            pb.set_world_id(current_world);
+        }
+        std::string bytes;
+        pb.SerializeToString(&bytes);
         std::vector<std::uint8_t> res(bytes.begin(), bytes.end());
 
         session_sp->set_session_status(server::core::protocol::SessionStatus::kAuthenticated);
         session_sp->async_send(game_proto::MSG_LOGIN_RES, res, 0);
-
+        
         // presence:user:{uid} 키의 TTL을 주기적으로 갱신해 온라인 리스트를 유지한다.
         if (redis_) {
             try {
@@ -269,12 +342,21 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                     }
                 }
                 touch_user_presence(uid);
+                if (!continuity_session_id.empty()) {
+                    persist_continuity_world(continuity_session_id, current_world, continuity_expires_unix_ms);
+                    persist_continuity_world_owner(current_world, continuity_.current_owner_id, continuity_expires_unix_ms);
+                    persist_continuity_room(continuity_session_id, current_room, continuity_expires_unix_ms);
+                }
                 
-                // 로비 입장 처리 (Redis Set에 추가)
-                redis_->sadd("room:users:lobby", new_user);
+                // 초기 입장 방을 표시용 사용자 목록에 반영한다.
+                if (current_room != "lobby") {
+                    redis_->srem("room:users:lobby", new_user);
+                    redis_->sadd("rooms:active", current_room);
+                }
+                redis_->sadd("room:users:" + current_room, new_user);
                 
-                // 로비에 있는 다른 유저들에게 갱신 알림 전송
-                broadcast_refresh("lobby");
+                // 초기 입장 방에 있는 다른 유저들에게 갱신 알림 전송
+                broadcast_refresh(current_room);
             } catch (...) {}
         }
 
@@ -289,8 +371,12 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             lobby_id_opt = lobby_room_id;
         }
         std::vector<std::pair<std::string, std::string>> wb_fields;
-        wb_fields.emplace_back("room", "lobby");
+        wb_fields.emplace_back("room", current_room);
+        wb_fields.emplace_back("world_id", current_world);
         wb_fields.emplace_back("user_name", new_user);
+        if (resumed_login) {
+            wb_fields.emplace_back("resumed", "1");
+        }
         if (!login_ip.empty()) {
             wb_fields.emplace_back("ip", login_ip);
         }

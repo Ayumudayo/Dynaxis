@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "name": "rudp_ping_only",
+  "transport": "rudp",
+  "sessions": 4,
+  "ramp_up_ms": 1000,
+  "duration_ms": 10000,
+  "room": "loadgen_room",
+  "unique_room_per_run": true,
+  "login_prefix": "rudp_ping",
+  "connect_timeout_ms": 5000,
+  "read_timeout_ms": 5000,
+  "groups": [
+    {
+      "name": "rudp_ping",
+      "mode": "ping",
+      "count": 4,
+      "rate_per_sec": 1.0,
+      "join_room": false
+    }
+  ]
+}

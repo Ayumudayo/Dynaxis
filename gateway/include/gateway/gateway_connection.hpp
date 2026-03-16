@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -64,12 +65,14 @@ private:
     // 브리지 단계에서 클라이언트 payload를 backend 세션으로 전달한다.
     void send_to_backend(std::vector<std::uint8_t> payload);
     void send_to_backend(const std::uint8_t* data, std::size_t length);
+    void inspect_backend_payload(std::span<const std::uint8_t> payload);
 
     std::shared_ptr<auth::IAuthenticator> authenticator_;
     GatewayApp& app_;
     
     std::string session_id_;
     std::string client_id_;
+    std::string resume_routing_key_;
     std::string remote_ip_;
     
     GatewayApp::BackendConnectionPtr backend_connection_; 
@@ -80,6 +83,7 @@ private:
     Phase phase_{Phase::kWaitingForLogin};
     boost::asio::steady_timer handshake_timer_;
     std::vector<std::uint8_t> prebuffer_;
+    std::vector<std::uint8_t> backend_prebuffer_;
 };
 
 } // namespace gateway

@@ -21,6 +21,7 @@
 #include <boost/asio/steady_timer.hpp>
 
 #include "gateway/auth/authenticator.hpp"
+#include "gateway/direct_egress_route.hpp"
 #include "gateway/rudp_rollout_policy.hpp"
 #include "gateway/resilience_controls.hpp"
 #include "gateway/udp_bind_abuse_guard.hpp"
@@ -73,6 +74,16 @@ public:
     struct SelectedBackend {
         server::core::state::InstanceRecord record;
         bool sticky_hit{false};
+    };
+
+    /** @brief resume alias와 함께 보관하는 최소 locator 힌트입니다. */
+    struct ResumeLocatorHint {
+        std::string backend_instance_id;
+        std::string world_id;
+        std::string role;
+        std::string game_mode;
+        std::string region;
+        std::string shard;
     };
 
     /** @brief TCP 응답으로 전달되는 UDP bind ticket 정보입니다. */
@@ -141,6 +152,7 @@ public:
          * @return backend 연결과 매핑된 세션 ID
          */
         const std::string& session_id() const override;
+        const std::string& backend_instance_id() const noexcept { return backend_instance_id_; }
 
     private:
         void do_connect(const std::string& host, std::uint16_t port);
@@ -254,6 +266,8 @@ public:
      * @return 선택된 backend 정보, 후보가 없으면 std::nullopt
      */
     std::optional<SelectedBackend> select_best_server(const std::string& client_id = "");
+    void register_resume_routing_key(const std::string& routing_key,
+                                     const std::string& backend_instance_id);
 
     /** @brief gateway 인스턴스 ID를 반환합니다. */
     std::string gateway_id() const { return gateway_id_; }
@@ -267,6 +281,9 @@ public:
      * @return 생성된 `MSG_UDP_BIND_RES` 프레임, 발급 불가 시 std::nullopt
      */
     std::optional<std::vector<std::uint8_t>> make_udp_bind_ticket_frame(const std::string& session_id);
+    bool try_send_direct_client_frame(std::string_view session_id,
+                                      std::uint16_t msg_id,
+                                      std::span<const std::uint8_t> frame);
 
     boost::asio::io_context io_;
     std::shared_ptr<server::core::net::Hive> hive_;
@@ -279,12 +296,18 @@ public:
     bool allow_anonymous_{true};
 
  private:
-     void on_backend_connected(const std::string& client_id,
-                               const std::string& backend_instance_id,
-                               bool sticky_hit);
-     void configure_gateway();
-     void configure_infrastructure();
-     void start_listener();
+    void on_backend_connected(const std::string& client_id,
+                              const std::string& backend_instance_id,
+                              bool sticky_hit);
+    std::string make_resume_locator_key(std::string_view routing_key) const;
+    std::optional<ResumeLocatorHint> load_resume_locator_hint(std::string_view routing_key);
+    std::optional<server::core::state::InstanceSelector> make_resume_locator_selector(
+        const ResumeLocatorHint& hint) const;
+    void persist_resume_locator_hint(std::string_view routing_key,
+                                     const server::core::state::InstanceRecord& record);
+    void configure_gateway();
+    void configure_infrastructure();
+    void start_listener();
      void start_udp_listener();
      void stop_udp_listener();
      void do_udp_receive();
@@ -328,6 +351,7 @@ public:
     struct SessionState {
         TransportSessionPtr session;              ///< backend 전송 세션 핸들
         std::string client_id;                     ///< sticky 조회용 클라이언트 ID
+        std::string backend_instance_id;           ///< optimistic local load 추적용 backend ID
         bool udp_bound{false};                     ///< UDP endpoint 바인딩 완료 여부
         boost::asio::ip::udp::endpoint udp_endpoint; ///< 바인딩된 UDP endpoint
         std::uint64_t udp_nonce{0};                ///< 마지막 발급 nonce
@@ -354,6 +378,16 @@ public:
     std::atomic<std::uint64_t> backend_circuit_reject_total_{0};
     std::atomic<std::uint64_t> backend_connect_retry_total_{0};
     std::atomic<std::uint64_t> backend_retry_budget_exhausted_total_{0};
+    std::atomic<std::uint64_t> resume_routing_bind_total_{0};
+    std::atomic<std::uint64_t> resume_routing_hit_total_{0};
+    std::atomic<std::uint64_t> resume_locator_bind_total_{0};
+    std::atomic<std::uint64_t> resume_locator_lookup_hit_total_{0};
+    std::atomic<std::uint64_t> resume_locator_lookup_miss_total_{0};
+    std::atomic<std::uint64_t> resume_locator_selector_hit_total_{0};
+    std::atomic<std::uint64_t> resume_locator_selector_fallback_total_{0};
+    std::atomic<std::uint64_t> world_policy_filtered_sticky_total_{0};
+    std::atomic<std::uint64_t> world_policy_filtered_candidate_total_{0};
+    std::atomic<std::uint64_t> world_policy_replacement_selected_total_{0};
 
     std::atomic<std::uint64_t> ingress_reject_not_ready_total_{0};
     std::atomic<std::uint64_t> ingress_reject_rate_limit_total_{0};
@@ -402,6 +436,10 @@ public:
     std::shared_ptr<server::core::state::IInstanceStateBackend> backend_registry_;
     std::unique_ptr<SessionDirectory> session_directory_;
     std::string redis_uri_;
+    std::string continuity_prefix_;
+    std::string session_directory_prefix_{"gateway/session/"};
+    std::string resume_locator_prefix_{"gateway/session/locator/"};
+    std::uint32_t resume_locator_ttl_sec_{900};
 
     std::atomic<bool> infra_probe_stop_{false};
     std::thread infra_probe_thread_;
@@ -420,6 +458,7 @@ public:
     std::atomic<std::uint64_t> udp_forward_reliable_ordered_total_{0};
     std::atomic<std::uint64_t> udp_forward_reliable_total_{0};
     std::atomic<std::uint64_t> udp_forward_unreliable_sequenced_total_{0};
+    std::atomic<std::uint64_t> udp_direct_state_delta_total_{0};
     std::atomic<std::uint64_t> udp_replay_drop_total_{0};
     std::atomic<std::uint64_t> udp_reorder_drop_total_{0};
     std::atomic<std::uint64_t> udp_duplicate_drop_total_{0};
@@ -431,6 +470,8 @@ public:
     std::atomic<std::uint64_t> rudp_packets_reject_total_{0};
     std::atomic<std::uint64_t> rudp_inner_forward_total_{0};
     std::atomic<std::uint64_t> rudp_fallback_total_{0};
+    std::atomic<std::uint64_t> rudp_direct_state_delta_total_{0};
+    std::atomic<std::uint64_t> direct_state_delta_tcp_fallback_total_{0};
     std::atomic<bool> udp_enabled_{false};
 };
 

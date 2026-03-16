@@ -15,7 +15,7 @@
 | ID | 이름 | 방향 | 상태 | 처리 위치 | 전송 | 전달 보장 | 채널 | 설명 |
 |---:|------|:---:|:-----:|:---------:|:----:|:---------:|-------:|------|
 | 0x0001 | `MSG_HELLO` | `s2c` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 버전/서버 정보 |
-| 0x0002 | `MSG_PING` | `c2s` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 하트비트 핑 |
+| 0x0002 | `MSG_PING` | `c2s` | `any` | `inline` | `both` | `reliable` | 0 | 하트비트 핑 |
 | 0x0003 | `MSG_PONG` | `c2s` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 하트비트 퐁 |
 | 0x0004 | `MSG_ERR` | `s2c` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 에러 응답 |
 
@@ -61,3 +61,6 @@
 | 0x0203 | `MSG_ROOM_USERS_REQ` | `c2s` | `authenticated` | `inline` | `tcp` | `reliable_ordered` | 0 | 특정 방 사용자 목록 요청 |
 | 0x0204 | `MSG_REFRESH_REQ` | `c2s` | `authenticated` | `inline` | `tcp` | `reliable_ordered` | 0 | 현재 방 스냅샷 요청 |
 | 0x0205 | `MSG_REFRESH_NOTIFY` | `s2c` | `any` | `inline` | `tcp` | `reliable_ordered` | 0 | 상태 변경 알림 (클라이언트가 REFRESH_REQ를 보내도록 유도) |
+| 0x0206 | `MSG_FPS_INPUT` | `c2s` | `authenticated` | `inline` | `both` | `unreliable_sequenced` | 1 | FPS fixed-step 입력 프레임 |
+| 0x0207 | `MSG_FPS_STATE_SNAPSHOT` | `s2c` | `any` | `inline` | `tcp` | `reliable_ordered` | 1 | FPS authoritative 상태 스냅샷 |
+| 0x0208 | `MSG_FPS_STATE_DELTA` | `s2c` | `any` | `inline` | `both` | `unreliable_sequenced` | 1 | FPS authoritative 상태 델타 |

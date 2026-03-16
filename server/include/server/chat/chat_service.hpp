@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -19,6 +20,7 @@
 
 #include "server/core/net/session.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
+#include "server/core/state/world_lifecycle_policy.hpp"
 #include "server/core/storage/redis/client.hpp"
 #include "server/protocol/game_opcodes.hpp"
 #include "server/chat/chat_hook_plugin_abi.hpp"
@@ -328,6 +330,32 @@ public:
 
     LuaHooksMetrics lua_hooks_metrics() const;
 
+    /** @brief continuity lease/state handoff 집계 메트릭입니다. */
+    struct ContinuityMetrics {
+        std::uint64_t lease_issue_total{0};
+        std::uint64_t lease_issue_fail_total{0};
+        std::uint64_t lease_resume_total{0};
+        std::uint64_t lease_resume_fail_total{0};
+        std::uint64_t state_write_total{0};
+        std::uint64_t state_write_fail_total{0};
+        std::uint64_t state_restore_total{0};
+        std::uint64_t state_restore_fallback_total{0};
+        std::uint64_t world_write_total{0};
+        std::uint64_t world_write_fail_total{0};
+        std::uint64_t world_restore_total{0};
+        std::uint64_t world_restore_fallback_total{0};
+        std::uint64_t world_restore_fallback_missing_world_total{0};
+        std::uint64_t world_restore_fallback_missing_owner_total{0};
+        std::uint64_t world_restore_fallback_owner_mismatch_total{0};
+        std::uint64_t world_restore_fallback_draining_replacement_unhonored_total{0};
+        std::uint64_t world_owner_write_total{0};
+        std::uint64_t world_owner_write_fail_total{0};
+        std::uint64_t world_owner_restore_total{0};
+        std::uint64_t world_owner_restore_fallback_total{0};
+    };
+
+    ContinuityMetrics continuity_metrics() const;
+
 private:
     using Session = NetSession;
     using WeakSession = std::weak_ptr<Session>;
@@ -355,6 +383,15 @@ private:
         std::string prefix;
     };
 
+    /** @brief reconnect/resume용 logical session continuity 설정입니다. */
+    struct ContinuityConfig {
+        bool enabled{false};
+        unsigned int lease_ttl_sec{15 * 60};
+        std::string redis_prefix;
+        std::string default_world_id;
+        std::string current_owner_id;
+    };
+
     // 서버의 전체 상태를 관리하는 구조체
     // 멀티스레드 환경에서 안전하게 접근하기 위해 mutex로 보호됩니다.
     /** @brief 세션/방/제재 상태를 보관하는 서버 메모리 상태 컨테이너입니다. */
@@ -378,6 +415,9 @@ private:
         std::unordered_map<Session*, std::string> user;          // 세션 -> 닉네임
         std::unordered_map<Session*, std::string> user_uuid;     // 세션 -> 유저 UUID
         std::unordered_map<Session*, std::string> session_uuid;  // 세션 -> 세션 UUID
+        std::unordered_map<Session*, std::string> logical_session_id; // 세션 -> logical continuity session ID
+        std::unordered_map<Session*, std::uint64_t> logical_session_expires_unix_ms; // 세션 -> continuity lease 만료 시각
+        std::unordered_map<Session*, std::string> cur_world;     // 세션 -> 현재 소속 world residency ID
         std::unordered_map<Session*, std::string> cur_room;      // 세션 -> 현재 참여 중인 방 이름
         std::unordered_map<Session*, std::string> session_ip;     // 세션 -> 최근 로그인 IP
         std::unordered_map<Session*, std::string> session_hwid_hash; // 세션 -> HWID 해시(로그인 토큰 기반)
@@ -418,6 +458,26 @@ private:
     std::uint32_t spam_ban_violation_threshold_{3};
     std::uint64_t lua_auto_disable_threshold_{3};
     std::uint64_t lua_hook_warn_budget_us_{0};
+    std::atomic<std::uint64_t> continuity_lease_issue_total_{0};
+    std::atomic<std::uint64_t> continuity_lease_issue_fail_total_{0};
+    std::atomic<std::uint64_t> continuity_lease_resume_total_{0};
+    std::atomic<std::uint64_t> continuity_lease_resume_fail_total_{0};
+    std::atomic<std::uint64_t> continuity_state_write_total_{0};
+    std::atomic<std::uint64_t> continuity_state_write_fail_total_{0};
+    std::atomic<std::uint64_t> continuity_state_restore_total_{0};
+    std::atomic<std::uint64_t> continuity_state_restore_fallback_total_{0};
+    std::atomic<std::uint64_t> continuity_world_write_total_{0};
+    std::atomic<std::uint64_t> continuity_world_write_fail_total_{0};
+    std::atomic<std::uint64_t> continuity_world_restore_total_{0};
+    std::atomic<std::uint64_t> continuity_world_restore_fallback_total_{0};
+    std::atomic<std::uint64_t> continuity_world_restore_fallback_missing_world_total_{0};
+    std::atomic<std::uint64_t> continuity_world_restore_fallback_missing_owner_total_{0};
+    std::atomic<std::uint64_t> continuity_world_restore_fallback_owner_mismatch_total_{0};
+    std::atomic<std::uint64_t> continuity_world_restore_fallback_draining_replacement_unhonored_total_{0};
+    std::atomic<std::uint64_t> continuity_world_owner_write_total_{0};
+    std::atomic<std::uint64_t> continuity_world_owner_write_fail_total_{0};
+    std::atomic<std::uint64_t> continuity_world_owner_restore_total_{0};
+    std::atomic<std::uint64_t> continuity_world_owner_restore_fallback_total_{0};
     mutable std::mutex lua_hook_metrics_mu_;
     std::unordered_map<std::string, std::uint64_t> lua_hook_consecutive_failures_;
     std::unordered_map<std::string, std::uint64_t> lua_hook_auto_disable_total_;
@@ -438,6 +498,7 @@ private:
 
     WriteBehindConfig write_behind_;
     PresenceConfig presence_{};
+    ContinuityConfig continuity_{};
     
     // 메시지 히스토리 캐싱 설정
     /** @brief 스냅샷/refresh 경로의 최근 메시지 캐시 파라미터입니다. */
@@ -475,10 +536,47 @@ private:
     std::string hash_hwid_token(std::string_view token) const;
     void send_whisper_result(Session& s, bool ok, const std::string& reason);
     std::string ensure_room_id_ci(const std::string& room_name);
+
+    /** @brief persisted logical session lease 한 건의 복원/발급 결과입니다. */
+    struct ContinuityLease {
+        std::string logical_session_id;
+        std::string resume_token;
+        std::string user_id;
+        std::string effective_user;
+        std::string world_id;
+        std::string room;
+        std::uint64_t expires_unix_ms{0};
+        bool resumed{false};
+    };
     
     // Redis 키 생성 헬퍼
     std::string make_recent_list_key(const std::string& room_id) const;
     std::string make_recent_message_key(std::uint64_t message_id) const;
+    std::string make_continuity_room_key(const std::string& logical_session_id) const;
+    std::string make_continuity_world_key(const std::string& logical_session_id) const;
+    std::string make_continuity_world_owner_key(const std::string& world_id) const;
+    std::string make_continuity_world_policy_key(const std::string& world_id) const;
+    bool continuity_enabled() const;
+    std::optional<std::string> extract_resume_token(std::string_view token) const;
+    std::optional<std::string> load_continuity_room(const std::string& logical_session_id);
+    std::optional<std::string> load_continuity_world(const std::string& logical_session_id);
+    std::optional<std::string> load_continuity_world_owner(const std::string& world_id);
+    std::optional<server::core::state::WorldLifecyclePolicy> load_continuity_world_policy(const std::string& world_id);
+    void persist_continuity_room(const std::string& logical_session_id,
+                                 const std::string& room,
+                                 std::uint64_t expires_unix_ms);
+    void persist_continuity_world(const std::string& logical_session_id,
+                                  const std::string& world_id,
+                                  std::uint64_t expires_unix_ms);
+    void persist_continuity_world_owner(const std::string& world_id,
+                                        const std::string& owner_id,
+                                        std::uint64_t expires_unix_ms);
+    std::optional<ContinuityLease> try_resume_continuity_lease(std::string_view token);
+    std::optional<ContinuityLease> issue_continuity_lease(const std::string& user_id,
+                                                          const std::string& effective_user,
+                                                          const std::string& world_id,
+                                                          const std::string& room,
+                                                          const std::optional<std::string>& client_ip);
     
     // 캐시 관리
     bool cache_recent_message(const std::string& room_id,

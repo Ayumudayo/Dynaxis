@@ -219,6 +219,28 @@ bool RudpEngine::queue_reliable_payload(std::span<const std::uint8_t> inner_fram
     return true;
 }
 
+bool RudpEngine::queue_unreliable_payload(std::span<const std::uint8_t> inner_frame,
+                                          std::uint8_t channel,
+                                          std::uint64_t now_unix_ms,
+                                          std::vector<std::uint8_t>& out_datagram) {
+    if (state_.lifecycle != LifecycleState::kEstablished) {
+        return false;
+    }
+
+    if (inner_frame.empty()) {
+        return false;
+    }
+
+    if (inner_frame.size() > config_.mtu_payload_bytes) {
+        return false;
+    }
+
+    const auto packet_number = state_.next_packet_number++;
+    state_.last_send_unix_ms = now_unix_ms;
+    out_datagram = make_packet(PacketType::kData, 0, channel, packet_number, now_unix_ms, inner_frame);
+    return true;
+}
+
 ProcessResult RudpEngine::poll(std::uint64_t now_unix_ms) {
     ProcessResult result{};
 

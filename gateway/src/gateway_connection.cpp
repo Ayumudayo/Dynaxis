@@ -1,8 +1,11 @@
 #include "gateway/gateway_connection.hpp"
 
 #include <atomic>
+#include <array>
 #include <string>
 #include <utility>
+
+#include <openssl/sha.h>
 
 #include "gateway/gateway_app.hpp"
 #include "server/core/util/log.hpp"
@@ -22,6 +25,9 @@ namespace core_proto = server::core::protocol;
 
 namespace {
 
+constexpr std::string_view kResumeTokenPrefix = "resume:";
+constexpr std::string_view kResumeRoutingPrefix = "resume-hash:";
+
 std::vector<std::uint8_t> make_control_frame(const core_proto::PacketHeader& header,
                                              std::uint16_t msg_id,
                                              std::span<const std::uint8_t> payload = {}) {
@@ -37,6 +43,95 @@ std::vector<std::uint8_t> make_control_frame(const core_proto::PacketHeader& hea
         std::memcpy(frame.data() + core_proto::k_header_bytes, payload.data(), payload.size());
     }
     return frame;
+}
+
+std::string sha256_hex(std::string_view input) {
+    std::array<unsigned char, SHA256_DIGEST_LENGTH> digest{};
+    if (SHA256(reinterpret_cast<const unsigned char*>(input.data()), input.size(), digest.data()) == nullptr) {
+        return {};
+    }
+
+    static constexpr char kHexDigits[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(digest.size() * 2);
+    for (unsigned char byte : digest) {
+        out.push_back(kHexDigits[(byte >> 4) & 0x0F]);
+        out.push_back(kHexDigits[byte & 0x0F]);
+    }
+    return out;
+}
+
+std::string make_resume_routing_key(std::string_view raw_resume_token) {
+    const std::string digest = sha256_hex(raw_resume_token);
+    if (digest.empty()) {
+        return {};
+    }
+    return std::string(kResumeRoutingPrefix) + digest;
+}
+
+bool is_resume_routing_key(std::string_view value) {
+    return value.rfind(kResumeRoutingPrefix, 0) == 0;
+}
+
+bool read_varint(std::span<const std::uint8_t> input, std::size_t& offset, std::uint64_t& value) {
+    value = 0;
+    unsigned int shift = 0;
+    while (offset < input.size()) {
+        const std::uint8_t byte = input[offset++];
+        value |= static_cast<std::uint64_t>(byte & 0x7Fu) << shift;
+        if ((byte & 0x80u) == 0) {
+            return true;
+        }
+        shift += 7;
+        if (shift > 63) {
+            return false;
+        }
+    }
+    return false;
+}
+
+bool skip_wire_value(std::span<const std::uint8_t> input, std::size_t& offset, std::uint64_t wire_type) {
+    switch (wire_type) {
+    case 0: {
+        std::uint64_t ignored = 0;
+        return read_varint(input, offset, ignored);
+    }
+    case 2: {
+        std::uint64_t len = 0;
+        if (!read_varint(input, offset, len) || offset + len > input.size()) {
+            return false;
+        }
+        offset += static_cast<std::size_t>(len);
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+std::optional<std::string> parse_resume_token_from_login_res(std::span<const std::uint8_t> payload) {
+    std::size_t offset = 0;
+    while (offset < payload.size()) {
+        std::uint64_t tag = 0;
+        if (!read_varint(payload, offset, tag)) {
+            return std::nullopt;
+        }
+
+        const std::uint64_t field_number = tag >> 3;
+        const std::uint64_t wire_type = tag & 0x07u;
+        if (field_number == 6 && wire_type == 2) {
+            std::uint64_t len = 0;
+            if (!read_varint(payload, offset, len) || offset + len > payload.size()) {
+                return std::nullopt;
+            }
+            return std::string(reinterpret_cast<const char*>(payload.data() + offset), static_cast<std::size_t>(len));
+        }
+
+        if (!skip_wire_value(payload, offset, wire_type)) {
+            return std::nullopt;
+        }
+    }
+    return std::nullopt;
 }
 
 } // namespace
@@ -55,7 +150,53 @@ void GatewayConnection::handle_backend_payload(std::vector<std::uint8_t> payload
     if (payload.empty() || closing_.load(std::memory_order_relaxed)) {
         return;
     }
-    async_send(std::move(payload));
+
+    constexpr std::size_t kMaxInspectableBytes = 256 * 1024;
+    if (backend_prebuffer_.size() + payload.size() > kMaxInspectableBytes) {
+        backend_prebuffer_.clear();
+    }
+
+    backend_prebuffer_.insert(backend_prebuffer_.end(), payload.begin(), payload.end());
+
+    std::vector<std::uint8_t> tcp_payload;
+    while (backend_prebuffer_.size() >= core_proto::k_header_bytes) {
+        core_proto::PacketHeader header{};
+        core_proto::decode_header(backend_prebuffer_.data(), header);
+        const std::size_t frame_bytes =
+            core_proto::k_header_bytes + static_cast<std::size_t>(header.length);
+        if (backend_prebuffer_.size() < frame_bytes) {
+            break;
+        }
+
+        const auto frame_span = std::span<const std::uint8_t>(backend_prebuffer_.data(), frame_bytes);
+        const auto body = std::span<const std::uint8_t>(
+            backend_prebuffer_.data() + core_proto::k_header_bytes,
+            static_cast<std::size_t>(header.length));
+
+        if (header.msg_id == game_proto::MSG_LOGIN_RES && backend_connection_) {
+            if (const auto resume_token = parse_resume_token_from_login_res(body);
+                resume_token.has_value() && !resume_token->empty()) {
+                const std::string routing_key = make_resume_routing_key(*resume_token);
+                if (!routing_key.empty()) {
+                    app_.register_resume_routing_key(routing_key, backend_connection_->backend_instance_id());
+                }
+            }
+        }
+
+        const bool delivered_direct =
+            !session_id_.empty() && app_.try_send_direct_client_frame(session_id_, header.msg_id, frame_span);
+        if (!delivered_direct) {
+            tcp_payload.insert(tcp_payload.end(), frame_span.begin(), frame_span.end());
+        }
+
+        backend_prebuffer_.erase(
+            backend_prebuffer_.begin(),
+            backend_prebuffer_.begin() + static_cast<std::ptrdiff_t>(frame_bytes));
+    }
+
+    if (!tcp_payload.empty()) {
+        async_send(std::move(tcp_payload));
+    }
 }
 
 void GatewayConnection::handle_backend_close(const std::string& reason) {
@@ -268,6 +409,16 @@ bool GatewayConnection::try_finish_handshake() {
         }
 
         std::string routing_key = !request.client_id.empty() ? request.client_id : last_auth_result_.subject;
+        if (token.rfind(kResumeTokenPrefix, 0) == 0) {
+            const std::string raw_resume_token(token.substr(kResumeTokenPrefix.size()));
+            if (!raw_resume_token.empty()) {
+                const std::string resume_routing_key = make_resume_routing_key(raw_resume_token);
+                if (!resume_routing_key.empty()) {
+                    resume_routing_key_ = resume_routing_key;
+                    routing_key = resume_routing_key_;
+                }
+            }
+        }
         if (routing_key.empty() || routing_key == "guest") {
             routing_key = "anonymous";
         }
@@ -340,6 +491,45 @@ void GatewayConnection::send_to_backend(const std::uint8_t* data, std::size_t le
         return;
     }
     backend_connection_->send(data, length);
+}
+
+void GatewayConnection::inspect_backend_payload(std::span<const std::uint8_t> payload) {
+    if (payload.empty()) {
+        return;
+    }
+
+    constexpr std::size_t kMaxInspectableBytes = 256 * 1024;
+    if (backend_prebuffer_.size() + payload.size() > kMaxInspectableBytes) {
+        backend_prebuffer_.clear();
+    }
+
+    backend_prebuffer_.insert(backend_prebuffer_.end(), payload.begin(), payload.end());
+    while (backend_prebuffer_.size() >= core_proto::k_header_bytes) {
+        core_proto::PacketHeader header{};
+        core_proto::decode_header(backend_prebuffer_.data(), header);
+        const std::size_t frame_bytes =
+            core_proto::k_header_bytes + static_cast<std::size_t>(header.length);
+        if (backend_prebuffer_.size() < frame_bytes) {
+            return;
+        }
+
+        if (header.msg_id == game_proto::MSG_LOGIN_RES && backend_connection_) {
+            const auto body = std::span<const std::uint8_t>(
+                backend_prebuffer_.data() + core_proto::k_header_bytes,
+                static_cast<std::size_t>(header.length));
+            if (const auto resume_token = parse_resume_token_from_login_res(body);
+                resume_token.has_value() && !resume_token->empty()) {
+                const std::string routing_key = make_resume_routing_key(*resume_token);
+                if (!routing_key.empty()) {
+                    app_.register_resume_routing_key(routing_key, backend_connection_->backend_instance_id());
+                }
+            }
+        }
+
+        backend_prebuffer_.erase(
+            backend_prebuffer_.begin(),
+            backend_prebuffer_.begin() + static_cast<std::ptrdiff_t>(frame_bytes));
+    }
 }
 
 } // namespace gateway

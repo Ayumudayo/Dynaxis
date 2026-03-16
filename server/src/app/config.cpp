@@ -226,6 +226,44 @@ bool ServerConfig::load(int argc, char** argv) {
         if (v > 0 && v < 65536) metrics_port = static_cast<unsigned short>(v);
     }
 
+    // 8. FPS runtime 설정
+    if (const char* val = std::getenv("FPS_TICK_RATE_HZ"); val && *val) {
+        const auto parsed = std::strtoul(val, nullptr, 10);
+        if (parsed > 0 && parsed <= 240) {
+            fps_tick_rate_hz = static_cast<std::uint32_t>(parsed);
+        }
+    }
+    if (const char* val = std::getenv("FPS_SNAPSHOT_REFRESH_TICKS"); val && *val) {
+        const auto parsed = std::strtoul(val, nullptr, 10);
+        if (parsed > 0) {
+            fps_snapshot_refresh_ticks = static_cast<std::uint32_t>(parsed);
+        }
+    }
+    if (const char* val = std::getenv("FPS_INTEREST_CELL_SIZE_MM"); val && *val) {
+        const auto parsed = std::strtol(val, nullptr, 10);
+        if (parsed > 0) {
+            fps_interest_cell_size_mm = static_cast<std::int32_t>(parsed);
+        }
+    }
+    if (const char* val = std::getenv("FPS_INTEREST_RADIUS_CELLS"); val && *val) {
+        const auto parsed = std::strtol(val, nullptr, 10);
+        if (parsed >= 0) {
+            fps_interest_radius_cells = static_cast<std::int32_t>(parsed);
+        }
+    }
+    if (const char* val = std::getenv("FPS_MAX_INTEREST_RECIPIENTS_PER_TICK"); val && *val) {
+        const auto parsed = std::strtoul(val, nullptr, 10);
+        if (parsed > 0) {
+            fps_max_interest_recipients_per_tick = static_cast<std::uint32_t>(parsed);
+        }
+    }
+    if (const char* val = std::getenv("FPS_HISTORY_TICKS"); val && *val) {
+        const auto parsed = std::strtoul(val, nullptr, 10);
+        if (parsed > 0) {
+            fps_history_ticks = static_cast<std::uint32_t>(parsed);
+        }
+    }
+
     return true;
 }
 

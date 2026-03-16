@@ -29,8 +29,8 @@
             "desc": "하트비트 핑",
             "required_state": "any",
             "processing_place": "inline",
-            "transport": "tcp",
-            "delivery": "reliable_ordered",
+            "transport": "both",
+            "delivery": "reliable",
             "channel": 0
         },
         {

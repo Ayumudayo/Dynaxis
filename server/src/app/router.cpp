@@ -4,6 +4,7 @@
 #include "server/core/protocol/opcode_policy.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
 #include "server/core/util/log.hpp"
+#include "server/fps/fps_service.hpp"
 #include "server/protocol/game_opcodes.hpp"
 #include "server/chat/chat_service.hpp"
 
@@ -21,7 +22,9 @@ namespace server::app {
 // 현재 서버는 ChatService 단일 모듈이 모든 메시지를 처리하므로 dispatcher 테이블만 채우면 된다.
 // ChatService가 대부분의 메시지를 처리하므로 dispatcher는 단순한 라우팅 테이블 역할을 한다.
 // 각 메시지 ID(opcode)에 대해 어떤 함수가 호출되어야 하는지 정의합니다.
-void register_routes(server::core::Dispatcher& dispatcher, server::app::chat::ChatService& chat) {
+void register_routes(server::core::Dispatcher& dispatcher,
+                     server::app::chat::ChatService& chat,
+                     server::app::fps::FpsService& fps) {
     using NetSession = server::app::chat::ChatService::NetSession;
     using server::core::protocol::TransportMask;
     using server::core::protocol::MSG_PING;
@@ -34,6 +37,7 @@ void register_routes(server::core::Dispatcher& dispatcher, server::app::chat::Ch
     using server::protocol::MSG_ROOMS_REQ;
     using server::protocol::MSG_ROOM_USERS_REQ;
     using server::protocol::MSG_REFRESH_REQ;
+    using server::protocol::MSG_FPS_INPUT;
 
     auto register_core = [&dispatcher](std::uint16_t msg_id, auto&& handler) {
         const auto policy = server::core::protocol::opcode_policy(msg_id);
@@ -82,6 +86,9 @@ void register_routes(server::core::Dispatcher& dispatcher, server::app::chat::Ch
 
     register_game(MSG_REFRESH_REQ,
         [&chat](NetSession& s, std::span<const std::uint8_t> payload) { chat.on_refresh_request(s, payload); });
+
+    register_game(MSG_FPS_INPUT,
+        [&fps](NetSession& s, std::span<const std::uint8_t> payload) { fps.on_input(s, payload); });
 }
 
 } // namespace server::app

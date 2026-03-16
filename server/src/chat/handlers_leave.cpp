@@ -44,6 +44,8 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
         std::vector<std::uint8_t> body;
         std::string room_to_leave;
         std::string sender_name;
+        std::string logical_session_id;
+        std::uint64_t logical_session_expires_unix_ms = 0;
         {
             std::lock_guard<std::mutex> lk(state_.mu);
             // 인증 여부 확인
@@ -70,6 +72,13 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
                 auto it2 = state_.user.find(session_sp.get());
                 sender_name = (it2 != state_.user.end()) ? it2->second : std::string("guest");
                 if (auto it_uuid = state_.user_uuid.find(session_sp.get()); it_uuid != state_.user_uuid.end()) { user_uuid = it_uuid->second; }
+                if (auto it_logical = state_.logical_session_id.find(session_sp.get()); it_logical != state_.logical_session_id.end()) {
+                    logical_session_id = it_logical->second;
+                }
+                if (auto it_expires = state_.logical_session_expires_unix_ms.find(session_sp.get());
+                    it_expires != state_.logical_session_expires_unix_ms.end()) {
+                    logical_session_expires_unix_ms = it_expires->second;
+                }
 
                 if (maybe_handle_leave_hook(*session_sp, sender_name, room_to_leave)) {
                     return;
@@ -130,6 +139,9 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
             // 사용자를 로비로 이동시킴
             state_.cur_room[session_sp.get()] = std::string("lobby");
             state_.rooms["lobby"].insert(session_sp);
+        }
+        if (!logical_session_id.empty()) {
+            persist_continuity_room(logical_session_id, next_room, logical_session_expires_unix_ms);
         }
 
         // 방 퇴장 브로드캐스트 메시지를 구성한다.

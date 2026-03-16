@@ -54,7 +54,9 @@
 | `server/core/plugin/plugin_host.hpp` | Transitional | 플러그인 로딩/리로드 제네릭 호스트로 core platform capability의 주 메커니즘 |
 | `server/core/plugin/plugin_chain_host.hpp` | Transitional | 디렉터리 스캔/체인 구성/리로드 정책이 안정화 중인 core 확장 체인 표면 |
 | `server/core/runtime_metrics.hpp` | Stable | server/gateway/tools 관측 경로가 사용하는 프로세스 전역 런타임 카운터/스냅샷 계약 |
-| `server/core/state/instance_registry.hpp` | Internal | `InstanceRecord`/selector/backend-interface 같은 shared discovery contract이지만 Redis/Consul adapter 및 sticky routing 안정화가 끝나지 않은 internal 경계 |
+| `server/core/state/instance_registry.hpp` | Internal | `InstanceRecord`/selector/backend-interface 같은 shared discovery contract이지만 discovery adapter/sticky routing 안정화가 끝나지 않은 internal 경계 |
+| `server/core/state/redis_instance_registry.hpp` | Internal | Redis-backed discovery adapter/runtime seam의 canonical header. ownership은 core로 옮겼지만 아직 Stable 승격 전인 transitional/internal 경계 |
+| `server/core/state/redis_backend_factory.hpp` | Internal | Redis-backed discovery backend factory seam의 canonical header. gateway/server/tools가 공유하지만 compatibility/promotion 전략이 아직 고정되지 않은 internal 경계 |
 | `server/core/scripting/script_watcher.hpp` | Transitional | 파일 감시/sentinel 정책을 제공하는 core extensibility mechanism |
 | `server/core/scripting/lua_runtime.hpp` | Transitional | Lua cold-hook 실행/메트릭 표면으로 core platform capability의 런타임 계층 |
 | `server/core/scripting/lua_sandbox.hpp` | Transitional | instruction/memory 제한 및 허용 라이브러리 정책을 정교화 중인 core sandbox 계층 |

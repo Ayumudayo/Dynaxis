@@ -9,13 +9,17 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <random>
 #include <algorithm>
 #include <deque>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <openssl/crypto.h>
@@ -30,6 +34,7 @@
 #include "gateway/registry_backend_factory.hpp"
 #include "server/core/net/queue_budget.hpp"
 #include "server/core/state/instance_registry.hpp"
+#include "server/core/state/world_lifecycle_policy.hpp"
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
@@ -54,6 +59,8 @@ constexpr const char* kEnvGatewayId = "GATEWAY_ID";
 constexpr const char* kEnvRedisUri = "REDIS_URI";
 constexpr const char* kEnvServerRegistryPrefix = "SERVER_REGISTRY_PREFIX";
 constexpr const char* kEnvServerRegistryTtl = "SERVER_REGISTRY_TTL";
+constexpr const char* kEnvRedisChannelPrefix = "REDIS_CHANNEL_PREFIX";
+constexpr const char* kEnvSessionContinuityRedisPrefix = "SESSION_CONTINUITY_REDIS_PREFIX";
 constexpr const char* kEnvGatewayBackendConnectTimeoutMs = "GATEWAY_BACKEND_CONNECT_TIMEOUT_MS";
 constexpr const char* kEnvGatewayBackendSendQueueMaxBytes = "GATEWAY_BACKEND_SEND_QUEUE_MAX_BYTES";
 constexpr const char* kEnvGatewayBackendCircuitEnabled = "GATEWAY_BACKEND_CIRCUIT_BREAKER_ENABLED";
@@ -87,10 +94,12 @@ constexpr const char* kEnvGatewayRudpMaxInflightBytes = "GATEWAY_RUDP_MAX_INFLIG
 constexpr const char* kEnvGatewayRudpMtuPayloadBytes = "GATEWAY_RUDP_MTU_PAYLOAD_BYTES";
 constexpr const char* kEnvGatewayRudpRtoMinMs = "GATEWAY_RUDP_RTO_MIN_MS";
 constexpr const char* kEnvGatewayRudpRtoMaxMs = "GATEWAY_RUDP_RTO_MAX_MS";
+constexpr const char* kEnvSessionContinuityLeaseTtlSec = "SESSION_CONTINUITY_LEASE_TTL_SEC";
 constexpr const char* kDefaultGatewayListen = "0.0.0.0:6000";
 constexpr const char* kDefaultGatewayId = "gateway-default";
 constexpr const char* kDefaultRedisUri = "tcp://127.0.0.1:6379";
 constexpr const char* kDefaultServerRegistryPrefix = "gateway/instances/";
+constexpr const char* kDefaultSessionDirectoryPrefix = "gateway/session/";
 constexpr std::uint32_t kDefaultBackendConnectTimeoutMs = 5000;
 constexpr std::size_t kDefaultBackendSendQueueMaxBytes = 256 * 1024;
 constexpr bool kDefaultBackendCircuitEnabled = true;
@@ -111,6 +120,8 @@ constexpr std::uint32_t kDefaultUdpBindRetryBackoffMaxMs = 2000;
 constexpr std::uint32_t kDefaultUdpBindRetryMaxAttempts = 6;
 constexpr bool kDefaultGatewayRudpEnable = false;
 constexpr std::uint32_t kDefaultGatewayRudpCanaryPercent = 0;
+constexpr std::uint32_t kDefaultResumeLocatorTtlSec = 900;
+constexpr std::string_view kResumeRoutingPrefix = "resume-hash:";
 
 constexpr bool kGatewayUdpIngressBuildEnabled = true;
 
@@ -285,6 +296,173 @@ std::string make_boot_id() {
 
 std::string endpoint_key(const boost::asio::ip::udp::endpoint& endpoint) {
     return endpoint.address().to_string() + ":" + std::to_string(endpoint.port());
+}
+
+bool is_resume_routing_key(std::string_view value) {
+    return value.rfind(kResumeRoutingPrefix, 0) == 0;
+}
+
+std::optional<std::string> extract_world_id_from_tags(const std::vector<std::string>& tags) {
+    static constexpr std::string_view kWorldPrefix = "world:";
+    for (const auto& tag : tags) {
+        const std::string_view value(tag);
+        if (value.rfind(kWorldPrefix, 0) == 0 && value.size() > kWorldPrefix.size()) {
+            return std::string(value.substr(kWorldPrefix.size()));
+        }
+    }
+    return std::nullopt;
+}
+
+std::string make_world_policy_key(std::string_view continuity_prefix, std::string_view world_id) {
+    return std::string(continuity_prefix) + "world-policy:" + std::string(world_id);
+}
+
+std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy>
+load_world_policy_index(server::core::storage::redis::IRedisClient* redis_client,
+                        std::string_view continuity_prefix,
+                        const std::vector<server::core::state::InstanceRecord>& items) {
+    std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy> out;
+    if (!redis_client || continuity_prefix.empty()) {
+        return out;
+    }
+
+    std::vector<std::string> world_ids;
+    std::vector<std::string> policy_keys;
+    for (const auto& item : items) {
+        const auto world_id = extract_world_id_from_tags(item.tags);
+        if (!world_id.has_value()) {
+            continue;
+        }
+        if (out.contains(*world_id)) {
+            continue;
+        }
+        world_ids.push_back(*world_id);
+        policy_keys.push_back(make_world_policy_key(continuity_prefix, *world_id));
+        out.emplace(*world_id, server::core::state::WorldLifecyclePolicy{});
+    }
+
+    if (policy_keys.empty()) {
+        return out;
+    }
+
+    std::vector<std::optional<std::string>> payloads(policy_keys.size());
+    bool mget_ok = false;
+    try {
+        mget_ok = redis_client->mget(policy_keys, payloads);
+    } catch (...) {
+        mget_ok = false;
+    }
+
+    if (!mget_ok || payloads.size() != policy_keys.size()) {
+        payloads.clear();
+        payloads.reserve(policy_keys.size());
+        for (const auto& key : policy_keys) {
+            try {
+                payloads.push_back(redis_client->get(key));
+            } catch (...) {
+                payloads.push_back(std::nullopt);
+            }
+        }
+    }
+
+    for (std::size_t i = 0; i < world_ids.size() && i < payloads.size(); ++i) {
+        if (!payloads[i].has_value() || payloads[i]->empty()) {
+            continue;
+        }
+        if (const auto parsed = server::core::state::parse_world_lifecycle_policy(*payloads[i])) {
+            out[world_ids[i]] = *parsed;
+        }
+    }
+
+    return out;
+}
+
+struct WorldPolicyBackendDecision {
+    bool allowed{true};
+    bool draining_filtered{false};
+    bool replacement_match{false};
+    std::optional<std::string> world_id;
+};
+
+WorldPolicyBackendDecision evaluate_world_policy_backend(
+    const server::core::state::InstanceRecord& record,
+    const std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy>& world_policy_index) {
+    WorldPolicyBackendDecision decision;
+    const auto world_id = extract_world_id_from_tags(record.tags);
+    if (!world_id.has_value()) {
+        return decision;
+    }
+    decision.world_id = *world_id;
+
+    const auto policy_it = world_policy_index.find(*world_id);
+    if (policy_it == world_policy_index.end() || !policy_it->second.draining) {
+        return decision;
+    }
+
+    decision.draining_filtered = true;
+    decision.replacement_match = !policy_it->second.replacement_owner_instance_id.empty()
+        && policy_it->second.replacement_owner_instance_id == record.instance_id;
+    decision.allowed = decision.replacement_match;
+    return decision;
+}
+
+std::string serialize_resume_locator_hint(const GatewayApp::ResumeLocatorHint& hint) {
+    std::ostringstream out;
+    out << "backend=" << hint.backend_instance_id << '\n';
+    out << "world_id=" << hint.world_id << '\n';
+    out << "role=" << hint.role << '\n';
+    out << "game_mode=" << hint.game_mode << '\n';
+    out << "region=" << hint.region << '\n';
+    out << "shard=" << hint.shard << '\n';
+    return out.str();
+}
+
+std::optional<GatewayApp::ResumeLocatorHint> parse_resume_locator_hint(std::string_view payload) {
+    GatewayApp::ResumeLocatorHint hint;
+    std::size_t offset = 0;
+    while (offset <= payload.size()) {
+        const std::size_t line_end = payload.find('\n', offset);
+        const std::string_view line =
+            line_end == std::string_view::npos ? payload.substr(offset) : payload.substr(offset, line_end - offset);
+        if (!line.empty()) {
+            const std::size_t sep = line.find('=');
+            if (sep != std::string_view::npos) {
+                std::string value(line.substr(sep + 1));
+                if (!value.empty() && value.back() == '\r') {
+                    value.pop_back();
+                }
+                const std::string_view key = line.substr(0, sep);
+                if (key == "backend") {
+                    hint.backend_instance_id = std::move(value);
+                } else if (key == "world_id") {
+                    hint.world_id = std::move(value);
+                } else if (key == "role") {
+                    hint.role = std::move(value);
+                } else if (key == "game_mode") {
+                    hint.game_mode = std::move(value);
+                } else if (key == "region") {
+                    hint.region = std::move(value);
+                } else if (key == "shard") {
+                    hint.shard = std::move(value);
+                }
+            }
+        }
+
+        if (line_end == std::string_view::npos) {
+            break;
+        }
+        offset = line_end + 1;
+    }
+
+    if (hint.backend_instance_id.empty()
+        && hint.world_id.empty()
+        && hint.role.empty()
+        && hint.game_mode.empty()
+        && hint.region.empty()
+        && hint.shard.empty()) {
+        return std::nullopt;
+    }
+    return hint;
 }
 
 std::string udp_frame_summary(std::span<const std::uint8_t> frame) {
@@ -764,6 +942,30 @@ GatewayApp::GatewayApp()
         stream << "# TYPE gateway_backend_retry_budget_exhausted_total counter\n";
         stream << "gateway_backend_retry_budget_exhausted_total "
                << backend_retry_budget_exhausted_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE gateway_resume_routing_bind_total counter\n";
+        stream << "gateway_resume_routing_bind_total "
+               << resume_routing_bind_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE gateway_resume_routing_hit_total counter\n";
+        stream << "gateway_resume_routing_hit_total "
+               << resume_routing_hit_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE gateway_resume_locator_bind_total counter\n";
+        stream << "gateway_resume_locator_bind_total "
+               << resume_locator_bind_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE gateway_resume_locator_lookup_hit_total counter\n";
+        stream << "gateway_resume_locator_lookup_hit_total "
+               << resume_locator_lookup_hit_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE gateway_resume_locator_lookup_miss_total counter\n";
+        stream << "gateway_resume_locator_lookup_miss_total "
+               << resume_locator_lookup_miss_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE gateway_resume_locator_selector_hit_total counter\n";
+        stream << "gateway_resume_locator_selector_hit_total "
+               << resume_locator_selector_hit_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE gateway_resume_locator_selector_fallback_total counter\n";
+        stream << "gateway_resume_locator_selector_fallback_total "
+               << resume_locator_selector_fallback_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE gateway_resume_locator_ttl_sec gauge\n";
+        stream << "gateway_resume_locator_ttl_sec "
+               << resume_locator_ttl_sec_ << "\n";
 
         stream << "# TYPE gateway_backend_circuit_open gauge\n";
         stream << "gateway_backend_circuit_open "
@@ -906,6 +1108,9 @@ GatewayApp::GatewayApp()
                << udp_forward_reliable_total_.load(std::memory_order_relaxed) << "\n";
         stream << "gateway_transport_delivery_forward_total{transport=\"udp\",delivery=\"unreliable_sequenced\"} "
                << udp_forward_unreliable_sequenced_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE gateway_udp_direct_state_delta_total counter\n";
+        stream << "gateway_udp_direct_state_delta_total "
+               << udp_direct_state_delta_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_replay_drop_total counter\n";
         stream << "gateway_udp_replay_drop_total "
@@ -958,6 +1163,22 @@ GatewayApp::GatewayApp()
         stream << "# TYPE gateway_rudp_fallback_total counter\n";
         stream << "gateway_rudp_fallback_total "
                << rudp_fallback_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE gateway_rudp_direct_state_delta_total counter\n";
+        stream << "gateway_rudp_direct_state_delta_total "
+               << rudp_direct_state_delta_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE gateway_direct_state_delta_tcp_fallback_total counter\n";
+        stream << "gateway_direct_state_delta_tcp_fallback_total "
+               << direct_state_delta_tcp_fallback_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE gateway_world_policy_filtered_total counter\n";
+        stream << "gateway_world_policy_filtered_total{source=\"sticky\"} "
+               << world_policy_filtered_sticky_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "gateway_world_policy_filtered_total{source=\"candidate\"} "
+               << world_policy_filtered_candidate_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE gateway_world_policy_replacement_selected_total counter\n";
+        stream << "gateway_world_policy_replacement_selected_total "
+               << world_policy_replacement_selected_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << app_host_.dependency_metrics_text();
         stream << app_host_.lifecycle_metrics_text();
@@ -1196,6 +1417,7 @@ GatewayApp::BackendConnectionPtr GatewayApp::create_backend_connection(const std
         SessionState state{};
         state.session = session;
         state.client_id = client_id;
+        state.backend_instance_id = selected->record.instance_id;
         sessions_[session_id] = std::move(state);
     }
 
@@ -1501,6 +1723,61 @@ void GatewayApp::send_udp_datagram(std::vector<std::uint8_t> frame,
         std::move(handler));
 }
 
+bool GatewayApp::try_send_direct_client_frame(std::string_view session_id,
+                                              std::uint16_t msg_id,
+                                              std::span<const std::uint8_t> frame) {
+    if (!is_direct_egress_msg(msg_id) || frame.empty()) {
+        return false;
+    }
+
+    boost::asio::ip::udp::endpoint endpoint;
+    DirectEgressRoute route = DirectEgressRoute::kTcpFallback;
+
+    {
+        std::lock_guard<std::mutex> lock(session_mutex_);
+        const auto it = sessions_.find(std::string(session_id));
+        if (it == sessions_.end()) {
+            (void)direct_state_delta_tcp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+
+        const bool rudp_established =
+            it->second.rudp_engine != nullptr
+            && it->second.rudp_engine->state().lifecycle == server::core::net::rudp::LifecycleState::kEstablished;
+        route = select_direct_egress_route(DirectEgressContext{
+            .msg_id = msg_id,
+            .udp_bound = it->second.udp_bound,
+            .rudp_selected = it->second.rudp_selected,
+            .rudp_fallback_to_tcp = it->second.rudp_fallback_to_tcp,
+            .rudp_established = rudp_established,
+        });
+        endpoint = it->second.udp_endpoint;
+
+        if (route == DirectEgressRoute::kRudp) {
+            std::vector<std::uint8_t> datagram;
+            const auto channel = server::protocol::opcode_policy(msg_id).channel;
+            if (!it->second.rudp_engine->queue_unreliable_payload(frame, channel, unix_time_ms(), datagram)) {
+                it->second.rudp_fallback_to_tcp = true;
+                (void)rudp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+                (void)direct_state_delta_tcp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+                return false;
+            }
+            send_udp_datagram(std::move(datagram), endpoint);
+            (void)rudp_direct_state_delta_total_.fetch_add(1, std::memory_order_relaxed);
+            return true;
+        }
+    }
+
+    if (route == DirectEgressRoute::kUdp) {
+        send_udp_datagram(std::vector<std::uint8_t>(frame.begin(), frame.end()), endpoint);
+        (void)udp_direct_state_delta_total_.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
+
+    (void)direct_state_delta_tcp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+    return false;
+}
+
 void GatewayApp::trace_udp_bind_send(std::span<const std::uint8_t> frame,
                                      const boost::asio::ip::udp::endpoint& endpoint) const {
     namespace proto = server::core::protocol;
@@ -1552,6 +1829,11 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
         return std::nullopt;
     }
 
+    const auto world_policy_index = load_world_policy_index(redis_client_.get(), continuity_prefix_, instances);
+    const auto backend_policy_decision = [&](const server::core::state::InstanceRecord& record) {
+        return evaluate_world_policy_backend(record, world_policy_index);
+    };
+
     // 1) 세션 스티키니스: 기존 바인딩이 유효하면 우선 사용한다.
     if (session_directory_ && !client_id.empty() && client_id != "anonymous") {
         if (auto backend_id = session_directory_->find_backend(client_id)) {
@@ -1559,29 +1841,225 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
                 return rec.instance_id == *backend_id && rec.ready;
             });
             if (it != instances.end()) {
-                return SelectedBackend{*it, true};
+                const auto policy_decision = backend_policy_decision(*it);
+                if (policy_decision.allowed) {
+                    if (is_resume_routing_key(client_id)) {
+                        (void)resume_routing_hit_total_.fetch_add(1, std::memory_order_relaxed);
+                    }
+                    return SelectedBackend{*it, true};
+                }
+                if (policy_decision.draining_filtered) {
+                    (void)world_policy_filtered_sticky_total_.fetch_add(1, std::memory_order_relaxed);
+                }
             }
             // 바인딩된 인스턴스가 사라졌거나 비활성화되었으므로 바인딩을 해제한다.
             session_directory_->release_backend(client_id, *backend_id);
         }
     }
 
-    // 2) 신규 선택: least-connections(active_sessions) 기반.
-    const server::core::state::InstanceRecord* selected = nullptr;
-    for (const auto& rec : instances) {
-        if (!rec.ready || rec.instance_id.empty() || rec.host.empty() || rec.port == 0) {
-            continue;
-        }
-        if (selected == nullptr || rec.active_sessions < selected->active_sessions) {
-            selected = &rec;
+    std::optional<server::core::state::InstanceSelector> resume_locator_selector;
+    if (is_resume_routing_key(client_id)) {
+        if (auto hint = load_resume_locator_hint(client_id)) {
+            (void)resume_locator_lookup_hit_total_.fetch_add(1, std::memory_order_relaxed);
+            resume_locator_selector = make_resume_locator_selector(*hint);
+        } else {
+            (void)resume_locator_lookup_miss_total_.fetch_add(1, std::memory_order_relaxed);
         }
     }
 
-    if (selected == nullptr) {
+    // 2) 신규 선택: registry active_sessions + gateway 로컬 optimistic load 기반.
+    std::unordered_map<std::string, std::size_t> local_backend_load;
+    {
+        std::lock_guard<std::mutex> lock(session_mutex_);
+        for (const auto& [session_id, state] : sessions_) {
+            (void)session_id;
+            if (!state.backend_instance_id.empty()) {
+                ++local_backend_load[state.backend_instance_id];
+            }
+        }
+    }
+
+    const auto build_candidates =
+        [&](const std::optional<server::core::state::InstanceSelector>& selector) {
+            std::vector<const server::core::state::InstanceRecord*> candidates;
+            std::unordered_set<std::string> filtered_world_ids;
+            std::uint64_t min_effective_load = std::numeric_limits<std::uint64_t>::max();
+            for (const auto& rec : instances) {
+                if (!rec.ready || rec.instance_id.empty() || rec.host.empty() || rec.port == 0) {
+                    continue;
+                }
+                if (selector.has_value() && !server::core::state::matches_selector(rec, *selector)) {
+                    continue;
+                }
+                const auto policy_decision = backend_policy_decision(rec);
+                if (!policy_decision.allowed) {
+                    if (policy_decision.draining_filtered) {
+                        (void)world_policy_filtered_candidate_total_.fetch_add(1, std::memory_order_relaxed);
+                        if (policy_decision.world_id.has_value()) {
+                            filtered_world_ids.insert(*policy_decision.world_id);
+                        }
+                    }
+                    continue;
+                }
+
+                const auto local_it = local_backend_load.find(rec.instance_id);
+                const std::uint64_t local_load =
+                    local_it == local_backend_load.end() ? 0ull : static_cast<std::uint64_t>(local_it->second);
+                const std::uint64_t effective_load = static_cast<std::uint64_t>(rec.active_sessions) + local_load;
+
+                if (effective_load < min_effective_load) {
+                    min_effective_load = effective_load;
+                    candidates.clear();
+                    candidates.push_back(&rec);
+                } else if (effective_load == min_effective_load) {
+                    candidates.push_back(&rec);
+                }
+            }
+            return std::pair{std::move(candidates), std::move(filtered_world_ids)};
+        };
+
+    auto [candidates, filtered_world_ids] = build_candidates(resume_locator_selector);
+    if (candidates.empty() && resume_locator_selector.has_value()) {
+        (void)resume_locator_selector_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+        std::tie(candidates, filtered_world_ids) = build_candidates(std::nullopt);
+    } else if (!candidates.empty() && resume_locator_selector.has_value()) {
+        (void)resume_locator_selector_hit_total_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    if (candidates.empty()) {
         return std::nullopt;
     }
 
-    return SelectedBackend{*selected, false};
+    std::size_t selected_index = 0;
+    if (candidates.size() > 1) {
+        if (!client_id.empty() && client_id != "anonymous") {
+            selected_index = std::hash<std::string>{}(client_id) % candidates.size();
+        } else {
+            static std::atomic<std::uint64_t> rr_counter{0};
+            selected_index = static_cast<std::size_t>(
+                rr_counter.fetch_add(1, std::memory_order_relaxed) % candidates.size());
+        }
+    }
+
+    const auto& selected = *candidates[selected_index];
+    const auto selected_policy_decision = backend_policy_decision(selected);
+    if (selected_policy_decision.replacement_match
+        && selected_policy_decision.world_id.has_value()
+        && filtered_world_ids.contains(*selected_policy_decision.world_id)) {
+        (void)world_policy_replacement_selected_total_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    return SelectedBackend{selected, false};
+}
+
+void GatewayApp::register_resume_routing_key(const std::string& routing_key,
+                                             const std::string& backend_instance_id) {
+    if (!session_directory_ || routing_key.empty() || backend_instance_id.empty()) {
+        return;
+    }
+    if (!is_resume_routing_key(routing_key)) {
+        return;
+    }
+
+    const auto bound = session_directory_->ensure_backend(routing_key, backend_instance_id);
+    if (bound && *bound != backend_instance_id) {
+        server::core::log::warn(
+            "GatewayApp resume routing key already bound: key=" + routing_key
+            + " desired=" + backend_instance_id
+            + " existing=" + *bound);
+        return;
+    }
+
+    (void)resume_routing_bind_total_.fetch_add(1, std::memory_order_relaxed);
+
+    if (!backend_registry_) {
+        return;
+    }
+
+    const auto instances = backend_registry_->list_instances();
+    const auto it = std::find_if(instances.begin(), instances.end(), [&](const auto& rec) {
+        return rec.instance_id == backend_instance_id;
+    });
+    if (it != instances.end()) {
+        persist_resume_locator_hint(routing_key, *it);
+    }
+}
+
+std::string GatewayApp::make_resume_locator_key(std::string_view routing_key) const {
+    if (routing_key.empty()) {
+        return {};
+    }
+
+    std::string key;
+    key.reserve(resume_locator_prefix_.size() + routing_key.size());
+    key.append(resume_locator_prefix_);
+    key.append(routing_key);
+    return key;
+}
+
+std::optional<GatewayApp::ResumeLocatorHint> GatewayApp::load_resume_locator_hint(std::string_view routing_key) {
+    if (!redis_client_ || routing_key.empty() || !is_resume_routing_key(routing_key)) {
+        return std::nullopt;
+    }
+
+    const auto payload = redis_client_->get(make_resume_locator_key(routing_key));
+    if (!payload.has_value() || payload->empty()) {
+        return std::nullopt;
+    }
+    return parse_resume_locator_hint(*payload);
+}
+
+std::optional<server::core::state::InstanceSelector> GatewayApp::make_resume_locator_selector(
+    const ResumeLocatorHint& hint) const {
+    server::core::state::InstanceSelector selector{};
+    if (!hint.world_id.empty()) {
+        selector.tags.push_back("world:" + hint.world_id);
+    }
+    if (!hint.role.empty()) {
+        selector.roles.push_back(hint.role);
+    }
+    if (!hint.game_mode.empty()) {
+        selector.game_modes.push_back(hint.game_mode);
+    }
+    if (!hint.region.empty()) {
+        selector.regions.push_back(hint.region);
+    }
+    if (!hint.shard.empty()) {
+        selector.shards.push_back(hint.shard);
+    }
+
+    if (selector.roles.empty()
+        && selector.tags.empty()
+        && selector.game_modes.empty()
+        && selector.regions.empty()
+        && selector.shards.empty()) {
+        return std::nullopt;
+    }
+    return selector;
+}
+
+void GatewayApp::persist_resume_locator_hint(std::string_view routing_key,
+                                             const server::core::state::InstanceRecord& record) {
+    if (!redis_client_ || routing_key.empty() || !is_resume_routing_key(routing_key) || resume_locator_ttl_sec_ == 0) {
+        return;
+    }
+
+    ResumeLocatorHint hint;
+    hint.backend_instance_id = record.instance_id;
+    hint.world_id = extract_world_id_from_tags(record.tags).value_or("");
+    hint.role = record.role;
+    hint.game_mode = record.game_mode;
+    hint.region = record.region;
+    hint.shard = record.shard;
+
+    if (redis_client_->setex(
+            make_resume_locator_key(routing_key),
+            serialize_resume_locator_hint(hint),
+            resume_locator_ttl_sec_)) {
+        (void)resume_locator_bind_total_.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        server::core::log::warn("GatewayApp failed to persist resume locator hint");
+    }
 }
 
 void GatewayApp::on_backend_connected(const std::string& client_id,
@@ -1935,6 +2413,36 @@ void GatewayApp::configure_gateway() {
 void GatewayApp::configure_infrastructure() {
     const char* redis_env = std::getenv(kEnvRedisUri);
     redis_uri_ = redis_env ? redis_env : kDefaultRedisUri;
+    if (const char* prefix = std::getenv(kEnvSessionContinuityRedisPrefix); prefix && *prefix) {
+        continuity_prefix_ = prefix;
+    } else if (const char* prefix = std::getenv(kEnvRedisChannelPrefix); prefix && *prefix) {
+        continuity_prefix_ = prefix;
+    } else {
+        continuity_prefix_.clear();
+    }
+    if (!continuity_prefix_.empty() && continuity_prefix_.back() != ':') {
+        continuity_prefix_.push_back(':');
+    }
+    continuity_prefix_ += "continuity:";
+    session_directory_prefix_ = kDefaultSessionDirectoryPrefix;
+    if (!session_directory_prefix_.empty() && session_directory_prefix_.back() != '/') {
+        session_directory_prefix_.push_back('/');
+    }
+    resume_locator_prefix_ = session_directory_prefix_ + "locator/";
+
+    if (const char* ttl_env = std::getenv(kEnvSessionContinuityLeaseTtlSec); ttl_env && *ttl_env) {
+        try {
+            const auto parsed = std::stoul(ttl_env);
+            if (parsed > 0) {
+                resume_locator_ttl_sec_ = static_cast<std::uint32_t>(parsed);
+            }
+        } catch (...) {
+            server::core::log::warn("GatewayApp invalid SESSION_CONTINUITY_LEASE_TTL_SEC; using default");
+            resume_locator_ttl_sec_ = kDefaultResumeLocatorTtlSec;
+        }
+    } else {
+        resume_locator_ttl_sec_ = kDefaultResumeLocatorTtlSec;
+    }
 
     try {
         server::core::storage::redis::Options opts;
@@ -1962,7 +2470,7 @@ void GatewayApp::configure_infrastructure() {
               
               session_directory_ = std::make_unique<SessionDirectory>(
                   redis_client_,
-                  "gateway/session/",
+                  session_directory_prefix_,
                   std::chrono::seconds(600) // 10 minutes session stickiness
               );
 
