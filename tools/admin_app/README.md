@@ -13,6 +13,8 @@
 - `/api/v1/overview` (JSON)
 - `/api/v1/instances` (JSON)
 - `/api/v1/instances/{instance_id}` (JSON)
+- `/api/v1/worlds` (JSON)
+- `/api/v1/worlds/{world_id}/policy` (PUT/DELETE, JSON)
 - `/api/v1/sessions/{client_id}` (JSON)
 - `/api/v1/users` (JSON)
 - `/api/v1/users/disconnect` (POST, query/body)
@@ -116,9 +118,28 @@ server 인스턴스는 `world_scope`를 함께 반환한다.
 - `world_scope.world_id`
 - `world_scope.owner_instance_id`
 - `world_scope.owner_match`
+- `world_scope.policy.draining`
+- `world_scope.policy.replacement_owner_instance_id`
+- `world_scope.policy.reassignment_declared`
 - `world_scope.source.owner_key`
+- `world_scope.source.policy_key`
 
 이 값은 `world:<id>` tag와 continuity owner key를 조합해, 현재 backend가 해당 world residency owner와 일치하는지 control-plane에서 바로 확인하게 한다.
+
+## World lifecycle inventory
+
+- `GET /api/v1/worlds`
+
+world 단위의 owner/policy 인벤토리를 반환한다.
+
+- `world_id`
+- `owner_instance_id`
+- `policy.draining`
+- `policy.replacement_owner_instance_id`
+- `policy.reassignment_declared`
+- `instances[]` (`instance_id`, `ready`, `owner_match`)
+- `source.owner_key`
+- `source.policy_key`
 
 ## 쓰기 액션 (2단계)
 
@@ -126,11 +147,17 @@ server 인스턴스는 `world_scope`를 함께 반환한다.
 운영에서는 query 파라미터보다 JSON body 사용을 권장한다. (기존 query 호출은 호환 유지)
 
 `ADMIN_READ_ONLY=1`이면 아래 write 엔드포인트는 역할과 무관하게 `403` + `READ_ONLY`로 거부된다.
-`/api/v1/auth/context`의 `data.read_only`는 `true`가 되고, write capability(`disconnect/announce/settings/moderation`)는 모두 `false`로 내려간다.
+`/api/v1/auth/context`의 `data.read_only`는 `true`가 되고, write capability(`disconnect/announce/settings/moderation/world_policy`)는 모두 `false`로 내려간다.
 
 `ADMIN_COMMAND_SIGNING_SECRET`이 설정되면 write 명령 publish payload에
 `issued_at`, `nonce`, `signature`(HMAC-SHA256)가 자동 추가된다.
 미설정 상태에서는 write 명령 publish가 `503` + `MISCONFIGURED`로 거부된다.
+
+world lifecycle policy write는 예외다.
+
+- `PUT/DELETE /api/v1/worlds/{world_id}/policy` 는 fanout/admin 명령 publish를 사용하지 않는다.
+- authoritative state는 Redis `dynaxis:continuity:world-policy:<world_id>` key 자체다.
+- 따라서 이 endpoint는 `ADMIN_COMMAND_SIGNING_SECRET` 없이도 동작한다.
 
 - `POST /api/v1/users/disconnect`
   - `client_id` 또는 `client_ids`(쉼표 구분)
@@ -149,6 +176,14 @@ server 인스턴스는 `world_scope`를 함께 반환한다.
 - `PATCH /api/v1/settings`
   - `key` (`presence_ttl_sec|recent_history_limit|room_recent_maxlen|chat_spam_threshold|chat_spam_window_sec|chat_spam_mute_sec|chat_spam_ban_sec|chat_spam_ban_violations`)
   - `value` (부호 없는 정수)
+- `PUT /api/v1/worlds/{world_id}/policy`
+  - JSON body required
+  - `draining` (필수, bool)
+  - `replacement_owner_instance_id` (선택, string 또는 `null`)
+  - `replacement_owner_instance_id`는 현재 world inventory에 존재하는 같은 world의 `server` 인스턴스여야 한다
+- `DELETE /api/v1/worlds/{world_id}/policy`
+  - 해당 world policy key를 제거한다
+  - key가 이미 없어도 성공으로 처리한다
 
 설정 key/range 검증은 `server/include/server/config/runtime_settings.hpp`의 공통 규칙을 사용한다.
 동일 규칙이 `admin_app` 입력 검증과 `server_app` 런타임 적용 경로에 함께 적용되어 문서/코드 드리프트(drift)를 줄인다.
@@ -157,7 +192,7 @@ server 인스턴스는 `world_scope`를 함께 반환한다.
 
 - `viewer`: 조회 전용(read-only)
 - `operator`: 공지(announcement) 가능
-- `admin`: 런타임 설정(runtime settings) + moderation 포함 전체 가능
+- `admin`: runtime settings + moderation + world lifecycle policy 포함 전체 가능
 
 ## 확장 배포 제어면 (Phase 7)
 

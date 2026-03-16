@@ -38,7 +38,8 @@
 
 ### 2.4 상태/유틸(`core::state`, `core::util`)
 - `core::state`는 `InstanceRecord`, selector helper, `IInstanceStateBackend`, `InMemoryStateBackend` 같은 shared discovery contract를 제공한다.
-- Redis/Consul 기반 instance registry adapter는 `server/state/*`에 남고, sticky `SessionDirectory` 구현은 `gateway/*`에 남는다.
+- Redis 기반 instance registry adapter/factory의 canonical seam은 `core/state`로 이동했지만, 현재는 `Transitional/Internal` ownership으로 관리한다.
+- Consul 기반 instance registry adapter는 `server/state/*`에 남고, sticky `SessionDirectory` 구현은 `gateway/*`에 남는다.
 - `ServiceRegistry`는 각 모듈이 의존성을 동적으로 주입받을 수 있게 해, 테스트 시 mock을 바인딩하기 쉽다.
 - `CrashHandler`, `log` 모듈은 공통 로깅/덤프 정책을 제공하며, `/logs/` 디렉터리에 스택 정보를 남긴다.
 
@@ -56,7 +57,7 @@
 
 ### 2.7 조합 헬퍼 타깃(Composition Helper Targets)
 - `server_app_backends`, `gateway_backends`, `admin_app_backends`, `wb_common_redis_factory`는 reusable engine module이 아니라 각 실행 파일의 composition helper로 취급한다.
-- 이 타깃들은 프로세스별 설정/수명주기/운영 맥락을 `server_storage_pg_factory`, `server_storage_redis_factory`, `server_state_redis_factory` 같은 narrower factory seam에 연결하는 얇은 조합 레이어다.
+- 이 타깃들은 프로세스별 설정/수명주기/운영 맥락을 `server_storage_pg_factory`, `server_storage_redis_factory`, 그리고 core-owned Redis registry seam 같은 narrower factory seam에 연결하는 얇은 조합 레이어다.
 - 따라서 현재 단계에서는 `server_core`나 별도 중립 패키지로 승격하지 않고, 해당 실행 파일이 있는 `server/`, `gateway/`, `tools/` 트리 안에 둔다.
 - helper target은 아래 조건을 모두 만족할 때만 상위 패키지로 이동을 검토한다.
   - 둘 이상의 실행 파일이 동일한 helper 구현을 그대로 공유한다.

@@ -59,6 +59,10 @@ public:
         lists_.erase(key);
         return true;
     }
+    bool set(const std::string& key, const std::string& value) override {
+        kv_[key] = value;
+        return true;
+    }
     std::optional<std::string> get(const std::string& key) override {
         auto it = kv_.find(key);
         if (it == kv_.end()) return std::nullopt;

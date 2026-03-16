@@ -22,6 +22,8 @@ add_library(server_core
     src/util/paths.cpp
     src/util/crash_handler.cpp
     src/state/instance_registry.cpp
+    src/state/redis_instance_registry.cpp
+    src/state/redis_backend_factory.cpp
     src/storage/db_worker_pool.cpp
     src/security/cipher.cpp
     src/security/admin_command_auth.cpp

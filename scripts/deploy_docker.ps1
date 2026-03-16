@@ -7,7 +7,8 @@ param (
     [switch]$Observability = $false,
     [string]$ProjectName = "",
     [switch]$NoBase = $false,
-    [string]$EnvFile = ""
+    [string]$EnvFile = "",
+    [string]$TopologyConfig = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -68,6 +69,26 @@ function Resolve-ComposeTarget {
     }
 }
 
+function Resolve-PythonCommand {
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if ($python) {
+        return @{
+            Executable = $python.Source
+            Arguments = @()
+        }
+    }
+
+    $py = Get-Command py -ErrorAction SilentlyContinue
+    if ($py) {
+        return @{
+            Executable = $py.Source
+            Arguments = @("-3")
+        }
+    }
+
+    Write-Error "Python interpreter not found. Install python or py launcher."
+}
+
 function Resolve-ComposeEnvFile([string]$EnvFilePath, [string]$ComposeDir, [string]$ProjectRoot) {
     if (-not $EnvFilePath -or $EnvFilePath.Trim() -eq "") {
         return $null
@@ -107,6 +128,74 @@ function Maybe-PrintComposeEnvHint([string]$ComposeDir, [string]$ResolvedEnvFile
     }
 }
 
+function Resolve-TopologyConfigPath([string]$TopologyConfigValue,
+                                    [string]$ComposeDir,
+                                    [string]$ProjectRoot,
+                                    [string]$ActionName) {
+    if ($TopologyConfigValue -and $TopologyConfigValue.Trim() -ne "") {
+        if ([System.IO.Path]::IsPathRooted($TopologyConfigValue)) {
+            if (-not (Test-Path $TopologyConfigValue)) {
+                Write-Error "Topology config not found: $TopologyConfigValue"
+            }
+            return (Resolve-Path $TopologyConfigValue).Path
+        }
+
+        $projectCandidate = Join-Path $ProjectRoot $TopologyConfigValue
+        if (Test-Path $projectCandidate) {
+            return (Resolve-Path $projectCandidate).Path
+        }
+
+        $composeCandidate = Join-Path $ComposeDir $TopologyConfigValue
+        if (Test-Path $composeCandidate) {
+            return (Resolve-Path $composeCandidate).Path
+        }
+
+        Write-Error "Topology config not found (checked project and compose dir): $TopologyConfigValue"
+    }
+
+    $activeTopology = Join-Path $ComposeDir "topology.active.json"
+    if ($ActionName -in @("down", "restart", "logs", "ps", "clean") -and (Test-Path $activeTopology)) {
+        return (Resolve-Path $activeTopology).Path
+    }
+
+    return (Resolve-Path (Join-Path $ComposeDir "topologies/default.json")).Path
+}
+
+function Generate-StackTopology([string]$TopologyConfigPath,
+                                [string]$ComposeDir,
+                                [string]$ProjectRoot) {
+    $pythonCommand = Resolve-PythonCommand
+    $generatorScript = Join-Path $ProjectRoot "scripts/generate_stack_topology.py"
+    if (-not (Test-Path $generatorScript)) {
+        Write-Error "Missing topology generator: $generatorScript"
+    }
+
+    $generatedCompose = Join-Path $ComposeDir "docker-compose.topology.generated.yml"
+    $activeTopology = Join-Path $ComposeDir "topology.active.json"
+    Write-Host "Using topology config: $TopologyConfigPath" -ForegroundColor Gray
+
+    $args = @(
+        $generatorScript,
+        "--topology-config", $TopologyConfigPath,
+        "--output-compose", $generatedCompose,
+        "--output-active", $activeTopology
+    )
+
+    & $pythonCommand.Executable @($pythonCommand.Arguments) @args
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to generate stack topology compose."
+    }
+
+    return @{
+        GeneratedCompose = $generatedCompose
+        ActiveTopology = $activeTopology
+    }
+}
+
+function Test-ComposeConfiguration([string[]]$ComposeArgs) {
+    Invoke-DockerCommand -Args ($ComposeArgs + @("config", "--quiet")) -FailureMessage "Docker Compose config validation failed."
+}
+
 function Needs-BaseImage([string]$ComposePath) {
     return (-not $NoBase)
 }
@@ -128,6 +217,8 @@ $ComposeDir = $target.ComposeDir
 $ProjectName = $target.ProjectName
 
 $ResolvedEnvFile = Resolve-ComposeEnvFile -EnvFilePath $EnvFile -ComposeDir $ComposeDir -ProjectRoot $ProjectRoot
+$ResolvedTopologyConfig = Resolve-TopologyConfigPath -TopologyConfigValue $TopologyConfig -ComposeDir $ComposeDir -ProjectRoot $ProjectRoot -ActionName $Action
+$TopologyArtifacts = Generate-StackTopology -TopologyConfigPath $ResolvedTopologyConfig -ComposeDir $ComposeDir -ProjectRoot $ProjectRoot
 
 Write-Host "Compose: $ComposePath" -ForegroundColor Gray
 Write-Host "Project: $ProjectName" -ForegroundColor Gray
@@ -137,7 +228,8 @@ $ComposeBaseArgs = @(
     "compose",
     "--project-name", $ProjectName,
     "--project-directory", $ComposeDir,
-    "-f", $ComposePath
+    "-f", $ComposePath,
+    "-f", $TopologyArtifacts.GeneratedCompose
 )
 
 if ($ResolvedEnvFile) {
@@ -149,6 +241,7 @@ if ($Observability) {
 }
 
 if ($Action -eq "build") {
+    Test-ComposeConfiguration $ComposeBaseArgs
     if (Needs-BaseImage $ComposePath) {
         Ensure-BaseImage
     }
@@ -159,6 +252,7 @@ if ($Action -eq "build") {
     Invoke-DockerCommand -Args $ComposeArgs -FailureMessage "Docker Compose build failed."
 }
 elseif ($Action -eq "up") {
+    Test-ComposeConfiguration $ComposeBaseArgs
     if (Needs-BaseImage $ComposePath) {
         # Up 실행 시에도 Base Image가 없으면 빌드해야 함 (Build 옵션이 켜져있거나 이미지가 없을 때)
         if ($Build -or $NoCache -or -not (Test-DockerImageExists "dynaxis-base")) {
@@ -170,6 +264,7 @@ elseif ($Action -eq "up") {
     $DockerArgs = $ComposeBaseArgs + @("up")
     if ($Detached) { $DockerArgs += "-d" }
     if ($Build) { $DockerArgs += "--build" }
+    $DockerArgs += "--remove-orphans"
     Invoke-DockerCommand -Args $DockerArgs -FailureMessage "Docker Compose up failed."
 }
 elseif ($Action -eq "down") {
@@ -191,7 +286,7 @@ elseif ($Action -eq "clean") {
     Invoke-DockerCommand -Args ($ComposeBaseArgs + @("down", "-v")) -FailureMessage "Docker Compose clean failed."
 }
 elseif ($Action -eq "config") {
-    Invoke-DockerCommand -Args ($ComposeBaseArgs + @("config", "--quiet")) -FailureMessage "Docker Compose config failed."
+    Test-ComposeConfiguration $ComposeBaseArgs
 }
 else {
     Write-Error "Unknown action: $Action. Use 'up', 'down', 'restart', 'build', 'logs', 'ps', 'clean', or 'config'."

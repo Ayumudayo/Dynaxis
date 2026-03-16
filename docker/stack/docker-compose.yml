@@ -99,116 +99,6 @@ services:
     networks:
       - dynaxis-stack
 
-  server-1:
-    <<: *server-build
-    command: ["server"]
-    environment:
-      PORT: "5000"
-      DB_URI: postgresql://${POSTGRES_USER:-dynaxis}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-dynaxis_db}
-      REDIS_URI: tcp://redis:6379
-      USE_REDIS_PUBSUB: "1"
-      REDIS_CHANNEL_PREFIX: "dynaxis:"
-      WRITE_BEHIND_ENABLED: "1"
-      REDIS_STREAM_KEY: "session_events"
-      SERVER_INSTANCE_ID: "server-1"
-      SERVER_ADVERTISE_HOST: "server-1"
-      SERVER_ADVERTISE_PORT: "5000"
-      SERVER_SHARD: "stack-shard-a"
-      SERVER_TAGS: "world:starter-a"
-      SERVER_REGISTRY_PREFIX: "gateway/instances/"
-      SERVER_REGISTRY_TTL: "30"
-      SERVER_HEARTBEAT_INTERVAL: "5"
-      GATEWAY_ID: "server-1"
-      METRICS_PORT: "9090"
-      RECENT_HISTORY_LIMIT: "20"
-      CHAT_HOOK_PLUGINS_DIR: "/app/plugins"
-      CHAT_HOOK_FALLBACK_PLUGINS_DIR: "/app/plugins_builtin"
-      CHAT_HOOK_ENABLED: "${CHAT_HOOK_ENABLED:-0}"
-      CHAT_HOOK_CACHE_DIR: "/tmp/chat_hook_cache"
-      CHAT_HOOK_RELOAD_INTERVAL_MS: "500"
-      LUA_ENABLED: "${LUA_ENABLED:-0}"
-      LUA_SCRIPTS_DIR: "/app/scripts"
-      LUA_FALLBACK_SCRIPTS_DIR: "/app/scripts_builtin"
-      SESSION_CONTINUITY_ENABLED: "${SESSION_CONTINUITY_ENABLED:-0}"
-      SESSION_CONTINUITY_LEASE_TTL_SEC: "${SESSION_CONTINUITY_LEASE_TTL_SEC:-900}"
-      ADMIN_COMMAND_SIGNING_SECRET: "${ADMIN_COMMAND_SIGNING_SECRET:-dev-admin-command-secret}"
-      ADMIN_COMMAND_TTL_MS: "${ADMIN_COMMAND_TTL_MS:-60000}"
-      ADMIN_COMMAND_FUTURE_SKEW_MS: "${ADMIN_COMMAND_FUTURE_SKEW_MS:-5000}"
-      SERVER_DRAIN_TIMEOUT_MS: "${SERVER_DRAIN_TIMEOUT_MS:-15000}"
-      SERVER_DRAIN_POLL_MS: "${SERVER_DRAIN_POLL_MS:-100}"
-      RUNTIME_TRACING_ENABLED: "${RUNTIME_TRACING_ENABLED:-0}"
-      RUNTIME_TRACING_SAMPLE_PERCENT: "${RUNTIME_TRACING_SAMPLE_PERCENT:-100}"
-    volumes:
-      - ./plugins:/app/plugins:ro
-      - ./scripts:/app/scripts:ro
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
-    networks:
-      - dynaxis-stack
-    ports:
-      - "${SERVER1_HOST_PORT:-30001}:5000"
-      - "${SERVER1_METRICS_HOST_PORT:-39091}:9090"
-
-  server-2:
-    <<: *server
-    command: ["server"]
-    environment:
-      PORT: "5000"
-      DB_URI: postgresql://${POSTGRES_USER:-dynaxis}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-dynaxis_db}
-      REDIS_URI: tcp://redis:6379
-      USE_REDIS_PUBSUB: "1"
-      REDIS_CHANNEL_PREFIX: "dynaxis:"
-      WRITE_BEHIND_ENABLED: "1"
-      REDIS_STREAM_KEY: "session_events"
-      SERVER_INSTANCE_ID: "server-2"
-      SERVER_ADVERTISE_HOST: "server-2"
-      SERVER_ADVERTISE_PORT: "5000"
-      SERVER_SHARD: "stack-shard-b"
-      SERVER_TAGS: "world:starter-b"
-      SERVER_REGISTRY_PREFIX: "gateway/instances/"
-      SERVER_REGISTRY_TTL: "30"
-      SERVER_HEARTBEAT_INTERVAL: "5"
-      GATEWAY_ID: "server-2"
-      METRICS_PORT: "9090"
-      RECENT_HISTORY_LIMIT: "20"
-      CHAT_HOOK_PLUGINS_DIR: "/app/plugins"
-      CHAT_HOOK_FALLBACK_PLUGINS_DIR: "/app/plugins_builtin"
-      CHAT_HOOK_ENABLED: "${CHAT_HOOK_ENABLED:-0}"
-      CHAT_HOOK_CACHE_DIR: "/tmp/chat_hook_cache"
-      CHAT_HOOK_RELOAD_INTERVAL_MS: "500"
-      LUA_ENABLED: "${LUA_ENABLED:-0}"
-      LUA_SCRIPTS_DIR: "/app/scripts"
-      LUA_FALLBACK_SCRIPTS_DIR: "/app/scripts_builtin"
-      SESSION_CONTINUITY_ENABLED: "${SESSION_CONTINUITY_ENABLED:-0}"
-      SESSION_CONTINUITY_LEASE_TTL_SEC: "${SESSION_CONTINUITY_LEASE_TTL_SEC:-900}"
-      ADMIN_COMMAND_SIGNING_SECRET: "${ADMIN_COMMAND_SIGNING_SECRET:-dev-admin-command-secret}"
-      ADMIN_COMMAND_TTL_MS: "${ADMIN_COMMAND_TTL_MS:-60000}"
-      ADMIN_COMMAND_FUTURE_SKEW_MS: "${ADMIN_COMMAND_FUTURE_SKEW_MS:-5000}"
-      SERVER_DRAIN_TIMEOUT_MS: "${SERVER_DRAIN_TIMEOUT_MS:-15000}"
-      SERVER_DRAIN_POLL_MS: "${SERVER_DRAIN_POLL_MS:-100}"
-      RUNTIME_TRACING_ENABLED: "${RUNTIME_TRACING_ENABLED:-0}"
-      RUNTIME_TRACING_SAMPLE_PERCENT: "${RUNTIME_TRACING_SAMPLE_PERCENT:-100}"
-    volumes:
-      - ./plugins:/app/plugins:ro
-      - ./scripts:/app/scripts:ro
-    depends_on:
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      migrator:
-        condition: service_completed_successfully
-    networks:
-      - dynaxis-stack
-    ports:
-      - "${SERVER2_HOST_PORT:-30002}:5000"
-      - "${SERVER2_METRICS_HOST_PORT:-39092}:9090"
-
   wb_worker:
     <<: *worker-build
     command: ["worker"]
@@ -290,6 +180,7 @@ services:
       GATEWAY_RUDP_OPCODE_ALLOWLIST: "${GATEWAY_RUDP_OPCODE_ALLOWLIST:-}"
       GATEWAY_ID: "gw1"
       REDIS_URI: "tcp://redis:6379"
+      REDIS_CHANNEL_PREFIX: "dynaxis:"
       SESSION_CONTINUITY_LEASE_TTL_SEC: "${SESSION_CONTINUITY_LEASE_TTL_SEC:-900}"
       SERVER_REGISTRY_PREFIX: "gateway/instances/"
       SERVER_REGISTRY_TTL: "30"
@@ -322,6 +213,7 @@ services:
       GATEWAY_RUDP_OPCODE_ALLOWLIST: "${GATEWAY_RUDP_OPCODE_ALLOWLIST:-}"
       GATEWAY_ID: "gw2"
       REDIS_URI: "tcp://redis:6379"
+      REDIS_CHANNEL_PREFIX: "dynaxis:"
       SESSION_CONTINUITY_LEASE_TTL_SEC: "${SESSION_CONTINUITY_LEASE_TTL_SEC:-900}"
       SERVER_REGISTRY_PREFIX: "gateway/instances/"
       SERVER_REGISTRY_TTL: "30"
