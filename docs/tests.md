@@ -68,15 +68,30 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
   - RUDP attach/fallback/OFF, direct ping, FPS input proof
 - direct UDP/RUDP proofs require direct gateway TCP+UDP ports, not HAProxy frontend routing
 
+## Main Merge Policy
+
+- `main` is PR-only and protected; direct pushes are not the intended path.
+- branch protection applies to admins and requires conversation resolution before merge.
+- the only required status check is `windows-fast-tests` from `.github/workflows/ci.yml`.
+- path-gated workflows stay non-required on purpose so unrelated PRs do not stall on checks that never dispatch.
+- when a PR touches the matching surface, reviewers are expected to wait for the relevant path-gated workflow to pass before merging.
+
 ## CI Surfaces
 
 - `.github/workflows/ci.yml`
-  - Windows build/test + opcode/doc checks
+  - always-on required gate
+  - `windows-fast-tests`: Windows build/test + opcode/doc checks
 - `.github/workflows/ci-api-governance.yml`
-  - core API boundary/governance checks
+  - path-gated optional gate for `core/**`, core API docs, and contract fixtures
+  - jobs: `core-api-consumer-windows`, `core-api-consumer-linux`
 - `.github/workflows/ci-stack.yml`
-  - Docker stack verification
+  - path-gated optional gate for stack/runtime/integration surfaces
+  - job: `linux-docker-stack`
 - `.github/workflows/ci-extensibility.yml`
-  - extensibility/runtime toggle verification
+  - path-gated optional gate for plugin/Lua/extensibility surfaces
+  - job: `linux-extensibility`
 - `.github/workflows/ci-hardening.yml`
+  - scheduled/manual hardening gate; not a PR-required check
   - sanitizer/fuzz/perf hardening paths
+- `.github/workflows/ci-prewarm.yml`
+  - scheduled/manual cache prewarm; not a merge gate
