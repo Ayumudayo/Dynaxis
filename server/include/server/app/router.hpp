@@ -4,6 +4,7 @@
 
 namespace server::core { class Dispatcher; }
 namespace server::app::chat { class ChatService; }
+namespace server::app::fps { class FpsService; }
 
 namespace server::app {
 
@@ -12,6 +13,8 @@ namespace server::app {
  * @param d 핸들러를 등록할 디스패처
  * @param chat 채팅 서비스 구현체
  */
-void register_routes(server::core::Dispatcher& d, server::app::chat::ChatService& chat);
+void register_routes(server::core::Dispatcher& d,
+                     server::app::chat::ChatService& chat,
+                     server::app::fps::FpsService& fps);
 
 } // namespace server::app

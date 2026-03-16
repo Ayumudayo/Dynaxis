@@ -17,6 +17,7 @@ enum class SessionMode {
     kLoginOnly,
     kChat,
     kPing,
+    kFpsInput,
 };
 
 struct GroupConfig {
@@ -88,6 +89,10 @@ struct RunSummary {
     std::uint64_t chat_errors{0};
     std::uint64_t ping_success{0};
     std::uint64_t ping_errors{0};
+    std::uint64_t fps_input_success{0};
+    std::uint64_t fps_input_errors{0};
+    std::uint64_t fps_snapshot_count{0};
+    std::uint64_t fps_delta_count{0};
     double throughput_rps{0.0};
     double latency_p50_ms{0.0};
     double latency_p95_ms{0.0};
@@ -127,6 +132,8 @@ inline std::string mode_name(SessionMode mode) {
         return "chat";
     case SessionMode::kPing:
         return "ping";
+    case SessionMode::kFpsInput:
+        return "fps_input";
     case SessionMode::kLoginOnly:
         return "login_only";
     }

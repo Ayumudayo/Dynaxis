@@ -1108,6 +1108,9 @@ GatewayApp::GatewayApp()
                << udp_forward_reliable_total_.load(std::memory_order_relaxed) << "\n";
         stream << "gateway_transport_delivery_forward_total{transport=\"udp\",delivery=\"unreliable_sequenced\"} "
                << udp_forward_unreliable_sequenced_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE gateway_udp_direct_state_delta_total counter\n";
+        stream << "gateway_udp_direct_state_delta_total "
+               << udp_direct_state_delta_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_replay_drop_total counter\n";
         stream << "gateway_udp_replay_drop_total "
@@ -1160,6 +1163,12 @@ GatewayApp::GatewayApp()
         stream << "# TYPE gateway_rudp_fallback_total counter\n";
         stream << "gateway_rudp_fallback_total "
                << rudp_fallback_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE gateway_rudp_direct_state_delta_total counter\n";
+        stream << "gateway_rudp_direct_state_delta_total "
+               << rudp_direct_state_delta_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "# TYPE gateway_direct_state_delta_tcp_fallback_total counter\n";
+        stream << "gateway_direct_state_delta_tcp_fallback_total "
+               << direct_state_delta_tcp_fallback_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_world_policy_filtered_total counter\n";
         stream << "gateway_world_policy_filtered_total{source=\"sticky\"} "
@@ -1712,6 +1721,61 @@ void GatewayApp::send_udp_datagram(std::vector<std::uint8_t> frame,
         boost::asio::buffer(*buffer),
         endpoint,
         std::move(handler));
+}
+
+bool GatewayApp::try_send_direct_client_frame(std::string_view session_id,
+                                              std::uint16_t msg_id,
+                                              std::span<const std::uint8_t> frame) {
+    if (!is_direct_egress_msg(msg_id) || frame.empty()) {
+        return false;
+    }
+
+    boost::asio::ip::udp::endpoint endpoint;
+    DirectEgressRoute route = DirectEgressRoute::kTcpFallback;
+
+    {
+        std::lock_guard<std::mutex> lock(session_mutex_);
+        const auto it = sessions_.find(std::string(session_id));
+        if (it == sessions_.end()) {
+            (void)direct_state_delta_tcp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+
+        const bool rudp_established =
+            it->second.rudp_engine != nullptr
+            && it->second.rudp_engine->state().lifecycle == server::core::net::rudp::LifecycleState::kEstablished;
+        route = select_direct_egress_route(DirectEgressContext{
+            .msg_id = msg_id,
+            .udp_bound = it->second.udp_bound,
+            .rudp_selected = it->second.rudp_selected,
+            .rudp_fallback_to_tcp = it->second.rudp_fallback_to_tcp,
+            .rudp_established = rudp_established,
+        });
+        endpoint = it->second.udp_endpoint;
+
+        if (route == DirectEgressRoute::kRudp) {
+            std::vector<std::uint8_t> datagram;
+            const auto channel = server::protocol::opcode_policy(msg_id).channel;
+            if (!it->second.rudp_engine->queue_unreliable_payload(frame, channel, unix_time_ms(), datagram)) {
+                it->second.rudp_fallback_to_tcp = true;
+                (void)rudp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+                (void)direct_state_delta_tcp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+                return false;
+            }
+            send_udp_datagram(std::move(datagram), endpoint);
+            (void)rudp_direct_state_delta_total_.fetch_add(1, std::memory_order_relaxed);
+            return true;
+        }
+    }
+
+    if (route == DirectEgressRoute::kUdp) {
+        send_udp_datagram(std::vector<std::uint8_t>(frame.begin(), frame.end()), endpoint);
+        (void)udp_direct_state_delta_total_.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
+
+    (void)direct_state_delta_tcp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+    return false;
 }
 
 void GatewayApp::trace_udp_bind_send(std::span<const std::uint8_t> frame,

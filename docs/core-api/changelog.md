@@ -9,6 +9,7 @@
 ## 미출시(Unreleased)
 
 ### 변경됨(Changed)
+- `server/core/protocol/system_opcodes.hpp`의 `MSG_PING` 정책이 `transport=both`, `delivery=reliable`로 확장되어 direct UDP/RUDP gameplay-rate proof frame을 허용합니다.
 - 헤더별 소비자 사용 커버리지를 높이기 위해 `CorePublicApiStableHeaderScenarios` 테스트 타깃을 추가했습니다.
 - `tools/check_core_api_contracts.py`에 stable-governance fixture 회귀 검증을 추가했습니다.
 - `server/core/protocol/packet.hpp`에 연결/세그먼트 분류 enum(`ConnectionType`, `SegmentType`)과 `classify_segment_type()` 헬퍼를 추가했습니다.

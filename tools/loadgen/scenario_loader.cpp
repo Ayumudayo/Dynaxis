@@ -33,6 +33,9 @@ SessionMode parse_mode(const std::string& raw) {
     if (mode == "ping") {
         return SessionMode::kPing;
     }
+    if (mode == "fps_input") {
+        return SessionMode::kFpsInput;
+    }
     if (mode == "login_only" || mode == "idle") {
         return SessionMode::kLoginOnly;
     }
@@ -64,8 +67,11 @@ void validate_group(const GroupConfig& group) {
         throw std::runtime_error("group '" + group.name + "' count must be > 0");
     }
 
-    if ((group.mode == SessionMode::kChat || group.mode == SessionMode::kPing) && group.rate_per_sec <= 0.0) {
-        throw std::runtime_error("chat/ping groups require rate_per_sec > 0");
+    if ((group.mode == SessionMode::kChat
+         || group.mode == SessionMode::kPing
+         || group.mode == SessionMode::kFpsInput)
+        && group.rate_per_sec <= 0.0) {
+        throw std::runtime_error("chat/ping/fps_input groups require rate_per_sec > 0");
     }
 
     if (group.mode == SessionMode::kLoginOnly && group.rate_per_sec != 0.0) {
@@ -73,9 +79,10 @@ void validate_group(const GroupConfig& group) {
     }
 
     if (group.transport != TransportKind::kTcp) {
-        if (group.mode != SessionMode::kLoginOnly) {
+        if (group.mode == SessionMode::kChat) {
             throw std::runtime_error(
-                "transport '" + transport_name(group.transport) + "' currently supports only login_only groups");
+                "transport '" + transport_name(group.transport)
+                + "' currently supports only login_only, ping, or fps_input groups");
         }
         if (group.join_room) {
             throw std::runtime_error(

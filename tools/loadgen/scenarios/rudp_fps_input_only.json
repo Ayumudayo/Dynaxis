@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "name": "rudp_fps_input_only",
+  "transport": "rudp",
+  "sessions": 4,
+  "ramp_up_ms": 1000,
+  "duration_ms": 10000,
+  "room": "loadgen_room",
+  "unique_room_per_run": true,
+  "login_prefix": "rudp_fps",
+  "connect_timeout_ms": 5000,
+  "read_timeout_ms": 5000,
+  "groups": [
+    {
+      "name": "rudp_fps_input",
+      "mode": "fps_input",
+      "count": 4,
+      "rate_per_sec": 1.0,
+      "join_room": false
+    }
+  ]
+}

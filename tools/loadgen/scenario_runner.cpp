@@ -113,6 +113,35 @@ public:
         ++breakdown_[transport_index(transport)].error_count;
     }
 
+    void record_fps_update(const FpsUpdateResult& update) {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (update.is_snapshot) {
+            ++fps_snapshot_count_;
+        } else {
+            ++fps_delta_count_;
+        }
+    }
+
+    void record_fps_input_success(TransportKind transport, double latency_ms, const FpsUpdateResult& update) {
+        std::lock_guard<std::mutex> lock(mu_);
+        ++success_count_;
+        ++fps_input_success_;
+        ++breakdown_[transport_index(transport)].success_count;
+        if (update.is_snapshot) {
+            ++fps_snapshot_count_;
+        } else {
+            ++fps_delta_count_;
+        }
+        latencies_ms_.push_back(latency_ms);
+    }
+
+    void record_fps_input_failure(TransportKind transport) {
+        std::lock_guard<std::mutex> lock(mu_);
+        ++error_count_;
+        ++fps_input_errors_;
+        ++breakdown_[transport_index(transport)].error_count;
+    }
+
     void record_runtime_failure(TransportKind transport) {
         std::lock_guard<std::mutex> lock(mu_);
         ++error_count_;
@@ -150,6 +179,10 @@ public:
             summary.chat_errors = chat_errors_;
             summary.ping_success = ping_success_;
             summary.ping_errors = ping_errors_;
+            summary.fps_input_success = fps_input_success_;
+            summary.fps_input_errors = fps_input_errors_;
+            summary.fps_snapshot_count = fps_snapshot_count_;
+            summary.fps_delta_count = fps_delta_count_;
             latencies = latencies_ms_;
             summary.transport_breakdown.assign(breakdown_.begin(), breakdown_.end());
         }
@@ -212,6 +245,10 @@ private:
     std::uint64_t chat_errors_{0};
     std::uint64_t ping_success_{0};
     std::uint64_t ping_errors_{0};
+    std::uint64_t fps_input_success_{0};
+    std::uint64_t fps_input_errors_{0};
+    std::uint64_t fps_snapshot_count_{0};
+    std::uint64_t fps_delta_count_{0};
     std::vector<double> latencies_ms_;
     std::array<TransportBreakdown, kTransportKindCount> breakdown_{};
 };
@@ -315,6 +352,18 @@ void run_session_workload(SessionClient& client,
             const auto elapsed_ms =
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
             metrics.record_ping_success(assignment.transport, elapsed_ms);
+        } else if (assignment.mode == SessionMode::kFpsInput) {
+            FpsUpdateResult update;
+            const auto started = std::chrono::steady_clock::now();
+            if (!client.send_fps_input_and_wait_state(&update)) {
+                metrics.record_fps_input_failure(assignment.transport);
+                maybe_log(verbose,
+                          "session " + std::to_string(session_index) + " fps_input failed: " + client.last_error());
+                return;
+            }
+            const auto elapsed_ms =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+            metrics.record_fps_input_success(assignment.transport, elapsed_ms, update);
         }
 
         next_action = std::chrono::steady_clock::now() + interval_duration;
@@ -418,6 +467,23 @@ RunSummary run_scenario(const ScenarioConfig& scenario, const CliOptions& cli) {
                 continue;
             }
             metrics.record_joined(assignment.transport);
+        }
+
+        if (assignment.mode == SessionMode::kFpsInput) {
+            FpsUpdateResult initial_update;
+            if (!client->prepare_fps_session(&initial_update)) {
+                metrics.record_fps_input_failure(assignment.transport);
+                maybe_log(cli.verbose,
+                          "fps session prime failed for session " + std::to_string(session_index) + ": "
+                              + client->last_error());
+                client->close();
+                clients.push_back(std::move(client));
+                if (ramp_delay.count() > 0) {
+                    std::this_thread::sleep_for(ramp_delay);
+                }
+                continue;
+            }
+            metrics.record_fps_update(initial_update);
         }
 
         auto* client_ptr = client.get();

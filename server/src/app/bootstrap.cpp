@@ -25,6 +25,7 @@
 #include "server/app/config.hpp"
 #include "server/app/core_internal_adapter.hpp"
 #include "server/app/metrics_server.hpp"
+#include "server/fps/fps_service.hpp"
 
 #include "server/core/net/dispatcher.hpp"
 #include "server/core/security/admin_command_auth.hpp"
@@ -275,6 +276,7 @@ int run_server(int argc, char** argv) {
     // 1. 핵심 컴포넌트 선언
     core::concurrent::TaskScheduler scheduler;
     std::shared_ptr<asio::steady_timer> scheduler_timer;
+    std::shared_ptr<asio::steady_timer> fps_tick_timer;
     std::shared_ptr<core::storage::DbWorkerPool> db_workers;
     std::shared_ptr<core::scripting::LuaRuntime> lua_runtime;
     std::shared_ptr<asio::strand<asio::io_context::executor_type>> lua_reload_strand;
@@ -759,8 +761,47 @@ int run_server(int argc, char** argv) {
 
         // 6. 채팅 서비스 및 라우터 초기화
         server::app::chat::ChatService chat(io, job_queue, repository_pool, redis);
+        server::app::fps::FpsService fps(server::app::fps::RuntimeConfig{
+            .tick_rate_hz = config.fps_tick_rate_hz,
+            .snapshot_refresh_ticks = config.fps_snapshot_refresh_ticks,
+            .interest_cell_size_mm = config.fps_interest_cell_size_mm,
+            .interest_radius_cells = config.fps_interest_radius_cells,
+            .max_interest_recipients_per_tick = config.fps_max_interest_recipients_per_tick,
+            .history_ticks = config.fps_history_ticks,
+        });
         services::set(make_ref(chat));
-        register_routes(dispatcher, chat);
+        services::set(make_ref(fps));
+        register_routes(dispatcher, chat, fps);
+
+        fps_tick_timer = std::make_shared<asio::steady_timer>(io);
+        auto fps_driver = std::make_shared<server::app::fps::FixedStepDriver>(config.fps_tick_rate_hz);
+        auto fps_last_tick = std::make_shared<server::app::fps::FixedStepDriver::Clock::time_point>(
+            server::app::fps::FixedStepDriver::Clock::now());
+        auto fps_tick = std::make_shared<std::function<void()>>();
+        std::weak_ptr<std::function<void()>> fps_tick_weak = fps_tick;
+        *fps_tick = [fps_tick_timer, fps_tick_weak, fps_driver, fps_last_tick, fps_ptr = &fps]() {
+            const auto now = server::app::fps::FixedStepDriver::Clock::now();
+            const auto elapsed = now - *fps_last_tick;
+            *fps_last_tick = now;
+
+            const auto steps = fps_driver->consume_elapsed(elapsed);
+            for (std::size_t step = 0; step < steps; ++step) {
+                fps_ptr->tick();
+            }
+
+            fps_tick_timer->expires_after(fps_driver->step_duration());
+            fps_tick_timer->async_wait([fps_tick_timer, fps_tick_weak](const boost::system::error_code& ec) {
+                if (ec == asio::error::operation_aborted) {
+                    return;
+                }
+                if (!ec) {
+                    if (auto locked = fps_tick_weak.lock()) {
+                        (*locked)();
+                    }
+                }
+            });
+        };
+        (*fps_tick)();
 
         // 7. TCP 리스너 시작
         auto acceptor = core_internal::make_session_listener_handle(
@@ -770,7 +811,8 @@ int run_server(int argc, char** argv) {
             buffer_manager,
             options,
             state,
-            [&chat](std::shared_ptr<server::core::Session> session) {
+            [&chat, &fps](std::shared_ptr<server::core::Session> session) {
+                fps.on_session_close(session);
                 chat.on_session_close(session);
             });
         services::set(acceptor);

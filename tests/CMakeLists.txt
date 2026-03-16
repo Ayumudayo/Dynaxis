@@ -92,6 +92,7 @@ if (BUILD_GTEST_TESTS)
         core/test_rudp_rollout_policy.cpp
         core/test_security_compression.cpp
         core/test_admin_command_auth.cpp
+        core/test_direct_egress_route.cpp
     )
     target_include_directories(core_general_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/core/include
@@ -182,6 +183,24 @@ if (BUILD_GTEST_TESTS)
 
     # Linux dynamic loader symbols (dlopen/dlsym)
     target_link_libraries(server_general_tests PRIVATE ${CMAKE_DL_LIBS})
+
+    add_executable(server_fps_tests
+        server/test_fps_runtime.cpp
+    )
+    target_include_directories(server_fps_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/include
+        ${CMAKE_SOURCE_DIR}/server/include
+        ${CMAKE_BINARY_DIR}/proto
+    )
+    target_link_libraries(server_fps_tests PRIVATE
+        GTest::gtest_main
+        server_fps_runtime
+        server_core
+        wire_proto
+    )
+    if (TARGET generate_game_opcodes)
+        add_dependencies(server_fps_tests generate_game_opcodes)
+    endif()
 
     if (TARGET chat_hook_sample AND TARGET chat_hook_sample_v2 AND TARGET chat_hook_tag)
         add_library(test_chat_hook_v2_only MODULE
@@ -288,6 +307,7 @@ if (BUILD_GTEST_TESTS)
     discover_labeled_gtests(core_general_tests "core-behavior")
     discover_labeled_gtests(core_plugin_runtime_tests "core-behavior;extensibility")
     discover_labeled_gtests(server_general_tests "integration;server-behavior;extensibility")
+    discover_labeled_gtests(server_fps_tests "integration;server-behavior;fps")
     if (TARGET server_plugin_chain_tests)
         discover_labeled_gtests(server_plugin_chain_tests "integration;extensibility")
     endif()
@@ -454,6 +474,11 @@ if (Python3_Interpreter_FOUND)
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
               "${CMAKE_SOURCE_DIR}/tests/python/verify_chat_hook_behavior.py"
     )
+    add_test(
+      NAME StackPythonVerifyFpsStateTransport
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_fps_state_transport.py"
+    )
 
     set_tests_properties(
       StackPythonVerifyPluginMetrics
@@ -466,6 +491,13 @@ if (Python3_Interpreter_FOUND)
       StackPythonChatHookBehavior
       PROPERTIES
         LABELS "python;stack;plugin-script"
+        SKIP_RETURN_CODE 77
+        RUN_SERIAL TRUE
+    )
+    set_tests_properties(
+      StackPythonVerifyFpsStateTransport
+      PROPERTIES
+        LABELS "python;stack;fps"
         SKIP_RETURN_CODE 77
         RUN_SERIAL TRUE
     )

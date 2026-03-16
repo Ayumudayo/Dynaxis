@@ -26,6 +26,7 @@ json transport_stats_json(const TransportStats& stats) {
         {"rudp_attach_attempts", stats.rudp_attach_attempts},
         {"rudp_attach_successes", stats.rudp_attach_successes},
         {"rudp_attach_fallbacks", stats.rudp_attach_fallbacks},
+        {"fps_direct_updates", stats.fps_direct_updates},
     };
 }
 
@@ -73,6 +74,10 @@ json to_json(const RunSummary& summary) {
              {"chat_errors", summary.chat_errors},
              {"ping_success", summary.ping_success},
              {"ping_errors", summary.ping_errors},
+             {"fps_input_success", summary.fps_input_success},
+             {"fps_input_errors", summary.fps_input_errors},
+             {"fps_snapshot_count", summary.fps_snapshot_count},
+             {"fps_delta_count", summary.fps_delta_count},
          }},
         {"throughput_rps", summary.throughput_rps},
         {"latency_ms",
@@ -121,6 +126,9 @@ void print_summary(const RunSummary& summary, const fs::path& report_path) {
               << " udp_bind_fail=" << summary.transport.udp_bind_failures
               << " rudp_attach_ok=" << summary.transport.rudp_attach_successes
               << " rudp_attach_fallback=" << summary.transport.rudp_attach_fallbacks
+              << " fps_snapshot=" << summary.fps_snapshot_count
+              << " fps_delta=" << summary.fps_delta_count
+              << " fps_direct_updates=" << summary.transport.fps_direct_updates
               << " throughput_rps=" << std::fixed << std::setprecision(2) << summary.throughput_rps
               << " p95_ms=" << summary.latency_p95_ms
               << " report=" << report_path.string()
