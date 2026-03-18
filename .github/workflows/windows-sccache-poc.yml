@@ -99,6 +99,28 @@ jobs:
       - name: Enable MSVC Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Resolve Ninja path
+        shell: pwsh
+        run: |
+          $ninja = (Get-Command ninja -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Path -ErrorAction SilentlyContinue)
+          if ([string]::IsNullOrWhiteSpace($ninja)) {
+            $vsNinja = Join-Path $env:VSINSTALLDIR 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe'
+            if (Test-Path $vsNinja) {
+              $ninja = $vsNinja
+            }
+          }
+          if ([string]::IsNullOrWhiteSpace($ninja)) {
+            $cmakeNinja = 'C:\Program Files\CMake\bin\ninja.exe'
+            if (Test-Path $cmakeNinja) {
+              $ninja = $cmakeNinja
+            }
+          }
+          if ([string]::IsNullOrWhiteSpace($ninja)) {
+            throw 'ninja.exe not found for Windows SCCache PoC run'
+          }
+          "POC_NINJA=$ninja" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- ninja: {0}" -f $ninja)
+
       - name: Select PoC parameters
         shell: pwsh
         run: |
@@ -124,8 +146,8 @@ jobs:
       - name: Configure without sccache (Ninja, Release)
         shell: pwsh
         run: |
-          $toolchain = "${{ github.workspace }}/build-windows-sccache-poc-conan/conan/build/Release/generators/conan_toolchain.cmake"
-          cmake -S . -B build-windows-nosccache-conan -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$toolchain" -DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release -DCMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL=Release
+          $toolchain = "${{ github.workspace }}/build-windows-sccache-poc-conan/conan/build/generators/conan_toolchain.cmake"
+          cmake -S . -B build-windows-nosccache-conan -G Ninja -DCMAKE_MAKE_PROGRAM="$env:POC_NINJA" -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$toolchain" -DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release -DCMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL=Release
 
       - name: Build baseline pass #1 (without sccache)
         shell: pwsh
@@ -147,8 +169,8 @@ jobs:
       - name: Configure with sccache (Ninja, Release)
         shell: pwsh
         run: |
-          $toolchain = "${{ github.workspace }}/build-windows-sccache-poc-conan/conan/build/Release/generators/conan_toolchain.cmake"
-          cmake -S . -B build-windows-sccache-conan -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$toolchain" -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release -DCMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL=Release
+          $toolchain = "${{ github.workspace }}/build-windows-sccache-poc-conan/conan/build/generators/conan_toolchain.cmake"
+          cmake -S . -B build-windows-sccache-conan -G Ninja -DCMAKE_MAKE_PROGRAM="$env:POC_NINJA" -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$toolchain" -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release -DCMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL=Release
 
       - name: Build pass #1 (with sccache)
         shell: pwsh
@@ -189,8 +211,6 @@ jobs:
             '--target', $env:POC_TARGET
             '--double-build', $env:POC_DOUBLE_BUILD
             '--reset-sccache-before-measurement', $env:POC_RESET_SCCACHE
-            '--baseline-first-sec', $env:POC_BASELINE_FIRST_BUILD_SEC
-            '--sccache-first-sec', $env:POC_FIRST_BUILD_SEC
             '--pass1-stats-path', $env:POC_STATS_PASS1_PATH
             '--conan-cache-hit', '${{ steps.conan_cache_restore.outputs.cache-hit }}'
             '--conan-cache-matched-key', '${{ steps.conan_cache_restore.outputs.cache-matched-key }}'
@@ -201,6 +221,12 @@ jobs:
             '--runner-os', '${{ runner.os }}'
             '--step-summary', $env:GITHUB_STEP_SUMMARY
           )
+          if (-not [string]::IsNullOrWhiteSpace($env:POC_BASELINE_FIRST_BUILD_SEC)) {
+            $args += @('--baseline-first-sec', $env:POC_BASELINE_FIRST_BUILD_SEC)
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:POC_FIRST_BUILD_SEC)) {
+            $args += @('--sccache-first-sec', $env:POC_FIRST_BUILD_SEC)
+          }
           if (-not [string]::IsNullOrWhiteSpace($env:POC_BASELINE_SECOND_BUILD_SEC)) {
             $args += @('--baseline-second-sec', $env:POC_BASELINE_SECOND_BUILD_SEC)
           }
