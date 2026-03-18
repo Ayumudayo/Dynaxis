@@ -3,12 +3,14 @@
 ## 목표
 `[Stable]` `server_core` API만 사용해 최소 실행 바이너리를 컴파일합니다.
 
+이 문서는 package consumption entrypoint입니다. 공개 surface 범위는 `docs/core-api/overview.md`와 `docs/core-api-boundary.md`, 호환성 규칙은 `docs/core-api/compatibility-policy.md`, release/verification command는 `docs/core-api/checklists.md`와 `docs/tests.md`를 기준으로 합니다.
+
 ## 최소 예제
 
 ```cpp
 #include <boost/asio/io_context.hpp>
 
-#include "server/core/app/app_host.hpp"
+#include "server/core/app/engine_builder.hpp"
 #include "server/core/concurrent/task_scheduler.hpp"
 #include "server/core/net/hive.hpp"
 
@@ -16,16 +18,17 @@ int main() {
     boost::asio::io_context io;
     server::core::net::Hive hive(io);
 
-    server::core::app::AppHost host{"quickstart"};
-    host.declare_dependency("sample");
-    host.set_dependency_ok("sample", true);
-    host.set_ready(true);
-    host.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kRunning);
+    auto runtime = server::core::app::EngineBuilder("quickstart")
+        .declare_dependency("sample")
+        .build();
+    runtime.set_dependency_ok("sample", true);
+    runtime.mark_running();
 
     server::core::concurrent::TaskScheduler scheduler;
     scheduler.post([] {});
     (void)scheduler.poll();
 
+    runtime.mark_stopped();
     return 0;
 }
 ```
@@ -72,11 +75,25 @@ cmake --build build-windows/package-smoke/build --config Debug
 
 의존성 탐색에 실패하면 현재 build tree의 Conan generator 출력과 install prefix가 모두 존재하는지 확인합니다.
 
-자동화된 계약 검증에서는 같은 흐름을 `CoreInstalledPackageConsumer` 테스트로 실행합니다. 관련 label은 `contract;public-api;installed-consumer`이며, Windows multi-config 빌드에서는 다음처럼 `tests` 하위 test-dir로 실행하는 것이 가장 안전합니다.
+자동화된 계약 검증에서는 같은 흐름을 `CoreInstalledPackageConsumer` 테스트로 실행합니다. 이 테스트는 install prefix를 만든 뒤 별도 consumer configure/build를 수행하고, `server_core_installed_consumer`와 `server_core_extensibility_consumer` 실행까지 확인합니다.
 
 ```powershell
-ctest -C Debug --test-dir build-windows/tests -L contract --output-on-failure
+ctest --test-dir build-windows -C Debug -R "CoreInstalledPackageConsumer|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure
 ```
+
+### 로컬 Linux package parity smoke (Docker-backed)
+
+현재 저장소는 Linux package parity를 `dynaxis-base:latest` 기반 컨테이너에서 repeatable하게 검증합니다.
+
+```powershell
+pwsh scripts/run_linux_installed_consumer.ps1
+```
+
+이 스크립트는 Linux container 안에서:
+
+- `server_core`와 public-api smoke targets를 빌드하고
+- installed prefix를 만든 뒤
+- `CoreInstalledPackageConsumer`, `CoreApiBoundaryFixtures`, `CoreApiStableGovernanceFixtures`를 실행합니다.
 
 ## 참고
 - 이 빠른 시작 문서는 의도적으로 `Transitional`, `Internal` 헤더를 사용하지 않습니다.

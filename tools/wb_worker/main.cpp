@@ -15,9 +15,9 @@
 
 #include "../wb_common/redis_client_factory.hpp"
 #include "server/core/storage/redis/client.hpp"
+#include "server/core/app/engine_builder.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/trace/context.hpp"
-#include "server/core/app/app_host.hpp"
 #include "server/core/metrics/build_info.hpp"
 #include "server/core/metrics/metrics.hpp"
 #include <pqxx/pqxx>
@@ -179,27 +179,29 @@ std::size_t EstimateEntryBytes(const server::core::storage::redis::IRedisClient:
  */
 class WbWorker {
 public:
-    explicit WbWorker(WorkerConfig config) : config_(std::move(config)) {}
+    explicit WbWorker(WorkerConfig config)
+        : engine_(server::core::app::EngineBuilder("wb_worker")
+                      .install_process_signal_handlers()
+                      .build())
+        , app_host_(engine_.host())
+        , config_(std::move(config)) {}
 
     int Run() {
-        app_host_.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kBootstrapping);
-        server::core::app::install_termination_signal_handlers();
-
         // Readiness requires both Redis and DB to function.
-        app_host_.declare_dependency("redis");
-        app_host_.declare_dependency("db");
-        app_host_.set_dependency_ok("redis", false);
-        app_host_.set_dependency_ok("db", false);
-        app_host_.set_ready(false);
+        engine_.declare_dependency("redis");
+        engine_.declare_dependency("db");
+        engine_.set_dependency_ok("redis", false);
+        engine_.set_dependency_ok("db", false);
+        engine_.set_ready(false);
 
         if (config_.db_uri.empty()) {
             std::cerr << "WB worker: DB_URI not set" << std::endl;
-            app_host_.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kFailed);
+            engine_.mark_failed();
             return 2;
         }
         if (config_.redis_uri.empty()) {
             std::cerr << "WB worker: REDIS_URI not set" << std::endl;
-            app_host_.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kFailed);
+            engine_.mark_failed();
             return 2;
         }
 
@@ -214,10 +216,11 @@ public:
         redis_ = wb_tools::make_redis_client(config_.redis_uri, ropts);
         if (!redis_ || !redis_->health_check()) {
             std::cerr << "WB worker: Redis health check failed" << std::endl;
-            app_host_.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kFailed);
+            engine_.mark_failed();
             return 3;
         }
         NoteRedisAvailability(true, "startup_health_check");
+        engine_.set_service(redis_);
 
         // Consumer Group 생성 (이미 존재하면 무시됨)
         // Consumer Group은 여러 워커가 메시지를 중복 없이 나눠서 처리하게 해줍니다.
@@ -234,13 +237,13 @@ public:
             // Loop() 내에서 처리하도록 함.
         }
 
-        app_host_.start_admin_http(config_.metrics_port, [this]() { return RenderMetrics(); });
-        app_host_.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kRunning);
+        engine_.start_admin_http(config_.metrics_port, [this]() { return RenderMetrics(); });
+        engine_.mark_running();
 
         // 메인 루프 시작
         Loop();
-        app_host_.set_ready(false);
-        app_host_.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kStopped);
+        engine_.run_shutdown();
+        engine_.mark_stopped();
         return 0;
     }
 
@@ -695,8 +698,8 @@ private:
         }
     }
 
-    server::core::app::AppHost app_host_{"wb_worker"};
-
+    server::core::app::EngineRuntime engine_;
+    server::core::app::AppHost& app_host_;
     WorkerConfig config_;
     std::shared_ptr<server::core::storage::redis::IRedisClient> redis_;
     std::unique_ptr<pqxx::connection> db_;

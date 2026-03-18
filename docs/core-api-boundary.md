@@ -22,8 +22,24 @@
 |---|---|---|
 | `server/core/api/version.hpp` | Stable | 공개 API 버전 신호입니다. stable 헤더 변경 시 이 버전을 갱신해야 합니다. |
 | `server/core/app/app_host.hpp` | Stable | server/gateway/tools 전반에서 사용하는 런타임 호스트 계약 |
+| `server/core/app/engine_builder.hpp` | Stable | bootstrap 초기 lifecycle/dependency/admin-http 기본값을 선언적으로 구성하는 공용 조립 빌더 |
+| `server/core/app/engine_context.hpp` | Stable | 인스턴스 범위의 타입 기반 composition context. 앱 bootstrap이 core primitive를 지역적으로 조립하는 기준 표면 |
+| `server/core/app/engine_runtime.hpp` | Stable | `AppHost` + `EngineContext`를 묶어 lifecycle/dependency/shutdown/admin-http 제어를 공통화하는 런타임 조립 표면 |
 | `server/core/app/termination_signals.hpp` | Stable | non-Asio 루프 및 공용 종료 시그널링을 위한 프로세스 전역 종료 폴링 계약 |
 | `server/core/build_info.hpp` | Stable | 모든 바이너리가 사용하는 빌드 메타데이터 계약 |
+| `server/core/fps/direct_bind.hpp` | Stable | direct UDP bind request/response payload와 bind ticket data contract를 정의하는 FPS ingress surface |
+| `server/core/fps/direct_delivery.hpp` | Stable | direct UDP/RUDP delta delivery route selection policy를 app-local opcode 판별과 분리해 노출하는 FPS transport policy surface |
+| `server/core/fps/transport_quality.hpp` | Stable | direct UDP sequenced ingress의 loss/jitter/reorder/duplicate quality signal contract를 노출하는 FPS transport quality surface |
+| `server/core/fps/transport_policy.hpp` | Stable | direct UDP/RUDP rollout enablement, canary selection, opcode allowlist parsing을 정의하는 FPS transport policy surface |
+| `server/core/fps/runtime.hpp` | Stable | fixed-step authoritative tick, generic snapshot/delta shaping, coarse interest, rewind/history query를 제공하는 FPS engine capability surface |
+| `server/core/worlds/migration.hpp` | Stable | draining source world에서 target world owner로의 migration envelope/status evaluation을 정의하는 world migration runtime surface |
+| `server/core/worlds/world_drain.hpp` | Stable | live world drain phase/progress evaluation을 정의하는 world-drain runtime surface |
+| `server/core/worlds/topology.hpp` | Stable | desired topology document, observed topology pool aggregation, desired-vs-observed reconciliation status, read-only topology actuation planning, revisioned actuation request/status evaluation, executor-facing execution progress/status evaluation, observed-topology realization/adoption evaluation, adapter-facing lease/status evaluation, runtime-assignment document/instance lookup helper를 정의하는 world topology control-plane surface |
+| `server/core/worlds/world_transfer.hpp` | Stable | live world owner handoff의 phase/status 평가 contract를 정의하는 world owner-transfer runtime surface |
+| `server/core/mmorpg/migration.hpp` | Transitional | `server/core/worlds/migration.hpp`의 compatibility wrapper. 기존 genre-specific include 경로를 한 릴리스 주기 동안 유지하기 위한 shim |
+| `server/core/mmorpg/world_drain.hpp` | Transitional | `server/core/worlds/world_drain.hpp`의 compatibility wrapper |
+| `server/core/mmorpg/topology.hpp` | Transitional | `server/core/worlds/topology.hpp`의 compatibility wrapper |
+| `server/core/mmorpg/world_transfer.hpp` | Transitional | `server/core/worlds/world_transfer.hpp`의 compatibility wrapper |
 | `server/core/compression/compressor.hpp` | Stable | 비정상/손상 입력에 대한 명시적 오류 신호를 포함한 LZ4 압축/해제 계약 |
 | `server/core/concurrent/job_queue.hpp` | Stable | 명시적 stop 및 backpressure 동작을 포함한 bounded/unbounded FIFO 큐 계약 |
 | `server/core/concurrent/locked_queue.hpp` | Internal | 내부 worker 배선에 사용하는 저수준 큐 기본 구성요소 |
@@ -77,6 +93,7 @@
 - 공개 API는 가변 public 데이터 필드를 지양하고, 동작을 정의하는 메서드 중심으로 설계합니다.
 - 공개 헤더는 `server/` 또는 `gateway/` 구현 헤더에 의존하면 안 됩니다.
 - 공개 문서/예제는 `Internal` 헤더를 포함하면 안 됩니다.
+- runtime composition은 `EngineBuilder -> EngineRuntime -> EngineContext` 순으로 사용하고, 전역 `ServiceRegistry`는 필요한 경우 compatibility bridge로만 사용합니다.
 
 ## 즉시 후속 작업
 - `Transitional` 헤더는 릴리스마다 축소하고, 안정화가 끝난 표면은 `Stable`로 승격하거나 `Internal`로 재분류합니다.

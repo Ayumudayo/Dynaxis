@@ -25,13 +25,14 @@
 #include "server/app/config.hpp"
 #include "server/app/core_internal_adapter.hpp"
 #include "server/app/metrics_server.hpp"
+#include "server/app/topology_runtime_assignment.hpp"
 #include "server/fps/fps_service.hpp"
 
 #include "server/core/net/dispatcher.hpp"
 #include "server/core/security/admin_command_auth.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/util/service_registry.hpp"
-#include "server/core/app/app_host.hpp"
+#include "server/core/app/engine_builder.hpp"
 #include "server/core/config/options.hpp"
 #include "server/core/concurrent/job_queue.hpp"
 #include "server/core/concurrent/thread_manager.hpp"
@@ -284,8 +285,8 @@ int run_server(int argc, char** argv) {
         std::shared_ptr<server::core::state::IInstanceStateBackend> registry_backend;
         server::core::state::InstanceRecord registry_record{};
     bool registry_registered = false;
-    server::core::app::AppHost app_host{"server_app"};
-    app_host.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kBootstrapping);
+    auto engine = server::core::app::EngineBuilder("server_app").build();
+    auto& app_host = engine.host();
 
     try {
 #if defined(_WIN32)
@@ -301,7 +302,7 @@ int run_server(int argc, char** argv) {
         ServerConfig config;
         if (!config.load(argc, argv)) {
             corelog::error("Failed to load configuration");
-            app_host.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kFailed);
+            engine.mark_failed();
             return 1;
         }
 
@@ -315,13 +316,13 @@ int run_server(int argc, char** argv) {
             std::memory_order_relaxed);
 
         // Readiness: DB is required; Redis is required when configured.
-        app_host.declare_dependency("db");
+        engine.declare_dependency("db");
         if (!config.redis_uri.empty()) {
-            app_host.declare_dependency("redis");
+            engine.declare_dependency("redis");
         }
 
         // Base readiness will flip to true after listeners/threads are running.
-        app_host.set_ready(false);
+        engine.set_ready(false);
 
         if (config.log_buffer_capacity > 0) {
             corelog::set_buffer_capacity(config.log_buffer_capacity);
@@ -351,7 +352,7 @@ int run_server(int argc, char** argv) {
             lua_cfg.memory_limit_bytes = static_cast<std::size_t>(capped_memory_limit);
 
             lua_runtime = std::make_shared<core::scripting::LuaRuntime>(std::move(lua_cfg));
-            services::set(lua_runtime);
+            engine.bridge_service(lua_runtime);
             corelog::info("Lua runtime scaffold initialised");
         }
 
@@ -374,27 +375,23 @@ int run_server(int argc, char** argv) {
         core::BufferManager buffer_manager(buffer_block_size, 1024);
         auto state = core_internal::make_connection_runtime_state();
 
-        // ServiceRegistry 등록
-        const auto make_ref = [](auto& instance) {
-            using T = std::remove_reference_t<decltype(instance)>;
-            return std::shared_ptr<T>(&instance, [](T*) {});
-        };
-        services::set(make_ref(io));
-        services::set(make_ref(job_queue));
-        services::set(make_ref(workers));
-        services::set(make_ref(buffer_manager));
-        services::set(make_ref(dispatcher));
-        services::set(options);
+        // Legacy service-registry bridge for the current server runtime graph.
+        engine.bridge_alias(io);
+        engine.bridge_alias(job_queue);
+        engine.bridge_alias(workers);
+        engine.bridge_alias(buffer_manager);
+        engine.bridge_alias(dispatcher);
+        engine.bridge_service(options);
         core_internal::register_connection_runtime_state_service(state);
-        services::set(make_ref(scheduler));
-        services::set(make_ref(app_host));
+        engine.bridge_alias(scheduler);
+        engine.bridge_alias(app_host);
         if (lua_reload_strand) {
-            services::set(lua_reload_strand);
+            engine.bridge_service(lua_reload_strand);
         }
 
         // 스케줄러 타이머 설정
         scheduler_timer = std::make_shared<asio::steady_timer>(io);
-        services::set(scheduler_timer);
+        engine.bridge_service(scheduler_timer);
 
         auto scheduler_tick = std::make_shared<std::function<void()>>();
         std::weak_ptr<std::function<void()>> scheduler_tick_weak = scheduler_tick;
@@ -627,14 +624,14 @@ int run_server(int argc, char** argv) {
             db_pool = repository_pool;
             if (!core_internal::connection_pool_health_check(db_pool)) {
                 corelog::error("DB health check failed; please verify DB_URI.");
-                app_host.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kFailed);
+                engine.mark_failed();
                 return 2;
             }
             corelog::info("DB connection pool initialised.");
-            app_host.set_dependency_ok("db", true);
+            engine.set_dependency_ok("db", true);
         } else {
             corelog::warn("DB_URI is not set; database features remain disabled.");
-            app_host.set_dependency_ok("db", false);
+            engine.set_dependency_ok("db", false);
         }
 
         if (db_pool) {
@@ -686,13 +683,47 @@ int run_server(int argc, char** argv) {
             } else {
                 corelog::info("Redis client initialised.");
             }
-            app_host.set_dependency_ok("redis", ok);
+            engine.set_dependency_ok("redis", ok);
         } else {
             corelog::warn("REDIS_URI is not set; Redis features remain disabled.");
         }
 
         if (redis) {
-            services::set(redis);
+            engine.bridge_service(redis);
+
+            const auto load_runtime_assignment =
+                [redis, assignment_key = config.topology_runtime_assignment_key, instance_id = config.server_instance_id]()
+                -> std::optional<server::core::worlds::TopologyActuationRuntimeAssignmentItem> {
+                    if (!redis || assignment_key.empty() || instance_id.empty()) {
+                        return std::nullopt;
+                    }
+
+                    try {
+                        const auto payload = redis->get(assignment_key);
+                        if (!payload.has_value() || payload->empty()) {
+                            return std::nullopt;
+                        }
+
+                        const auto document =
+                            server::app::parse_topology_actuation_runtime_assignment_document(*payload);
+                        if (!document.has_value()) {
+                            return std::nullopt;
+                        }
+
+                        return server::app::find_topology_actuation_runtime_assignment_for_instance(
+                            *document,
+                            instance_id);
+                    } catch (...) {
+                        return std::nullopt;
+                    }
+                };
+            const auto apply_runtime_assignment =
+                [base_shard = config.server_shard, base_tags = config.server_tags, load_runtime_assignment](
+                    server::core::state::InstanceRecord& record) {
+                    const auto assignment = load_runtime_assignment();
+                    record.shard = server::app::resolve_topology_runtime_assignment_shard(base_shard, assignment);
+                    record.tags = server::app::apply_topology_runtime_assignment_tags(base_tags, assignment);
+                };
 
             // 주기적인 Redis 헬스 체크
             scheduler.schedule_every([job_queue_ptr, redis, &app_host]() {
@@ -717,7 +748,7 @@ int run_server(int argc, char** argv) {
             try {
                 registry_backend = core_internal::make_registry_backend(
                     redis, config.registry_prefix, config.registry_ttl);
-                
+
                 registry_record.instance_id = config.server_instance_id;
                 registry_record.host = config.advertise_host;
                 registry_record.port = config.advertise_port;
@@ -731,10 +762,11 @@ int run_server(int argc, char** argv) {
                 registry_record.ready = app_host.ready();
                 registry_record.last_heartbeat_ms = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count());
+                apply_runtime_assignment(registry_record);
 
                 if (registry_backend->upsert(registry_record)) {
                     registry_registered = true;
-                    corelog::info("Registered server instance id=" + registry_record.instance_id + 
+                    corelog::info("Registered server instance id=" + registry_record.instance_id +
                                   " host=" + registry_record.host + ":" + std::to_string(registry_record.port));
                 } else {
                     corelog::warn("Failed to register server instance in registry");
@@ -747,11 +779,12 @@ int run_server(int argc, char** argv) {
             // 레지스트리 하트비트 스케줄링
             if (registry_registered) {
                 auto interval = config.registry_heartbeat_interval;
-                scheduler.schedule_every([registry_backend, registry_record, state, &app_host]() mutable {
+                scheduler.schedule_every([registry_backend, registry_record, state, &app_host, apply_runtime_assignment]() mutable {
                     registry_record.last_heartbeat_ms = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now().time_since_epoch()).count());
                     registry_record.active_sessions = core_internal::connection_count(state);
                     registry_record.ready = app_host.ready();
+                    apply_runtime_assignment(registry_record);
                     if (!registry_backend->upsert(registry_record)) {
                         corelog::warn("Server registry heartbeat upsert failed");
                     }
@@ -767,10 +800,11 @@ int run_server(int argc, char** argv) {
             .interest_cell_size_mm = config.fps_interest_cell_size_mm,
             .interest_radius_cells = config.fps_interest_radius_cells,
             .max_interest_recipients_per_tick = config.fps_max_interest_recipients_per_tick,
+            .max_delta_actors_per_tick = config.fps_max_delta_actors_per_tick,
             .history_ticks = config.fps_history_ticks,
         });
-        services::set(make_ref(chat));
-        services::set(make_ref(fps));
+        engine.bridge_alias(chat);
+        engine.bridge_alias(fps);
         register_routes(dispatcher, chat, fps);
 
         fps_tick_timer = std::make_shared<asio::steady_timer>(io);
@@ -815,7 +849,7 @@ int run_server(int argc, char** argv) {
                 fps.on_session_close(session);
                 chat.on_session_close(session);
             });
-        services::set(acceptor);
+        engine.bridge_service(acceptor);
         acceptor->start();
         corelog::info("server_app listening on 0.0.0.0:" + std::to_string(config.port));
 
@@ -839,8 +873,7 @@ int run_server(int argc, char** argv) {
         corelog::info(std::to_string(num_io_threads) + " I/O threads started.");
 
         // Readiness is computed from base readiness + dependency probes.
-        app_host.set_ready(true);
-        app_host.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kRunning);
+        engine.mark_running();
 
         if (registry_registered && registry_backend) {
             registry_record.last_heartbeat_ms = static_cast<std::uint64_t>(
@@ -848,6 +881,30 @@ int run_server(int argc, char** argv) {
                     std::chrono::steady_clock::now().time_since_epoch()).count());
             registry_record.active_sessions = core_internal::connection_count(state);
             registry_record.ready = app_host.ready();
+            registry_record.shard = config.server_shard;
+            registry_record.tags = config.server_tags;
+            if (redis && !config.topology_runtime_assignment_key.empty()) {
+                try {
+                    const auto payload = redis->get(config.topology_runtime_assignment_key);
+                    if (payload.has_value() && !payload->empty()) {
+                        const auto document =
+                            server::app::parse_topology_actuation_runtime_assignment_document(*payload);
+                        if (document.has_value()) {
+                            const auto assignment =
+                                server::app::find_topology_actuation_runtime_assignment_for_instance(
+                                    *document,
+                                    config.server_instance_id);
+                            registry_record.shard = server::app::resolve_topology_runtime_assignment_shard(
+                                config.server_shard,
+                                assignment);
+                            registry_record.tags = server::app::apply_topology_runtime_assignment_tags(
+                                config.server_tags,
+                                assignment);
+                        }
+                    }
+                } catch (...) {
+                }
+            }
             if (!registry_backend->upsert(registry_record)) {
                 corelog::warn("Server registry ready-state upsert failed");
             }
@@ -1145,17 +1202,16 @@ int run_server(int argc, char** argv) {
             corelog::info(std::string("Subscribed Redis pattern: ") + pattern_all);
         }
 
-        // 11. Metrics Server 시작
-        std::unique_ptr<MetricsServer> metrics_server;
-        if (config.metrics_port != 0) {
-            metrics_server = std::make_unique<MetricsServer>(config.metrics_port);
-            metrics_server->start();
-        }
+        // 11. Metrics/admin HTTP 시작
+        engine.start_admin_http(
+            config.metrics_port,
+            []() { return render_metrics_text(); },
+            []() { return render_logs_text(); });
 
         // 12. 종료 시그널 대기
-        app_host.add_shutdown_step("stop workers", [&]() { workers.Stop(); });
-        app_host.add_shutdown_step("stop io_context", [&]() { io.stop(); });
-        app_host.add_shutdown_step("drain active sessions", [&]() {
+        engine.add_shutdown_step("stop workers", [&]() { workers.Stop(); });
+        engine.add_shutdown_step("stop io_context", [&]() { io.stop(); });
+        engine.add_shutdown_step("drain active sessions", [&]() {
             const std::uint64_t timeout_ms = config.shutdown_drain_timeout_ms;
             const std::uint64_t poll_ms = std::max<std::uint64_t>(1, config.shutdown_drain_poll_ms);
 
@@ -1188,62 +1244,51 @@ int run_server(int argc, char** argv) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
             }
         });
-        app_host.add_shutdown_step("stop acceptor", [&]() { acceptor->stop(); });
-        app_host.add_shutdown_step("stop db worker pool", [&]() {
+        engine.add_shutdown_step("stop acceptor", [&]() { acceptor->stop(); });
+        engine.add_shutdown_step("stop db worker pool", [&]() {
             core_internal::stop_db_worker_pool(db_workers);
         });
-        app_host.add_shutdown_step("cancel scheduler timer", [&]() {
+        engine.add_shutdown_step("cancel scheduler timer", [&]() {
             try {
                 if (scheduler_timer) scheduler_timer->cancel();
             } catch (...) {
                 core::runtime_metrics::record_exception_ignored();
             }
         });
-        app_host.add_shutdown_step("shutdown scheduler", [&]() { scheduler.shutdown(); });
-        app_host.add_shutdown_step("reset lua runtime", [&]() {
+        engine.add_shutdown_step("shutdown scheduler", [&]() { scheduler.shutdown(); });
+        engine.add_shutdown_step("reset lua runtime", [&]() {
             if (lua_runtime) {
                 lua_runtime->reset();
             }
         });
-        app_host.add_shutdown_step("stop metrics server", [&]() {
-            if (metrics_server) metrics_server->stop();
-        });
-        app_host.add_shutdown_step("stop redis pubsub", [&]() {
+        engine.add_shutdown_step("stop redis pubsub", [&]() {
             try { if (redis) redis->stop_psubscribe(); } catch (...) { core::runtime_metrics::record_exception_ignored(); }
         });
-        app_host.add_shutdown_step("deregister instance", [&]() {
+        engine.add_shutdown_step("deregister instance", [&]() {
             if (registry_registered && registry_backend) {
                 try { registry_backend->remove(registry_record.instance_id); } catch (...) { core::runtime_metrics::record_exception_ignored(); }
                 registry_registered = false;
             }
         });
 
-        app_host.install_asio_termination_signals(io, {});
+        engine.install_asio_termination_signals(io, {});
 
         for (auto& t : io_threads) {
             t.join();
         }
 
-        app_host.set_ready(false);
-        app_host.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kStopped);
+        engine.run_shutdown();
+        engine.mark_stopped();
 
-        // 정리 작업
-        if (registry_registered && registry_backend) {
-            try { registry_backend->remove(registry_record.instance_id); } catch (...) { core::runtime_metrics::record_exception_ignored(); }
-        }
-        if (metrics_server) metrics_server->stop();
-        try { scheduler_timer->cancel(); } catch (...) { core::runtime_metrics::record_exception_ignored(); }
-        scheduler.shutdown();
-        core_internal::stop_db_worker_pool(db_workers);
-        services::clear();
+        engine.clear_global_services();
 
         return 0;
 
     } catch (const std::exception& ex) {
         core::runtime_metrics::record_exception_fatal();
         corelog::error(std::string("component=server_bootstrap error_code=SERVER_FATAL server_app exception: ") + ex.what());
-        app_host.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kFailed);
-        services::clear();
+        engine.mark_failed();
+        engine.clear_global_services();
         return 1;
     }
 }

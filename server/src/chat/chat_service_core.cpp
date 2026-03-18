@@ -1,4 +1,5 @@
 #include "server/chat/chat_service.hpp"
+#include "server/app/topology_runtime_assignment.hpp"
 #include "server/protocol/game_opcodes.hpp"
 #include "server/core/config/runtime_settings.hpp"
 #include "server/core/protocol/packet.hpp"
@@ -56,6 +57,7 @@ struct ChatService::HookPluginState {
 namespace {
 
 constexpr std::string_view kRoomPasswordHashPrefix = "sha256:";
+constexpr std::string_view kAppMigrationPayloadRoomKind = "chat-room-v1";
 
 std::string legacy_hash_room_password(std::string_view password) {
     std::hash<std::string> hasher;
@@ -153,10 +155,10 @@ std::optional<std::string> extract_world_tag(std::string_view value) {
 // ChatService 생성자: 주요 의존성을 주입받고 환경 변수로부터 설정을 로드합니다.
 ChatService::ChatService(boost::asio::io_context& io,
                          server::core::JobQueue& job_queue,
-                         std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool,
-                         std::shared_ptr<server::core::storage::redis::IRedisClient> redis)
+    std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool,
+    std::shared_ptr<server::core::storage::redis::IRedisClient> redis)
     : io_(&io), job_queue_(job_queue), db_pool_(std::move(db_pool)), redis_(std::move(redis)) {
-    
+
     // 의존성이 주입되지 않은 경우 ServiceRegistry에서 가져옵니다.
     if (!db_pool_) {
         db_pool_ = services::get<server::storage::IRepositoryConnectionPool>();
@@ -298,6 +300,12 @@ ChatService::ChatService(boost::asio::io_context& io,
         continuity_.current_owner_id = "server-owner-" + std::to_string(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
+    if (const char* assignment_key = std::getenv("TOPOLOGY_RUNTIME_ASSIGNMENT_KEY");
+        assignment_key && *assignment_key) {
+        continuity_.topology_runtime_assignment_key = assignment_key;
+    } else {
+        continuity_.topology_runtime_assignment_key = "dynaxis:topology:actuation:runtime-assignment";
     }
 
     if (const char* admins_env = read_env("CHAT_ADMIN_USERS", "ADMIN_USERS"); admins_env && *admins_env) {
@@ -669,6 +677,23 @@ ChatService::ContinuityMetrics ChatService::continuity_metrics() const {
     out.world_owner_write_fail_total = continuity_world_owner_write_fail_total_.load(std::memory_order_relaxed);
     out.world_owner_restore_total = continuity_world_owner_restore_total_.load(std::memory_order_relaxed);
     out.world_owner_restore_fallback_total = continuity_world_owner_restore_fallback_total_.load(std::memory_order_relaxed);
+    out.world_migration_restore_total = continuity_world_migration_restore_total_.load(std::memory_order_relaxed);
+    out.world_migration_restore_fallback_total =
+        continuity_world_migration_restore_fallback_total_.load(std::memory_order_relaxed);
+    out.world_migration_restore_fallback_target_world_missing_total =
+        continuity_world_migration_restore_fallback_target_world_missing_total_.load(std::memory_order_relaxed);
+    out.world_migration_restore_fallback_target_owner_missing_total =
+        continuity_world_migration_restore_fallback_target_owner_missing_total_.load(std::memory_order_relaxed);
+    out.world_migration_restore_fallback_target_owner_not_ready_total =
+        continuity_world_migration_restore_fallback_target_owner_not_ready_total_.load(std::memory_order_relaxed);
+    out.world_migration_restore_fallback_target_owner_mismatch_total =
+        continuity_world_migration_restore_fallback_target_owner_mismatch_total_.load(std::memory_order_relaxed);
+    out.world_migration_restore_fallback_source_not_draining_total =
+        continuity_world_migration_restore_fallback_source_not_draining_total_.load(std::memory_order_relaxed);
+    out.world_migration_payload_room_handoff_total =
+        continuity_world_migration_payload_room_handoff_total_.load(std::memory_order_relaxed);
+    out.world_migration_payload_room_handoff_fallback_total =
+        continuity_world_migration_payload_room_handoff_fallback_total_.load(std::memory_order_relaxed);
     return out;
 }
 
@@ -823,6 +848,10 @@ std::string ChatService::make_continuity_world_policy_key(const std::string& wor
     return continuity_.redis_prefix + "world-policy:" + world_id;
 }
 
+std::string ChatService::make_continuity_world_migration_key(const std::string& world_id) const {
+    return continuity_.redis_prefix + "world-migration:" + world_id;
+}
+
 bool ChatService::continuity_enabled() const {
     return continuity_.enabled && static_cast<bool>(db_pool_);
 }
@@ -872,6 +901,66 @@ ChatService::load_continuity_world_policy(const std::string& world_id) {
         return std::nullopt;
     }
     return server::core::state::parse_world_lifecycle_policy(*payload);
+}
+
+std::optional<server::core::worlds::WorldMigrationEnvelope>
+ChatService::load_continuity_world_migration(const std::string& world_id) {
+    if (!redis_ || world_id.empty()) {
+        return std::nullopt;
+    }
+
+    const auto payload = redis_->get(make_continuity_world_migration_key(world_id));
+    if (!payload.has_value() || payload->empty()) {
+        return std::nullopt;
+    }
+    return server::core::worlds::parse_world_migration_envelope(*payload);
+}
+
+std::optional<server::core::worlds::TopologyActuationRuntimeAssignmentItem>
+ChatService::load_topology_runtime_assignment() const {
+    if (!redis_ || continuity_.topology_runtime_assignment_key.empty() || continuity_.current_owner_id.empty()) {
+        return std::nullopt;
+    }
+
+    try {
+        const auto payload = redis_->get(continuity_.topology_runtime_assignment_key);
+        if (!payload.has_value() || payload->empty()) {
+            return std::nullopt;
+        }
+
+        const auto document = server::app::parse_topology_actuation_runtime_assignment_document(*payload);
+        if (!document.has_value()) {
+            return std::nullopt;
+        }
+
+        return server::app::find_topology_actuation_runtime_assignment_for_instance(
+            *document,
+            continuity_.current_owner_id);
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+std::string ChatService::current_runtime_default_world_id() const {
+    const std::string fallback_world_id =
+        continuity_.default_world_id.empty() ? std::string("default") : continuity_.default_world_id;
+    const auto assignment = load_topology_runtime_assignment();
+    const auto resolved =
+        server::app::resolve_topology_runtime_assignment_world_id(fallback_world_id, assignment);
+    return resolved.empty() ? std::string("default") : resolved;
+}
+
+ChatService::AppMigrationRoomHandoff
+ChatService::resolve_app_world_migration_room_handoff(
+    const server::core::worlds::WorldMigrationEnvelope& migration) const {
+    AppMigrationRoomHandoff handoff{};
+    if (migration.payload_kind != kAppMigrationPayloadRoomKind) {
+        return handoff;
+    }
+
+    handoff.recognized = true;
+    handoff.room = migration.payload_ref;
+    return handoff;
 }
 
 void ChatService::persist_continuity_room(const std::string& logical_session_id,
@@ -988,9 +1077,10 @@ std::optional<ChatService::ContinuityLease> ChatService::try_resume_continuity_l
         lease.resume_token = *raw_token;
         lease.user_id = session->user_id;
         lease.effective_user = user->name;
-        const std::string fallback_world_id =
-            continuity_.default_world_id.empty() ? std::string("default") : continuity_.default_world_id;
+        const std::string fallback_world_id = current_runtime_default_world_id();
         bool world_restore_ok = false;
+        bool preserve_room_on_restore = false;
+        std::optional<std::string> migration_payload_room;
         const auto continuity_world = load_continuity_world(session->id);
         if (continuity_world.has_value() && !continuity_world->empty()) {
             const auto continuity_world_policy = load_continuity_world_policy(*continuity_world);
@@ -1008,25 +1098,83 @@ std::optional<ChatService::ContinuityLease> ChatService::try_resume_continuity_l
             if (owner_matches_current && (!world_draining || replacement_owner_matches_current)) {
                 lease.world_id = *continuity_world;
                 world_restore_ok = true;
+                preserve_room_on_restore = true;
                 (void)continuity_world_restore_total_.fetch_add(1, std::memory_order_relaxed);
                 (void)continuity_world_owner_restore_total_.fetch_add(1, std::memory_order_relaxed);
             } else {
-                lease.world_id = fallback_world_id;
-                (void)continuity_world_restore_fallback_total_.fetch_add(1, std::memory_order_relaxed);
-                if (world_draining && !replacement_owner_matches_current) {
-                    (void)continuity_world_restore_fallback_draining_replacement_unhonored_total_.fetch_add(
-                        1,
-                        std::memory_order_relaxed);
-                } else if (!owner_present) {
-                    (void)continuity_world_restore_fallback_missing_owner_total_.fetch_add(
-                        1,
-                        std::memory_order_relaxed);
-                    (void)continuity_world_owner_restore_fallback_total_.fetch_add(1, std::memory_order_relaxed);
-                } else if (!owner_matches_current) {
-                    (void)continuity_world_restore_fallback_owner_mismatch_total_.fetch_add(
-                        1,
-                        std::memory_order_relaxed);
-                    (void)continuity_world_owner_restore_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+                bool migration_restored = false;
+                if (const auto migration = load_continuity_world_migration(*continuity_world); migration.has_value()) {
+                    const bool source_draining_for_migration = world_draining;
+                    const bool target_owner_matches_current =
+                        migration->target_owner_instance_id == continuity_.current_owner_id;
+                    const bool current_backend_hosts_target_world =
+                        current_runtime_default_world_id() == migration->target_world_id;
+                    const auto target_world_owner = load_continuity_world_owner(migration->target_world_id);
+                    const bool target_world_owner_matches_current =
+                        target_world_owner.has_value()
+                        && !target_world_owner->empty()
+                        && *target_world_owner == continuity_.current_owner_id;
+
+                    if (!source_draining_for_migration) {
+                        (void)continuity_world_migration_restore_fallback_total_.fetch_add(
+                            1,
+                            std::memory_order_relaxed);
+                        (void)continuity_world_migration_restore_fallback_source_not_draining_total_.fetch_add(
+                            1,
+                            std::memory_order_relaxed);
+                    } else if (!target_owner_matches_current) {
+                        (void)continuity_world_migration_restore_fallback_total_.fetch_add(
+                            1,
+                            std::memory_order_relaxed);
+                        (void)continuity_world_migration_restore_fallback_target_owner_mismatch_total_.fetch_add(
+                            1,
+                            std::memory_order_relaxed);
+                    } else if (!current_backend_hosts_target_world && !target_world_owner_matches_current) {
+                        (void)continuity_world_migration_restore_fallback_total_.fetch_add(
+                            1,
+                            std::memory_order_relaxed);
+                        (void)continuity_world_migration_restore_fallback_target_world_missing_total_.fetch_add(
+                            1,
+                            std::memory_order_relaxed);
+                    } else {
+                        lease.world_id = migration->target_world_id;
+                        world_restore_ok = true;
+                        preserve_room_on_restore = migration->preserve_room;
+                        const auto room_handoff = resolve_app_world_migration_room_handoff(*migration);
+                        if (room_handoff.recognized) {
+                            if (!room_handoff.room.empty()) {
+                                migration_payload_room = room_handoff.room;
+                            } else {
+                                (void)continuity_world_migration_payload_room_handoff_fallback_total_.fetch_add(
+                                    1,
+                                    std::memory_order_relaxed);
+                            }
+                        }
+                        migration_restored = true;
+                        (void)continuity_world_migration_restore_total_.fetch_add(
+                            1,
+                            std::memory_order_relaxed);
+                    }
+                }
+
+                if (!migration_restored) {
+                    lease.world_id = fallback_world_id;
+                    (void)continuity_world_restore_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+                    if (world_draining && !replacement_owner_matches_current) {
+                        (void)continuity_world_restore_fallback_draining_replacement_unhonored_total_.fetch_add(
+                            1,
+                            std::memory_order_relaxed);
+                    } else if (!owner_present) {
+                        (void)continuity_world_restore_fallback_missing_owner_total_.fetch_add(
+                            1,
+                            std::memory_order_relaxed);
+                        (void)continuity_world_owner_restore_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+                    } else if (!owner_matches_current) {
+                        (void)continuity_world_restore_fallback_owner_mismatch_total_.fetch_add(
+                            1,
+                            std::memory_order_relaxed);
+                        (void)continuity_world_owner_restore_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+                    }
                 }
             }
         } else {
@@ -1038,7 +1186,15 @@ std::optional<ChatService::ContinuityLease> ChatService::try_resume_continuity_l
         }
 
         const auto continuity_room = load_continuity_room(session->id);
-        if (world_restore_ok && continuity_room.has_value() && !continuity_room->empty()) {
+        if (world_restore_ok && migration_payload_room.has_value() && !migration_payload_room->empty()) {
+            lease.room = *migration_payload_room;
+            (void)continuity_world_migration_payload_room_handoff_total_.fetch_add(
+                1,
+                std::memory_order_relaxed);
+        } else if (world_restore_ok
+                   && preserve_room_on_restore
+                   && continuity_room.has_value()
+                   && !continuity_room->empty()) {
             lease.room = *continuity_room;
             (void)continuity_state_restore_total_.fetch_add(1, std::memory_order_relaxed);
         } else {
@@ -1087,9 +1243,7 @@ std::optional<ChatService::ContinuityLease> ChatService::issue_continuity_lease(
         lease.resume_token = raw_token;
         lease.user_id = user_id;
         lease.effective_user = effective_user;
-        lease.world_id = world_id.empty()
-            ? (continuity_.default_world_id.empty() ? std::string("default") : continuity_.default_world_id)
-            : world_id;
+        lease.world_id = world_id.empty() ? current_runtime_default_world_id() : world_id;
         lease.room = room.empty() ? "lobby" : room;
         lease.expires_unix_ms = static_cast<std::uint64_t>(session.expires_at_ms);
         lease.resumed = false;
@@ -1156,7 +1310,7 @@ std::string ChatService::ensure_unique_or_error(Session& s, const std::string& d
 void ChatService::send_rooms_list(Session& s) {
     std::vector<std::uint8_t> body;
     std::string msg = "rooms:";
-    
+
     // 1. Redis 데이터 미리 조회 (Lock 없이 수행)
     struct RoomInfo {
         std::string name;
@@ -1233,7 +1387,7 @@ void ChatService::send_rooms_list(Session& s) {
     {
         // 2. 로컬 상태 처리 (Lock 필요)
         std::lock_guard<std::mutex> lk(state_.mu);
-        
+
         // 로컬 방 정리
         std::vector<std::string> to_remove;
         for (auto it = state_.rooms.begin(); it != state_.rooms.end(); ++it) {
@@ -1248,7 +1402,7 @@ void ChatService::send_rooms_list(Session& s) {
             for (auto& info : redis_rooms) {
                 std::string display_name = info.name;
                 bool is_locked = info.is_locked;
-                
+
                 // Redis에 잠금 정보가 없어도 로컬에 있을 수 있음
                 if (!is_locked && state_.room_passwords.count(info.name)) {
                     is_locked = true;
@@ -1298,7 +1452,7 @@ void ChatService::broadcast_refresh_local(const std::string& room) {
             collect_room_sessions(it->second, targets);
         }
     }
-    
+
     for (auto& s : targets) {
         s->async_send(game_proto::MSG_REFRESH_NOTIFY, empty_body, 0);
     }
@@ -1334,7 +1488,7 @@ void ChatService::send_room_users(Session& s, const std::string& target) {
         auto itroom = state_.rooms.find(target);
         bool is_locked = state_.room_passwords.count(target) > 0;
         bool is_member = false;
-        
+
         // 로컬 세션에서 멤버 여부 확인
         if (itroom != state_.rooms.end()) {
             for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) {
@@ -1420,7 +1574,7 @@ void ChatService::send_room_users(Session& s, const std::string& target) {
 void ChatService::send_snapshot(Session& s, const std::string& current) {
     std::vector<std::uint8_t> body;
     server::wire::v1::StateSnapshot pb; pb.set_current_room(current);
-    
+
     // 1. Redis 데이터 미리 조회 (Lock 없이 수행)
     struct RoomInfo {
         std::string name;
@@ -1496,7 +1650,7 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
     {
         // 2. 로컬 상태 처리 (Lock 필요)
         std::lock_guard<std::mutex> lk(state_.mu);
-        
+
         // 로컬 방 정리
         std::vector<std::string> to_remove;
         for (auto it = state_.rooms.begin(); it != state_.rooms.end(); ++it) {
@@ -1508,10 +1662,10 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
         if (redis_available) {
             // Redis 데이터 기반으로 메시지 구성
             for (auto& info : redis_rooms) {
-                auto* ri = pb.add_rooms(); 
-                ri->set_name(info.name); 
+                auto* ri = pb.add_rooms();
+                ri->set_name(info.name);
                 ri->set_members(info.count);
-                
+
                 bool locked = info.is_locked;
                 if (!locked && state_.room_passwords.count(info.name)) {
                     locked = true;
@@ -1543,13 +1697,13 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
     {
         std::vector<std::string> user_list;
         bool loaded_from_redis = false;
-        
+
         if (redis_) {
             if (redis_->smembers("room:users:" + current, user_list)) {
                 loaded_from_redis = true;
             }
         }
-        
+
         if (loaded_from_redis) {
             for (const auto& name : user_list) {
                 if (viewer_blocked.count(name) > 0) {
@@ -1576,7 +1730,7 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
             }
         }
     }
-    
+
     // 최근 메시지를 Redis에서 우선 조회하고, 부족하면 DB에서 가져옵니다 (Fallback).
     std::string rid;
     {

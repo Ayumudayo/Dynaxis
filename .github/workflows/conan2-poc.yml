@@ -39,6 +39,19 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Prepare Conan strategy telemetry directory
+        shell: pwsh
+        run: |
+          $telemetryDir = Join-Path $env:GITHUB_WORKSPACE "build/conan-strategy-poc"
+          New-Item -ItemType Directory -Force -Path $telemetryDir | Out-Null
+          "CONAN_STRATEGY_TELEMETRY_DIR=$telemetryDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CONAN_STRATEGY_SUMMARY_PATH=$(Join-Path $telemetryDir 'windows-conan-current-cache.json')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Mark Conan cache restore start (Windows)
+        shell: pwsh
+        run: |
+          "CONAN_CACHE_RESTORE_START=$(Get-Date -AsUTC -Format o)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Restore Conan cache (Windows)
         id: conan_cache_restore
         uses: actions/cache/restore@v4
@@ -47,6 +60,21 @@ jobs:
           key: ${{ runner.os }}-conan2-${{ hashFiles('conan.lock', 'conanfile.py', 'conan/profiles/**', 'scripts/setup_conan.ps1', 'scripts/build.ps1') }}
           restore-keys: |
             ${{ runner.os }}-conan2-
+
+      - name: Summarize Conan cache restore (Windows)
+        shell: pwsh
+        run: |
+          $start = [DateTime]::Parse($env:CONAN_CACHE_RESTORE_START)
+          $elapsed = [Math]::Round(((Get-Date).ToUniversalTime() - $start).TotalSeconds, 2)
+          "CONAN_CACHE_RESTORE_ELAPSED_SEC=$elapsed" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $hit = '${{ steps.conan_cache_restore.outputs.cache-hit }}'
+          if ([string]::IsNullOrWhiteSpace($hit)) { $hit = 'false' }
+          $matchedKey = '${{ steps.conan_cache_restore.outputs.cache-matched-key }}'
+          if ([string]::IsNullOrWhiteSpace($matchedKey)) { $matchedKey = 'N/A' }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '### conan strategy restore telemetry'
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_hit: {0}" -f $hit)
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_elapsed_sec: {0}" -f $elapsed)
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_key: {0}" -f $matchedKey)
 
       - name: Ensure Conan cache directory
         shell: pwsh
@@ -86,7 +114,10 @@ jobs:
           if (-not [string]::IsNullOrWhiteSpace($target)) {
             $args += @('-Target', $target)
           }
-          & pwsh @args
+          $elapsed = Measure-Command { & pwsh @args }
+          $buildSec = [Math]::Round($elapsed.TotalSeconds, 2)
+          "CONAN_STRATEGY_BUILD_ELAPSED_SEC=$buildSec" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- build_elapsed_sec: {0}" -f $buildSec)
 
       - name: Run ctest (Conan2 build)
         if: github.event.inputs.run_ctest != 'false' && github.event.inputs.target == ''
@@ -94,11 +125,82 @@ jobs:
         run: |
           $config = '${{ github.event.inputs.config }}'
           if ([string]::IsNullOrWhiteSpace($config)) { $config = 'Release' }
-          ctest --test-dir build-windows --build-config $config --parallel 8 --output-on-failure
+          $elapsed = Measure-Command { ctest --test-dir build-windows --build-config $config --parallel 8 --output-on-failure }
+          $ctestSec = [Math]::Round($elapsed.TotalSeconds, 2)
+          "CONAN_STRATEGY_CTEST_ELAPSED_SEC=$ctestSec" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- ctest_elapsed_sec: {0}" -f $ctestSec)
+
+      - name: Mark Conan cache save start (Windows)
+        if: success() && steps.conan_cache_restore.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          "CONAN_CACHE_SAVE_START=$(Get-Date -AsUTC -Format o)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Save Conan cache (Windows)
         if: success() && steps.conan_cache_restore.outputs.cache-hit != 'true'
+        id: conan_cache_save
         uses: actions/cache/save@v4
         with:
           path: ${{ env.CONAN_HOME }}
           key: ${{ steps.conan_cache_restore.outputs.cache-primary-key }}
+
+      - name: Summarize Conan strategy artifact
+        if: always()
+        shell: pwsh
+        run: |
+          $config = '${{ github.event.inputs.config }}'
+          if ([string]::IsNullOrWhiteSpace($config)) { $config = 'Release' }
+          $target = '${{ github.event.inputs.target }}'
+          $runCtest = '${{ github.event.inputs.run_ctest }}'
+          if ([string]::IsNullOrWhiteSpace($runCtest)) { $runCtest = 'true' }
+          $saveStatus = '${{ steps.conan_cache_save.outcome }}'
+          if ([string]::IsNullOrWhiteSpace($saveStatus)) { $saveStatus = 'unknown' }
+          $saveReason = ''
+          $saveElapsed = ''
+          if ('${{ steps.conan_cache_restore.outputs.cache-hit }}' -eq 'true') {
+            $saveReason = 'exact cache hit'
+          } elseif (-not [string]::IsNullOrWhiteSpace($env:CONAN_CACHE_SAVE_START)) {
+            $start = [DateTime]::Parse($env:CONAN_CACHE_SAVE_START)
+            $saveElapsed = [Math]::Round(((Get-Date).ToUniversalTime() - $start).TotalSeconds, 2)
+          }
+          $args = @(
+            'tests/python/summarize_conan_strategy_probe.py'
+            '--output', $env:CONAN_STRATEGY_SUMMARY_PATH
+            '--config', $config
+            '--target', $target
+            '--run-ctest', $runCtest
+            '--strategy-mode', 'current-cache'
+            '--restore-cache-hit', '${{ steps.conan_cache_restore.outputs.cache-hit }}'
+            '--restore-matched-key', '${{ steps.conan_cache_restore.outputs.cache-matched-key }}'
+            '--restore-primary-key', '${{ steps.conan_cache_restore.outputs.cache-primary-key }}'
+            '--run-id', '${{ github.run_id }}'
+            '--run-attempt', '${{ github.run_attempt }}'
+            '--runner-os', '${{ runner.os }}'
+            '--step-summary', $env:GITHUB_STEP_SUMMARY
+            '--workflow', 'conan2-poc'
+            '--job', 'windows-conan2-poc'
+            '--save-status', $saveStatus
+            '--save-skipped-reason', $saveReason
+          )
+          if (-not [string]::IsNullOrWhiteSpace($env:CONAN_CACHE_RESTORE_ELAPSED_SEC)) {
+            $args += @('--restore-elapsed-sec', $env:CONAN_CACHE_RESTORE_ELAPSED_SEC)
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:CONAN_STRATEGY_BUILD_ELAPSED_SEC)) {
+            $args += @('--build-elapsed-sec', $env:CONAN_STRATEGY_BUILD_ELAPSED_SEC)
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:CONAN_STRATEGY_CTEST_ELAPSED_SEC)) {
+            $args += @('--ctest-elapsed-sec', $env:CONAN_STRATEGY_CTEST_ELAPSED_SEC)
+          }
+          if (-not [string]::IsNullOrWhiteSpace($saveElapsed)) {
+            $args += @('--save-elapsed-sec', $saveElapsed)
+          }
+          & python @args
+
+      - name: Upload Conan strategy artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conan-strategy-poc-windows-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            build/conan-strategy-poc/windows-conan-current-cache.json

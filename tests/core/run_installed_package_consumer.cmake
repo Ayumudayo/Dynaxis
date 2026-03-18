@@ -62,3 +62,38 @@ execute_process(
 if(NOT build_result EQUAL 0)
     message(FATAL_ERROR "installed consumer build failed\n${build_stdout}\n${build_stderr}")
 endif()
+
+function(run_consumer_executable target_name)
+    set(candidates
+        "${CONSUMER_BUILD_DIR}/${target_name}"
+        "${CONSUMER_BUILD_DIR}/${CONFIG}/${target_name}"
+        "${CONSUMER_BUILD_DIR}/${target_name}.exe"
+        "${CONSUMER_BUILD_DIR}/${CONFIG}/${target_name}.exe"
+    )
+
+    set(target_path "")
+    foreach(candidate IN LISTS candidates)
+        if(EXISTS "${candidate}")
+            set(target_path "${candidate}")
+            break()
+        endif()
+    endforeach()
+
+    if("${target_path}" STREQUAL "")
+        message(FATAL_ERROR "installed consumer executable not found for ${target_name}")
+    endif()
+
+    execute_process(
+        COMMAND "${target_path}"
+        WORKING_DIRECTORY "${CONSUMER_BUILD_DIR}"
+        RESULT_VARIABLE run_result
+        OUTPUT_VARIABLE run_stdout
+        ERROR_VARIABLE run_stderr
+    )
+    if(NOT run_result EQUAL 0)
+        message(FATAL_ERROR "installed consumer run failed for ${target_name}\n${run_stdout}\n${run_stderr}")
+    endif()
+endfunction()
+
+run_consumer_executable("server_core_installed_consumer")
+run_consumer_executable("server_core_extensibility_consumer")

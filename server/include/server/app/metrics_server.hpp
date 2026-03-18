@@ -6,6 +6,9 @@
 
 namespace server::app {
 
+std::string render_metrics_text();
+std::string render_logs_text();
+
 /**
  * @brief Prometheus 메트릭 및 로그를 제공하는 간단한 HTTP 서버입니다.
  * /metrics, /logs 엔드포인트를 지원합니다.

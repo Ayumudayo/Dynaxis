@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
-#include <gateway/udp_sequenced_metrics.hpp>
+#include <server/core/fps/transport_quality.hpp>
 
 TEST(UdpSequencedMetricsTest, AcceptsFirstPacket) {
-    gateway::UdpSequencedMetrics metrics;
+    server::core::fps::UdpSequencedMetrics metrics;
 
     const auto result = metrics.on_packet(10, 1000);
     EXPECT_TRUE(result.accepted);
@@ -14,7 +14,7 @@ TEST(UdpSequencedMetricsTest, AcceptsFirstPacket) {
 }
 
 TEST(UdpSequencedMetricsTest, MarksDuplicatePacket) {
-    gateway::UdpSequencedMetrics metrics;
+    server::core::fps::UdpSequencedMetrics metrics;
 
     EXPECT_TRUE(metrics.on_packet(11, 1000).accepted);
     const auto duplicate = metrics.on_packet(11, 1010);
@@ -24,7 +24,7 @@ TEST(UdpSequencedMetricsTest, MarksDuplicatePacket) {
 }
 
 TEST(UdpSequencedMetricsTest, MarksReorderedPacket) {
-    gateway::UdpSequencedMetrics metrics;
+    server::core::fps::UdpSequencedMetrics metrics;
 
     EXPECT_TRUE(metrics.on_packet(20, 1000).accepted);
     EXPECT_TRUE(metrics.on_packet(22, 1010).accepted);
@@ -36,7 +36,7 @@ TEST(UdpSequencedMetricsTest, MarksReorderedPacket) {
 }
 
 TEST(UdpSequencedMetricsTest, EstimatesLossAndJitter) {
-    gateway::UdpSequencedMetrics metrics;
+    server::core::fps::UdpSequencedMetrics metrics;
 
     EXPECT_TRUE(metrics.on_packet(100, 1000).accepted);
 
@@ -52,7 +52,7 @@ TEST(UdpSequencedMetricsTest, EstimatesLossAndJitter) {
 }
 
 TEST(UdpSequencedMetricsTest, ResetClearsReplayWindowForRebind) {
-    gateway::UdpSequencedMetrics metrics;
+    server::core::fps::UdpSequencedMetrics metrics;
 
     EXPECT_TRUE(metrics.on_packet(500, 1000).accepted);
     EXPECT_FALSE(metrics.on_packet(499, 1010).accepted);

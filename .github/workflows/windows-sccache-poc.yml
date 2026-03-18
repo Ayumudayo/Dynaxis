@@ -11,6 +11,10 @@ on:
         description: Run clean-first second build for cache-hit check (true/false)
         required: false
         default: "true"
+      reset_sccache_before_measurement:
+        description: Reset sccache contents before pass #1 so pass #1 is cold within the current run (true/false)
+        required: false
+        default: "true"
 
 permissions:
   contents: read
@@ -58,6 +62,16 @@ jobs:
           New-Item -ItemType Directory -Force -Path "${{ env.CONAN_HOME }}" | Out-Null
           New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/.cache/sccache" | Out-Null
 
+      - name: Prepare SCCache PoC telemetry directory
+        shell: pwsh
+        run: |
+          $telemetryDir = Join-Path $env:GITHUB_WORKSPACE "build/windows-sccache-poc"
+          New-Item -ItemType Directory -Force -Path $telemetryDir | Out-Null
+          "POC_TELEMETRY_DIR=$telemetryDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "POC_STATS_PASS1_PATH=$(Join-Path $telemetryDir 'sccache-pass1.stats.txt')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "POC_STATS_PASS2_PATH=$(Join-Path $telemetryDir 'sccache-pass2.stats.txt')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "POC_SUMMARY_PATH=$(Join-Path $telemetryDir 'windows-sccache-poc.json')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Ensure lockfile exists
         shell: pwsh
         run: |
@@ -85,6 +99,39 @@ jobs:
       - name: Enable MSVC Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Resolve Ninja path
+        shell: pwsh
+        run: |
+          $ninja = ''
+          $vsNinja = Join-Path $env:VSINSTALLDIR 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe'
+          if (Test-Path $vsNinja) {
+            $ninja = $vsNinja
+          }
+          if ([string]::IsNullOrWhiteSpace($ninja)) {
+            $cmakeNinja = 'C:\Program Files\CMake\bin\ninja.exe'
+            if (Test-Path $cmakeNinja) {
+              $ninja = $cmakeNinja
+            }
+          }
+          if ([string]::IsNullOrWhiteSpace($ninja)) {
+            $ninja = (Get-Command ninja -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Path -ErrorAction SilentlyContinue)
+          }
+          if ([string]::IsNullOrWhiteSpace($ninja)) {
+            throw 'ninja.exe not found for Windows SCCache PoC run'
+          }
+          "POC_NINJA=$ninja" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- ninja: {0}" -f $ninja)
+
+      - name: Resolve MSVC compiler path
+        shell: pwsh
+        run: |
+          $cl = (Get-Command cl -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Path -ErrorAction SilentlyContinue)
+          if ([string]::IsNullOrWhiteSpace($cl)) {
+            throw 'cl.exe not found after MSVC Developer Command Prompt setup'
+          }
+          "POC_CL=$cl" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- cl: {0}" -f $cl)
+
       - name: Select PoC parameters
         shell: pwsh
         run: |
@@ -94,44 +141,126 @@ jobs:
           $double = '${{ github.event.inputs.double_build }}'
           if ([string]::IsNullOrWhiteSpace($double)) { $double = 'true' }
           "POC_DOUBLE_BUILD=$double" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $reset = '${{ github.event.inputs.reset_sccache_before_measurement }}'
+          if ([string]::IsNullOrWhiteSpace($reset)) { $reset = 'true' }
+          "POC_RESET_SCCACHE=$reset" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '### sccache PoC parameters'
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- target: {0}" -f $target)
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- double_build: {0}" -f $double)
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- reset_sccache_before_measurement: {0}" -f $reset)
 
       - name: Prepare Conan dependencies (Release)
         shell: pwsh
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup_conan.ps1 -Config Release -Feature windows-dev -BuildDir build-windows-sccache-conan
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup_conan.ps1 -Config Release -Feature windows-dev -BuildDir build-windows-sccache-poc-conan -ToolchainGenerator Ninja
+
+      - name: Configure without sccache (Ninja, Release)
+        shell: pwsh
+        run: |
+          $toolchain = "${{ github.workspace }}/build-windows-sccache-poc-conan/conan/build/Release/generators/conan_toolchain.cmake"
+          cmake -S . -B build-windows-nosccache-conan -G Ninja -DCMAKE_MAKE_PROGRAM="$env:POC_NINJA" -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$toolchain" -DCMAKE_C_COMPILER="$env:POC_CL" -DCMAKE_CXX_COMPILER="$env:POC_CL" -DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release -DCMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL=Release
+
+      - name: Build baseline pass #1 (without sccache)
+        shell: pwsh
+        run: |
+          $first = Measure-Command { cmake --build build-windows-nosccache-conan --target $env:POC_TARGET --parallel }
+          $firstSec = [Math]::Round($first.TotalSeconds, 2)
+          "POC_BASELINE_FIRST_BUILD_SEC=$firstSec" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- baseline_build_pass_1_sec: {0}" -f $firstSec)
+
+      - name: Build baseline pass #2 (without sccache, fresh-tree)
+        if: env.POC_DOUBLE_BUILD == 'true'
+        shell: pwsh
+        run: |
+          $toolchain = "${{ github.workspace }}/build-windows-sccache-poc-conan/conan/build/Release/generators/conan_toolchain.cmake"
+          cmake -S . -B build-windows-nosccache-conan-pass2 -G Ninja -DCMAKE_MAKE_PROGRAM="$env:POC_NINJA" -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$toolchain" -DCMAKE_C_COMPILER="$env:POC_CL" -DCMAKE_CXX_COMPILER="$env:POC_CL" -DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release -DCMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL=Release
+          $second = Measure-Command { cmake --build build-windows-nosccache-conan-pass2 --target $env:POC_TARGET --parallel }
+          $secondSec = [Math]::Round($second.TotalSeconds, 2)
+          "POC_BASELINE_SECOND_BUILD_SEC=$secondSec" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- baseline_build_pass_2_sec: {0}" -f $secondSec)
 
       - name: Configure with sccache (Ninja, Release)
         shell: pwsh
         run: |
-          cmake -S . -B build-windows-sccache-conan -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/build-windows-sccache-conan/conan/build/Release/generators/conan_toolchain.cmake" -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release -DCMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL=Release
+          $toolchain = "${{ github.workspace }}/build-windows-sccache-poc-conan/conan/build/Release/generators/conan_toolchain.cmake"
+          cmake -S . -B build-windows-sccache-conan -G Ninja -DCMAKE_MAKE_PROGRAM="$env:POC_NINJA" -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$toolchain" -DCMAKE_C_COMPILER="$env:POC_CL" -DCMAKE_CXX_COMPILER="$env:POC_CL" -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release -DCMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL=Release
 
-      - name: Build pass #1
+      - name: Build pass #1 (with sccache)
         shell: pwsh
         run: |
           sccache --stop-server | Out-Null
+          if ($env:POC_RESET_SCCACHE -eq 'true') {
+            $entries = Get-ChildItem -Path "${{ github.workspace }}/.cache/sccache" -Force -ErrorAction SilentlyContinue
+            if ($entries) {
+              $entries | Remove-Item -Recurse -Force
+            }
+          }
           sccache --start-server
           sccache --zero-stats
           $first = Measure-Command { cmake --build build-windows-sccache-conan --target $env:POC_TARGET --parallel }
           $firstSec = [Math]::Round($first.TotalSeconds, 2)
           "POC_FIRST_BUILD_SEC=$firstSec" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- build_pass_1_sec: {0}" -f $firstSec)
+          sccache --show-stats | Tee-Object -FilePath $env:POC_STATS_PASS1_PATH
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- sccache_build_pass_1_sec: {0}" -f $firstSec)
 
-      - name: Build pass #2 (clean-first)
+      - name: Build pass #2 (with sccache, fresh-tree)
         if: env.POC_DOUBLE_BUILD == 'true'
         shell: pwsh
         run: |
-          $second = Measure-Command { cmake --build build-windows-sccache-conan --target $env:POC_TARGET --clean-first --parallel }
+          $toolchain = "${{ github.workspace }}/build-windows-sccache-poc-conan/conan/build/Release/generators/conan_toolchain.cmake"
+          cmake -S . -B build-windows-sccache-conan-pass2 -G Ninja -DCMAKE_MAKE_PROGRAM="$env:POC_NINJA" -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$toolchain" -DCMAKE_C_COMPILER="$env:POC_CL" -DCMAKE_CXX_COMPILER="$env:POC_CL" -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release -DCMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL=Release
+          sccache --zero-stats
+          $second = Measure-Command { cmake --build build-windows-sccache-conan-pass2 --target $env:POC_TARGET --parallel }
           $secondSec = [Math]::Round($second.TotalSeconds, 2)
           "POC_SECOND_BUILD_SEC=$secondSec" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- build_pass_2_sec: {0}" -f $secondSec)
+          sccache --show-stats | Tee-Object -FilePath $env:POC_STATS_PASS2_PATH
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- sccache_build_pass_2_sec: {0}" -f $secondSec)
 
-      - name: Show sccache stats
+      - name: Summarize SCCache PoC
+        if: always()
         shell: pwsh
         run: |
-          sccache --show-stats
+          $args = @(
+            'tests/python/summarize_windows_sccache_poc.py'
+            '--output', $env:POC_SUMMARY_PATH
+            '--target', $env:POC_TARGET
+            '--double-build', $env:POC_DOUBLE_BUILD
+            '--reset-sccache-before-measurement', $env:POC_RESET_SCCACHE
+            '--pass1-stats-path', $env:POC_STATS_PASS1_PATH
+            '--conan-cache-hit', '${{ steps.conan_cache_restore.outputs.cache-hit }}'
+            '--conan-cache-matched-key', '${{ steps.conan_cache_restore.outputs.cache-matched-key }}'
+            '--sccache-cache-hit', '${{ steps.sccache_restore.outputs.cache-hit }}'
+            '--sccache-cache-matched-key', '${{ steps.sccache_restore.outputs.cache-matched-key }}'
+            '--run-id', '${{ github.run_id }}'
+            '--run-attempt', '${{ github.run_attempt }}'
+            '--runner-os', '${{ runner.os }}'
+            '--step-summary', $env:GITHUB_STEP_SUMMARY
+          )
+          if (-not [string]::IsNullOrWhiteSpace($env:POC_BASELINE_FIRST_BUILD_SEC)) {
+            $args += @('--baseline-first-sec', $env:POC_BASELINE_FIRST_BUILD_SEC)
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:POC_FIRST_BUILD_SEC)) {
+            $args += @('--sccache-first-sec', $env:POC_FIRST_BUILD_SEC)
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:POC_BASELINE_SECOND_BUILD_SEC)) {
+            $args += @('--baseline-second-sec', $env:POC_BASELINE_SECOND_BUILD_SEC)
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:POC_SECOND_BUILD_SEC)) {
+            $args += @('--sccache-second-sec', $env:POC_SECOND_BUILD_SEC)
+            $args += @('--pass2-stats-path', $env:POC_STATS_PASS2_PATH)
+          }
+          & python @args
+
+      - name: Upload SCCache PoC artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-sccache-poc-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            build/windows-sccache-poc/windows-sccache-poc.json
+            build/windows-sccache-poc/sccache-pass1.stats.txt
+            build/windows-sccache-poc/sccache-pass2.stats.txt
 
       - name: Save sccache artifacts cache (Windows)
         if: success() && steps.sccache_restore.outputs.cache-hit != 'true'

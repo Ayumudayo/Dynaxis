@@ -298,7 +298,9 @@ std::string AppHost::lifecycle_metrics_text() const {
 }
 
 void AppHost::start_admin_http(unsigned short port,
-                               server::core::metrics::MetricsHttpServer::MetricsCallback metrics_callback) {
+                               server::core::metrics::MetricsHttpServer::MetricsCallback metrics_callback,
+                               server::core::metrics::MetricsHttpServer::LogsCallback logs_callback,
+                               server::core::metrics::MetricsHttpServer::RouteCallback route_callback) {
     if (port == 0) {
         return;
     }
@@ -321,12 +323,18 @@ void AppHost::start_admin_http(unsigned short port,
             // 기본 ready 플래그 + 필수 의존성 + health/stop 조건을 함께 본다.
             return ready() && healthy() && !stop_requested();
         },
-        server::core::metrics::MetricsHttpServer::LogsCallback{},
+        std::move(logs_callback),
         [this](bool ok) { return health_body(ok); },
-        [this](bool ok) { return readiness_body(ok); });
+        [this](bool ok) { return readiness_body(ok); },
+        std::move(route_callback));
     admin_http_->start();
 
     corelog::info(name_ + " admin http enabled on :" + std::to_string(port));
+
+    if (!admin_http_shutdown_step_registered_) {
+        add_shutdown_step("stop admin http", [this]() { stop_admin_http(); });
+        admin_http_shutdown_step_registered_ = true;
+    }
 }
 
 void AppHost::stop_admin_http() {

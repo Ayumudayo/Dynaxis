@@ -78,7 +78,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         std::string lobby_room_id;
         std::string login_ip = session_sp->remote_ip();
         std::string current_room = "lobby";
-        std::string current_world = continuity_.default_world_id.empty() ? std::string("default") : continuity_.default_world_id;
+        std::string current_world = current_runtime_default_world_id();
         std::string continuity_session_id;
         std::string continuity_resume_token;
         std::uint64_t continuity_expires_unix_ms = 0;
@@ -112,7 +112,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             continuity_resume_token = continuity_resume->resume_token;
             continuity_expires_unix_ms = continuity_resume->expires_unix_ms;
             current_world = continuity_resume->world_id.empty()
-                ? (continuity_.default_world_id.empty() ? std::string("default") : continuity_.default_world_id)
+                ? current_runtime_default_world_id()
                 : continuity_resume->world_id;
             current_room = continuity_resume->room.empty() ? std::string("lobby") : continuity_resume->room;
             resumed_login = true;

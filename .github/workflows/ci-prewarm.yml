@@ -25,6 +25,13 @@ jobs:
           fetch-depth: 1
           submodules: recursive
 
+      - name: Prepare Prewarm Telemetry Directory
+        shell: pwsh
+        run: |
+          $telemetryDir = Join-Path $env:GITHUB_WORKSPACE "build/ci-prewarm"
+          New-Item -ItemType Directory -Force -Path $telemetryDir | Out-Null
+          "PREWARM_TELEMETRY_DIR=$telemetryDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Mark Conan cache restore start (Windows)
         shell: pwsh
         run: |
@@ -52,6 +59,22 @@ jobs:
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_hit: {0}" -f $hit)
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_elapsed_sec: {0}" -f $elapsed)
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- restore_key: {0}" -f $matchedKey)
+          $telemetryPath = Join-Path $env:PREWARM_TELEMETRY_DIR "windows-conan-prewarm.json"
+          $payload = [ordered]@{
+            workflow = "ci-prewarm"
+            job = "windows-conan-prewarm"
+            run_id = "${{ github.run_id }}"
+            run_attempt = "${{ github.run_attempt }}"
+            runner_os = "${{ runner.os }}"
+            restore = [ordered]@{
+              cache_hit = $hit
+              elapsed_sec = $elapsed
+              matched_key = $matchedKey
+              primary_key = '${{ steps.conan_cache_restore.outputs.cache-primary-key }}'
+              recorded_at_utc = (Get-Date).ToUniversalTime().ToString('o')
+            }
+          }
+          $payload | ConvertTo-Json -Depth 6 | Set-Content -Path $telemetryPath -Encoding utf8
 
       - name: Ensure Conan cache directory
         shell: pwsh
@@ -104,20 +127,61 @@ jobs:
         if: always()
         shell: pwsh
         run: |
+          $telemetryPath = Join-Path $env:PREWARM_TELEMETRY_DIR "windows-conan-prewarm.json"
+          $payload = if (Test-Path $telemetryPath) {
+            Get-Content -Path $telemetryPath -Raw | ConvertFrom-Json -AsHashtable
+          } else {
+            [ordered]@{
+              workflow = "ci-prewarm"
+              job = "windows-conan-prewarm"
+              run_id = "${{ github.run_id }}"
+              run_attempt = "${{ github.run_attempt }}"
+              runner_os = "${{ runner.os }}"
+            }
+          }
           $saveOutcome = '${{ steps.conan_cache_save.outcome }}'
           if ([string]::IsNullOrWhiteSpace($saveOutcome)) { $saveOutcome = 'unknown' }
           if ('${{ steps.conan_cache_restore.outputs.cache-hit }}' -eq 'true') {
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '- save_skipped: true (exact cache hit)'
+            $payload.save = [ordered]@{
+              skipped = $true
+              reason = "exact cache hit"
+              status = $saveOutcome
+              recorded_at_utc = (Get-Date).ToUniversalTime().ToString('o')
+            }
+            $payload | ConvertTo-Json -Depth 6 | Set-Content -Path $telemetryPath -Encoding utf8
             return
           }
           if ([string]::IsNullOrWhiteSpace($env:CONAN_CACHE_SAVE_START)) {
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- save_status: {0}" -f $saveOutcome)
+            $payload.save = [ordered]@{
+              skipped = $false
+              status = $saveOutcome
+              recorded_at_utc = (Get-Date).ToUniversalTime().ToString('o')
+            }
+            $payload | ConvertTo-Json -Depth 6 | Set-Content -Path $telemetryPath -Encoding utf8
             return
           }
           $start = [DateTime]::Parse($env:CONAN_CACHE_SAVE_START)
           $elapsed = [Math]::Round(((Get-Date).ToUniversalTime() - $start).TotalSeconds, 2)
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- save_status: {0}" -f $saveOutcome)
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- save_elapsed_sec: {0}" -f $elapsed)
+          $payload.save = [ordered]@{
+            skipped = $false
+            status = $saveOutcome
+            elapsed_sec = $elapsed
+            recorded_at_utc = (Get-Date).ToUniversalTime().ToString('o')
+          }
+          $payload | ConvertTo-Json -Depth 6 | Set-Content -Path $telemetryPath -Encoding utf8
+
+      - name: Upload Prewarm Telemetry Artifact (Windows)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-prewarm-windows-conan-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            build/ci-prewarm/windows-conan-prewarm.json
 
   linux-base-image-prewarm:
     runs-on: ubuntu-latest
@@ -129,6 +193,10 @@ jobs:
           fetch-depth: 1
           submodules: recursive
 
+      - name: Prepare Prewarm Telemetry Directory (Linux)
+        run: |
+          mkdir -p build/ci-prewarm
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -136,6 +204,10 @@ jobs:
         run: |
           docker version
           docker compose version
+
+      - name: Mark Base Image Build Start (Linux)
+        run: |
+          echo "BASE_IMAGE_BUILD_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
 
       - name: Build Base Image (dynaxis-base) with cache
         uses: docker/build-push-action@v6
@@ -151,3 +223,43 @@ jobs:
       - name: Verify Local Base Image
         run: |
           docker image inspect dynaxis-base:latest > /dev/null
+
+      - name: Summarize Base Image Prewarm (Linux)
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+          from datetime import datetime, timezone
+
+          start_raw = os.environ.get("BASE_IMAGE_BUILD_START", "").strip()
+          elapsed = None
+          if start_raw:
+              start = datetime.strptime(start_raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+              elapsed = round((datetime.now(timezone.utc) - start).total_seconds(), 2)
+
+          payload = {
+              "workflow": "ci-prewarm",
+              "job": "linux-base-image-prewarm",
+              "run_id": os.environ.get("GITHUB_RUN_ID", ""),
+              "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+              "runner_os": os.environ.get("RUNNER_OS", ""),
+              "base_image_build": {
+                  "elapsed_sec": elapsed,
+                  "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
+              },
+          }
+          path = pathlib.Path("build/ci-prewarm/linux-base-image-prewarm.json")
+          path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+          with pathlib.Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as handle:
+              handle.write("### base image telemetry (Linux prewarm)\n")
+              handle.write(f"- build_elapsed_sec: {elapsed}\n")
+          PY
+
+      - name: Upload Prewarm Telemetry Artifact (Linux)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-prewarm-linux-base-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            build/ci-prewarm/linux-base-image-prewarm.json
