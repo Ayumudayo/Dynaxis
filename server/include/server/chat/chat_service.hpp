@@ -570,6 +570,7 @@ private:
         bool resumed{false};
     };
 
+    /** @brief app-local migration payload에서 복원한 target room handoff 결과입니다. */
     struct AppMigrationRoomHandoff {
         bool recognized{false};
         std::string room;

@@ -16,6 +16,7 @@ namespace server::core::app {
  */
 class EngineBuilder {
 public:
+    /** @brief Runtime 조립 전에 선언하는 dependency 요구사항 한 건입니다. */
     struct DependencySpec {
         std::string name;
         AppHost::DependencyRequirement requirement{AppHost::DependencyRequirement::kRequired};
@@ -42,6 +43,7 @@ private:
     bool install_process_signal_handlers_{false};
     std::vector<DependencySpec> dependencies_;
 
+    /** @brief 선택적인 admin HTTP 노출 설정입니다. */
     struct AdminHttpSpec {
         unsigned short port{0};
         EngineRuntime::MetricsCallback metrics_callback;

@@ -195,5 +195,5 @@ jobs:
             python3 tools/check_core_api_contracts.py --check-boundary-fixtures; \
             python3 tools/check_core_api_contracts.py --check-stable-governance-fixtures; \
             cmake --preset linux -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=ON; \
-            cmake --build --preset linux-debug --target core_public_api_smoke core_public_api_headers_compile core_public_api_stable_header_scenarios protocol_fuzz_harness --parallel; \
+            cmake --build --preset linux-debug --target core_public_api_smoke core_public_api_headers_compile core_public_api_stable_header_scenarios core_public_api_fps_capability_smoke protocol_fuzz_harness --parallel; \
             ctest --test-dir build-linux --parallel 8 -R 'CorePublicApi|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures' --output-on-failure"

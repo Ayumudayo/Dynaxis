@@ -126,11 +126,13 @@ public:
     RuntimeConfig config() const;
 
 private:
+    /** @brief 다음 tick에 적용할 세션별 staged input 슬롯입니다. */
     struct StagedInput {
         InputCommand input;
         bool present{false};
     };
 
+    /** @brief authoritative transform, history, dirty state를 보관하는 actor 슬롯입니다. */
     struct ActorState {
         std::uint32_t actor_id{0};
         std::uint32_t session_id{0};
@@ -144,6 +146,7 @@ private:
         std::deque<ActorTransformSample> history;
     };
 
+    /** @brief viewer별 가시 actor 집합과 snapshot cadence를 추적합니다. */
     struct ViewerState {
         std::optional<std::uint32_t> actor_id;
         std::set<std::uint32_t> visible_actor_ids;

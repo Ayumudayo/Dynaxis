@@ -11,12 +11,14 @@
 
 namespace server::core::mmorpg {
 
+/** @brief drain 대상 world에서 관측한 instance 상태 한 건입니다. */
 struct ObservedWorldDrainInstance {
     std::string instance_id;
     bool ready{false};
     std::uint32_t active_sessions{0};
 };
 
+/** @brief world drain 판단에 필요한 owner/replacement/instance 관측 스냅샷입니다. */
 struct ObservedWorldDrainState {
     std::string world_id;
     std::string owner_instance_id;
@@ -49,6 +51,7 @@ inline constexpr std::string_view world_drain_phase_name(WorldDrainPhase phase) 
     return "idle";
 }
 
+/** @brief drain 선언, replacement readiness, active session 분포를 요약합니다. */
 struct WorldDrainSummary {
     bool drain_declared{false};
     bool replacement_declared{false};
@@ -62,6 +65,7 @@ struct WorldDrainSummary {
     std::uint32_t replacement_active_sessions{0};
 };
 
+/** @brief 단일 world drain policy의 phase와 요약 상태입니다. */
 struct WorldDrainStatus {
     std::string world_id;
     std::string owner_instance_id;
@@ -125,6 +129,7 @@ inline constexpr std::string_view world_drain_next_action_name(WorldDrainNextAct
     return "none";
 }
 
+/** @brief drain, transfer, migration closure 판단에 필요한 orchestration 요약입니다. */
 struct WorldDrainOrchestrationSummary {
     bool drain_declared{false};
     bool drained{false};
@@ -135,6 +140,7 @@ struct WorldDrainOrchestrationSummary {
     bool clear_allowed{false};
 };
 
+/** @brief drain policy를 언제 clear할 수 있는지 표현하는 orchestration 상태입니다. */
 struct WorldDrainOrchestrationStatus {
     std::string world_id;
     WorldDrainPhase drain_phase{WorldDrainPhase::kIdle};

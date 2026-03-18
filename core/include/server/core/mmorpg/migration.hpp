@@ -11,6 +11,7 @@
 
 namespace server::core::mmorpg {
 
+/** @brief source world drain 이후 target world resume에 필요한 opaque migration envelope입니다. */
 struct WorldMigrationEnvelope {
     std::string target_world_id;
     std::string target_owner_instance_id;
@@ -20,11 +21,13 @@ struct WorldMigrationEnvelope {
     std::uint64_t updated_at_ms{0};
 };
 
+/** @brief migration target world에서 관측한 instance readiness 한 건입니다. */
 struct ObservedWorldMigrationInstance {
     std::string instance_id;
     bool ready{false};
 };
 
+/** @brief migration target world의 owner 및 instance readiness 관측값입니다. */
 struct ObservedWorldMigrationWorld {
     std::string world_id;
     std::string current_owner_instance_id;
@@ -59,6 +62,7 @@ inline constexpr std::string_view world_migration_phase_name(WorldMigrationPhase
     return "idle";
 }
 
+/** @brief migration readiness 판단에 필요한 요약 플래그입니다. */
 struct WorldMigrationSummary {
     bool envelope_present{false};
     bool source_draining{false};
@@ -69,6 +73,7 @@ struct WorldMigrationSummary {
     bool preserve_room{false};
 };
 
+/** @brief source->target world migration handoff의 현재 상태입니다. */
 struct WorldMigrationStatus {
     std::string source_world_id;
     std::string target_world_id;

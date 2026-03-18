@@ -7,11 +7,13 @@
 
 namespace server::core::mmorpg {
 
+/** @brief world owner handoff 판단에 필요한 target candidate readiness 한 건입니다. */
 struct ObservedWorldTransferInstance {
     std::string instance_id;
     bool ready{false};
 };
 
+/** @brief world owner transfer를 계산하기 위한 observed drain/owner snapshot입니다. */
 struct ObservedWorldTransferState {
     std::string world_id;
     std::string owner_instance_id;
@@ -47,6 +49,7 @@ inline constexpr std::string_view world_transfer_phase_name(WorldTransferPhase p
     return "idle";
 }
 
+/** @brief owner transfer의 선언 여부와 target readiness를 요약합니다. */
 struct WorldTransferSummary {
     bool transfer_declared{false};
     bool draining{false};
@@ -58,6 +61,7 @@ struct WorldTransferSummary {
     std::uint32_t ready_instances{0};
 };
 
+/** @brief world owner handoff contract의 현재 phase입니다. */
 struct WorldTransferStatus {
     std::string world_id;
     std::string owner_instance_id;
