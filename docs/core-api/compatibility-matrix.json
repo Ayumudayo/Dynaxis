@@ -1,5 +1,5 @@
 {
-  "api_version": "2.16.0",
+  "api_version": "2.17.0",
   "stable_headers": [
     {
       "path": "server/core/api/version.hpp",
@@ -50,19 +50,19 @@
       "compatibility": "stable"
     },
     {
-      "path": "server/core/mmorpg/migration.hpp",
+      "path": "server/core/worlds/migration.hpp",
       "compatibility": "stable"
     },
     {
-      "path": "server/core/mmorpg/world_drain.hpp",
+      "path": "server/core/worlds/world_drain.hpp",
       "compatibility": "stable"
     },
     {
-      "path": "server/core/mmorpg/topology.hpp",
+      "path": "server/core/worlds/topology.hpp",
       "compatibility": "stable"
     },
     {
-      "path": "server/core/mmorpg/world_transfer.hpp",
+      "path": "server/core/worlds/world_transfer.hpp",
       "compatibility": "stable"
     },
     {

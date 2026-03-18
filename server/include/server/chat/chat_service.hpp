@@ -19,8 +19,8 @@
 #include <boost/asio.hpp>
 
 #include "server/core/net/session.hpp"
-#include "server/core/mmorpg/migration.hpp"
-#include "server/core/mmorpg/topology.hpp"
+#include "server/core/worlds/migration.hpp"
+#include "server/core/worlds/topology.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
 #include "server/core/state/world_lifecycle_policy.hpp"
 #include "server/core/storage/redis/client.hpp"
@@ -590,11 +590,11 @@ private:
     std::optional<std::string> load_continuity_world(const std::string& logical_session_id);
     std::optional<std::string> load_continuity_world_owner(const std::string& world_id);
     std::optional<server::core::state::WorldLifecyclePolicy> load_continuity_world_policy(const std::string& world_id);
-    std::optional<server::core::mmorpg::WorldMigrationEnvelope> load_continuity_world_migration(const std::string& world_id);
-    std::optional<server::core::mmorpg::TopologyActuationRuntimeAssignmentItem> load_topology_runtime_assignment() const;
+    std::optional<server::core::worlds::WorldMigrationEnvelope> load_continuity_world_migration(const std::string& world_id);
+    std::optional<server::core::worlds::TopologyActuationRuntimeAssignmentItem> load_topology_runtime_assignment() const;
     std::string current_runtime_default_world_id() const;
     AppMigrationRoomHandoff resolve_app_world_migration_room_handoff(
-        const server::core::mmorpg::WorldMigrationEnvelope& migration) const;
+        const server::core::worlds::WorldMigrationEnvelope& migration) const;
     void persist_continuity_room(const std::string& logical_session_id,
                                  const std::string& room,
                                  std::uint64_t expires_unix_ms);

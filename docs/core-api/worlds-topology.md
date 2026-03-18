@@ -1,10 +1,16 @@
-# MMORPG Topology API Guide
+# World Topology API Guide
 
 ## Stability
 
 | Header | Stability |
 |---|---|
-| `server/core/mmorpg/topology.hpp` | `[Stable]` |
+| `server/core/worlds/topology.hpp` | `[Stable]` |
+
+## Canonical Naming
+
+- canonical include path: `server/core/worlds/topology.hpp`
+- canonical namespace: `server::core::worlds`
+- `server/core/mmorpg/topology.hpp`는 compatibility wrapper로만 유지된다
 
 ## Scope
 
@@ -191,3 +197,4 @@
 - unit contract: `MmorpgTopologyContractTest.*`
 - public-api smoke: `core_public_api_smoke`
 - installed consumer: `CoreInstalledPackageConsumer`
+

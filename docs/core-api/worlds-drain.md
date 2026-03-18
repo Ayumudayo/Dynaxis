@@ -1,6 +1,12 @@
-# MMORPG World Drain API
+# World Drain API
 
-`server/core/mmorpg/world_drain.hpp`는 live world drain의 phase, 진행 상태, 그리고 transfer/migration surface로의 orchestration handoff를 평가하는 contract를 정의한다.
+`server/core/worlds/world_drain.hpp`는 live world drain의 phase, 진행 상태, 그리고 transfer/migration surface로의 orchestration handoff를 평가하는 contract를 정의한다.
+
+## Canonical Naming
+
+- canonical include path: `server/core/worlds/world_drain.hpp`
+- canonical namespace: `server::core::worlds`
+- `server/core/mmorpg/world_drain.hpp`는 compatibility wrapper로만 유지된다
 
 ## Scope
 
@@ -73,3 +79,4 @@
 - cross-world migration
 - gameplay payload handoff
 - autoscaling/orchestration
+

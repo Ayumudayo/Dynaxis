@@ -812,7 +812,7 @@ TEST_F(ChatServiceTest, ContinuityResumeUsesAppDefinedMigrationPayloadRoomHandof
         server::app::chat::ChatServiceContinuityTester::WorldOwnerKey(*chat_service_, "starter-b"),
         "server-test-a"));
 
-    server::core::mmorpg::WorldMigrationEnvelope envelope{};
+    server::core::worlds::WorldMigrationEnvelope envelope{};
     envelope.target_world_id = "starter-b";
     envelope.target_owner_instance_id = "server-test-a";
     envelope.preserve_room = false;
@@ -821,7 +821,7 @@ TEST_F(ChatServiceTest, ContinuityResumeUsesAppDefinedMigrationPayloadRoomHandof
     envelope.updated_at_ms = 1;
     EXPECT_TRUE(redis_->set(
         server::app::chat::ChatServiceContinuityTester::WorldMigrationKey(*chat_service_, "starter-a"),
-        server::core::mmorpg::serialize_world_migration_envelope(envelope)));
+        server::core::worlds::serialize_world_migration_envelope(envelope)));
 
     const auto metrics_before = chat_service_->continuity_metrics();
     const auto resumed =

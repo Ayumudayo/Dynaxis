@@ -80,6 +80,7 @@ if (BUILD_GTEST_TESTS)
         core/test_app_host_lifecycle.cpp
         core/test_engine_composition.cpp
         core/test_mmorpg_migration.cpp
+        core/test_mmorpg_compat_headers.cpp
         core/test_mmorpg_world_drain.cpp
         core/test_mmorpg_topology.cpp
         core/test_mmorpg_world_transfer.cpp

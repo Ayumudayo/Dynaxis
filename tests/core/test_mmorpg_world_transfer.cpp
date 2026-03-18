@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
-#include <server/core/mmorpg/world_transfer.hpp>
+#include <server/core/worlds/world_transfer.hpp>
 
 TEST(MmorpgWorldTransferContractTest, ReportsAwaitingOwnerHandoffWhenTargetIsReadyButOwnerUnchanged) {
-    server::core::mmorpg::ObservedWorldTransferState state;
+    server::core::worlds::ObservedWorldTransferState state;
     state.world_id = "starter-a";
     state.owner_instance_id = "server-1";
     state.draining = true;
@@ -13,8 +13,8 @@ TEST(MmorpgWorldTransferContractTest, ReportsAwaitingOwnerHandoffWhenTargetIsRea
         {.instance_id = "server-2", .ready = true},
     };
 
-    const auto status = server::core::mmorpg::evaluate_world_transfer(state);
-    EXPECT_EQ(status.phase, server::core::mmorpg::WorldTransferPhase::kAwaitingOwnerHandoff);
+    const auto status = server::core::worlds::evaluate_world_transfer(state);
+    EXPECT_EQ(status.phase, server::core::worlds::WorldTransferPhase::kAwaitingOwnerHandoff);
     EXPECT_TRUE(status.summary.transfer_declared);
     EXPECT_TRUE(status.summary.target_present);
     EXPECT_TRUE(status.summary.target_ready);
@@ -22,7 +22,7 @@ TEST(MmorpgWorldTransferContractTest, ReportsAwaitingOwnerHandoffWhenTargetIsRea
 }
 
 TEST(MmorpgWorldTransferContractTest, ReportsCommittedWhenOwnerMatchesTarget) {
-    server::core::mmorpg::ObservedWorldTransferState state;
+    server::core::worlds::ObservedWorldTransferState state;
     state.world_id = "starter-a";
     state.owner_instance_id = "server-2";
     state.draining = true;
@@ -32,15 +32,15 @@ TEST(MmorpgWorldTransferContractTest, ReportsCommittedWhenOwnerMatchesTarget) {
         {.instance_id = "server-2", .ready = true},
     };
 
-    const auto status = server::core::mmorpg::evaluate_world_transfer(state);
-    EXPECT_EQ(status.phase, server::core::mmorpg::WorldTransferPhase::kOwnerHandoffCommitted);
+    const auto status = server::core::worlds::evaluate_world_transfer(state);
+    EXPECT_EQ(status.phase, server::core::worlds::WorldTransferPhase::kOwnerHandoffCommitted);
     EXPECT_TRUE(status.summary.owner_matches_target);
     EXPECT_EQ(status.summary.instances_total, 2u);
     EXPECT_EQ(status.summary.ready_instances, 2u);
 }
 
 TEST(MmorpgWorldTransferContractTest, ReportsBlockedStatesForMissingOrUnreadyTarget) {
-    server::core::mmorpg::ObservedWorldTransferState missing_target;
+    server::core::worlds::ObservedWorldTransferState missing_target;
     missing_target.world_id = "starter-a";
     missing_target.owner_instance_id = "server-1";
     missing_target.draining = true;
@@ -49,12 +49,12 @@ TEST(MmorpgWorldTransferContractTest, ReportsBlockedStatesForMissingOrUnreadyTar
         {.instance_id = "server-1", .ready = true},
     };
 
-    const auto missing_status = server::core::mmorpg::evaluate_world_transfer(missing_target);
-    EXPECT_EQ(missing_status.phase, server::core::mmorpg::WorldTransferPhase::kTargetMissing);
+    const auto missing_status = server::core::worlds::evaluate_world_transfer(missing_target);
+    EXPECT_EQ(missing_status.phase, server::core::worlds::WorldTransferPhase::kTargetMissing);
 
-    server::core::mmorpg::ObservedWorldTransferState unready_target = missing_target;
+    server::core::worlds::ObservedWorldTransferState unready_target = missing_target;
     unready_target.instances.push_back({.instance_id = "server-2", .ready = false});
 
-    const auto unready_status = server::core::mmorpg::evaluate_world_transfer(unready_target);
-    EXPECT_EQ(unready_status.phase, server::core::mmorpg::WorldTransferPhase::kTargetNotReady);
+    const auto unready_status = server::core::worlds::evaluate_world_transfer(unready_target);
+    EXPECT_EQ(unready_status.phase, server::core::worlds::WorldTransferPhase::kTargetNotReady);
 }

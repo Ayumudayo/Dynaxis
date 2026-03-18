@@ -693,7 +693,7 @@ int run_server(int argc, char** argv) {
 
             const auto load_runtime_assignment =
                 [redis, assignment_key = config.topology_runtime_assignment_key, instance_id = config.server_instance_id]()
-                -> std::optional<server::core::mmorpg::TopologyActuationRuntimeAssignmentItem> {
+                -> std::optional<server::core::worlds::TopologyActuationRuntimeAssignmentItem> {
                     if (!redis || assignment_key.empty() || instance_id.empty()) {
                         return std::nullopt;
                     }
@@ -748,7 +748,7 @@ int run_server(int argc, char** argv) {
             try {
                 registry_backend = core_internal::make_registry_backend(
                     redis, config.registry_prefix, config.registry_ttl);
-                
+
                 registry_record.instance_id = config.server_instance_id;
                 registry_record.host = config.advertise_host;
                 registry_record.port = config.advertise_port;
@@ -766,7 +766,7 @@ int run_server(int argc, char** argv) {
 
                 if (registry_backend->upsert(registry_record)) {
                     registry_registered = true;
-                    corelog::info("Registered server instance id=" + registry_record.instance_id + 
+                    corelog::info("Registered server instance id=" + registry_record.instance_id +
                                   " host=" + registry_record.host + ":" + std::to_string(registry_record.port));
                 } else {
                     corelog::warn("Failed to register server instance in registry");

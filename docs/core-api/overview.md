@@ -24,7 +24,7 @@
 |---|---|---|---|
 | Runtime Host | `[Stable]` | `server/core/app/app_host.hpp`, `server/core/app/engine_builder.hpp`, `server/core/app/engine_context.hpp`, `server/core/app/engine_runtime.hpp`, `server/core/app/termination_signals.hpp` | 프로세스 수명주기, readiness/health, bootstrap composition, 프로세스 종료 신호 계약 |
 | FPS Capability | `[Stable]` | `server/core/fps/direct_bind.hpp`, `server/core/fps/direct_delivery.hpp`, `server/core/fps/transport_quality.hpp`, `server/core/fps/transport_policy.hpp`, `server/core/fps/runtime.hpp` | fixed-step runtime, bind payload contract, rollout/canary/allowlist policy, direct delivery route policy, sequenced UDP quality tracking, coarse interest management, rewind/history lookup |
-| MMORPG Topology | `[Stable]` | `server/core/mmorpg/migration.hpp`, `server/core/mmorpg/topology.hpp`, `server/core/mmorpg/world_drain.hpp`, `server/core/mmorpg/world_transfer.hpp` | desired topology document, observed pool aggregation, desired-vs-observed reconciliation summary, read-only topology actuation plan, revisioned topology actuation request/status evaluation, executor-facing execution progress/status evaluation, observed-topology realization/adoption evaluation, adapter-facing lease/status evaluation, runtime-assignment document/instance lookup helper, live world-drain progress/orchestration evaluation, live owner-transfer phase/status evaluation, draining-source to target-world migration envelope/status |
+| World Orchestration | `[Stable]` | `server/core/worlds/migration.hpp`, `server/core/worlds/topology.hpp`, `server/core/worlds/world_drain.hpp`, `server/core/worlds/world_transfer.hpp` | desired topology document, observed pool aggregation, desired-vs-observed reconciliation summary, read-only topology actuation plan, revisioned topology actuation request/status evaluation, executor-facing execution progress/status evaluation, observed-topology realization/adoption evaluation, adapter-facing lease/status evaluation, runtime-assignment document/instance lookup helper, live world-drain progress/orchestration evaluation, live owner-transfer phase/status evaluation, draining-source to target-world migration envelope/status |
 | Networking | `[Stable]+[Internal]` | `server/core/net/hive.hpp`, `server/core/net/dispatcher.hpp`, `server/core/net/listener.hpp`, `server/core/net/connection.hpp` | 이벤트 루프 수명주기와 전송 라우팅 기본 구성요소 |
 | Concurrency | `[Stable]+[Internal]` | `server/core/concurrent/task_scheduler.hpp`, `server/core/concurrent/job_queue.hpp`, `server/core/concurrent/thread_manager.hpp` | 스케줄러와 워커 큐 기본 구성요소 |
 | Compression | `[Stable]` | `server/core/compression/compressor.hpp` | LZ4 기반 바이트 payload 압축/해제 계약 |
@@ -41,6 +41,8 @@
 - 공개 소비자는 `[Stable]`로 분류된 헤더만 사용합니다.
 - include 형식은 `#include "server/core/..."` 또는 `<server/core/...>`를 사용합니다.
 - 구현 경로(`core/src/**`)나 `Internal` 헤더를 포함하지 않습니다.
+- world orchestration public surface의 canonical path/namespace는 `server/core/worlds/**`와 `server::core::worlds`입니다.
+- 기존 `server/core/mmorpg/**` include 경로는 compatibility wrapper로만 유지되며 새 consumer의 기준 표면이 아닙니다.
 - 내부 헤더 목록은 `docs/core-api-boundary.md`에서만 관리합니다.
 
 ## Package-First Proof Baseline
@@ -79,10 +81,10 @@
 - 리뷰/릴리스 체크리스트: `docs/core-api/checklists.md`
 - 세부 가이드:
   - `docs/core-api/fps.md`
-  - `docs/core-api/mmorpg-migration.md`
-  - `docs/core-api/mmorpg-world-drain.md`
-  - `docs/core-api/mmorpg-topology.md`
-  - `docs/core-api/mmorpg-world-transfer.md`
+  - `docs/core-api/worlds-migration.md`
+  - `docs/core-api/worlds-drain.md`
+  - `docs/core-api/worlds-topology.md`
+  - `docs/core-api/worlds-transfer.md`
   - `docs/core-api/net.md`
   - `docs/core-api/metrics-and-lifecycle.md`
   - `docs/core-api/promotion-matrix.md`

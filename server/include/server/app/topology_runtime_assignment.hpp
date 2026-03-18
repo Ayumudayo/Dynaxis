@@ -7,11 +7,11 @@
 
 #include <nlohmann/json.hpp>
 
-#include "server/core/mmorpg/topology.hpp"
+#include "server/core/worlds/topology.hpp"
 
 namespace server::app {
 
-inline std::optional<server::core::mmorpg::TopologyActuationRuntimeAssignmentDocument>
+inline std::optional<server::core::worlds::TopologyActuationRuntimeAssignmentDocument>
 parse_topology_actuation_runtime_assignment_document(std::string_view payload) {
     const auto parsed = nlohmann::json::parse(payload, nullptr, false);
     if (parsed.is_discarded() || !parsed.is_object()) {
@@ -32,7 +32,7 @@ parse_topology_actuation_runtime_assignment_document(std::string_view payload) {
         return std::nullopt;
     }
 
-    server::core::mmorpg::TopologyActuationRuntimeAssignmentDocument document;
+    server::core::worlds::TopologyActuationRuntimeAssignmentDocument document;
     document.adapter_id = parsed["adapter_id"].get<std::string>();
     document.revision = parsed["revision"].get<std::uint64_t>();
     document.lease_revision = parsed["lease_revision"].get<std::uint64_t>();
@@ -58,7 +58,7 @@ parse_topology_actuation_runtime_assignment_document(std::string_view payload) {
             return std::nullopt;
         }
 
-        const auto parsed_action = server::core::mmorpg::parse_topology_actuation_action_kind(
+        const auto parsed_action = server::core::worlds::parse_topology_actuation_action_kind(
             item["action"].get<std::string>());
         if (!parsed_action.has_value()) {
             return std::nullopt;
@@ -75,12 +75,12 @@ parse_topology_actuation_runtime_assignment_document(std::string_view payload) {
     return document;
 }
 
-inline std::optional<server::core::mmorpg::TopologyActuationRuntimeAssignmentItem>
+inline std::optional<server::core::worlds::TopologyActuationRuntimeAssignmentItem>
 find_topology_actuation_runtime_assignment_for_instance(
-    const server::core::mmorpg::TopologyActuationRuntimeAssignmentDocument& document,
+    const server::core::worlds::TopologyActuationRuntimeAssignmentDocument& document,
     std::string_view instance_id) {
     if (const auto* assignment =
-            server::core::mmorpg::find_topology_actuation_runtime_assignment(document, instance_id);
+            server::core::worlds::find_topology_actuation_runtime_assignment(document, instance_id);
         assignment != nullptr) {
         return *assignment;
     }
@@ -89,7 +89,7 @@ find_topology_actuation_runtime_assignment_for_instance(
 
 inline std::vector<std::string> apply_topology_runtime_assignment_tags(
     const std::vector<std::string>& base_tags,
-    const std::optional<server::core::mmorpg::TopologyActuationRuntimeAssignmentItem>& assignment) {
+    const std::optional<server::core::worlds::TopologyActuationRuntimeAssignmentItem>& assignment) {
     if (!assignment.has_value()) {
         return base_tags;
     }
@@ -113,7 +113,7 @@ inline std::vector<std::string> apply_topology_runtime_assignment_tags(
 
 inline std::string resolve_topology_runtime_assignment_world_id(
     std::string_view base_world_id,
-    const std::optional<server::core::mmorpg::TopologyActuationRuntimeAssignmentItem>& assignment) {
+    const std::optional<server::core::worlds::TopologyActuationRuntimeAssignmentItem>& assignment) {
     if (assignment.has_value() && !assignment->world_id.empty()) {
         return assignment->world_id;
     }
@@ -122,7 +122,7 @@ inline std::string resolve_topology_runtime_assignment_world_id(
 
 inline std::string resolve_topology_runtime_assignment_shard(
     std::string_view base_shard,
-    const std::optional<server::core::mmorpg::TopologyActuationRuntimeAssignmentItem>& assignment) {
+    const std::optional<server::core::worlds::TopologyActuationRuntimeAssignmentItem>& assignment) {
     if (assignment.has_value() && !assignment->shard.empty()) {
         return assignment->shard;
     }

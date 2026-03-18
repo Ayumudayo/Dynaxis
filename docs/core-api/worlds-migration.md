@@ -1,6 +1,12 @@
-# MMORPG Migration API
+# World Migration API
 
-`server/core/mmorpg/migration.hpp`는 draining source world에서 target world owner로 넘어가는 migration envelope와 readiness/status evaluation contract를 정의한다.
+`server/core/worlds/migration.hpp`는 draining source world에서 target world owner로 넘어가는 migration envelope와 readiness/status evaluation contract를 정의한다.
+
+## Canonical Naming
+
+- canonical include path: `server/core/worlds/migration.hpp`
+- canonical namespace: `server::core::worlds`
+- `server/core/mmorpg/migration.hpp`는 compatibility wrapper로만 유지된다
 
 ## Scope
 
@@ -64,3 +70,4 @@
 - autoscaling
 - gameplay payload schema
 - combat/simulation state replication
+

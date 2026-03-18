@@ -37,10 +37,10 @@
 #include "server/core/app/engine_builder.hpp"
 #include "server/core/config/runtime_settings.hpp"
 #include "server/core/metrics/build_info.hpp"
-#include "server/core/mmorpg/migration.hpp"
-#include "server/core/mmorpg/topology.hpp"
-#include "server/core/mmorpg/world_drain.hpp"
-#include "server/core/mmorpg/world_transfer.hpp"
+#include "server/core/worlds/migration.hpp"
+#include "server/core/worlds/topology.hpp"
+#include "server/core/worlds/world_drain.hpp"
+#include "server/core/worlds/world_transfer.hpp"
 #include "server/core/metrics/http_server.hpp"
 #include "server/core/state/instance_registry.hpp"
 #include "server/core/state/world_lifecycle_policy.hpp"
@@ -814,17 +814,17 @@ WorldDrainWriteRequest parse_world_drain_write_request(
     return result;
 }
 
-using DesiredTopologyPool = server::core::mmorpg::DesiredTopologyPool;
-using DesiredTopologyDocument = server::core::mmorpg::DesiredTopologyDocument;
-using TopologyActuationRequestAction = server::core::mmorpg::TopologyActuationRequestAction;
-using TopologyActuationRequestDocument = server::core::mmorpg::TopologyActuationRequestDocument;
-using TopologyActuationExecutionAction = server::core::mmorpg::TopologyActuationExecutionAction;
-using TopologyActuationExecutionDocument = server::core::mmorpg::TopologyActuationExecutionDocument;
-using TopologyActuationAdapterLeaseAction = server::core::mmorpg::TopologyActuationAdapterLeaseAction;
-using TopologyActuationAdapterLeaseDocument = server::core::mmorpg::TopologyActuationAdapterLeaseDocument;
-using TopologyActuationRuntimeAssignmentItem = server::core::mmorpg::TopologyActuationRuntimeAssignmentItem;
-using TopologyActuationRuntimeAssignmentDocument = server::core::mmorpg::TopologyActuationRuntimeAssignmentDocument;
-using WorldMigrationEnvelope = server::core::mmorpg::WorldMigrationEnvelope;
+using DesiredTopologyPool = server::core::worlds::DesiredTopologyPool;
+using DesiredTopologyDocument = server::core::worlds::DesiredTopologyDocument;
+using TopologyActuationRequestAction = server::core::worlds::TopologyActuationRequestAction;
+using TopologyActuationRequestDocument = server::core::worlds::TopologyActuationRequestDocument;
+using TopologyActuationExecutionAction = server::core::worlds::TopologyActuationExecutionAction;
+using TopologyActuationExecutionDocument = server::core::worlds::TopologyActuationExecutionDocument;
+using TopologyActuationAdapterLeaseAction = server::core::worlds::TopologyActuationAdapterLeaseAction;
+using TopologyActuationAdapterLeaseDocument = server::core::worlds::TopologyActuationAdapterLeaseDocument;
+using TopologyActuationRuntimeAssignmentItem = server::core::worlds::TopologyActuationRuntimeAssignmentItem;
+using TopologyActuationRuntimeAssignmentDocument = server::core::worlds::TopologyActuationRuntimeAssignmentDocument;
+using WorldMigrationEnvelope = server::core::worlds::WorldMigrationEnvelope;
 
 struct DesiredTopologyWriteRequest {
     bool ok{false};
@@ -1093,7 +1093,7 @@ TopologyActuationRequestWriteRequest parse_topology_actuation_request_write_requ
             return result;
         }
 
-        const auto parsed_action = server::core::mmorpg::parse_topology_actuation_action_kind(
+        const auto parsed_action = server::core::worlds::parse_topology_actuation_action_kind(
             trim_ascii(item["action"].get<std::string>()));
         if (!parsed_action.has_value()) {
             result.error_message = "action.action must be a known topology actuation action";
@@ -1263,7 +1263,7 @@ TopologyActuationExecutionWriteRequest parse_topology_actuation_execution_write_
             return result;
         }
 
-        const auto parsed_action = server::core::mmorpg::parse_topology_actuation_action_kind(
+        const auto parsed_action = server::core::worlds::parse_topology_actuation_action_kind(
             trim_ascii(item["action"].get<std::string>()));
         if (!parsed_action.has_value()) {
             result.error_message = "action.action must be a known topology actuation action";
@@ -1273,7 +1273,7 @@ TopologyActuationExecutionWriteRequest parse_topology_actuation_execution_write_
         action.action = *parsed_action;
         action.replica_delta = item["replica_delta"].get<std::int32_t>();
 
-        const auto parsed_state = server::core::mmorpg::parse_topology_actuation_execution_action_state(
+        const auto parsed_state = server::core::worlds::parse_topology_actuation_execution_action_state(
             trim_ascii(item["state"].get<std::string>()));
         if (!parsed_state.has_value()) {
             result.error_message = "action.state must be a known execution state";
@@ -1425,7 +1425,7 @@ TopologyActuationAdapterWriteRequest parse_topology_actuation_adapter_write_requ
             result.error_details = "{\"parameter\":\"actions\"}";
             return result;
         }
-        const auto parsed_action = server::core::mmorpg::parse_topology_actuation_action_kind(
+        const auto parsed_action = server::core::worlds::parse_topology_actuation_action_kind(
             trim_ascii(item["action"].get<std::string>()));
         if (!parsed_action.has_value()) {
             result.error_message = "action.action must be a known topology actuation action";
@@ -1570,7 +1570,7 @@ TopologyActuationRuntimeAssignmentWriteRequest parse_topology_actuation_runtime_
             return result;
         }
 
-        const auto parsed_action = server::core::mmorpg::parse_topology_actuation_action_kind(
+        const auto parsed_action = server::core::worlds::parse_topology_actuation_action_kind(
             trim_ascii(item["action"].get<std::string>()));
         if (!parsed_action.has_value()) {
             result.error_message = "assignment.action must be a known topology actuation action";
@@ -2839,9 +2839,9 @@ private:
         std::vector<server::core::state::InstanceRecord> instances;
     };
 
-    server::core::mmorpg::ObservedWorldTransferState
+    server::core::worlds::ObservedWorldTransferState
     make_world_transfer_state(const WorldInventoryEntry& world) const {
-        server::core::mmorpg::ObservedWorldTransferState state;
+        server::core::worlds::ObservedWorldTransferState state;
         state.world_id = world.world_id;
         state.owner_instance_id = world.owner_instance_id;
         state.draining = world.policy.draining;
@@ -2859,9 +2859,9 @@ private:
         return state;
     }
 
-    server::core::mmorpg::ObservedWorldDrainState
+    server::core::worlds::ObservedWorldDrainState
     make_world_drain_state(const WorldInventoryEntry& world) const {
-        server::core::mmorpg::ObservedWorldDrainState state;
+        server::core::worlds::ObservedWorldDrainState state;
         state.world_id = world.world_id;
         state.owner_instance_id = world.owner_instance_id;
         state.draining = world.policy.draining;
@@ -2883,9 +2883,9 @@ private:
     std::string make_world_drain_json(
         const WorldInventoryEntry& world,
         const std::vector<WorldInventoryEntry>& worlds) const {
-        const auto drain = server::core::mmorpg::evaluate_world_drain(make_world_drain_state(world));
-        const auto transfer = server::core::mmorpg::evaluate_world_transfer(make_world_transfer_state(world));
-        std::optional<server::core::mmorpg::ObservedWorldMigrationWorld> target_world;
+        const auto drain = server::core::worlds::evaluate_world_drain(make_world_drain_state(world));
+        const auto transfer = server::core::worlds::evaluate_world_transfer(make_world_transfer_state(world));
+        std::optional<server::core::worlds::ObservedWorldMigrationWorld> target_world;
         if (world.migration.has_value()) {
             const auto it = std::find_if(worlds.begin(), worlds.end(), [&](const auto& candidate) {
                 return candidate.world_id == world.migration->target_world_id;
@@ -2894,18 +2894,18 @@ private:
                 target_world = make_observed_world_migration_world(*it);
             }
         }
-        const auto migration = server::core::mmorpg::evaluate_world_migration(
+        const auto migration = server::core::worlds::evaluate_world_migration(
             make_observed_world_migration_world(world),
             world.migration,
             target_world);
-        const auto orchestration = server::core::mmorpg::evaluate_world_drain_orchestration(
+        const auto orchestration = server::core::worlds::evaluate_world_drain_orchestration(
             drain,
             transfer,
             migration);
 
         std::ostringstream data;
         data << "{";
-        data << "\"phase\":\"" << server::core::mmorpg::world_drain_phase_name(drain.phase) << "\",";
+        data << "\"phase\":\"" << server::core::worlds::world_drain_phase_name(drain.phase) << "\",";
         data << "\"current_owner_instance_id\":";
         if (!drain.owner_instance_id.empty()) {
             data << "\"" << json_escape(drain.owner_instance_id) << "\"";
@@ -2934,9 +2934,9 @@ private:
         data << "},";
         data << "\"orchestration\":{";
         data << "\"phase\":\""
-             << server::core::mmorpg::world_drain_orchestration_phase_name(orchestration.phase) << "\",";
+             << server::core::worlds::world_drain_orchestration_phase_name(orchestration.phase) << "\",";
         data << "\"next_action\":\""
-             << server::core::mmorpg::world_drain_next_action_name(orchestration.next_action) << "\",";
+             << server::core::worlds::world_drain_next_action_name(orchestration.next_action) << "\",";
         data << "\"target_owner_instance_id\":";
         if (!orchestration.target_owner_instance_id.empty()) {
             data << "\"" << json_escape(orchestration.target_owner_instance_id) << "\"";
@@ -2966,11 +2966,11 @@ private:
     }
 
     std::string make_world_transfer_json(const WorldInventoryEntry& world) const {
-        const auto transfer = server::core::mmorpg::evaluate_world_transfer(make_world_transfer_state(world));
+        const auto transfer = server::core::worlds::evaluate_world_transfer(make_world_transfer_state(world));
 
         std::ostringstream data;
         data << "{";
-        data << "\"phase\":\"" << server::core::mmorpg::world_transfer_phase_name(transfer.phase) << "\",";
+        data << "\"phase\":\"" << server::core::worlds::world_transfer_phase_name(transfer.phase) << "\",";
         data << "\"current_owner_instance_id\":";
         if (!transfer.owner_instance_id.empty()) {
             data << "\"" << json_escape(transfer.owner_instance_id) << "\"";
@@ -2999,9 +2999,9 @@ private:
         return data.str();
     }
 
-    server::core::mmorpg::ObservedWorldMigrationWorld
+    server::core::worlds::ObservedWorldMigrationWorld
     make_observed_world_migration_world(const WorldInventoryEntry& world) const {
-        server::core::mmorpg::ObservedWorldMigrationWorld observed;
+        server::core::worlds::ObservedWorldMigrationWorld observed;
         observed.world_id = world.world_id;
         observed.current_owner_instance_id = world.owner_instance_id;
         observed.draining = world.policy.draining;
@@ -3021,7 +3021,7 @@ private:
     std::string make_world_migration_json(
         const WorldInventoryEntry& world,
         const std::vector<WorldInventoryEntry>& worlds) const {
-        std::optional<server::core::mmorpg::ObservedWorldMigrationWorld> target_world;
+        std::optional<server::core::worlds::ObservedWorldMigrationWorld> target_world;
         if (world.migration.has_value()) {
             const auto it = std::find_if(worlds.begin(), worlds.end(), [&](const auto& candidate) {
                 return candidate.world_id == world.migration->target_world_id;
@@ -3031,14 +3031,14 @@ private:
             }
         }
 
-        const auto migration = server::core::mmorpg::evaluate_world_migration(
+        const auto migration = server::core::worlds::evaluate_world_migration(
             make_observed_world_migration_world(world),
             world.migration,
             target_world);
 
         std::ostringstream data;
         data << "{";
-        data << "\"phase\":\"" << server::core::mmorpg::world_migration_phase_name(migration.phase) << "\",";
+        data << "\"phase\":\"" << server::core::worlds::world_migration_phase_name(migration.phase) << "\",";
         data << "\"target_world_id\":";
         if (!migration.target_world_id.empty()) {
             data << "\"" << json_escape(migration.target_world_id) << "\"";
@@ -3324,7 +3324,7 @@ private:
                 return std::nullopt;
             }
 
-            const auto parsed_action = server::core::mmorpg::parse_topology_actuation_action_kind(
+            const auto parsed_action = server::core::worlds::parse_topology_actuation_action_kind(
                 trim_ascii(item["action"].get<std::string>()));
             if (!parsed_action.has_value()) {
                 return std::nullopt;
@@ -3416,9 +3416,9 @@ private:
                 return std::nullopt;
             }
 
-            const auto parsed_action = server::core::mmorpg::parse_topology_actuation_action_kind(
+            const auto parsed_action = server::core::worlds::parse_topology_actuation_action_kind(
                 trim_ascii(item["action"].get<std::string>()));
-            const auto parsed_state = server::core::mmorpg::parse_topology_actuation_execution_action_state(
+            const auto parsed_state = server::core::worlds::parse_topology_actuation_execution_action_state(
                 trim_ascii(item["state"].get<std::string>()));
             if (!parsed_action.has_value() || !parsed_state.has_value()) {
                 return std::nullopt;
@@ -3503,7 +3503,7 @@ private:
                 return std::nullopt;
             }
 
-            const auto parsed_action = server::core::mmorpg::parse_topology_actuation_action_kind(
+            const auto parsed_action = server::core::worlds::parse_topology_actuation_action_kind(
                 trim_ascii(item["action"].get<std::string>()));
             if (!parsed_action.has_value()) {
                 return std::nullopt;
@@ -3609,7 +3609,7 @@ private:
             data << "\"world_id\":\"" << json_escape(action.world_id) << "\",";
             data << "\"shard\":\"" << json_escape(action.shard) << "\",";
             data << "\"action\":\"" << json_escape(
-                std::string(server::core::mmorpg::topology_actuation_action_kind_name(action.action))) << "\",";
+                std::string(server::core::worlds::topology_actuation_action_kind_name(action.action))) << "\",";
             data << "\"replica_delta\":" << action.replica_delta;
             data << "}";
         }
@@ -3652,14 +3652,14 @@ private:
             data << "\"world_id\":\"" << json_escape(item.action.world_id) << "\",";
             data << "\"shard\":\"" << json_escape(item.action.shard) << "\",";
         data << "\"action\":\""
-                 << json_escape(std::string(server::core::mmorpg::topology_actuation_action_kind_name(
+                 << json_escape(std::string(server::core::worlds::topology_actuation_action_kind_name(
                         item.action.action)))
                  << "\",";
         data << "\"replica_delta\":" << item.action.replica_delta << ",";
         data << "\"observed_instances_before\":" << item.observed_instances_before << ",";
         data << "\"ready_instances_before\":" << item.ready_instances_before << ",";
         data << "\"state\":\""
-                 << json_escape(std::string(server::core::mmorpg::topology_actuation_execution_action_state_name(
+                 << json_escape(std::string(server::core::worlds::topology_actuation_execution_action_state_name(
                         item.state)))
                  << "\"";
             data << "}";
@@ -3702,7 +3702,7 @@ private:
             data << "\"world_id\":\"" << json_escape(action.world_id) << "\",";
             data << "\"shard\":\"" << json_escape(action.shard) << "\",";
             data << "\"action\":\""
-                 << json_escape(std::string(server::core::mmorpg::topology_actuation_action_kind_name(action.action)))
+                 << json_escape(std::string(server::core::worlds::topology_actuation_action_kind_name(action.action)))
                  << "\",";
             data << "\"replica_delta\":" << action.replica_delta;
             data << "}";
@@ -3747,7 +3747,7 @@ private:
             data << "\"world_id\":\"" << json_escape(assignment.world_id) << "\",";
             data << "\"shard\":\"" << json_escape(assignment.shard) << "\",";
             data << "\"action\":\""
-                 << json_escape(std::string(server::core::mmorpg::topology_actuation_action_kind_name(
+                 << json_escape(std::string(server::core::worlds::topology_actuation_action_kind_name(
                         assignment.action)))
                  << "\"";
             data << "}";
@@ -3817,12 +3817,12 @@ private:
         return data.str();
     }
 
-    std::vector<server::core::mmorpg::ObservedTopologyInstance>
+    std::vector<server::core::worlds::ObservedTopologyInstance>
     make_observed_topology_instances(const std::vector<server::core::state::InstanceRecord>& items) const {
-        std::vector<server::core::mmorpg::ObservedTopologyInstance> out;
+        std::vector<server::core::worlds::ObservedTopologyInstance> out;
         out.reserve(items.size());
         for (const auto& item : items) {
-            server::core::mmorpg::ObservedTopologyInstance observed;
+            server::core::worlds::ObservedTopologyInstance observed;
             observed.instance_id = item.instance_id;
             observed.role = item.role;
             observed.shard = item.shard;
@@ -3885,7 +3885,7 @@ private:
             if (!payloads[i].has_value() || payloads[i]->empty()) {
                 continue;
             }
-            if (const auto parsed = server::core::mmorpg::parse_world_migration_envelope(*payloads[i])) {
+            if (const auto parsed = server::core::worlds::parse_world_migration_envelope(*payloads[i])) {
                 out[world_ids[i]] = *parsed;
             }
         }
@@ -3893,7 +3893,7 @@ private:
         return out;
     }
 
-    std::string make_observed_pool_json(const server::core::mmorpg::ObservedTopologyPool& pool) const {
+    std::string make_observed_pool_json(const server::core::worlds::ObservedTopologyPool& pool) const {
         std::ostringstream data;
         data << "{";
         data << "\"world_id\":\"" << json_escape(pool.world_id) << "\",";
@@ -3906,8 +3906,8 @@ private:
 
     std::string make_topology_reconciliation_json(
         const std::optional<DesiredTopologyDocument>& desired_topology,
-        const std::vector<server::core::mmorpg::ObservedTopologyPool>& observed_pools,
-        const server::core::mmorpg::TopologyReconciliation& reconciliation) const {
+        const std::vector<server::core::worlds::ObservedTopologyPool>& observed_pools,
+        const server::core::worlds::TopologyReconciliation& reconciliation) const {
         std::ostringstream data;
         data << "{";
         data << "\"desired\":";
@@ -3948,7 +3948,7 @@ private:
             data << "\"desired_replicas\":" << pool.desired_replicas << ",";
             data << "\"observed_instances\":" << pool.observed_instances << ",";
             data << "\"ready_instances\":" << pool.ready_instances << ",";
-            data << "\"status\":\"" << server::core::mmorpg::topology_pool_status_name(pool.status) << "\"";
+            data << "\"status\":\"" << server::core::worlds::topology_pool_status_name(pool.status) << "\"";
             data << "}";
         }
         data << "]";
@@ -3958,8 +3958,8 @@ private:
 
     std::string make_topology_actuation_json(
         const std::optional<DesiredTopologyDocument>& desired_topology,
-        const std::vector<server::core::mmorpg::ObservedTopologyPool>& observed_pools,
-        const server::core::mmorpg::TopologyActuationPlan& actuation) const {
+        const std::vector<server::core::worlds::ObservedTopologyPool>& observed_pools,
+        const server::core::worlds::TopologyActuationPlan& actuation) const {
         std::ostringstream data;
         data << "{";
         data << "\"desired\":";
@@ -3995,8 +3995,8 @@ private:
             data << "{";
             data << "\"world_id\":\"" << json_escape(action.world_id) << "\",";
             data << "\"shard\":\"" << json_escape(action.shard) << "\",";
-            data << "\"status\":\"" << server::core::mmorpg::topology_pool_status_name(action.status) << "\",";
-            data << "\"action\":\"" << server::core::mmorpg::topology_actuation_action_kind_name(action.action) << "\",";
+            data << "\"status\":\"" << server::core::worlds::topology_pool_status_name(action.status) << "\",";
+            data << "\"action\":\"" << server::core::worlds::topology_actuation_action_kind_name(action.action) << "\",";
             data << "\"actionable\":" << bool_json(action.actionable) << ",";
             data << "\"desired_replicas\":" << action.desired_replicas << ",";
             data << "\"observed_instances\":" << action.observed_instances << ",";
@@ -4012,9 +4012,9 @@ private:
     std::string make_topology_actuation_status_json(
         const std::optional<DesiredTopologyDocument>& desired_topology,
         const std::optional<TopologyActuationRequestDocument>& request_document,
-        const std::vector<server::core::mmorpg::ObservedTopologyPool>& observed_pools,
-        const server::core::mmorpg::TopologyActuationPlan& actuation_plan,
-        const server::core::mmorpg::TopologyActuationRequestStatus& request_status) const {
+        const std::vector<server::core::worlds::ObservedTopologyPool>& observed_pools,
+        const server::core::worlds::TopologyActuationPlan& actuation_plan,
+        const server::core::worlds::TopologyActuationRequestStatus& request_status) const {
         std::ostringstream data;
         data << "{";
         data << "\"desired\":";
@@ -4069,21 +4069,21 @@ private:
             data << "{";
             data << "\"world_id\":\"" << json_escape(action.world_id) << "\",";
             data << "\"shard\":\"" << json_escape(action.shard) << "\",";
-            data << "\"requested_action\":\"" << server::core::mmorpg::topology_actuation_action_kind_name(
+            data << "\"requested_action\":\"" << server::core::worlds::topology_actuation_action_kind_name(
                 action.requested_action) << "\",";
             data << "\"requested_replica_delta\":" << action.requested_replica_delta << ",";
-            data << "\"state\":\"" << server::core::mmorpg::topology_actuation_request_action_state_name(
+            data << "\"state\":\"" << server::core::worlds::topology_actuation_request_action_state_name(
                 action.state) << "\",";
             data << "\"current_status\":";
             if (action.current_status.has_value()) {
-                data << "\"" << server::core::mmorpg::topology_pool_status_name(*action.current_status) << "\"";
+                data << "\"" << server::core::worlds::topology_pool_status_name(*action.current_status) << "\"";
             } else {
                 data << "null";
             }
             data << ",";
             data << "\"current_action\":";
             if (action.current_action.has_value()) {
-                data << "\"" << server::core::mmorpg::topology_actuation_action_kind_name(*action.current_action)
+                data << "\"" << server::core::worlds::topology_actuation_action_kind_name(*action.current_action)
                      << "\"";
             } else {
                 data << "null";
@@ -4100,8 +4100,8 @@ private:
     std::string make_topology_actuation_execution_status_json(
         const std::optional<TopologyActuationRequestDocument>& request_document,
         const std::optional<TopologyActuationExecutionDocument>& execution_document,
-        const server::core::mmorpg::TopologyActuationRequestStatus& request_status,
-        const server::core::mmorpg::TopologyActuationExecutionStatus& execution_status) const {
+        const server::core::worlds::TopologyActuationRequestStatus& request_status,
+        const server::core::worlds::TopologyActuationExecutionStatus& execution_status) const {
         std::ostringstream data;
         data << "{";
         data << "\"request\":";
@@ -4154,13 +4154,13 @@ private:
             data << "\"world_id\":\"" << json_escape(action.world_id) << "\",";
             data << "\"shard\":\"" << json_escape(action.shard) << "\",";
             data << "\"requested_action\":\""
-                 << server::core::mmorpg::topology_actuation_action_kind_name(action.requested_action) << "\",";
+                 << server::core::worlds::topology_actuation_action_kind_name(action.requested_action) << "\",";
             data << "\"requested_replica_delta\":" << action.requested_replica_delta << ",";
             data << "\"state\":\""
-                 << server::core::mmorpg::topology_actuation_execution_status_state_name(action.state) << "\",";
+                 << server::core::worlds::topology_actuation_execution_status_state_name(action.state) << "\",";
             data << "\"request_state\":";
             if (action.request_state.has_value()) {
-                data << "\"" << server::core::mmorpg::topology_actuation_request_action_state_name(
+                data << "\"" << server::core::worlds::topology_actuation_request_action_state_name(
                     *action.request_state) << "\"";
             } else {
                 data << "null";
@@ -4168,7 +4168,7 @@ private:
             data << ",";
             data << "\"execution_state\":";
             if (action.execution_state.has_value()) {
-                data << "\"" << server::core::mmorpg::topology_actuation_execution_action_state_name(
+                data << "\"" << server::core::worlds::topology_actuation_execution_action_state_name(
                     *action.execution_state) << "\"";
             } else {
                 data << "null";
@@ -4183,10 +4183,10 @@ private:
     std::string make_topology_actuation_realization_json(
         const std::optional<TopologyActuationRequestDocument>& request_document,
         const std::optional<TopologyActuationExecutionDocument>& execution_document,
-        const std::vector<server::core::mmorpg::ObservedTopologyPool>& observed_pools,
-        const server::core::mmorpg::TopologyActuationRequestStatus& request_status,
-        const server::core::mmorpg::TopologyActuationExecutionStatus& execution_status,
-        const server::core::mmorpg::TopologyActuationRealizationStatus& realization_status) const {
+        const std::vector<server::core::worlds::ObservedTopologyPool>& observed_pools,
+        const server::core::worlds::TopologyActuationRequestStatus& request_status,
+        const server::core::worlds::TopologyActuationExecutionStatus& execution_status,
+        const server::core::worlds::TopologyActuationRealizationStatus& realization_status) const {
         std::ostringstream data;
         data << "{";
         data << "\"request\":";
@@ -4262,13 +4262,13 @@ private:
             data << "\"world_id\":\"" << json_escape(action.world_id) << "\",";
             data << "\"shard\":\"" << json_escape(action.shard) << "\",";
             data << "\"requested_action\":\""
-                 << server::core::mmorpg::topology_actuation_action_kind_name(action.requested_action) << "\",";
+                 << server::core::worlds::topology_actuation_action_kind_name(action.requested_action) << "\",";
             data << "\"requested_replica_delta\":" << action.requested_replica_delta << ",";
-            data << "\"state\":\"" << server::core::mmorpg::topology_actuation_realization_state_name(action.state)
+            data << "\"state\":\"" << server::core::worlds::topology_actuation_realization_state_name(action.state)
                  << "\",";
             data << "\"request_state\":";
             if (action.request_state.has_value()) {
-                data << "\"" << server::core::mmorpg::topology_actuation_request_action_state_name(
+                data << "\"" << server::core::worlds::topology_actuation_request_action_state_name(
                     *action.request_state) << "\"";
             } else {
                 data << "null";
@@ -4276,7 +4276,7 @@ private:
             data << ",";
             data << "\"execution_state\":";
             if (action.execution_state.has_value()) {
-                data << "\"" << server::core::mmorpg::topology_actuation_execution_action_state_name(
+                data << "\"" << server::core::worlds::topology_actuation_execution_action_state_name(
                     *action.execution_state) << "\"";
             } else {
                 data << "null";
@@ -4296,9 +4296,9 @@ private:
     std::string make_topology_actuation_adapter_status_json(
         const std::optional<TopologyActuationAdapterLeaseDocument>& lease_document,
         const std::optional<TopologyActuationExecutionDocument>& execution_document,
-        const server::core::mmorpg::TopologyActuationExecutionStatus& execution_status,
-        const server::core::mmorpg::TopologyActuationRealizationStatus& realization_status,
-        const server::core::mmorpg::TopologyActuationAdapterStatus& adapter_status) const {
+        const server::core::worlds::TopologyActuationExecutionStatus& execution_status,
+        const server::core::worlds::TopologyActuationRealizationStatus& realization_status,
+        const server::core::worlds::TopologyActuationAdapterStatus& adapter_status) const {
         std::ostringstream data;
         data << "{";
         data << "\"lease\":";
@@ -4369,13 +4369,13 @@ private:
             data << "\"world_id\":\"" << json_escape(action.world_id) << "\",";
             data << "\"shard\":\"" << json_escape(action.shard) << "\",";
             data << "\"requested_action\":\""
-                 << server::core::mmorpg::topology_actuation_action_kind_name(action.requested_action) << "\",";
+                 << server::core::worlds::topology_actuation_action_kind_name(action.requested_action) << "\",";
             data << "\"requested_replica_delta\":" << action.requested_replica_delta << ",";
-            data << "\"state\":\"" << server::core::mmorpg::topology_actuation_adapter_status_state_name(action.state)
+            data << "\"state\":\"" << server::core::worlds::topology_actuation_adapter_status_state_name(action.state)
                  << "\",";
             data << "\"execution_state\":";
             if (action.execution_state.has_value()) {
-                data << "\"" << server::core::mmorpg::topology_actuation_execution_status_state_name(
+                data << "\"" << server::core::worlds::topology_actuation_execution_status_state_name(
                     *action.execution_state) << "\"";
             } else {
                 data << "null";
@@ -4383,7 +4383,7 @@ private:
             data << ",";
             data << "\"realization_state\":";
             if (action.realization_state.has_value()) {
-                data << "\"" << server::core::mmorpg::topology_actuation_realization_state_name(
+                data << "\"" << server::core::worlds::topology_actuation_realization_state_name(
                     *action.realization_state) << "\"";
             } else {
                 data << "null";
@@ -7857,7 +7857,7 @@ private:
         WorldMigrationEnvelope envelope = parsed.envelope;
         envelope.updated_at_ms = now_ms();
 
-        if (!redis_->set(migration_key, server::core::mmorpg::serialize_world_migration_envelope(envelope))) {
+        if (!redis_->set(migration_key, server::core::worlds::serialize_world_migration_envelope(envelope))) {
             world_migration_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
             http_errors_total_.fetch_add(1, std::memory_order_relaxed);
             return json_error(
@@ -8076,16 +8076,16 @@ private:
         }
 
         const auto observed_instances = make_observed_topology_instances(items);
-        const auto observed_pools = server::core::mmorpg::collect_observed_pools(observed_instances);
-        const auto actuation_plan = server::core::mmorpg::plan_topology_actuation(desired_topology, observed_pools);
-        std::unordered_map<std::string, server::core::mmorpg::TopologyActuationAction> plan_index;
+        const auto observed_pools = server::core::worlds::collect_observed_pools(observed_instances);
+        const auto actuation_plan = server::core::worlds::plan_topology_actuation(desired_topology, observed_pools);
+        std::unordered_map<std::string, server::core::worlds::TopologyActuationAction> plan_index;
         plan_index.reserve(actuation_plan.actions.size());
         for (const auto& action : actuation_plan.actions) {
             plan_index.emplace(action.world_id + "\n" + action.shard, action);
         }
 
         for (const auto& action : parsed.request_document.actions) {
-            if (action.action == server::core::mmorpg::TopologyActuationActionKind::kObserveUndeclaredPool) {
+            if (action.action == server::core::worlds::TopologyActuationActionKind::kObserveUndeclaredPool) {
                 topology_actuation_request_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
                 http_errors_total_.fetch_add(1, std::memory_order_relaxed);
                 return json_error(
@@ -8118,10 +8118,10 @@ private:
                 details << "\"world_id\":\"" << json_escape(action.world_id) << "\",";
                 details << "\"shard\":\"" << json_escape(action.shard) << "\",";
                 details << "\"requested_action\":\""
-                        << server::core::mmorpg::topology_actuation_action_kind_name(action.action) << "\",";
+                        << server::core::worlds::topology_actuation_action_kind_name(action.action) << "\",";
                 details << "\"requested_replica_delta\":" << action.replica_delta << ",";
                 details << "\"current_action\":\""
-                        << server::core::mmorpg::topology_actuation_action_kind_name(plan_it->second.action) << "\",";
+                        << server::core::worlds::topology_actuation_action_kind_name(plan_it->second.action) << "\",";
                 details << "\"current_replica_delta\":" << plan_it->second.replica_delta;
                 details << "}";
                 return json_error(
@@ -8147,7 +8147,7 @@ private:
             nlohmann::json item;
             item["world_id"] = action.world_id;
             item["shard"] = action.shard;
-            item["action"] = std::string(server::core::mmorpg::topology_actuation_action_kind_name(action.action));
+            item["action"] = std::string(server::core::worlds::topology_actuation_action_kind_name(action.action));
             item["replica_delta"] = action.replica_delta;
             root["actions"].push_back(std::move(item));
         }
@@ -8262,14 +8262,14 @@ private:
             items = instances_cache_;
         }
         const auto observed_instances = make_observed_topology_instances(items);
-        const auto observed_pools = server::core::mmorpg::collect_observed_pools(observed_instances);
-        std::unordered_map<std::string, server::core::mmorpg::ObservedTopologyPool> observed_pool_index;
+        const auto observed_pools = server::core::worlds::collect_observed_pools(observed_instances);
+        std::unordered_map<std::string, server::core::worlds::ObservedTopologyPool> observed_pool_index;
         observed_pool_index.reserve(observed_pools.size());
         for (const auto& pool : observed_pools) {
             observed_pool_index.emplace(pool.world_id + "\n" + pool.shard, pool);
         }
 
-        std::unordered_map<std::string, server::core::mmorpg::TopologyActuationExecutionItem> current_execution_index;
+        std::unordered_map<std::string, server::core::worlds::TopologyActuationExecutionItem> current_execution_index;
         if (current.has_value()) {
             current_execution_index.reserve(current->actions.size());
             for (const auto& item : current->actions) {
@@ -8284,7 +8284,7 @@ private:
         }
 
         for (const auto& item : parsed.execution_document.actions) {
-            if (item.action.action == server::core::mmorpg::TopologyActuationActionKind::kObserveUndeclaredPool) {
+            if (item.action.action == server::core::worlds::TopologyActuationActionKind::kObserveUndeclaredPool) {
                 topology_actuation_execution_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
                 http_errors_total_.fetch_add(1, std::memory_order_relaxed);
                 return json_error(
@@ -8363,12 +8363,12 @@ private:
             nlohmann::json action;
             action["world_id"] = item.action.world_id;
             action["shard"] = item.action.shard;
-            action["action"] = std::string(server::core::mmorpg::topology_actuation_action_kind_name(
+            action["action"] = std::string(server::core::worlds::topology_actuation_action_kind_name(
                 item.action.action));
             action["replica_delta"] = item.action.replica_delta;
             action["observed_instances_before"] = item.observed_instances_before;
             action["ready_instances_before"] = item.ready_instances_before;
-            action["state"] = std::string(server::core::mmorpg::topology_actuation_execution_action_state_name(
+            action["state"] = std::string(server::core::worlds::topology_actuation_execution_action_state_name(
                 item.state));
             root["actions"].push_back(std::move(action));
         }
@@ -8456,9 +8456,9 @@ private:
 
         const auto desired_topology = load_desired_topology_document();
         const auto observed_instances = make_observed_topology_instances(items);
-        const auto observed_pools = server::core::mmorpg::collect_observed_pools(observed_instances);
+        const auto observed_pools = server::core::worlds::collect_observed_pools(observed_instances);
         const auto reconciliation =
-            server::core::mmorpg::reconcile_topology(desired_topology, observed_pools);
+            server::core::worlds::reconcile_topology(desired_topology, observed_pools);
 
         return json_ok(
             request_id,
@@ -8499,9 +8499,9 @@ private:
 
         const auto desired_topology = load_desired_topology_document();
         const auto observed_instances = make_observed_topology_instances(items);
-        const auto observed_pools = server::core::mmorpg::collect_observed_pools(observed_instances);
+        const auto observed_pools = server::core::worlds::collect_observed_pools(observed_instances);
         const auto actuation =
-            server::core::mmorpg::plan_topology_actuation(desired_topology, observed_pools);
+            server::core::worlds::plan_topology_actuation(desired_topology, observed_pools);
 
         return json_ok(
             request_id,
@@ -8543,9 +8543,9 @@ private:
         const auto desired_topology = load_desired_topology_document();
         const auto request_document = load_topology_actuation_request_document();
         const auto observed_instances = make_observed_topology_instances(items);
-        const auto observed_pools = server::core::mmorpg::collect_observed_pools(observed_instances);
-        const auto actuation_plan = server::core::mmorpg::plan_topology_actuation(desired_topology, observed_pools);
-        const auto request_status = server::core::mmorpg::evaluate_topology_actuation_request_status(
+        const auto observed_pools = server::core::worlds::collect_observed_pools(observed_instances);
+        const auto actuation_plan = server::core::worlds::plan_topology_actuation(desired_topology, observed_pools);
+        const auto request_status = server::core::worlds::evaluate_topology_actuation_request_status(
             request_document,
             desired_topology,
             observed_pools);
@@ -8596,12 +8596,12 @@ private:
         const auto request_document = load_topology_actuation_request_document();
         const auto execution_document = load_topology_actuation_execution_document();
         const auto observed_instances = make_observed_topology_instances(items);
-        const auto observed_pools = server::core::mmorpg::collect_observed_pools(observed_instances);
-        const auto request_status = server::core::mmorpg::evaluate_topology_actuation_request_status(
+        const auto observed_pools = server::core::worlds::collect_observed_pools(observed_instances);
+        const auto request_status = server::core::worlds::evaluate_topology_actuation_request_status(
             request_document,
             desired_topology,
             observed_pools);
-        const auto execution_status = server::core::mmorpg::evaluate_topology_actuation_execution_status(
+        const auto execution_status = server::core::worlds::evaluate_topology_actuation_execution_status(
             execution_document,
             request_document,
             desired_topology,
@@ -8652,17 +8652,17 @@ private:
         const auto request_document = load_topology_actuation_request_document();
         const auto execution_document = load_topology_actuation_execution_document();
         const auto observed_instances = make_observed_topology_instances(items);
-        const auto observed_pools = server::core::mmorpg::collect_observed_pools(observed_instances);
-        const auto request_status = server::core::mmorpg::evaluate_topology_actuation_request_status(
+        const auto observed_pools = server::core::worlds::collect_observed_pools(observed_instances);
+        const auto request_status = server::core::worlds::evaluate_topology_actuation_request_status(
             request_document,
             desired_topology,
             observed_pools);
-        const auto execution_status = server::core::mmorpg::evaluate_topology_actuation_execution_status(
+        const auto execution_status = server::core::worlds::evaluate_topology_actuation_execution_status(
             execution_document,
             request_document,
             desired_topology,
             observed_pools);
-        const auto realization_status = server::core::mmorpg::evaluate_topology_actuation_realization_status(
+        const auto realization_status = server::core::worlds::evaluate_topology_actuation_realization_status(
             execution_document,
             request_document,
             desired_topology,
@@ -8730,7 +8730,7 @@ private:
             items = instances_cache_;
         }
         const auto observed_instances = make_observed_topology_instances(items);
-        const auto observed_pools = server::core::mmorpg::collect_observed_pools(observed_instances);
+        const auto observed_pools = server::core::worlds::collect_observed_pools(observed_instances);
 
         const auto parsed = parse_topology_actuation_adapter_write_request(request);
         if (!parsed.ok) {
@@ -8778,13 +8778,13 @@ private:
                 details.str());
         }
 
-        const auto adapter_status = server::core::mmorpg::evaluate_topology_actuation_adapter_status(
+        const auto adapter_status = server::core::worlds::evaluate_topology_actuation_adapter_status(
             std::nullopt,
             execution_document,
             request_document,
             desired_topology,
             observed_pools);
-        std::unordered_map<std::string, server::core::mmorpg::TopologyActuationAdapterStatusAction> status_index;
+        std::unordered_map<std::string, server::core::worlds::TopologyActuationAdapterStatusAction> status_index;
         status_index.reserve(adapter_status.actions.size());
         for (const auto& action : adapter_status.actions) {
             status_index.emplace(action.world_id + "\n" + action.shard, action);
@@ -8805,7 +8805,7 @@ private:
                     "adapter lease item does not match the current execution/realization boundary",
                     json_details("world_id", action.world_id));
             }
-            if (status_it->second.state == server::core::mmorpg::TopologyActuationAdapterStatusState::kStale) {
+            if (status_it->second.state == server::core::worlds::TopologyActuationAdapterStatusState::kStale) {
                 topology_actuation_adapter_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
                 http_errors_total_.fetch_add(1, std::memory_order_relaxed);
                 return json_error(
@@ -8831,7 +8831,7 @@ private:
             nlohmann::json item;
             item["world_id"] = action.world_id;
             item["shard"] = action.shard;
-            item["action"] = std::string(server::core::mmorpg::topology_actuation_action_kind_name(action.action));
+            item["action"] = std::string(server::core::worlds::topology_actuation_action_kind_name(action.action));
             item["replica_delta"] = action.replica_delta;
             root["actions"].push_back(std::move(item));
         }
@@ -8970,7 +8970,7 @@ private:
         std::unordered_map<std::string, std::uint32_t> lease_capacity_by_pool;
         lease_capacity_by_pool.reserve(lease_document->actions.size());
         for (const auto& action : lease_document->actions) {
-            if (action.action != server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool) {
+            if (action.action != server::core::worlds::TopologyActuationActionKind::kScaleOutPool) {
                 continue;
             }
             lease_capacity_by_pool.emplace(action.world_id + "\n" + action.shard, static_cast<std::uint32_t>(
@@ -8979,7 +8979,7 @@ private:
 
         std::unordered_map<std::string, std::uint32_t> assigned_by_pool;
         for (const auto& assignment : parsed.document.assignments) {
-            if (assignment.action != server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool) {
+            if (assignment.action != server::core::worlds::TopologyActuationActionKind::kScaleOutPool) {
                 topology_actuation_runtime_assignment_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
                 http_errors_total_.fetch_add(1, std::memory_order_relaxed);
                 return json_error(
@@ -9089,7 +9089,7 @@ private:
             item["instance_id"] = assignment.instance_id;
             item["world_id"] = assignment.world_id;
             item["shard"] = assignment.shard;
-            item["action"] = std::string(server::core::mmorpg::topology_actuation_action_kind_name(assignment.action));
+            item["action"] = std::string(server::core::worlds::topology_actuation_action_kind_name(assignment.action));
             root["assignments"].push_back(std::move(item));
         }
 
@@ -9146,18 +9146,18 @@ private:
         const auto execution_document = load_topology_actuation_execution_document();
         const auto lease_document = load_topology_actuation_adapter_document();
         const auto observed_instances = make_observed_topology_instances(items);
-        const auto observed_pools = server::core::mmorpg::collect_observed_pools(observed_instances);
-        const auto execution_status = server::core::mmorpg::evaluate_topology_actuation_execution_status(
+        const auto observed_pools = server::core::worlds::collect_observed_pools(observed_instances);
+        const auto execution_status = server::core::worlds::evaluate_topology_actuation_execution_status(
             execution_document,
             request_document,
             desired_topology,
             observed_pools);
-        const auto realization_status = server::core::mmorpg::evaluate_topology_actuation_realization_status(
+        const auto realization_status = server::core::worlds::evaluate_topology_actuation_realization_status(
             execution_document,
             request_document,
             desired_topology,
             observed_pools);
-        const auto adapter_status = server::core::mmorpg::evaluate_topology_actuation_adapter_status(
+        const auto adapter_status = server::core::worlds::evaluate_topology_actuation_adapter_status(
             lease_document,
             execution_document,
             request_document,

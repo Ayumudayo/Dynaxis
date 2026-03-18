@@ -1,6 +1,12 @@
-# MMORPG World Transfer API
+# World Transfer API
 
-`server/core/mmorpg/world_transfer.hpp`는 live world owner handoff 상태를 평가하는 stable contract다.
+`server/core/worlds/world_transfer.hpp`는 live world owner handoff 상태를 평가하는 stable contract다.
+
+## Canonical Naming
+
+- canonical include path: `server/core/worlds/world_transfer.hpp`
+- canonical namespace: `server::core::worlds`
+- `server/core/mmorpg/world_transfer.hpp`는 compatibility wrapper로만 유지된다
 
 ## Scope
 
@@ -61,3 +67,4 @@
 - automatic drain scheduler
 - desired topology reconciliation 자체
 - zone-to-zone payload handoff
+

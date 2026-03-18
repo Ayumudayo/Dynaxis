@@ -20,10 +20,10 @@
 #include "server/core/fps/transport_quality.hpp"
 #include "server/core/fps/transport_policy.hpp"
 #include "server/core/fps/runtime.hpp"
-#include "server/core/mmorpg/migration.hpp"
-#include "server/core/mmorpg/world_drain.hpp"
-#include "server/core/mmorpg/topology.hpp"
-#include "server/core/mmorpg/world_transfer.hpp"
+#include "server/core/worlds/migration.hpp"
+#include "server/core/worlds/world_drain.hpp"
+#include "server/core/worlds/topology.hpp"
+#include "server/core/worlds/world_transfer.hpp"
 #include "server/core/compression/compressor.hpp"
 #include "server/core/concurrent/job_queue.hpp"
 #include "server/core/concurrent/task_scheduler.hpp"
@@ -112,107 +112,107 @@ void scenario_metrics_and_runtime() {
     server::core::fps::UdpSequencedMetrics udp_quality;
     (void)udp_quality.on_packet(10, 1000);
     (void)udp_quality.on_packet(12, 1020);
-    (void)server::core::mmorpg::reconcile_topology(
-        server::core::mmorpg::DesiredTopologyDocument{},
-        std::vector<server::core::mmorpg::ObservedTopologyPool>{});
-    (void)server::core::mmorpg::plan_topology_actuation(
-        server::core::mmorpg::DesiredTopologyDocument{},
-        std::vector<server::core::mmorpg::ObservedTopologyPool>{});
-    (void)server::core::mmorpg::evaluate_topology_actuation_request_status(
-        server::core::mmorpg::TopologyActuationRequestDocument{
+    (void)server::core::worlds::reconcile_topology(
+        server::core::worlds::DesiredTopologyDocument{},
+        std::vector<server::core::worlds::ObservedTopologyPool>{});
+    (void)server::core::worlds::plan_topology_actuation(
+        server::core::worlds::DesiredTopologyDocument{},
+        std::vector<server::core::worlds::ObservedTopologyPool>{});
+    (void)server::core::worlds::evaluate_topology_actuation_request_status(
+        server::core::worlds::TopologyActuationRequestDocument{
             .request_id = "stable-header-request",
             .actions = {{
                 .world_id = "starter-a",
                 .shard = "alpha",
-                .action = server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool,
+                .action = server::core::worlds::TopologyActuationActionKind::kScaleOutPool,
                 .replica_delta = 1,
             }},
         },
-        server::core::mmorpg::DesiredTopologyDocument{
+        server::core::worlds::DesiredTopologyDocument{
             .revision = 1,
             .pools = {{.world_id = "starter-a", .shard = "alpha", .replicas = 2}},
         },
-        std::vector<server::core::mmorpg::ObservedTopologyPool>{
+        std::vector<server::core::worlds::ObservedTopologyPool>{
             {.world_id = "starter-a", .shard = "alpha", .instances = 1, .ready_instances = 1},
         });
-    (void)server::core::mmorpg::evaluate_topology_actuation_execution_status(
-        server::core::mmorpg::TopologyActuationExecutionDocument{
+    (void)server::core::worlds::evaluate_topology_actuation_execution_status(
+        server::core::worlds::TopologyActuationExecutionDocument{
             .executor_id = "executor-a",
             .request_revision = 1,
             .actions = {{
                 .action = {
                     .world_id = "starter-a",
                     .shard = "alpha",
-                    .action = server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool,
+                    .action = server::core::worlds::TopologyActuationActionKind::kScaleOutPool,
                     .replica_delta = 1,
                 },
                 .observed_instances_before = 1,
                 .ready_instances_before = 1,
-                .state = server::core::mmorpg::TopologyActuationExecutionActionState::kClaimed,
+                .state = server::core::worlds::TopologyActuationExecutionActionState::kClaimed,
             }},
         },
-        server::core::mmorpg::TopologyActuationRequestDocument{
+        server::core::worlds::TopologyActuationRequestDocument{
             .request_id = "stable-header-request",
             .revision = 1,
             .actions = {{
                 .world_id = "starter-a",
                 .shard = "alpha",
-                .action = server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool,
+                .action = server::core::worlds::TopologyActuationActionKind::kScaleOutPool,
                 .replica_delta = 1,
             }},
         },
-        server::core::mmorpg::DesiredTopologyDocument{
+        server::core::worlds::DesiredTopologyDocument{
             .revision = 1,
             .pools = {{.world_id = "starter-a", .shard = "alpha", .replicas = 2}},
         },
-        std::vector<server::core::mmorpg::ObservedTopologyPool>{
+        std::vector<server::core::worlds::ObservedTopologyPool>{
             {.world_id = "starter-a", .shard = "alpha", .instances = 1, .ready_instances = 1},
         });
-    (void)server::core::mmorpg::evaluate_topology_actuation_realization_status(
-        server::core::mmorpg::TopologyActuationExecutionDocument{
+    (void)server::core::worlds::evaluate_topology_actuation_realization_status(
+        server::core::worlds::TopologyActuationExecutionDocument{
             .executor_id = "executor-a",
             .request_revision = 1,
             .actions = {{
                 .action = {
                     .world_id = "starter-a",
                     .shard = "alpha",
-                    .action = server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool,
+                    .action = server::core::worlds::TopologyActuationActionKind::kScaleOutPool,
                     .replica_delta = 1,
                 },
                 .observed_instances_before = 1,
                 .ready_instances_before = 1,
-                .state = server::core::mmorpg::TopologyActuationExecutionActionState::kCompleted,
+                .state = server::core::worlds::TopologyActuationExecutionActionState::kCompleted,
             }},
         },
-        server::core::mmorpg::TopologyActuationRequestDocument{
+        server::core::worlds::TopologyActuationRequestDocument{
             .request_id = "stable-header-request",
             .revision = 1,
             .actions = {{
                 .world_id = "starter-a",
                 .shard = "alpha",
-                .action = server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool,
+                .action = server::core::worlds::TopologyActuationActionKind::kScaleOutPool,
                 .replica_delta = 1,
             }},
         },
-        server::core::mmorpg::DesiredTopologyDocument{
+        server::core::worlds::DesiredTopologyDocument{
             .revision = 1,
             .pools = {{.world_id = "starter-a", .shard = "alpha", .replicas = 2}},
         },
-        std::vector<server::core::mmorpg::ObservedTopologyPool>{
+        std::vector<server::core::worlds::ObservedTopologyPool>{
             {.world_id = "starter-a", .shard = "alpha", .instances = 2, .ready_instances = 1},
         });
-    (void)server::core::mmorpg::evaluate_topology_actuation_adapter_status(
-        server::core::mmorpg::TopologyActuationAdapterLeaseDocument{
+    (void)server::core::worlds::evaluate_topology_actuation_adapter_status(
+        server::core::worlds::TopologyActuationAdapterLeaseDocument{
             .adapter_id = "adapter-a",
             .execution_revision = 1,
             .actions = {{
                 .world_id = "starter-a",
                 .shard = "alpha",
-                .action = server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool,
+                .action = server::core::worlds::TopologyActuationActionKind::kScaleOutPool,
                 .replica_delta = 1,
             }},
         },
-        server::core::mmorpg::TopologyActuationExecutionDocument{
+        server::core::worlds::TopologyActuationExecutionDocument{
             .executor_id = "executor-a",
             .revision = 1,
             .request_revision = 1,
@@ -220,33 +220,33 @@ void scenario_metrics_and_runtime() {
                 .action = {
                     .world_id = "starter-a",
                     .shard = "alpha",
-                    .action = server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool,
+                    .action = server::core::worlds::TopologyActuationActionKind::kScaleOutPool,
                     .replica_delta = 1,
                 },
                 .observed_instances_before = 1,
                 .ready_instances_before = 1,
-                .state = server::core::mmorpg::TopologyActuationExecutionActionState::kCompleted,
+                .state = server::core::worlds::TopologyActuationExecutionActionState::kCompleted,
             }},
         },
-        server::core::mmorpg::TopologyActuationRequestDocument{
+        server::core::worlds::TopologyActuationRequestDocument{
             .request_id = "stable-header-request",
             .revision = 1,
             .actions = {{
                 .world_id = "starter-a",
                 .shard = "alpha",
-                .action = server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool,
+                .action = server::core::worlds::TopologyActuationActionKind::kScaleOutPool,
                 .replica_delta = 1,
             }},
         },
-        server::core::mmorpg::DesiredTopologyDocument{
+        server::core::worlds::DesiredTopologyDocument{
             .revision = 1,
             .pools = {{.world_id = "starter-a", .shard = "alpha", .replicas = 2}},
         },
-        std::vector<server::core::mmorpg::ObservedTopologyPool>{
+        std::vector<server::core::worlds::ObservedTopologyPool>{
             {.world_id = "starter-a", .shard = "alpha", .instances = 2, .ready_instances = 1},
         });
-    (void)server::core::mmorpg::find_topology_actuation_runtime_assignment(
-        server::core::mmorpg::TopologyActuationRuntimeAssignmentDocument{
+    (void)server::core::worlds::find_topology_actuation_runtime_assignment(
+        server::core::worlds::TopologyActuationRuntimeAssignmentDocument{
             .adapter_id = "adapter-a",
             .revision = 2,
             .lease_revision = 1,
@@ -254,33 +254,33 @@ void scenario_metrics_and_runtime() {
                 .instance_id = "server-2",
                 .world_id = "starter-a",
                 .shard = "alpha",
-                .action = server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool,
+                .action = server::core::worlds::TopologyActuationActionKind::kScaleOutPool,
             }},
         },
         "server-2");
-    (void)server::core::mmorpg::evaluate_world_transfer(
-        server::core::mmorpg::ObservedWorldTransferState{
+    (void)server::core::worlds::evaluate_world_transfer(
+        server::core::worlds::ObservedWorldTransferState{
             .draining = true,
             .replacement_owner_instance_id = "server-2",
         });
-    (void)server::core::mmorpg::evaluate_world_drain(
-        server::core::mmorpg::ObservedWorldDrainState{
+    (void)server::core::worlds::evaluate_world_drain(
+        server::core::worlds::ObservedWorldDrainState{
             .draining = true,
             .instances = {{.instance_id = "server-1", .ready = true, .active_sessions = 1}},
         });
-    (void)server::core::mmorpg::evaluate_world_drain_orchestration(
-        server::core::mmorpg::WorldDrainStatus{
+    (void)server::core::worlds::evaluate_world_drain_orchestration(
+        server::core::worlds::WorldDrainStatus{
             .world_id = "starter-a",
-            .phase = server::core::mmorpg::WorldDrainPhase::kDrained,
+            .phase = server::core::worlds::WorldDrainPhase::kDrained,
             .summary = {.drain_declared = true},
         },
         std::nullopt,
         std::nullopt);
-    (void)server::core::mmorpg::evaluate_world_migration(
-        server::core::mmorpg::ObservedWorldMigrationWorld{
+    (void)server::core::worlds::evaluate_world_migration(
+        server::core::worlds::ObservedWorldMigrationWorld{
             .world_id = "starter-a",
         },
-        server::core::mmorpg::WorldMigrationEnvelope{
+        server::core::worlds::WorldMigrationEnvelope{
             .target_world_id = "starter-b",
             .target_owner_instance_id = "server-2",
         },

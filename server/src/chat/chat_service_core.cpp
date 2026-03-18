@@ -155,10 +155,10 @@ std::optional<std::string> extract_world_tag(std::string_view value) {
 // ChatService 생성자: 주요 의존성을 주입받고 환경 변수로부터 설정을 로드합니다.
 ChatService::ChatService(boost::asio::io_context& io,
                          server::core::JobQueue& job_queue,
-                         std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool,
-                         std::shared_ptr<server::core::storage::redis::IRedisClient> redis)
+    std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool,
+    std::shared_ptr<server::core::storage::redis::IRedisClient> redis)
     : io_(&io), job_queue_(job_queue), db_pool_(std::move(db_pool)), redis_(std::move(redis)) {
-    
+
     // 의존성이 주입되지 않은 경우 ServiceRegistry에서 가져옵니다.
     if (!db_pool_) {
         db_pool_ = services::get<server::storage::IRepositoryConnectionPool>();
@@ -903,7 +903,7 @@ ChatService::load_continuity_world_policy(const std::string& world_id) {
     return server::core::state::parse_world_lifecycle_policy(*payload);
 }
 
-std::optional<server::core::mmorpg::WorldMigrationEnvelope>
+std::optional<server::core::worlds::WorldMigrationEnvelope>
 ChatService::load_continuity_world_migration(const std::string& world_id) {
     if (!redis_ || world_id.empty()) {
         return std::nullopt;
@@ -913,10 +913,10 @@ ChatService::load_continuity_world_migration(const std::string& world_id) {
     if (!payload.has_value() || payload->empty()) {
         return std::nullopt;
     }
-    return server::core::mmorpg::parse_world_migration_envelope(*payload);
+    return server::core::worlds::parse_world_migration_envelope(*payload);
 }
 
-std::optional<server::core::mmorpg::TopologyActuationRuntimeAssignmentItem>
+std::optional<server::core::worlds::TopologyActuationRuntimeAssignmentItem>
 ChatService::load_topology_runtime_assignment() const {
     if (!redis_ || continuity_.topology_runtime_assignment_key.empty() || continuity_.current_owner_id.empty()) {
         return std::nullopt;
@@ -952,7 +952,7 @@ std::string ChatService::current_runtime_default_world_id() const {
 
 ChatService::AppMigrationRoomHandoff
 ChatService::resolve_app_world_migration_room_handoff(
-    const server::core::mmorpg::WorldMigrationEnvelope& migration) const {
+    const server::core::worlds::WorldMigrationEnvelope& migration) const {
     AppMigrationRoomHandoff handoff{};
     if (migration.payload_kind != kAppMigrationPayloadRoomKind) {
         return handoff;
@@ -1310,7 +1310,7 @@ std::string ChatService::ensure_unique_or_error(Session& s, const std::string& d
 void ChatService::send_rooms_list(Session& s) {
     std::vector<std::uint8_t> body;
     std::string msg = "rooms:";
-    
+
     // 1. Redis 데이터 미리 조회 (Lock 없이 수행)
     struct RoomInfo {
         std::string name;
@@ -1387,7 +1387,7 @@ void ChatService::send_rooms_list(Session& s) {
     {
         // 2. 로컬 상태 처리 (Lock 필요)
         std::lock_guard<std::mutex> lk(state_.mu);
-        
+
         // 로컬 방 정리
         std::vector<std::string> to_remove;
         for (auto it = state_.rooms.begin(); it != state_.rooms.end(); ++it) {
@@ -1402,7 +1402,7 @@ void ChatService::send_rooms_list(Session& s) {
             for (auto& info : redis_rooms) {
                 std::string display_name = info.name;
                 bool is_locked = info.is_locked;
-                
+
                 // Redis에 잠금 정보가 없어도 로컬에 있을 수 있음
                 if (!is_locked && state_.room_passwords.count(info.name)) {
                     is_locked = true;
@@ -1452,7 +1452,7 @@ void ChatService::broadcast_refresh_local(const std::string& room) {
             collect_room_sessions(it->second, targets);
         }
     }
-    
+
     for (auto& s : targets) {
         s->async_send(game_proto::MSG_REFRESH_NOTIFY, empty_body, 0);
     }
@@ -1488,7 +1488,7 @@ void ChatService::send_room_users(Session& s, const std::string& target) {
         auto itroom = state_.rooms.find(target);
         bool is_locked = state_.room_passwords.count(target) > 0;
         bool is_member = false;
-        
+
         // 로컬 세션에서 멤버 여부 확인
         if (itroom != state_.rooms.end()) {
             for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) {
@@ -1574,7 +1574,7 @@ void ChatService::send_room_users(Session& s, const std::string& target) {
 void ChatService::send_snapshot(Session& s, const std::string& current) {
     std::vector<std::uint8_t> body;
     server::wire::v1::StateSnapshot pb; pb.set_current_room(current);
-    
+
     // 1. Redis 데이터 미리 조회 (Lock 없이 수행)
     struct RoomInfo {
         std::string name;
@@ -1650,7 +1650,7 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
     {
         // 2. 로컬 상태 처리 (Lock 필요)
         std::lock_guard<std::mutex> lk(state_.mu);
-        
+
         // 로컬 방 정리
         std::vector<std::string> to_remove;
         for (auto it = state_.rooms.begin(); it != state_.rooms.end(); ++it) {
@@ -1662,10 +1662,10 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
         if (redis_available) {
             // Redis 데이터 기반으로 메시지 구성
             for (auto& info : redis_rooms) {
-                auto* ri = pb.add_rooms(); 
-                ri->set_name(info.name); 
+                auto* ri = pb.add_rooms();
+                ri->set_name(info.name);
                 ri->set_members(info.count);
-                
+
                 bool locked = info.is_locked;
                 if (!locked && state_.room_passwords.count(info.name)) {
                     locked = true;
@@ -1697,13 +1697,13 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
     {
         std::vector<std::string> user_list;
         bool loaded_from_redis = false;
-        
+
         if (redis_) {
             if (redis_->smembers("room:users:" + current, user_list)) {
                 loaded_from_redis = true;
             }
         }
-        
+
         if (loaded_from_redis) {
             for (const auto& name : user_list) {
                 if (viewer_blocked.count(name) > 0) {
@@ -1730,7 +1730,7 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
             }
         }
     }
-    
+
     // 최근 메시지를 Redis에서 우선 조회하고, 부족하면 DB에서 가져옵니다 (Fallback).
     std::string rid;
     {
