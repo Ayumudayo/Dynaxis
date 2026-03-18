@@ -168,11 +168,13 @@ jobs:
           "POC_BASELINE_FIRST_BUILD_SEC=$firstSec" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- baseline_build_pass_1_sec: {0}" -f $firstSec)
 
-      - name: Build baseline pass #2 (without sccache, clean-first)
+      - name: Build baseline pass #2 (without sccache, fresh-tree)
         if: env.POC_DOUBLE_BUILD == 'true'
         shell: pwsh
         run: |
-          $second = Measure-Command { cmake --build build-windows-nosccache-conan --target $env:POC_TARGET --clean-first --parallel }
+          $toolchain = "${{ github.workspace }}/build-windows-sccache-poc-conan/conan/build/Release/generators/conan_toolchain.cmake"
+          cmake -S . -B build-windows-nosccache-conan-pass2 -G Ninja -DCMAKE_MAKE_PROGRAM="$env:POC_NINJA" -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$toolchain" -DCMAKE_C_COMPILER="$env:POC_CL" -DCMAKE_CXX_COMPILER="$env:POC_CL" -DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release -DCMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL=Release
+          $second = Measure-Command { cmake --build build-windows-nosccache-conan-pass2 --target $env:POC_TARGET --parallel }
           $secondSec = [Math]::Round($second.TotalSeconds, 2)
           "POC_BASELINE_SECOND_BUILD_SEC=$secondSec" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- baseline_build_pass_2_sec: {0}" -f $secondSec)
@@ -201,12 +203,14 @@ jobs:
           sccache --show-stats | Tee-Object -FilePath $env:POC_STATS_PASS1_PATH
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- sccache_build_pass_1_sec: {0}" -f $firstSec)
 
-      - name: Build pass #2 (clean-first)
+      - name: Build pass #2 (with sccache, fresh-tree)
         if: env.POC_DOUBLE_BUILD == 'true'
         shell: pwsh
         run: |
+          $toolchain = "${{ github.workspace }}/build-windows-sccache-poc-conan/conan/build/Release/generators/conan_toolchain.cmake"
+          cmake -S . -B build-windows-sccache-conan-pass2 -G Ninja -DCMAKE_MAKE_PROGRAM="$env:POC_NINJA" -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$toolchain" -DCMAKE_C_COMPILER="$env:POC_CL" -DCMAKE_CXX_COMPILER="$env:POC_CL" -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release -DCMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL=Release
           sccache --zero-stats
-          $second = Measure-Command { cmake --build build-windows-sccache-conan --target $env:POC_TARGET --clean-first --parallel }
+          $second = Measure-Command { cmake --build build-windows-sccache-conan-pass2 --target $env:POC_TARGET --parallel }
           $secondSec = [Math]::Round($second.TotalSeconds, 2)
           "POC_SECOND_BUILD_SEC=$secondSec" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           sccache --show-stats | Tee-Object -FilePath $env:POC_STATS_PASS2_PATH
