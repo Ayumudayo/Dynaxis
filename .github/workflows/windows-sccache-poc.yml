@@ -141,7 +141,7 @@ jobs:
       - name: Prepare Conan dependencies (Release)
         shell: pwsh
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup_conan.ps1 -Config Release -Feature windows-dev -BuildDir build-windows-sccache-poc-conan
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/setup_conan.ps1 -Config Release -Feature windows-dev -BuildDir build-windows-sccache-poc-conan -ToolchainGenerator Ninja
 
       - name: Configure without sccache (Ninja, Release)
         shell: pwsh
