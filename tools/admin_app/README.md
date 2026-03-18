@@ -15,6 +15,21 @@
 - `/api/v1/instances/{instance_id}` (JSON)
 - `/api/v1/worlds` (JSON)
 - `/api/v1/worlds/{world_id}/policy` (PUT/DELETE, JSON)
+- `/api/v1/worlds/{world_id}/drain` (GET/PUT/DELETE, JSON)
+- `/api/v1/worlds/{world_id}/transfer` (GET/PUT/DELETE, JSON)
+- `/api/v1/worlds/{world_id}/migration` (GET/PUT/DELETE, JSON)
+- `/api/v1/topology/desired` (GET/PUT/DELETE, JSON)
+- `/api/v1/topology/observed` (JSON)
+- `/api/v1/topology/reconciliation` (JSON)
+- `/api/v1/topology/actuation` (JSON)
+- `/api/v1/topology/actuation/request` (GET/PUT/DELETE, JSON)
+- `/api/v1/topology/actuation/status` (JSON)
+- `/api/v1/topology/actuation/execution` (GET/PUT/DELETE, JSON)
+- `/api/v1/topology/actuation/execution/status` (JSON)
+- `/api/v1/topology/actuation/realization` (JSON)
+- `/api/v1/topology/actuation/adapter` (GET/PUT/DELETE, JSON)
+- `/api/v1/topology/actuation/adapter/status` (JSON)
+- `/api/v1/topology/actuation/runtime-assignment` (GET/PUT/DELETE, JSON)
 - `/api/v1/sessions/{client_id}` (JSON)
 - `/api/v1/users` (JSON)
 - `/api/v1/users/disconnect` (POST, query/body)
@@ -45,12 +60,18 @@
 | `GATEWAY_SESSION_PREFIX` | 세션 디렉터리 키(key) 접두어(prefix) | `gateway/session/` |
 | `REDIS_CHANNEL_PREFIX` | fanout/admin 명령 채널 접두어(prefix) | `` |
 | `SESSION_CONTINUITY_REDIS_PREFIX` | continuity world owner key 조회용 접두어(prefix). 미설정이면 `REDIS_CHANNEL_PREFIX`를 재사용 | (unset) |
+| `SESSION_CONTINUITY_LEASE_TTL_SEC` | owner transfer commit 시 continuity world owner key에 적용할 TTL(초) | `900` |
 | `WB_WORKER_METRICS_URL` | wb_worker 메트릭 URL | `http://127.0.0.1:39093/metrics` |
 | `GRAFANA_BASE_URL` | Grafana 기본 URL 링크 | `http://127.0.0.1:33000` |
 | `PROMETHEUS_BASE_URL` | Prometheus 기본 URL 링크 | `http://127.0.0.1:39090` |
 | `ADMIN_AUTH_MODE` | 인증 모드 (`off`, `header`, `bearer`, `header_or_bearer`) | `off` |
 | `ADMIN_READ_ONLY` | write endpoint 킬스위치(`1`이면 write 요청 차단) | `0` |
 | `ADMIN_COMMAND_SIGNING_SECRET` | admin fanout 명령 payload HMAC 서명 키(미설정 시 write publish 차단) | (unset) |
+| `ADMIN_DESIRED_TOPOLOGY_KEY` | desired topology document Redis key | `dynaxis:topology:desired` |
+| `ADMIN_TOPOLOGY_ACTUATION_REQUEST_KEY` | topology actuation request document Redis key | `dynaxis:topology:actuation:request` |
+| `ADMIN_TOPOLOGY_ACTUATION_EXECUTION_KEY` | topology actuation execution progress document Redis key | `dynaxis:topology:actuation:execution` |
+| `ADMIN_TOPOLOGY_ACTUATION_ADAPTER_KEY` | topology actuation adapter lease document Redis key | `dynaxis:topology:actuation:adapter` |
+| `ADMIN_TOPOLOGY_ACTUATION_RUNTIME_ASSIGNMENT_KEY` | topology actuation runtime-assignment document Redis key | `dynaxis:topology:actuation:runtime-assignment` |
 | `ADMIN_OFF_ROLE` | `ADMIN_AUTH_MODE=off`일 때 적용할 역할(role) (`viewer/operator/admin`) | `admin` |
 | `ADMIN_AUTH_USER_HEADER` | header 인증 시 사용자 헤더(header) 이름 | `X-Admin-User` |
 | `ADMIN_AUTH_ROLE_HEADER` | header 인증 시 역할 헤더(header) 이름 | `X-Admin-Role` |
@@ -137,9 +158,52 @@ world 단위의 owner/policy 인벤토리를 반환한다.
 - `policy.draining`
 - `policy.replacement_owner_instance_id`
 - `policy.reassignment_declared`
+- `drain.phase`
+- `drain.current_owner_instance_id`
+- `drain.replacement_owner_instance_id`
+- `drain.summary.drain_declared`
+- `drain.summary.replacement_declared`
+- `drain.summary.replacement_present`
+- `drain.summary.replacement_ready`
+- `drain.summary.instances_total`
+- `drain.summary.ready_instances`
+- `drain.summary.active_sessions_total`
+- `drain.summary.owner_active_sessions`
+- `drain.summary.replacement_active_sessions`
+- `drain.orchestration.phase`
+- `drain.orchestration.next_action`
+- `drain.orchestration.target_owner_instance_id`
+- `drain.orchestration.target_world_id`
+- `drain.orchestration.summary.drain_declared`
+- `drain.orchestration.summary.drained`
+- `drain.orchestration.summary.transfer_declared`
+- `drain.orchestration.summary.transfer_committed`
+- `drain.orchestration.summary.migration_declared`
+- `drain.orchestration.summary.migration_ready`
+- `drain.orchestration.summary.clear_allowed`
+- `transfer.phase`
+- `transfer.current_owner_instance_id`
+- `transfer.target_owner_instance_id`
+- `transfer.summary.transfer_declared`
+- `transfer.summary.owner_present`
+- `transfer.summary.target_present`
+- `transfer.summary.target_ready`
+- `transfer.summary.owner_matches_target`
+- `migration.phase`
+- `migration.target_world_id`
+- `migration.target_owner_instance_id`
+- `migration.payload_kind`
+- `migration.payload_ref`
+- `migration.summary.envelope_present`
+- `migration.summary.source_draining`
+- `migration.summary.target_world_present`
+- `migration.summary.target_owner_present`
+- `migration.summary.target_owner_ready`
+- `migration.summary.preserve_room`
 - `instances[]` (`instance_id`, `ready`, `owner_match`)
 - `source.owner_key`
 - `source.policy_key`
+- `source.migration_key`
 
 ## 쓰기 액션 (2단계)
 
@@ -147,17 +211,23 @@ world 단위의 owner/policy 인벤토리를 반환한다.
 운영에서는 query 파라미터보다 JSON body 사용을 권장한다. (기존 query 호출은 호환 유지)
 
 `ADMIN_READ_ONLY=1`이면 아래 write 엔드포인트는 역할과 무관하게 `403` + `READ_ONLY`로 거부된다.
-`/api/v1/auth/context`의 `data.read_only`는 `true`가 되고, write capability(`disconnect/announce/settings/moderation/world_policy`)는 모두 `false`로 내려간다.
+`/api/v1/auth/context`의 `data.read_only`는 `true`가 되고, write capability(`disconnect/announce/settings/moderation/world_policy/world_drain/world_transfer/world_migration/desired_topology/topology_actuation_request/topology_actuation_execution/topology_actuation_adapter/topology_actuation_runtime_assignment`)는 모두 `false`로 내려간다.
 
 `ADMIN_COMMAND_SIGNING_SECRET`이 설정되면 write 명령 publish payload에
 `issued_at`, `nonce`, `signature`(HMAC-SHA256)가 자동 추가된다.
 미설정 상태에서는 write 명령 publish가 `503` + `MISCONFIGURED`로 거부된다.
 
-world lifecycle policy write는 예외다.
+world lifecycle policy / drain / transfer / migration write는 예외다.
 
 - `PUT/DELETE /api/v1/worlds/{world_id}/policy` 는 fanout/admin 명령 publish를 사용하지 않는다.
 - authoritative state는 Redis `dynaxis:continuity:world-policy:<world_id>` key 자체다.
-- 따라서 이 endpoint는 `ADMIN_COMMAND_SIGNING_SECRET` 없이도 동작한다.
+- `GET/PUT/DELETE /api/v1/worlds/{world_id}/transfer` 도 fanout/admin 명령 publish를 사용하지 않는다.
+- authoritative state는 world policy key + continuity world owner key 조합이다.
+- `GET/PUT/DELETE /api/v1/worlds/{world_id}/drain` 도 fanout/admin 명령 publish를 사용하지 않는다.
+- authoritative state는 기존 Redis `dynaxis:continuity:world-policy:<world_id>` key이고, named drain surface는 그 위에 live progress/status를 붙인다.
+- `GET/PUT/DELETE /api/v1/worlds/{world_id}/migration` 도 fanout/admin 명령 publish를 사용하지 않는다.
+- authoritative state는 `dynaxis:continuity:world-migration:<world_id>` envelope key다.
+- 따라서 이 endpoint들은 `ADMIN_COMMAND_SIGNING_SECRET` 없이도 동작한다.
 
 - `POST /api/v1/users/disconnect`
   - `client_id` 또는 `client_ids`(쉼표 구분)
@@ -184,6 +254,40 @@ world lifecycle policy write는 예외다.
 - `DELETE /api/v1/worlds/{world_id}/policy`
   - 해당 world policy key를 제거한다
   - key가 이미 없어도 성공으로 처리한다
+- `GET /api/v1/worlds/{world_id}/drain`
+  - 현재 world inventory 위에서 평가한 world-drain phase/progress와 orchestration handoff 상태를 반환한다
+  - `orchestration.phase`는 `idle|blocked_by_replacement_target|draining|awaiting_owner_transfer|awaiting_migration|ready_to_clear`
+  - `orchestration.next_action`은 `none|wait_for_drain|stabilize_replacement_target|commit_owner_transfer|await_migration|clear_policy`
+- `PUT /api/v1/worlds/{world_id}/drain`
+  - JSON body required
+  - `replacement_owner_instance_id` (선택, string 또는 `null`)
+  - optional replacement target을 기록하면서 named drain을 선언한다
+- `DELETE /api/v1/worlds/{world_id}/drain`
+  - named drain policy를 해제한다
+  - 현재 지원하는 closure flow는 `drain -> owner transfer commit 또는 migration readiness 확인 -> ready_to_clear -> DELETE /drain` 형태다
+- `GET /api/v1/worlds/{world_id}/transfer`
+  - 현재 world inventory 위에서 평가한 owner-transfer 상태를 반환한다
+- `PUT /api/v1/worlds/{world_id}/transfer`
+  - JSON body required
+  - `target_owner_instance_id` (필수, string)
+  - `expected_owner_instance_id` (선택, string 또는 `null`)
+  - `commit_owner` (선택, bool, 기본 `false`)
+  - same-world `server` replacement target만 허용한다
+  - `commit_owner=true`면 continuity world owner key를 replacement owner로 즉시 커밋한다
+- `DELETE /api/v1/worlds/{world_id}/transfer`
+  - transfer lifecycle policy(`draining + replacement_owner_instance_id`)만 해제한다
+  - 이미 커밋된 owner boundary는 유지한다
+- `GET /api/v1/worlds/{world_id}/migration`
+  - source world 기준 migration envelope/status를 반환한다
+- `PUT /api/v1/worlds/{world_id}/migration`
+  - JSON body required
+  - `target_world_id` (필수, source와 달라야 함)
+  - `target_owner_instance_id` (필수, target world의 known server instance)
+  - `preserve_room` (선택, bool)
+  - `payload_kind` / `payload_ref` (선택, opaque app-defined handoff metadata)
+  - current `server_app` mapping: `payload_kind="chat-room-v1"`이면 `payload_ref`를 resumed target room으로 해석한다
+- `DELETE /api/v1/worlds/{world_id}/migration`
+  - stored migration envelope를 제거한다
 
 설정 key/range 검증은 `server/include/server/config/runtime_settings.hpp`의 공통 규칙을 사용한다.
 동일 규칙이 `admin_app` 입력 검증과 `server_app` 런타임 적용 경로에 함께 적용되어 문서/코드 드리프트(drift)를 줄인다.
@@ -192,7 +296,377 @@ world lifecycle policy write는 예외다.
 
 - `viewer`: 조회 전용(read-only)
 - `operator`: 공지(announcement) 가능
-- `admin`: runtime settings + moderation + world lifecycle policy 포함 전체 가능
+- `admin`: runtime settings + moderation + world lifecycle policy + world drain + world owner transfer + world migration 포함 전체 가능
+
+`/api/v1/auth/context` capability에는 `world_drain`, `world_transfer`, `world_migration`, `desired_topology`, `topology_actuation_request`, `topology_actuation_execution`, `topology_actuation_adapter`, `topology_actuation_runtime_assignment`가 추가되며, 현재는 여덟 capability 모두 `admin`만 write 가능하다.
+
+## Desired topology control plane
+
+- `GET /api/v1/topology/desired`
+- `PUT /api/v1/topology/desired`
+- `DELETE /api/v1/topology/desired`
+
+`desired topology`는 world lifecycle policy와 별도다.
+
+- revisioned document shape:
+  - `topology_id`
+  - `revision`
+  - `updated_at_ms`
+  - `pools[]`
+- each pool:
+  - `world_id`
+  - `shard`
+  - `replicas`
+  - `capacity_class` (선택)
+  - `placement_tags[]` (선택)
+- `PUT` request body:
+  - `topology_id` (필수)
+  - `pools[]` (필수)
+  - `expected_revision` (선택, optimistic revision check)
+- `expected_revision`이 현재 stored revision과 다르면 `409 REVISION_MISMATCH`를 반환한다.
+- `DELETE`는 stored desired topology document를 제거한다.
+
+## Observed topology read model
+
+- `GET /api/v1/topology/observed`
+
+이 endpoint는 `desired topology`와 별도인 현재 runtime read model이다.
+
+- `instances[]`
+  - `instance_id`, `role`, `host`, `port`, `game_mode`, `region`, `shard`, `ready`
+  - `world_scope` (server instance일 때 world owner/policy visibility)
+- `worlds[]`
+  - 현재 `GET /api/v1/worlds` inventory와 동일한 world owner/policy summary
+- `summary.instances_total`
+- `summary.worlds_total`
+- `updated_at_ms`
+
+## Topology reconciliation view
+
+- `GET /api/v1/topology/reconciliation`
+
+이 endpoint는 stored desired topology document와 현재 observed pools를 비교한 read model이다.
+
+- `desired`
+  - stored desired topology document 또는 `null`
+- `observed_pools[]`
+  - `world_id`, `shard`, `instances`, `ready_instances`
+- `summary`
+  - `desired_present`
+  - `desired_pools`
+  - `observed_pools`
+  - `aligned_pools`
+  - `missing_pools`
+  - `under_replicated_pools`
+  - `over_replicated_pools`
+  - `undeclared_pools`
+  - `no_ready_pools`
+- `pools[]`
+  - `world_id`, `shard`
+  - `desired_replicas`
+  - `observed_instances`
+  - `ready_instances`
+  - `status`
+
+## Topology actuation view
+
+- `GET /api/v1/topology/actuation`
+
+이 endpoint는 stored desired topology와 observed pools를 바탕으로 다음 runtime/operator action을 read-only로 계산한 view다.
+
+- `desired`
+  - stored desired topology document 또는 `null`
+- `observed_pools[]`
+  - `world_id`, `shard`, `instances`, `ready_instances`
+- `summary`
+  - `desired_present`
+  - `actions_total`
+  - `actionable_actions`
+  - `scale_out_actions`
+  - `scale_in_actions`
+  - `readiness_recovery_actions`
+  - `observe_only_actions`
+- `actions[]`
+  - `world_id`, `shard`
+  - `status` (`missing_observed_pool|under_replicated|over_replicated|no_ready_instances|undeclared_observed_pool`)
+  - `action` (`scale_out_pool|scale_in_pool|restore_pool_readiness|observe_undeclared_pool`)
+  - `actionable`
+  - `desired_replicas`
+  - `observed_instances`
+  - `ready_instances`
+  - `replica_delta`
+
+## Topology actuation request
+
+- `GET /api/v1/topology/actuation/request`
+- `PUT /api/v1/topology/actuation/request`
+- `DELETE /api/v1/topology/actuation/request`
+
+이 endpoint는 read-only plan과 분리된 operator-approved actuation request document를 저장한다.
+
+- response:
+  - `key`
+  - `present`
+  - `request`
+- `request`
+  - `request_id`
+  - `revision`
+  - `requested_at_ms`
+  - `basis_topology_revision`
+  - `actions[]`
+- each action:
+  - `world_id`
+  - `shard`
+  - `action`
+  - `replica_delta`
+- `PUT` request body:
+  - `request_id` (필수)
+  - `basis_topology_revision` (필수)
+  - `actions[]` (필수, non-empty)
+  - `expected_revision` (선택)
+- `PUT`은 현재 `GET /api/v1/topology/actuation`에서 actionable로 보이는 action만 허용한다.
+- `observe_undeclared_pool`는 observe-only category이므로 request로 저장할 수 없다.
+
+## Topology actuation status
+
+- `GET /api/v1/topology/actuation/status`
+
+이 endpoint는 현재 stored actuation request를 current read-only actuation plan과 비교해 request state를 계산한 view다.
+
+- `desired`
+  - current desired topology document 또는 `null`
+- `request`
+  - current stored actuation request document 또는 `null`
+- `observed_pools[]`
+  - `world_id`, `shard`, `instances`, `ready_instances`
+- `plan_summary`
+  - current read-only actuation plan summary
+- `summary`
+  - `request_present`
+  - `desired_present`
+  - `basis_topology_revision_matches_current`
+  - `basis_topology_revision`
+  - `current_topology_revision`
+  - `actions_total`
+  - `pending_actions`
+  - `satisfied_actions`
+  - `superseded_actions`
+- `actions[]`
+  - `world_id`, `shard`
+  - `requested_action`
+  - `requested_replica_delta`
+  - `state` (`pending|satisfied|superseded`)
+  - `current_status`
+  - `current_action`
+  - `current_replica_delta`
+
+## Topology actuation execution
+
+- `GET /api/v1/topology/actuation/execution`
+- `PUT /api/v1/topology/actuation/execution`
+- `DELETE /api/v1/topology/actuation/execution`
+
+이 endpoint는 current actuation request에 대한 executor-facing progress document를 저장한다.
+
+- response:
+  - `key`
+  - `present`
+  - `execution`
+- `execution`
+  - `executor_id`
+  - `revision`
+  - `updated_at_ms`
+  - `request_revision`
+  - `actions[]`
+- each action:
+  - `world_id`
+  - `shard`
+  - `action`
+  - `replica_delta`
+  - `observed_instances_before`
+  - `ready_instances_before`
+  - `state` (`claimed|completed|failed`)
+- `PUT` request body:
+  - `executor_id` (필수)
+  - `request_revision` (필수)
+  - `actions[]` (필수, non-empty)
+  - `expected_revision` (선택)
+- `PUT`은 current actuation request revision과 정확히 맞는 item만 허용한다.
+- first claim에서는 baseline(`observed_instances_before`, `ready_instances_before`)이 current observed pool과 일치해야 한다.
+- same pool을 다시 업데이트할 때는 baseline이 기존 execution document와 동일해야 한다.
+
+## Topology actuation execution status
+
+- `GET /api/v1/topology/actuation/execution/status`
+
+이 endpoint는 current actuation request와 current execution progress document를 합쳐 executor-facing effective state를 계산한 view다.
+
+- `request`
+  - current stored actuation request document 또는 `null`
+- `execution`
+  - current stored execution progress document 또는 `null`
+- `request_summary`
+  - current actuation request status summary
+- `summary`
+  - `request_present`
+  - `execution_present`
+  - `execution_revision_matches_current_request`
+  - `execution_request_revision`
+  - `current_request_revision`
+  - `actions_total`
+  - `available_actions`
+  - `claimed_actions`
+  - `completed_actions`
+  - `failed_actions`
+  - `stale_actions`
+- `actions[]`
+  - `world_id`, `shard`
+  - `requested_action`
+  - `requested_replica_delta`
+  - `state` (`available|claimed|completed|failed|stale`)
+  - `request_state`
+  - `execution_state`
+
+## Topology actuation realization
+
+- `GET /api/v1/topology/actuation/realization`
+
+이 endpoint는 current request/execution 문서와 current observed pools를 합쳐, executor의 `completed`가 실제 topology adoption으로 이어졌는지 계산한 view다.
+
+- `request`
+  - current stored actuation request document 또는 `null`
+- `execution`
+  - current stored execution progress document 또는 `null`
+- `observed_pools[]`
+  - `world_id`, `shard`, `instances`, `ready_instances`
+- `request_summary`
+  - current actuation request status summary
+- `execution_summary`
+  - current actuation execution status summary
+- `summary`
+  - `request_present`
+  - `execution_present`
+  - `execution_revision_matches_current_request`
+  - `execution_request_revision`
+  - `current_request_revision`
+  - `actions_total`
+  - `available_actions`
+  - `claimed_actions`
+  - `awaiting_observation_actions`
+  - `realized_actions`
+  - `failed_actions`
+  - `stale_actions`
+- `actions[]`
+  - `world_id`, `shard`
+  - `requested_action`
+  - `requested_replica_delta`
+  - `state` (`available|claimed|awaiting_observation|realized|failed|stale`)
+  - `request_state`
+  - `execution_state`
+  - `observed_instances_before`
+  - `ready_instances_before`
+  - `current_observed_instances`
+  - `current_ready_instances`
+
+## Topology actuation adapter
+
+- `GET /api/v1/topology/actuation/adapter`
+- `PUT /api/v1/topology/actuation/adapter`
+- `DELETE /api/v1/topology/actuation/adapter`
+
+이 endpoint는 current actuation execution 문서 위에 concrete scaling adapter가 잡은 lease document를 저장한다.
+
+- response:
+  - `key`
+  - `present`
+  - `lease`
+- `lease`
+  - `adapter_id`
+  - `revision`
+  - `leased_at_ms`
+  - `execution_revision`
+  - `actions[]`
+- each action:
+  - `world_id`
+  - `shard`
+  - `action`
+  - `replica_delta`
+- `PUT` request body:
+  - `adapter_id` (필수)
+  - `execution_revision` (필수)
+  - `actions[]` (필수, non-empty)
+  - `expected_revision` (선택)
+- `PUT`은 current execution revision과 정확히 일치하는 action만 허용한다.
+- `PUT`은 current adapter status 기준으로 `stale`인 action을 lease로 저장할 수 없다.
+
+## Topology actuation adapter status
+
+- `GET /api/v1/topology/actuation/adapter/status`
+
+이 endpoint는 current execution progress, realization evidence, stored adapter lease를 합쳐 adapter-facing effective state를 계산한 view다.
+
+- `lease`
+  - current stored adapter lease document 또는 `null`
+- `execution`
+  - current stored execution progress document 또는 `null`
+- `execution_summary`
+  - current actuation execution status summary
+- `realization_summary`
+  - current actuation realization status summary
+- `summary`
+  - `execution_present`
+  - `lease_present`
+  - `lease_revision_matches_current_execution`
+  - `lease_execution_revision`
+  - `current_execution_revision`
+  - `actions_total`
+  - `available_actions`
+  - `leased_actions`
+  - `awaiting_realization_actions`
+  - `realized_actions`
+  - `failed_actions`
+  - `stale_actions`
+- `actions[]`
+  - `world_id`, `shard`
+  - `requested_action`
+  - `requested_replica_delta`
+  - `state` (`available|leased|awaiting_realization|realized|failed|stale`)
+  - `execution_state`
+  - `realization_state`
+
+## Topology actuation runtime assignment
+
+- `GET /api/v1/topology/actuation/runtime-assignment`
+- `PUT /api/v1/topology/actuation/runtime-assignment`
+- `DELETE /api/v1/topology/actuation/runtime-assignment`
+
+이 endpoint는 current adapter lease를 consuming side에서 concrete running `server` instance reassignment로 연결하는 app-local runtime mutation surface다.
+
+- response:
+  - `key`
+  - `present`
+  - `assignment`
+- `assignment`
+  - `adapter_id`
+  - `revision`
+  - `updated_at_ms`
+  - `lease_revision`
+  - `assignments[]`
+- each assignment:
+  - `instance_id`
+  - `world_id`
+  - `shard`
+  - `action`
+- `PUT` request body:
+  - `adapter_id` (필수)
+  - `lease_revision` (필수)
+  - `assignments[]` (필수, non-empty)
+  - `expected_revision` (선택)
+- current implementation은 intentionally narrow하다:
+  - `action=scale_out_pool`만 허용한다
+  - target instance는 current observed topology에 존재하는 `role=server`, `ready=true`, `active_sessions=0` 이어야 한다
+  - assignment는 current adapter lease와 일치해야 하며 lease replica capacity를 초과할 수 없다
+  - assignment가 적용되면 matching `SERVER_INSTANCE_ID`는 registry heartbeat와 fresh world admission default에서 new `world_id` / `shard`를 사용한다
 
 ## 확장 배포 제어면 (Phase 7)
 

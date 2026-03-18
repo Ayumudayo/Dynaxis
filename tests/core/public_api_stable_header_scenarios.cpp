@@ -1,4 +1,5 @@
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -9,8 +10,20 @@
 
 #include "server/core/api/version.hpp"
 #include "server/core/app/app_host.hpp"
+#include "server/core/app/engine_builder.hpp"
+#include "server/core/app/engine_context.hpp"
+#include "server/core/app/engine_runtime.hpp"
 #include "server/core/app/termination_signals.hpp"
 #include "server/core/build_info.hpp"
+#include "server/core/fps/direct_bind.hpp"
+#include "server/core/fps/direct_delivery.hpp"
+#include "server/core/fps/transport_quality.hpp"
+#include "server/core/fps/transport_policy.hpp"
+#include "server/core/fps/runtime.hpp"
+#include "server/core/mmorpg/migration.hpp"
+#include "server/core/mmorpg/world_drain.hpp"
+#include "server/core/mmorpg/topology.hpp"
+#include "server/core/mmorpg/world_transfer.hpp"
 #include "server/core/compression/compressor.hpp"
 #include "server/core/concurrent/job_queue.hpp"
 #include "server/core/concurrent/task_scheduler.hpp"
@@ -39,14 +52,33 @@ namespace {
 void scenario_api_and_app() {
     (void)server::core::api::version_string();
 
-    server::core::app::AppHost host{"stable_header_scenarios"};
-    host.declare_dependency("dep");
-    host.set_dependency_ok("dep", true);
-    host.set_ready(true);
-    host.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kRunning);
+    server::core::app::EngineRuntime runtime =
+        server::core::app::EngineBuilder("stable_header_scenarios")
+            .declare_dependency("dep")
+            .build();
+    server::core::app::AppHost& host = runtime.host();
+    runtime.set_dependency_ok("dep", true);
+    runtime.mark_running();
+
+    server::core::app::EngineContext local_context;
+    auto local_value = std::make_shared<int>(7);
+    local_context.set(local_value);
+    runtime.set_service(local_value);
 
     server::core::app::install_termination_signal_handlers();
     (void)server::core::app::termination_signal_received();
+    runtime.start_admin_http(
+        0,
+        [] { return std::string{}; },
+        server::core::metrics::MetricsHttpServer::LogsCallback{},
+        [](const server::core::metrics::MetricsHttpServer::HttpRequest&)
+            -> std::optional<server::core::metrics::MetricsHttpServer::RouteResponse> {
+            return std::nullopt;
+        });
+    runtime.request_stop();
+    runtime.wait_for_stop(std::chrono::milliseconds(1));
+    runtime.run_shutdown();
+    runtime.mark_stopped();
     (void)host.lifecycle_metrics_text();
     (void)host.dependency_metrics_text();
 }
@@ -68,6 +100,206 @@ void scenario_concurrency_and_config() {
 
 void scenario_metrics_and_runtime() {
     server::core::metrics::MetricsHttpServer metrics_server(0, [] { return std::string{}; });
+    server::core::fps::WorldRuntime fps_runtime(server::core::fps::RuntimeConfig{
+        .max_delta_actors_per_tick = 2,
+    });
+    (void)fps_runtime.stage_input(1, server::core::fps::InputCommand{.input_seq = 1});
+    (void)fps_runtime.tick();
+    (void)server::core::fps::evaluate_direct_delivery(server::core::fps::DirectDeliveryContext{
+        .direct_path_enabled_for_message = true,
+        .udp_bound = true,
+    });
+    server::core::fps::UdpSequencedMetrics udp_quality;
+    (void)udp_quality.on_packet(10, 1000);
+    (void)udp_quality.on_packet(12, 1020);
+    (void)server::core::mmorpg::reconcile_topology(
+        server::core::mmorpg::DesiredTopologyDocument{},
+        std::vector<server::core::mmorpg::ObservedTopologyPool>{});
+    (void)server::core::mmorpg::plan_topology_actuation(
+        server::core::mmorpg::DesiredTopologyDocument{},
+        std::vector<server::core::mmorpg::ObservedTopologyPool>{});
+    (void)server::core::mmorpg::evaluate_topology_actuation_request_status(
+        server::core::mmorpg::TopologyActuationRequestDocument{
+            .request_id = "stable-header-request",
+            .actions = {{
+                .world_id = "starter-a",
+                .shard = "alpha",
+                .action = server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool,
+                .replica_delta = 1,
+            }},
+        },
+        server::core::mmorpg::DesiredTopologyDocument{
+            .revision = 1,
+            .pools = {{.world_id = "starter-a", .shard = "alpha", .replicas = 2}},
+        },
+        std::vector<server::core::mmorpg::ObservedTopologyPool>{
+            {.world_id = "starter-a", .shard = "alpha", .instances = 1, .ready_instances = 1},
+        });
+    (void)server::core::mmorpg::evaluate_topology_actuation_execution_status(
+        server::core::mmorpg::TopologyActuationExecutionDocument{
+            .executor_id = "executor-a",
+            .request_revision = 1,
+            .actions = {{
+                .action = {
+                    .world_id = "starter-a",
+                    .shard = "alpha",
+                    .action = server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool,
+                    .replica_delta = 1,
+                },
+                .observed_instances_before = 1,
+                .ready_instances_before = 1,
+                .state = server::core::mmorpg::TopologyActuationExecutionActionState::kClaimed,
+            }},
+        },
+        server::core::mmorpg::TopologyActuationRequestDocument{
+            .request_id = "stable-header-request",
+            .revision = 1,
+            .actions = {{
+                .world_id = "starter-a",
+                .shard = "alpha",
+                .action = server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool,
+                .replica_delta = 1,
+            }},
+        },
+        server::core::mmorpg::DesiredTopologyDocument{
+            .revision = 1,
+            .pools = {{.world_id = "starter-a", .shard = "alpha", .replicas = 2}},
+        },
+        std::vector<server::core::mmorpg::ObservedTopologyPool>{
+            {.world_id = "starter-a", .shard = "alpha", .instances = 1, .ready_instances = 1},
+        });
+    (void)server::core::mmorpg::evaluate_topology_actuation_realization_status(
+        server::core::mmorpg::TopologyActuationExecutionDocument{
+            .executor_id = "executor-a",
+            .request_revision = 1,
+            .actions = {{
+                .action = {
+                    .world_id = "starter-a",
+                    .shard = "alpha",
+                    .action = server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool,
+                    .replica_delta = 1,
+                },
+                .observed_instances_before = 1,
+                .ready_instances_before = 1,
+                .state = server::core::mmorpg::TopologyActuationExecutionActionState::kCompleted,
+            }},
+        },
+        server::core::mmorpg::TopologyActuationRequestDocument{
+            .request_id = "stable-header-request",
+            .revision = 1,
+            .actions = {{
+                .world_id = "starter-a",
+                .shard = "alpha",
+                .action = server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool,
+                .replica_delta = 1,
+            }},
+        },
+        server::core::mmorpg::DesiredTopologyDocument{
+            .revision = 1,
+            .pools = {{.world_id = "starter-a", .shard = "alpha", .replicas = 2}},
+        },
+        std::vector<server::core::mmorpg::ObservedTopologyPool>{
+            {.world_id = "starter-a", .shard = "alpha", .instances = 2, .ready_instances = 1},
+        });
+    (void)server::core::mmorpg::evaluate_topology_actuation_adapter_status(
+        server::core::mmorpg::TopologyActuationAdapterLeaseDocument{
+            .adapter_id = "adapter-a",
+            .execution_revision = 1,
+            .actions = {{
+                .world_id = "starter-a",
+                .shard = "alpha",
+                .action = server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool,
+                .replica_delta = 1,
+            }},
+        },
+        server::core::mmorpg::TopologyActuationExecutionDocument{
+            .executor_id = "executor-a",
+            .revision = 1,
+            .request_revision = 1,
+            .actions = {{
+                .action = {
+                    .world_id = "starter-a",
+                    .shard = "alpha",
+                    .action = server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool,
+                    .replica_delta = 1,
+                },
+                .observed_instances_before = 1,
+                .ready_instances_before = 1,
+                .state = server::core::mmorpg::TopologyActuationExecutionActionState::kCompleted,
+            }},
+        },
+        server::core::mmorpg::TopologyActuationRequestDocument{
+            .request_id = "stable-header-request",
+            .revision = 1,
+            .actions = {{
+                .world_id = "starter-a",
+                .shard = "alpha",
+                .action = server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool,
+                .replica_delta = 1,
+            }},
+        },
+        server::core::mmorpg::DesiredTopologyDocument{
+            .revision = 1,
+            .pools = {{.world_id = "starter-a", .shard = "alpha", .replicas = 2}},
+        },
+        std::vector<server::core::mmorpg::ObservedTopologyPool>{
+            {.world_id = "starter-a", .shard = "alpha", .instances = 2, .ready_instances = 1},
+        });
+    (void)server::core::mmorpg::find_topology_actuation_runtime_assignment(
+        server::core::mmorpg::TopologyActuationRuntimeAssignmentDocument{
+            .adapter_id = "adapter-a",
+            .revision = 2,
+            .lease_revision = 1,
+            .assignments = {{
+                .instance_id = "server-2",
+                .world_id = "starter-a",
+                .shard = "alpha",
+                .action = server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool,
+            }},
+        },
+        "server-2");
+    (void)server::core::mmorpg::evaluate_world_transfer(
+        server::core::mmorpg::ObservedWorldTransferState{
+            .draining = true,
+            .replacement_owner_instance_id = "server-2",
+        });
+    (void)server::core::mmorpg::evaluate_world_drain(
+        server::core::mmorpg::ObservedWorldDrainState{
+            .draining = true,
+            .instances = {{.instance_id = "server-1", .ready = true, .active_sessions = 1}},
+        });
+    (void)server::core::mmorpg::evaluate_world_drain_orchestration(
+        server::core::mmorpg::WorldDrainStatus{
+            .world_id = "starter-a",
+            .phase = server::core::mmorpg::WorldDrainPhase::kDrained,
+            .summary = {.drain_declared = true},
+        },
+        std::nullopt,
+        std::nullopt);
+    (void)server::core::mmorpg::evaluate_world_migration(
+        server::core::mmorpg::ObservedWorldMigrationWorld{
+            .world_id = "starter-a",
+        },
+        server::core::mmorpg::WorldMigrationEnvelope{
+            .target_world_id = "starter-b",
+            .target_owner_instance_id = "server-2",
+        },
+        std::nullopt);
+    server::core::fps::DirectTransportRolloutPolicy rollout_policy;
+    rollout_policy.enabled = true;
+    rollout_policy.canary_percent = 25;
+    rollout_policy.opcode_allowlist = server::core::fps::parse_direct_opcode_allowlist("0x0206,0x0208");
+    (void)rollout_policy.session_selected("session-a", 101);
+    (void)server::core::fps::evaluate_direct_attach(rollout_policy, "session-a", 101);
+    (void)server::core::fps::encode_direct_bind_response_payload(
+        0,
+        server::core::fps::DirectBindTicket{
+            .session_id = "session-a",
+            .nonce = 1,
+            .expires_unix_ms = 2,
+            .token = "token",
+        },
+        "issued");
 
     server::core::metrics::Counter& counter = server::core::metrics::get_counter("stable_header_counter");
     counter.inc();
@@ -100,6 +332,7 @@ void scenario_net_and_utils() {
     boost::asio::io_context io;
     auto hive = std::make_shared<server::core::net::Hive>(io);
     auto connection = std::make_shared<server::core::net::Connection>(hive);
+    auto runtime = server::core::app::EngineBuilder("stable_header_scenarios_net").build();
 
     server::core::Dispatcher dispatcher;
     dispatcher.register_handler(server::core::protocol::MSG_PING,
@@ -121,7 +354,7 @@ void scenario_net_and_utils() {
         int value{42};
     };
     auto service = std::make_shared<StableScenarioService>();
-    server::core::util::services::set(service);
+    runtime.bridge_service(service);
     (void)server::core::util::services::get<StableScenarioService>();
     server::core::util::services::clear();
 }

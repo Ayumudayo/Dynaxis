@@ -19,6 +19,8 @@
 #include <boost/asio.hpp>
 
 #include "server/core/net/session.hpp"
+#include "server/core/mmorpg/migration.hpp"
+#include "server/core/mmorpg/topology.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
 #include "server/core/state/world_lifecycle_policy.hpp"
 #include "server/core/storage/redis/client.hpp"
@@ -352,6 +354,15 @@ public:
         std::uint64_t world_owner_write_fail_total{0};
         std::uint64_t world_owner_restore_total{0};
         std::uint64_t world_owner_restore_fallback_total{0};
+        std::uint64_t world_migration_restore_total{0};
+        std::uint64_t world_migration_restore_fallback_total{0};
+        std::uint64_t world_migration_restore_fallback_target_world_missing_total{0};
+        std::uint64_t world_migration_restore_fallback_target_owner_missing_total{0};
+        std::uint64_t world_migration_restore_fallback_target_owner_not_ready_total{0};
+        std::uint64_t world_migration_restore_fallback_target_owner_mismatch_total{0};
+        std::uint64_t world_migration_restore_fallback_source_not_draining_total{0};
+        std::uint64_t world_migration_payload_room_handoff_total{0};
+        std::uint64_t world_migration_payload_room_handoff_fallback_total{0};
     };
 
     ContinuityMetrics continuity_metrics() const;
@@ -390,6 +401,7 @@ private:
         std::string redis_prefix;
         std::string default_world_id;
         std::string current_owner_id;
+        std::string topology_runtime_assignment_key;
     };
 
     // 서버의 전체 상태를 관리하는 구조체
@@ -478,6 +490,15 @@ private:
     std::atomic<std::uint64_t> continuity_world_owner_write_fail_total_{0};
     std::atomic<std::uint64_t> continuity_world_owner_restore_total_{0};
     std::atomic<std::uint64_t> continuity_world_owner_restore_fallback_total_{0};
+    std::atomic<std::uint64_t> continuity_world_migration_restore_total_{0};
+    std::atomic<std::uint64_t> continuity_world_migration_restore_fallback_total_{0};
+    std::atomic<std::uint64_t> continuity_world_migration_restore_fallback_target_world_missing_total_{0};
+    std::atomic<std::uint64_t> continuity_world_migration_restore_fallback_target_owner_missing_total_{0};
+    std::atomic<std::uint64_t> continuity_world_migration_restore_fallback_target_owner_not_ready_total_{0};
+    std::atomic<std::uint64_t> continuity_world_migration_restore_fallback_target_owner_mismatch_total_{0};
+    std::atomic<std::uint64_t> continuity_world_migration_restore_fallback_source_not_draining_total_{0};
+    std::atomic<std::uint64_t> continuity_world_migration_payload_room_handoff_total_{0};
+    std::atomic<std::uint64_t> continuity_world_migration_payload_room_handoff_fallback_total_{0};
     mutable std::mutex lua_hook_metrics_mu_;
     std::unordered_map<std::string, std::uint64_t> lua_hook_consecutive_failures_;
     std::unordered_map<std::string, std::uint64_t> lua_hook_auto_disable_total_;
@@ -548,6 +569,11 @@ private:
         std::uint64_t expires_unix_ms{0};
         bool resumed{false};
     };
+
+    struct AppMigrationRoomHandoff {
+        bool recognized{false};
+        std::string room;
+    };
     
     // Redis 키 생성 헬퍼
     std::string make_recent_list_key(const std::string& room_id) const;
@@ -556,12 +582,18 @@ private:
     std::string make_continuity_world_key(const std::string& logical_session_id) const;
     std::string make_continuity_world_owner_key(const std::string& world_id) const;
     std::string make_continuity_world_policy_key(const std::string& world_id) const;
+    std::string make_continuity_world_migration_key(const std::string& world_id) const;
     bool continuity_enabled() const;
     std::optional<std::string> extract_resume_token(std::string_view token) const;
     std::optional<std::string> load_continuity_room(const std::string& logical_session_id);
     std::optional<std::string> load_continuity_world(const std::string& logical_session_id);
     std::optional<std::string> load_continuity_world_owner(const std::string& world_id);
     std::optional<server::core::state::WorldLifecyclePolicy> load_continuity_world_policy(const std::string& world_id);
+    std::optional<server::core::mmorpg::WorldMigrationEnvelope> load_continuity_world_migration(const std::string& world_id);
+    std::optional<server::core::mmorpg::TopologyActuationRuntimeAssignmentItem> load_topology_runtime_assignment() const;
+    std::string current_runtime_default_world_id() const;
+    AppMigrationRoomHandoff resolve_app_world_migration_room_handoff(
+        const server::core::mmorpg::WorldMigrationEnvelope& migration) const;
     void persist_continuity_room(const std::string& logical_session_id,
                                  const std::string& room,
                                  std::uint64_t expires_unix_ms);
@@ -617,6 +649,7 @@ private:
                                          std::string& deny_reason);
 
     friend struct ChatServiceHistoryTester;
+    friend struct ChatServiceContinuityTester;
 
     static void collect_room_sessions(RoomSet& set, std::vector<std::shared_ptr<Session>>& out);
     std::shared_ptr<Session> find_session_by_id_locked(std::uint32_t session_id);

@@ -79,9 +79,11 @@ The original branch-start and tranche-closure notes are absorbed here; this file
 ## Current Proof Targets
 
 - `python tests/python/verify_session_continuity.py`
+- `python tests/python/verify_continuity_recovery_matrix.py --scenario phase5-recovery-baseline`
 - `python tests/python/verify_session_continuity_restart.py --scenario gateway-restart`
 - `python tests/python/verify_session_continuity_restart.py --scenario server-restart`
 - `python tests/python/verify_session_continuity_restart.py --scenario locator-fallback`
+- `verify_continuity_recovery_matrix.py --scenario phase5-recovery-baseline` is the preferred repeatable restart/recovery entrypoint when Phase 5 evidence should be gathered as one sequence instead of per-scenario manual runs
 
 ## Downstream Relationship
 

@@ -29,9 +29,10 @@ Only current-state guides, contracts, and reference docs belong here. Historical
 - `docs/ops/architecture-diagrams.md` - control-plane and failure-path diagrams
 - `docs/ops/engine-readiness-baseline.md` - accepted common-baseline checkpoint ledger
 - `docs/ops/engine-readiness-decision.md` - accepted baseline decision and downstream ownership notes
+- `docs/ops/quantified-release-evidence.md` - Phase 5 release-evidence inventory, artifact paths, and provisional thresholds
 - `docs/ops/session-continuity-contract.md` - current continuity ownership and restore rules
 - `docs/ops/mmorpg-world-residency-contract.md` - current world residency/lifecycle/runtime contract
-- `docs/ops/mmorpg-desired-topology-contract.md` - future desired-topology/orchestration contract
+- `docs/ops/mmorpg-desired-topology-contract.md` - current desired-topology, actuation, and orchestration contract
 - `docs/ops/fps-runtime-contract.md` - current FPS transport/runtime substrate contract
 
 ## Extensibility
@@ -46,10 +47,11 @@ Only current-state guides, contracts, and reference docs belong here. Historical
 
 ## Core API
 
-- `docs/core-api/overview.md` - public `server_core` API entrypoint
-- `docs/core-api/quickstart.md` - minimal consumer setup
-- `docs/core-api/compatibility-policy.md` - compatibility rules
-- `docs/core-api/checklists.md` - review and release checklists
+- `docs/core-api/overview.md` - public `server_core` package surface map and reading order
+- `docs/core-api/quickstart.md` - minimal consumer setup and installed-package flow
+- `docs/core-api/compatibility-policy.md` - stable/transitional governance and versioning rules
+- `docs/core-api/checklists.md` - PR/release gates and verification commands
+- `docs/core-api/adoption-cutover.md` - current stable/transitional/internal cutover status
 - `docs/core-api/extensions.md` - extensibility-related public API notes
 
 ## Tooling

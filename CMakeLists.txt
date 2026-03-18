@@ -260,6 +260,7 @@ if (BUILD_ADMIN_APP)
 
   add_executable(admin_app tools/admin_app/main.cpp)
   target_link_libraries(admin_app PRIVATE server_core)
+  target_include_directories(admin_app PRIVATE ${CMAKE_SOURCE_DIR}/server/include)
   if (TARGET nlohmann_json::nlohmann_json)
     target_link_libraries(admin_app PRIVATE nlohmann_json::nlohmann_json)
   else()

@@ -1,5 +1,9 @@
 add_library(server_core
     src/app/app_host.cpp
+    src/app/engine_builder.cpp
+    src/app/engine_context.cpp
+    src/app/engine_runtime.cpp
+    src/fps/runtime.cpp
     src/net/acceptor.cpp
     src/net/session.cpp
     src/net/dispatcher.cpp
@@ -122,6 +126,11 @@ if (WIN32)
 endif()
 
 if (MSVC)
+    # Public headers contain UTF-8 comments and exported consumers do not inherit
+    # the repo-level root add_compile_options(/utf-8). Propagate the charset
+    # requirement through the package target so installed consumers compile the
+    # headers consistently.
+    target_compile_options(server_core PUBLIC /utf-8)
     target_compile_definitions(server_core PUBLIC _WIN32_WINNT=0x0602)
 endif()
 

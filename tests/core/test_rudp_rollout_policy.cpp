@@ -1,11 +1,11 @@
 #include <gtest/gtest.h>
 
-#include <gateway/rudp_rollout_policy.hpp>
+#include <server/core/fps/transport_policy.hpp>
 
 #include <cstdint>
 
 TEST(RudpRolloutPolicyTest, ParseAllowlistSupportsDecimalAndHexTokens) {
-    const auto allowlist = gateway::parse_rudp_opcode_allowlist("100, 0x2A,0X0001,invalid,,65536");
+    const auto allowlist = server::core::fps::parse_direct_opcode_allowlist("100, 0x2A,0X0001,invalid,,65536");
 
     EXPECT_EQ(allowlist.size(), 3u);
     EXPECT_TRUE(allowlist.contains(static_cast<std::uint16_t>(100)));
@@ -16,7 +16,7 @@ TEST(RudpRolloutPolicyTest, ParseAllowlistSupportsDecimalAndHexTokens) {
 }
 
 TEST(RudpRolloutPolicyTest, ParseUdpAllowlistMatchesRudpParserSemantics) {
-    const auto udp_allowlist = gateway::parse_udp_opcode_allowlist("100, 0x2A,0X0001,invalid,,65536");
+    const auto udp_allowlist = server::core::fps::parse_direct_opcode_allowlist("100, 0x2A,0X0001,invalid,,65536");
 
     EXPECT_EQ(udp_allowlist.size(), 3u);
     EXPECT_TRUE(udp_allowlist.contains(static_cast<std::uint16_t>(100)));
@@ -27,12 +27,12 @@ TEST(RudpRolloutPolicyTest, ParseUdpAllowlistMatchesRudpParserSemantics) {
 }
 
 TEST(RudpRolloutPolicyTest, ParseUdpAllowlistEmptyInputReturnsEmptySet) {
-    const auto udp_allowlist = gateway::parse_udp_opcode_allowlist("  ,  ,\t");
+    const auto udp_allowlist = server::core::fps::parse_direct_opcode_allowlist("  ,  ,\t");
     EXPECT_TRUE(udp_allowlist.empty());
 }
 
 TEST(RudpRolloutPolicyTest, SessionSelectionRespectsCanaryPercent) {
-    gateway::RudpRolloutPolicy policy;
+    server::core::fps::DirectTransportRolloutPolicy policy;
     policy.enabled = true;
 
     policy.canary_percent = 0;
@@ -48,7 +48,7 @@ TEST(RudpRolloutPolicyTest, SessionSelectionRespectsCanaryPercent) {
 }
 
 TEST(RudpRolloutPolicyTest, OpcodeAllowedRequiresAllowlistMembership) {
-    gateway::RudpRolloutPolicy policy;
+    server::core::fps::DirectTransportRolloutPolicy policy;
     policy.enabled = true;
     policy.canary_percent = 100;
     policy.opcode_allowlist = {10, 11};
@@ -59,10 +59,25 @@ TEST(RudpRolloutPolicyTest, OpcodeAllowedRequiresAllowlistMembership) {
 }
 
 TEST(RudpRolloutPolicyTest, OpcodeAllowedRejectsWhenAllowlistIsEmpty) {
-    gateway::RudpRolloutPolicy policy;
+    server::core::fps::DirectTransportRolloutPolicy policy;
     policy.enabled = true;
     policy.canary_percent = 100;
     policy.opcode_allowlist.clear();
 
     EXPECT_FALSE(policy.opcode_allowed(10));
+}
+
+TEST(RudpRolloutPolicyTest, AttachDecisionExplainsRolloutOutcome) {
+    server::core::fps::DirectTransportRolloutPolicy disabled_policy;
+    const auto disabled = server::core::fps::evaluate_direct_attach(disabled_policy, "session-a", 101);
+    EXPECT_EQ(disabled.mode, server::core::fps::DirectAttachMode::kUdpOnly);
+    EXPECT_EQ(disabled.reason, server::core::fps::DirectAttachReason::kRolloutDisabled);
+
+    server::core::fps::DirectTransportRolloutPolicy selected_policy;
+    selected_policy.enabled = true;
+    selected_policy.canary_percent = 100;
+    selected_policy.opcode_allowlist = {10};
+    const auto selected = server::core::fps::evaluate_direct_attach(selected_policy, "session-a", 101);
+    EXPECT_EQ(selected.mode, server::core::fps::DirectAttachMode::kRudpCanary);
+    EXPECT_EQ(selected.reason, server::core::fps::DirectAttachReason::kCanarySelected);
 }

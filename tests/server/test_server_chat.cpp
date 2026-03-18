@@ -25,7 +25,10 @@
 #include <filesystem>
 #include <fstream>
 #include <cstdlib>
+#include <cctype>
 #include <iostream>
+#include <unordered_map>
+#include <unordered_set>
 
 #ifndef TEST_CHAT_HOOK_V2_ONLY_PATH
 #define TEST_CHAT_HOOK_V2_ONLY_PATH ""
@@ -136,16 +139,80 @@ private:
 // MockConnectionPool moved to bottom
 
 // --- Mock Repositories ---
+namespace {
+
+std::string lower_ascii_copy(std::string_view value) {
+    std::string lowered;
+    lowered.reserve(value.size());
+    for (const unsigned char ch : value) {
+        lowered.push_back(static_cast<char>(std::tolower(ch)));
+    }
+    return lowered;
+}
+
+struct MockStorageState {
+    std::unordered_map<std::string, server::storage::User> users_by_id;
+    std::unordered_map<std::string, std::string> user_id_by_name_ci;
+    std::unordered_map<std::string, server::storage::Session> sessions_by_id;
+    std::unordered_map<std::string, std::string> session_id_by_token_hash;
+    std::uint64_t next_user_id{1};
+    std::uint64_t next_session_id{1};
+};
+
+} // namespace
+
 class MockUserRepository : public IUserRepository {
 public:
-    std::optional<User> find_by_id(const std::string&) override { return std::nullopt; }
-    std::vector<User> find_by_name_ci(const std::string&, std::size_t) override { return {}; }
-    User create_guest(const std::string&) override { return {}; }
+    explicit MockUserRepository(std::shared_ptr<MockStorageState> state)
+        : state_(std::move(state)) {}
+
+    std::optional<User> find_by_id(const std::string& user_id) override {
+        if (const auto it = state_->users_by_id.find(user_id); it != state_->users_by_id.end()) {
+            return it->second;
+        }
+        return std::nullopt;
+    }
+
+    std::vector<User> find_by_name_ci(const std::string& name, std::size_t limit) override {
+        std::vector<User> out;
+        const auto lowered = lower_ascii_copy(name);
+        if (const auto it = state_->user_id_by_name_ci.find(lowered); it != state_->user_id_by_name_ci.end()) {
+            if (const auto user_it = state_->users_by_id.find(it->second); user_it != state_->users_by_id.end()) {
+                out.push_back(user_it->second);
+            }
+        }
+        if (out.size() > limit) {
+            out.resize(limit);
+        }
+        return out;
+    }
+
+    User create_guest(const std::string& name) override {
+        const auto lowered = lower_ascii_copy(name);
+        if (const auto it = state_->user_id_by_name_ci.find(lowered); it != state_->user_id_by_name_ci.end()) {
+            return state_->users_by_id.at(it->second);
+        }
+
+        User user{};
+        user.id = "user-" + std::to_string(state_->next_user_id++);
+        user.name = name;
+        user.created_at_ms = static_cast<std::int64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+        state_->user_id_by_name_ci[lowered] = user.id;
+        state_->users_by_id[user.id] = user;
+        return user;
+    }
+
     void update_last_login(const std::string&, const std::string&) override {}
+
+private:
+    std::shared_ptr<MockStorageState> state_;
 };
 
 class MockRoomRepository : public IRoomRepository {
 public:
+    MockRoomRepository() = default;
     std::optional<Room> find_by_id(const std::string&) override { return std::nullopt; }
     std::vector<Room> search_by_name_ci(const std::string&, std::size_t) override { return {}; }
     std::optional<Room> find_by_name_exact_ci(const std::string&) override { return std::nullopt; }
@@ -155,6 +222,7 @@ public:
 
 class MockMessageRepository : public IMessageRepository {
 public:
+    MockMessageRepository() = default;
     std::vector<Message> fetch_recent_by_room(const std::string&, std::uint64_t, std::size_t) override { return {}; }
     Message create(const std::string&, const std::string&, const std::optional<std::string>&, const std::string&) override { return {}; }
     std::uint64_t get_last_id(const std::string&) override { return 0; }
@@ -163,6 +231,7 @@ public:
 
 class MockMembershipRepository : public IMembershipRepository {
 public:
+    MockMembershipRepository() = default;
     void upsert_join(const std::string&, const std::string&, const std::string&) override {}
     void update_last_seen(const std::string&, const std::string&, std::uint64_t) override {}
     void leave(const std::string&, const std::string&) override {}
@@ -171,13 +240,55 @@ public:
 
 class MockSessionRepository : public ISessionRepository {
 public:
-    std::optional<server::storage::Session> find_by_token_hash(const std::string&) override { return std::nullopt; }
-    server::storage::Session create(const std::string&, const std::chrono::system_clock::time_point&, const std::optional<std::string>&, const std::optional<std::string>&, const std::string&) override { return {}; }
-    void revoke(const std::string&) override {}
+    explicit MockSessionRepository(std::shared_ptr<MockStorageState> state)
+        : state_(std::move(state)) {}
+
+    std::optional<server::storage::Session> find_by_token_hash(const std::string& token_hash) override {
+        if (const auto it = state_->session_id_by_token_hash.find(token_hash); it != state_->session_id_by_token_hash.end()) {
+            return state_->sessions_by_id.at(it->second);
+        }
+        return std::nullopt;
+    }
+
+    server::storage::Session create(const std::string& user_id,
+                                    const std::chrono::system_clock::time_point& expires_at,
+                                    const std::optional<std::string>& client_ip,
+                                    const std::optional<std::string>& user_agent,
+                                    const std::string& token_hash) override {
+        server::storage::Session session{};
+        session.id = "session-" + std::to_string(state_->next_session_id++);
+        session.user_id = user_id;
+        session.token_hash = token_hash;
+        session.client_ip = client_ip;
+        session.user_agent = user_agent;
+        const auto now = std::chrono::system_clock::now();
+        session.created_at_ms = static_cast<std::int64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
+        session.expires_at_ms = static_cast<std::int64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(expires_at.time_since_epoch()).count());
+        state_->session_id_by_token_hash[token_hash] = session.id;
+        state_->sessions_by_id[session.id] = session;
+        return session;
+    }
+
+    void revoke(const std::string& session_id) override {
+        if (const auto it = state_->sessions_by_id.find(session_id); it != state_->sessions_by_id.end()) {
+            it->second.revoked_at_ms = static_cast<std::int64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count());
+        }
+    }
+
+private:
+    std::shared_ptr<MockStorageState> state_;
 };
 
 class MockUnitOfWork : public IRepositoryUnitOfWork {
 public:
+    explicit MockUnitOfWork(std::shared_ptr<MockStorageState> state)
+        : user_repo(state),
+          session_repo(std::move(state)) {}
+
     MockUserRepository user_repo;
     MockRoomRepository room_repo;
     MockMessageRepository msg_repo;
@@ -196,10 +307,16 @@ public:
 
 class MockConnectionPool : public IRepositoryConnectionPool {
 public:
+    MockConnectionPool()
+        : state_(std::make_shared<MockStorageState>()) {}
+
     std::unique_ptr<IRepositoryUnitOfWork> make_repository_unit_of_work() override {
-        return std::make_unique<MockUnitOfWork>();
+        return std::make_unique<MockUnitOfWork>(state_);
     }
     bool health_check() override { return true; }
+
+private:
+    std::shared_ptr<MockStorageState> state_;
 };
 
 class MockRedisClient : public IRedisClient {
@@ -208,6 +325,8 @@ public:
     bool publish_called = false;
     std::string last_publish_channel;
     std::string last_publish_message;
+    std::unordered_map<std::string, std::string> kv_store;
+    std::unordered_map<std::string, std::unordered_set<std::string>> set_store;
     
     // IRedisClient Interface Implementation
     bool health_check() override { return true; }
@@ -215,35 +334,101 @@ public:
     
     bool sadd(const std::string& key, const std::string& member) override {
         sadd_called = true;
+        set_store[key].insert(member);
         return true;
     }
     
-    bool srem(const std::string&, const std::string&) override { return true; }
-    bool smembers(const std::string&, std::vector<std::string>&) override { return true; }
-    bool scard(const std::string&, std::size_t& out) override { out = 0; return true; }
+    bool srem(const std::string& key, const std::string& member) override {
+        if (const auto it = set_store.find(key); it != set_store.end()) {
+            it->second.erase(member);
+            if (it->second.empty()) {
+                set_store.erase(it);
+            }
+        }
+        return true;
+    }
+    bool smembers(const std::string& key, std::vector<std::string>& out) override {
+        out.clear();
+        if (const auto it = set_store.find(key); it != set_store.end()) {
+            out.assign(it->second.begin(), it->second.end());
+        }
+        return true;
+    }
+    bool scard(const std::string& key, std::size_t& out) override {
+        if (const auto it = set_store.find(key); it != set_store.end()) {
+            out = it->second.size();
+        } else {
+            out = 0;
+        }
+        return true;
+    }
     bool scard_many(const std::vector<std::string>& keys, std::vector<std::size_t>& out) override {
-        out.assign(keys.size(), 0);
+        out.clear();
+        out.reserve(keys.size());
+        for (const auto& key : keys) {
+            std::size_t size = 0;
+            (void)scard(key, size);
+            out.push_back(size);
+        }
         return true;
     }
     
-    bool del(const std::string& key) override { return true; }
-    bool set(const std::string&, const std::string&) override { return true; }
+    bool del(const std::string& key) override {
+        kv_store.erase(key);
+        set_store.erase(key);
+        return true;
+    }
+    bool set(const std::string& key, const std::string& value) override {
+        kv_store[key] = value;
+        return true;
+    }
     
-    std::optional<std::string> get(const std::string&) override { return std::nullopt; }
+    std::optional<std::string> get(const std::string& key) override {
+        if (const auto it = kv_store.find(key); it != kv_store.end()) {
+            return it->second;
+        }
+        return std::nullopt;
+    }
     bool mget(const std::vector<std::string>& keys, std::vector<std::optional<std::string>>& out) override {
-        out.assign(keys.size(), std::nullopt);
+        out.clear();
+        out.reserve(keys.size());
+        for (const auto& key : keys) {
+            out.push_back(get(key));
+        }
         return true;
     }
     
-    bool set_if_not_exists(const std::string&, const std::string&, unsigned int) override { return true; }
-    bool set_if_equals(const std::string&, const std::string&, const std::string&, unsigned int) override { return true; }
-    bool del_if_equals(const std::string&, const std::string&) override { return true; }
+    bool set_if_not_exists(const std::string& key, const std::string& value, unsigned int) override {
+        if (kv_store.contains(key)) {
+            return false;
+        }
+        kv_store[key] = value;
+        return true;
+    }
+    bool set_if_equals(const std::string& key, const std::string& expected, const std::string& value, unsigned int) override {
+        if (const auto it = kv_store.find(key); it == kv_store.end() || it->second != expected) {
+            return false;
+        }
+        kv_store[key] = value;
+        return true;
+    }
+    bool del_if_equals(const std::string& key, const std::string& expected) override {
+        const auto it = kv_store.find(key);
+        if (it == kv_store.end() || it->second != expected) {
+            return false;
+        }
+        kv_store.erase(it);
+        return true;
+    }
     
     bool scan_keys(const std::string&, std::vector<std::string>&) override { return true; }
     bool lrange(const std::string&, long long, long long, std::vector<std::string>&) override { return true; }
     bool scan_del(const std::string&) override { return true; }
     
-    bool setex(const std::string&, const std::string&, unsigned int) override { return true; }
+    bool setex(const std::string& key, const std::string& value, unsigned int) override {
+        kv_store[key] = value;
+        return true;
+    }
     
     bool publish(const std::string& channel, const std::string& message) override {
         publish_called = true;
@@ -512,7 +697,75 @@ protected:
         }
         return false;
     }
+
+    std::optional<server::wire::v1::LoginRes> WaitForLoginResponse(int timeout_ms = 300) {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+        while (std::chrono::steady_clock::now() < deadline) {
+            std::uint16_t msg_id = 0;
+            std::vector<std::uint8_t> payload;
+            if (!WaitForPacket(msg_id, payload, 60)) {
+                continue;
+            }
+            if (msg_id != game_proto::MSG_LOGIN_RES) {
+                continue;
+            }
+
+            server::wire::v1::LoginRes out;
+            if (!out.ParseFromArray(payload.data(), static_cast<int>(payload.size()))) {
+                return std::nullopt;
+            }
+            return out;
+        }
+        return std::nullopt;
+    }
 };
+
+namespace server::app::chat {
+
+struct ChatServiceContinuityTester {
+    struct ResumeSnapshot {
+        std::string logical_session_id;
+        std::string resume_token;
+        std::string user_id;
+        std::string effective_user;
+        std::string world_id;
+        std::string room;
+        std::uint64_t expires_unix_ms{0};
+        bool resumed{false};
+    };
+
+    static std::optional<ResumeSnapshot> TryResume(ChatService& service, std::string_view token) {
+        const auto lease = service.try_resume_continuity_lease(token);
+        if (!lease.has_value()) {
+            return std::nullopt;
+        }
+
+        return ResumeSnapshot{
+            .logical_session_id = lease->logical_session_id,
+            .resume_token = lease->resume_token,
+            .user_id = lease->user_id,
+            .effective_user = lease->effective_user,
+            .world_id = lease->world_id,
+            .room = lease->room,
+            .expires_unix_ms = lease->expires_unix_ms,
+            .resumed = lease->resumed,
+        };
+    }
+
+    static std::string WorldPolicyKey(ChatService& service, const std::string& world_id) {
+        return service.make_continuity_world_policy_key(world_id);
+    }
+
+    static std::string WorldOwnerKey(ChatService& service, const std::string& world_id) {
+        return service.make_continuity_world_owner_key(world_id);
+    }
+
+    static std::string WorldMigrationKey(ChatService& service, const std::string& world_id) {
+        return service.make_continuity_world_migration_key(world_id);
+    }
+};
+
+} // namespace server::app::chat
 
 // 로그인 핸들러 테스트
 TEST_F(ChatServiceTest, Login) {
@@ -529,6 +782,66 @@ TEST_F(ChatServiceTest, Login) {
     
     // 검증: Redis에 로비 유저 추가되었는지 (Spy 확인)
     EXPECT_TRUE(redis_->sadd_called) << "User should be added to Redis set";
+}
+
+TEST_F(ChatServiceTest, ContinuityResumeUsesAppDefinedMigrationPayloadRoomHandoff) {
+    ScopedEnvVar continuity_enabled("SESSION_CONTINUITY_ENABLED", "1");
+    ScopedEnvVar continuity_prefix("SESSION_CONTINUITY_REDIS_PREFIX", "dynaxis");
+    ScopedEnvVar world_default("WORLD_ADMISSION_DEFAULT", "starter-a");
+    ScopedEnvVar server_instance("SERVER_INSTANCE_ID", "server-test-a");
+
+    redis_ = std::make_shared<MockRedisClient>();
+    db_pool_ = std::make_shared<MockConnectionPool>();
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    LoginAs("payload_user", "payload_token");
+    const auto login = WaitForLoginResponse();
+    ASSERT_TRUE(login.has_value());
+    ASSERT_FALSE(login->logical_session_id().empty());
+    ASSERT_FALSE(login->resume_token().empty());
+    EXPECT_EQ(login->world_id(), "starter-a");
+
+    JoinRoom("source-room");
+
+    server::core::state::WorldLifecyclePolicy policy{};
+    policy.draining = true;
+    EXPECT_TRUE(redis_->set(
+        server::app::chat::ChatServiceContinuityTester::WorldPolicyKey(*chat_service_, "starter-a"),
+        server::core::state::serialize_world_lifecycle_policy(policy)));
+    EXPECT_TRUE(redis_->set(
+        server::app::chat::ChatServiceContinuityTester::WorldOwnerKey(*chat_service_, "starter-b"),
+        "server-test-a"));
+
+    server::core::mmorpg::WorldMigrationEnvelope envelope{};
+    envelope.target_world_id = "starter-b";
+    envelope.target_owner_instance_id = "server-test-a";
+    envelope.preserve_room = false;
+    envelope.payload_kind = "chat-room-v1";
+    envelope.payload_ref = "target-room";
+    envelope.updated_at_ms = 1;
+    EXPECT_TRUE(redis_->set(
+        server::app::chat::ChatServiceContinuityTester::WorldMigrationKey(*chat_service_, "starter-a"),
+        server::core::mmorpg::serialize_world_migration_envelope(envelope)));
+
+    const auto metrics_before = chat_service_->continuity_metrics();
+    const auto resumed =
+        server::app::chat::ChatServiceContinuityTester::TryResume(
+            *chat_service_,
+            "resume:" + login->resume_token());
+    ASSERT_TRUE(resumed.has_value());
+    EXPECT_TRUE(resumed->resumed);
+    EXPECT_EQ(resumed->world_id, "starter-b");
+    EXPECT_EQ(resumed->room, "target-room");
+
+    const auto metrics_after = chat_service_->continuity_metrics();
+    EXPECT_EQ(
+        metrics_after.world_migration_payload_room_handoff_total,
+        metrics_before.world_migration_payload_room_handoff_total + 1);
+    EXPECT_EQ(
+        metrics_after.world_migration_payload_room_handoff_fallback_total,
+        metrics_before.world_migration_payload_room_handoff_fallback_total);
+    EXPECT_EQ(metrics_after.state_restore_total, metrics_before.state_restore_total);
+    EXPECT_EQ(metrics_after.state_restore_fallback_total, metrics_before.state_restore_fallback_total);
 }
 
 TEST_F(ChatServiceTest, LoginRejectsMismatchedProtocolMajor) {

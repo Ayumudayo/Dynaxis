@@ -1,16 +1,16 @@
 #include <gtest/gtest.h>
 
-#include "server/fps/fps_service.hpp"
-#include "server/protocol/game_opcodes.hpp"
-#include "server/wire/codec.hpp"
-#include "wire.pb.h"
+#include "server/core/fps/runtime.hpp"
 
 namespace {
 
-using server::app::fps::FixedStepDriver;
-using server::app::fps::InputCommand;
-using server::app::fps::RuntimeConfig;
-using server::app::fps::WorldRuntime;
+using server::core::fps::FixedStepDriver;
+using server::core::fps::InputCommand;
+using server::core::fps::ReplicationKind;
+using server::core::fps::RewindQuery;
+using server::core::fps::RuntimeConfig;
+using server::core::fps::StageInputDisposition;
+using server::core::fps::WorldRuntime;
 
 TEST(FixedStepDriverTest, BoundsCatchUpSteps) {
     FixedStepDriver driver(30, 4);
@@ -25,42 +25,46 @@ TEST(FixedStepDriverTest, BoundsCatchUpSteps) {
 TEST(FpsWorldRuntimeTest, RejectsOlderStagedInputOrder) {
     WorldRuntime runtime(RuntimeConfig{});
 
-    EXPECT_TRUE(runtime.stage_input(1, InputCommand{.input_seq = 2, .move_x_mm = 100}));
-    EXPECT_FALSE(runtime.stage_input(1, InputCommand{.input_seq = 1, .move_x_mm = 999}));
+    const auto accepted = runtime.stage_input(1, InputCommand{.input_seq = 2, .move_x_mm = 100});
+    EXPECT_EQ(accepted.disposition, StageInputDisposition::kAccepted);
+    EXPECT_EQ(accepted.target_server_tick, 1u);
+
+    const auto rejected = runtime.stage_input(1, InputCommand{.input_seq = 1, .move_x_mm = 999});
+    EXPECT_EQ(rejected.disposition, StageInputDisposition::kRejectedStale);
+    EXPECT_EQ(rejected.target_server_tick, 1u);
 
     (void)runtime.tick();
     const auto actor_id = runtime.actor_id_for_session(1);
     ASSERT_TRUE(actor_id.has_value());
 
-    const auto sample = runtime.latest_history_at_or_before(*actor_id, 1);
+    const auto sample = runtime.rewind_at_or_before(RewindQuery{.actor_id = *actor_id, .server_tick = 1});
     ASSERT_TRUE(sample.has_value());
-    EXPECT_EQ(sample->last_applied_input_seq, 2u);
-    EXPECT_EQ(sample->x_mm, 100);
+    EXPECT_TRUE(sample->exact_tick);
+    EXPECT_EQ(sample->sample.last_applied_input_seq, 2u);
+    EXPECT_EQ(sample->sample.x_mm, 100);
 }
 
 TEST(FpsWorldRuntimeTest, EmitsSnapshotThenDelta) {
     WorldRuntime runtime(RuntimeConfig{});
 
-    EXPECT_TRUE(runtime.stage_input(1, InputCommand{.input_seq = 1, .move_x_mm = 100}));
+    EXPECT_EQ(
+        runtime.stage_input(1, InputCommand{.input_seq = 1, .move_x_mm = 100}).disposition,
+        StageInputDisposition::kAccepted);
     const auto first_tick = runtime.tick();
     ASSERT_EQ(first_tick.size(), 1u);
-    EXPECT_EQ(first_tick.front().msg_id, server::protocol::MSG_FPS_STATE_SNAPSHOT);
+    EXPECT_EQ(first_tick.front().kind, ReplicationKind::kSnapshot);
+    EXPECT_EQ(first_tick.front().actors.size(), 1u);
+    EXPECT_EQ(first_tick.front().server_tick, 1u);
+    EXPECT_EQ(first_tick.front().actors.front().server_tick, 1u);
 
-    server::wire::v1::FpsStateSnapshot snapshot;
-    ASSERT_TRUE(server::wire::codec::Decode(
-        first_tick.front().payload.data(), first_tick.front().payload.size(), snapshot));
-    EXPECT_EQ(snapshot.actors_size(), 1);
-
-    EXPECT_TRUE(runtime.stage_input(1, InputCommand{.input_seq = 2, .move_x_mm = 100}));
+    EXPECT_EQ(
+        runtime.stage_input(1, InputCommand{.input_seq = 2, .move_x_mm = 100}).disposition,
+        StageInputDisposition::kAccepted);
     const auto second_tick = runtime.tick();
     ASSERT_EQ(second_tick.size(), 1u);
-    EXPECT_EQ(second_tick.front().msg_id, server::protocol::MSG_FPS_STATE_DELTA);
-
-    server::wire::v1::FpsStateDelta delta;
-    ASSERT_TRUE(server::wire::codec::Decode(
-        second_tick.front().payload.data(), second_tick.front().payload.size(), delta));
-    EXPECT_EQ(delta.actors_size(), 1);
-    EXPECT_EQ(delta.actors(0).last_applied_input_seq(), 2u);
+    EXPECT_EQ(second_tick.front().kind, ReplicationKind::kDelta);
+    EXPECT_EQ(second_tick.front().actors.size(), 1u);
+    EXPECT_EQ(second_tick.front().actors.front().last_applied_input_seq, 2u);
 }
 
 TEST(FpsWorldRuntimeTest, InterestSelectionUsesCoarseCells) {
@@ -70,40 +74,65 @@ TEST(FpsWorldRuntimeTest, InterestSelectionUsesCoarseCells) {
         .max_interest_recipients_per_tick = 64,
     });
 
-    EXPECT_TRUE(runtime.stage_input(1, InputCommand{.input_seq = 1}));
-    EXPECT_TRUE(runtime.stage_input(2, InputCommand{.input_seq = 1, .move_x_mm = 25'000}));
+    EXPECT_EQ(runtime.stage_input(1, InputCommand{.input_seq = 1}).disposition, StageInputDisposition::kAccepted);
+    EXPECT_EQ(
+        runtime.stage_input(2, InputCommand{.input_seq = 1, .move_x_mm = 25'000}).disposition,
+        StageInputDisposition::kAccepted);
 
     const auto tick = runtime.tick();
     ASSERT_EQ(tick.size(), 2u);
 
     for (const auto& message : tick) {
-        ASSERT_EQ(message.msg_id, server::protocol::MSG_FPS_STATE_SNAPSHOT);
-        server::wire::v1::FpsStateSnapshot snapshot;
-        ASSERT_TRUE(server::wire::codec::Decode(message.payload.data(), message.payload.size(), snapshot));
-        EXPECT_EQ(snapshot.actors_size(), 1);
+        ASSERT_EQ(message.kind, ReplicationKind::kSnapshot);
+        EXPECT_EQ(message.actors.size(), 1u);
     }
 }
 
 TEST(FpsWorldRuntimeTest, HistoryLookupReturnsLatestSampleAtOrBeforeTick) {
     WorldRuntime runtime(RuntimeConfig{});
 
-    EXPECT_TRUE(runtime.stage_input(1, InputCommand{.input_seq = 1, .move_x_mm = 100}));
+    EXPECT_EQ(
+        runtime.stage_input(1, InputCommand{.input_seq = 1, .move_x_mm = 100}).disposition,
+        StageInputDisposition::kAccepted);
     (void)runtime.tick();
-    EXPECT_TRUE(runtime.stage_input(1, InputCommand{.input_seq = 2, .move_x_mm = 200}));
+    EXPECT_EQ(
+        runtime.stage_input(1, InputCommand{.input_seq = 2, .move_x_mm = 200}).disposition,
+        StageInputDisposition::kAccepted);
     (void)runtime.tick();
 
     const auto actor_id = runtime.actor_id_for_session(1);
     ASSERT_TRUE(actor_id.has_value());
 
-    const auto sample_tick1 = runtime.latest_history_at_or_before(*actor_id, 1);
+    const auto sample_tick1 = runtime.rewind_at_or_before(RewindQuery{.actor_id = *actor_id, .server_tick = 1});
     ASSERT_TRUE(sample_tick1.has_value());
-    EXPECT_EQ(sample_tick1->server_tick, 1u);
-    EXPECT_EQ(sample_tick1->x_mm, 100);
+    EXPECT_TRUE(sample_tick1->exact_tick);
+    EXPECT_EQ(sample_tick1->sample.server_tick, 1u);
+    EXPECT_EQ(sample_tick1->sample.x_mm, 100);
 
-    const auto sample_tick2 = runtime.latest_history_at_or_before(*actor_id, 2);
+    const auto sample_tick2 = runtime.rewind_at_or_before(RewindQuery{.actor_id = *actor_id, .server_tick = 2});
     ASSERT_TRUE(sample_tick2.has_value());
-    EXPECT_EQ(sample_tick2->server_tick, 2u);
-    EXPECT_EQ(sample_tick2->x_mm, 300);
+    EXPECT_TRUE(sample_tick2->exact_tick);
+    EXPECT_EQ(sample_tick2->sample.server_tick, 2u);
+    EXPECT_EQ(sample_tick2->sample.x_mm, 300);
+}
+
+TEST(FpsWorldRuntimeTest, DeltaBudgetFallsBackToSnapshot) {
+    WorldRuntime runtime(RuntimeConfig{
+        .max_delta_actors_per_tick = 1,
+    });
+
+    EXPECT_EQ(runtime.stage_input(1, InputCommand{.input_seq = 1, .move_x_mm = 100}).disposition, StageInputDisposition::kAccepted);
+    EXPECT_EQ(runtime.stage_input(2, InputCommand{.input_seq = 1, .move_x_mm = 150}).disposition, StageInputDisposition::kAccepted);
+    (void)runtime.tick();
+
+    EXPECT_EQ(runtime.stage_input(1, InputCommand{.input_seq = 2, .move_x_mm = 100}).disposition, StageInputDisposition::kAccepted);
+    EXPECT_EQ(runtime.stage_input(2, InputCommand{.input_seq = 2, .move_x_mm = 150}).disposition, StageInputDisposition::kAccepted);
+
+    const auto second_tick = runtime.tick();
+    ASSERT_EQ(second_tick.size(), 2u);
+    EXPECT_EQ(second_tick[0].kind, ReplicationKind::kSnapshot);
+    EXPECT_EQ(second_tick[1].kind, ReplicationKind::kSnapshot);
+    EXPECT_GT(runtime.snapshot().delta_budget_snapshot_total, 0u);
 }
 
 } // namespace

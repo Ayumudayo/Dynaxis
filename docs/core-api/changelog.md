@@ -9,6 +9,19 @@
 ## 미출시(Unreleased)
 
 ### 변경됨(Changed)
+- `server/core/fps/direct_bind.hpp`를 추가해 direct UDP bind request/response payload와 bind ticket data contract를 stable public engine surface로 승격했습니다.
+- `server/core/fps/transport_policy.hpp`를 추가해 direct UDP/RUDP rollout enablement, canary selection, opcode allowlist parsing policy를 stable public engine surface로 승격했습니다.
+- `server/core/fps/direct_delivery.hpp`를 추가해 direct UDP/RUDP delta delivery route selection policy를 stable public engine surface로 승격했습니다.
+- `server/core/fps/transport_quality.hpp`를 추가해 direct UDP sequenced ingress의 loss/jitter/reorder/duplicate quality signal contract를 stable public engine surface로 승격했습니다.
+- `server/core/fps/runtime.hpp`를 추가해 fixed-step authoritative tick, generic snapshot/delta shaping, coarse interest management, rewind/history query substrate를 stable public engine capability로 승격했습니다.
+- `server/core/mmorpg/migration.hpp`를 추가해 draining source world에서 target world owner로의 migration envelope/status evaluation contract를 stable public engine surface로 승격했습니다.
+- `server/core/mmorpg/world_drain.hpp`를 추가하고 `evaluate_world_drain_orchestration()`까지 확장해 live world drain phase/progress/orchestration evaluation contract를 stable public engine surface로 승격했습니다.
+- `server/core/mmorpg/topology.hpp`를 추가하고 read-only topology actuation planning, revisioned topology actuation request document/status, executor-facing execution progress/status evaluation, observed-topology realization/adoption evaluation, adapter-facing lease/status evaluation, runtime-assignment document/instance lookup helper까지 확장해 revisioned desired topology document, observed topology pool aggregation, desired-vs-observed reconciliation status/actuation contract를 stable public engine surface로 승격했습니다.
+- `server/core/mmorpg/world_transfer.hpp`를 추가해 live world owner handoff의 phase/status evaluation contract를 stable public engine surface로 승격했습니다.
+- `server/core/app/engine_context.hpp`, `server/core/app/engine_runtime.hpp`, `server/core/app/engine_builder.hpp`를 추가해 app bootstrap의 lifecycle/dependency/composition seam을 stable public surface로 승격했습니다.
+- `server/core/app/engine_runtime.hpp`에 `set_alias()`, `bridge_alias()`, `mark_running()`, `mark_stopped()`, `mark_failed()`, `clear_global_services()` helper를 추가해 app bootstrap이 alias bridge와 lifecycle teardown을 덜 open-code 하도록 정리했습니다.
+- `server/core/app/engine_runtime.hpp`에 `wait_for_stop()`과 `run_shutdown()` helper를 추가하고, `AppHost::start_admin_http()` 경로가 admin-http stop step을 shutdown registry에 자동 연결하도록 정리해 non-Asio/control-plane bootstrap의 normal teardown을 덜 open-code 하도록 만들었습니다.
+- `AppHost::start_admin_http()`와 `EngineRuntime::start_admin_http()`가 custom route callback을 받아 `admin_app` 같은 control-plane도 동일한 runtime composition 계층 위에서 admin HTTP를 조립할 수 있게 했습니다.
 - `server/core/protocol/system_opcodes.hpp`의 `MSG_PING` 정책이 `transport=both`, `delivery=reliable`로 확장되어 direct UDP/RUDP gameplay-rate proof frame을 허용합니다.
 - 헤더별 소비자 사용 커버리지를 높이기 위해 `CorePublicApiStableHeaderScenarios` 테스트 타깃을 추가했습니다.
 - `tools/check_core_api_contracts.py`에 stable-governance fixture 회귀 검증을 추가했습니다.

@@ -26,7 +26,8 @@
 #include "gateway/resilience_controls.hpp"
 #include "gateway/udp_bind_abuse_guard.hpp"
 #include "gateway/udp_sequenced_metrics.hpp"
-#include "server/core/app/app_host.hpp"
+#include "server/core/app/engine_runtime.hpp"
+#include "server/core/fps/direct_bind.hpp"
 #include "server/core/net/hive.hpp"
 #include "server/core/net/listener.hpp"
 #include "server/core/net/rudp/rudp_engine.hpp"
@@ -87,12 +88,7 @@ public:
     };
 
     /** @brief TCP 응답으로 전달되는 UDP bind ticket 정보입니다. */
-    struct UdpBindTicket {
-        std::string session_id;           ///< gateway 내부 세션 ID
-        std::uint64_t nonce{0};           ///< bind 논스 값
-        std::uint64_t expires_unix_ms{0}; ///< ticket 만료 시각(Epoch ms)
-        std::string token;                ///< bind 검증 토큰
-    };
+    using UdpBindTicket = server::core::fps::DirectBindTicket;
 
     /**
      * @brief backend 서버와의 TCP 연결을 관리하는 내부 클래스입니다.
@@ -288,7 +284,8 @@ public:
     boost::asio::io_context io_;
     std::shared_ptr<server::core::net::Hive> hive_;
     std::shared_ptr<server::core::net::TransportListener> listener_;
-    server::core::app::AppHost app_host_{"gateway_app"};
+    server::core::app::EngineRuntime engine_;
+    server::core::app::AppHost& app_host_;
     std::shared_ptr<auth::IAuthenticator> authenticator_;
     std::string gateway_id_;
     std::string listen_host_;
@@ -313,12 +310,7 @@ public:
      void do_udp_receive();
 
      /** @brief UDP bind 요청 payload 파싱 결과입니다. */
-     struct ParsedUdpBindRequest {
-         std::string session_id;           ///< gateway 내부 세션 ID
-         std::uint64_t nonce{0};           ///< bind ticket 논스 값
-         std::uint64_t expires_unix_ms{0}; ///< ticket 만료 시각(Epoch ms)
-         std::string token;                ///< bind ticket 서명 토큰
-     };
+     using ParsedUdpBindRequest = server::core::fps::DirectBindRequest;
 
      std::vector<std::uint8_t> make_udp_bind_res_frame(std::uint16_t code,
                                                         const UdpBindTicket& ticket,

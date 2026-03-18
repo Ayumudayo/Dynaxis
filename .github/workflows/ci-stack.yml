@@ -85,6 +85,11 @@ jobs:
         run: |
           docker image inspect dynaxis-base:latest > /dev/null
 
+      - name: Linux Installed Consumer Smoke
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_linux_installed_consumer.ps1
+
       - name: Start Stack Baseline (Runtime Off)
         shell: pwsh
         env:
@@ -224,6 +229,18 @@ jobs:
       - name: Smoke Test (Admin Control-Plane E2E)
         run: |
           python3 tests/python/verify_admin_control_plane_e2e.py
+
+      - name: Smoke Test (MMORPG Phase 3 Acceptance)
+        run: |
+          python3 tests/python/verify_mmorpg_runtime_matrix.py --scenario phase3-acceptance --no-build
+
+      - name: Smoke Test (Continuity Recovery Baseline)
+        run: |
+          python3 tests/python/verify_continuity_recovery_matrix.py --scenario phase5-recovery-baseline --no-build
+
+      - name: Smoke Test (FPS Phase 2 Acceptance)
+        run: |
+          python3 tests/python/verify_fps_rudp_transport_matrix.py --scenario phase2-acceptance --no-build
 
       - name: Dump Stack Logs (On Failure)
         if: failure()

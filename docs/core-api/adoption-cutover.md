@@ -2,12 +2,19 @@
 
 ## 목표
 - `server`, `gateway`, `tools`가 `core` 공개 계약을 사용할 때 `Stable` 헤더만 소비하도록 전환합니다.
-- `Transitional` 헤더 개수를 0으로 유지합니다.
+- `Transitional` 헤더는 현재 문서화된 범위로만 제한하고, 공개 예제/installed-consumer 경로에는 유입되지 않게 유지합니다.
 
 ## 현재 점검 스냅샷
 
 ### 과도기(Transitional) 헤더
-- `docs/core-api-boundary.md` 기준 현재 `Transitional` 행은 0개입니다.
+- `docs/core-api-boundary.md` 기준 현재 `Transitional` 헤더는 extensibility 계층 6개입니다.
+  - `server/core/plugin/shared_library.hpp`
+  - `server/core/plugin/plugin_host.hpp`
+  - `server/core/plugin/plugin_chain_host.hpp`
+  - `server/core/scripting/script_watcher.hpp`
+  - `server/core/scripting/lua_runtime.hpp`
+  - `server/core/scripting/lua_sandbox.hpp`
+- 현재 package/public-api 예제와 installed-consumer 경로는 이 헤더들을 사용하지 않습니다.
 
 ### 최상위 모듈별 Internal 헤더 사용 현황
 - `server`는 일부 구현 경로에서만 internal 헤더를 포함합니다.
@@ -50,10 +57,11 @@
 - Boundary 계약 점검: `python tools/check_core_api_contracts.py --check-boundary`
 - Boundary fixture 점검: `python tools/check_core_api_contracts.py --check-boundary-fixtures`
 - Stable governance fixture 점검: `python tools/check_core_api_contracts.py --check-stable-governance-fixtures`
-- 소비자 테스트: `ctest -C Debug --test-dir build-windows/tests -L contract --output-on-failure`
+- 소비자 테스트: `ctest --test-dir build-windows -C Debug -R "CoreInstalledPackageConsumer|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure`
 
 ## 종료 기준
-- `docs/core-api-boundary.md`의 `Transitional = 0` 상태를 유지합니다.
+- `docs/core-api-boundary.md`의 `Transitional` 인벤토리가 실제 현재 public package surface와 일치합니다.
+- `Transitional` 헤더는 공개 예제/installed-consumer 경로로 전파되지 않습니다.
 - `gateway`, `tools`는 internal `core` 헤더 include가 없는 상태를 유지합니다.
 - `server` internal include는 구현 어댑터 내부에 한정되고 공개/예제 계약으로 전파되지 않습니다.
 

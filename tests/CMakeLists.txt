@@ -78,6 +78,12 @@ if (BUILD_GTEST_TESTS)
         core/test_core_metrics.cpp
         core/test_core_paths.cpp
         core/test_app_host_lifecycle.cpp
+        core/test_engine_composition.cpp
+        core/test_mmorpg_migration.cpp
+        core/test_mmorpg_world_drain.cpp
+        core/test_mmorpg_topology.cpp
+        core/test_mmorpg_world_transfer.cpp
+        core/test_direct_bind_contract.cpp
         core/test_core_net.cpp
         core/test_gateway_resilience_controls.cpp
         core/test_trace_context.cpp
@@ -357,6 +363,18 @@ if (BUILD_CONTRACT_TESTS)
     add_test(NAME CorePublicApiStableHeaderScenarios COMMAND core_public_api_stable_header_scenarios)
     set_tests_properties(CorePublicApiStableHeaderScenarios PROPERTIES LABELS "contract;public-api;smoke")
 
+    add_executable(core_public_api_fps_capability_smoke
+        core/public_api_fps_capability_smoke.cpp
+    )
+    target_include_directories(core_public_api_fps_capability_smoke PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/include
+    )
+    target_link_libraries(core_public_api_fps_capability_smoke PRIVATE
+        server_core
+    )
+    add_test(NAME CorePublicApiFpsCapabilitySmoke COMMAND core_public_api_fps_capability_smoke)
+    set_tests_properties(CorePublicApiFpsCapabilitySmoke PROPERTIES LABELS "contract;public-api;fps")
+
     add_test(
       NAME CoreInstalledPackageConsumer
       COMMAND "${CMAKE_COMMAND}"
@@ -479,6 +497,79 @@ if (Python3_Interpreter_FOUND)
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
               "${CMAKE_SOURCE_DIR}/tests/python/verify_fps_state_transport.py"
     )
+    add_test(
+      NAME StackPythonVerifyFpsRudpTransport
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_fps_rudp_transport.py"
+    )
+    add_test(
+      NAME StackPythonVerifyFpsRudpTransportMatrix
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_fps_rudp_transport_matrix.py"
+    )
+    add_test(
+      NAME StackPythonVerifyFpsPhase2Acceptance
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_fps_rudp_transport_matrix.py"
+              --scenario phase2-acceptance
+              --no-build
+    )
+    add_test(
+      NAME StackPythonVerifyFpsNetemRehearsal
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_fps_netem_rehearsal.py"
+              --scenario fps-pair
+    )
+    add_test(
+      NAME StackPythonVerifyWorldDrainProgress
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_session_continuity_restart.py"
+              --scenario world-drain-progress
+    )
+    add_test(
+      NAME StackPythonVerifyWorldDrainTransferClosure
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_session_continuity_restart.py"
+              --scenario world-drain-transfer-closure
+    )
+    add_test(
+      NAME StackPythonVerifyWorldDrainMigrationClosure
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_session_continuity_restart.py"
+              --scenario world-drain-migration-closure
+    )
+    add_test(
+      NAME StackPythonVerifyMmorpgRuntimeClosureMatrix
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_mmorpg_runtime_matrix.py"
+              --scenario phase3-acceptance
+              --no-build
+    )
+    add_test(
+      NAME StackPythonVerifyContinuityRecoveryMatrix
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_continuity_recovery_matrix.py"
+              --scenario phase5-recovery-baseline
+              --no-build
+    )
+    add_test(
+      NAME StackPythonVerifyWorldOwnerTransferCommit
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_session_continuity_restart.py"
+              --scenario world-owner-transfer-commit
+    )
+    add_test(
+      NAME StackPythonVerifyWorldMigrationHandoff
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_session_continuity_restart.py"
+              --scenario world-migration-handoff
+    )
+    add_test(
+      NAME StackPythonVerifyWorldMigrationTargetRoomHandoff
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_session_continuity_restart.py"
+              --scenario world-migration-target-room-handoff
+    )
 
     set_tests_properties(
       StackPythonVerifyPluginMetrics
@@ -496,8 +587,33 @@ if (Python3_Interpreter_FOUND)
     )
     set_tests_properties(
       StackPythonVerifyFpsStateTransport
+      StackPythonVerifyFpsRudpTransport
+      StackPythonVerifyFpsRudpTransportMatrix
+      StackPythonVerifyFpsPhase2Acceptance
+      StackPythonVerifyFpsNetemRehearsal
       PROPERTIES
-        LABELS "python;stack;fps"
+        LABELS "python;stack;fps;hardening"
+        SKIP_RETURN_CODE 77
+        RUN_SERIAL TRUE
+    )
+    set_tests_properties(
+      StackPythonVerifyWorldDrainProgress
+      StackPythonVerifyWorldDrainTransferClosure
+      StackPythonVerifyWorldDrainMigrationClosure
+      StackPythonVerifyMmorpgRuntimeClosureMatrix
+      StackPythonVerifyContinuityRecoveryMatrix
+      StackPythonVerifyWorldOwnerTransferCommit
+      StackPythonVerifyWorldMigrationHandoff
+      StackPythonVerifyWorldMigrationTargetRoomHandoff
+      PROPERTIES
+        LABELS "python;stack;continuity"
+        SKIP_RETURN_CODE 77
+        RUN_SERIAL TRUE
+    )
+    set_tests_properties(
+      StackPythonVerifyWorldMigrationHandoff
+      PROPERTIES
+        LABELS "python;stack;continuity"
         SKIP_RETURN_CODE 77
         RUN_SERIAL TRUE
     )

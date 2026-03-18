@@ -10,6 +10,16 @@
 - `[Transitional]`: 안정화 중이며 변경 가능
 - `[Internal]`: 호환성 보장 없음
 
+## Package-First Enforcement Baseline
+
+- `Stable` surface의 호환성 주장은 문서 설명만으로 성립하지 않습니다.
+- 아래 항목이 함께 맞아야 현재 public package contract로 인정합니다.
+  - `docs/core-api-boundary.md`와 `docs/core-api/compatibility-matrix.json`
+  - Windows public-api executable proof
+  - `CoreInstalledPackageConsumer` + boundary/governance fixtures
+  - `pwsh scripts/run_linux_installed_consumer.ps1` Linux parity smoke
+- 정확한 release command는 `docs/core-api/checklists.md`, repo-wide entrypoint는 `docs/tests.md`를 기준으로 합니다.
+
 ## 호환성 파괴 변경 규칙 (`[Stable]`)
 - 파괴적 변경:
   - 공개 타입/함수/상수 제거 또는 이름 변경
@@ -47,7 +57,9 @@
 ## 안정(Stable) API 변경 시 PR 요구사항
 - `docs/core-api/` 하위 도메인 문서를 함께 갱신합니다.
 - 파괴적 변경은 마이그레이션 노트를 추가/갱신합니다.
-- API 스모크 소비자 빌드와 CI 검증을 통과합니다.
+- `core_public_api_smoke`, `core_public_api_headers_compile`, `core_public_api_stable_header_scenarios`를 build/run 기준으로 검증합니다.
+- `ctest --test-dir build-windows -C Debug -R "CoreInstalledPackageConsumer|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure`를 통과합니다.
+- 패키지 export, dependency probing, install consumer flow를 건드렸다면 `pwsh scripts/run_linux_installed_consumer.ps1`도 다시 확인합니다.
 - `core/include/server/core/api/version.hpp`를 갱신합니다.
 - `docs/core-api/compatibility-matrix.json`를 갱신합니다.
 

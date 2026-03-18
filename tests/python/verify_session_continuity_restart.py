@@ -216,9 +216,54 @@ def wait_for_redis_value(key: str, timeout_sec: float = 10.0) -> str:
     return redis_get(key)
 
 
+def wait_for_world_drain_phase(path: str, expected_phase: str, timeout_sec: float = 20.0) -> dict:
+    deadline = time.monotonic() + timeout_sec
+    last_status = 0
+    last_payload = None
+    while time.monotonic() < deadline:
+        status, payload = admin_request_json(path)
+        last_status = status
+        last_payload = payload
+        if status == 200 and isinstance(payload, dict):
+            drain = (payload.get("data", {}) or {}).get("drain", {})
+            if isinstance(drain, dict) and drain.get("phase") == expected_phase:
+                return payload
+        time.sleep(0.5)
+    raise TimeoutError(
+        f"world drain phase timeout path={path!r} expected={expected_phase!r} status={last_status} payload={last_payload}"
+    )
+
+
+def wait_for_instance_active_sessions(instance_id: str, minimum_sessions: int, timeout_sec: float = 20.0) -> dict:
+    deadline = time.monotonic() + timeout_sec
+    last_status = 0
+    last_payload = None
+    while time.monotonic() < deadline:
+        status, payload = admin_request_json(f"/api/v1/instances/{instance_id}")
+        last_status = status
+        last_payload = payload
+        if status == 200 and isinstance(payload, dict):
+            data = payload.get("data", {}) or {}
+            active_sessions = data.get("active_sessions")
+            if isinstance(active_sessions, int) and active_sessions >= minimum_sessions:
+                return payload
+        time.sleep(0.5)
+    raise TimeoutError(
+        f"instance active_sessions timeout instance_id={instance_id!r} minimum={minimum_sessions} status={last_status} payload={last_payload}"
+    )
+
+
 def read_world_restore_reason_metric(reason: str) -> float:
     return read_metric_sum_labeled(
         "chat_continuity_world_restore_fallback_reason_total",
+        {"reason": reason},
+        ports=SERVER_METRICS_PORTS,
+    )
+
+
+def read_world_migration_reason_metric(reason: str) -> float:
+    return read_metric_sum_labeled(
+        "chat_continuity_world_migration_restore_fallback_reason_total",
         {"reason": reason},
         ports=SERVER_METRICS_PORTS,
     )
@@ -1056,6 +1101,848 @@ def run_world_drain_reassignment() -> None:
             fresh.close()
 
 
+def run_world_drain_progress() -> None:
+    gateway_host = "127.0.0.1"
+    gateway_port = 36101
+
+    first, login, user = acquire_session_for_backend(PRIMARY_SERVER_ID, gateway_host, gateway_port, "verify_world_drain_progress")
+    world_drain_path = ""
+    try:
+        logical_session_id, resume_token = assert_initial_login(login, user)
+        if login["world_id"] != PRIMARY_WORLD_ID:
+            raise AssertionError(f"unexpected initial world residency: {login}")
+
+        world_drain_path = f"/api/v1/worlds/{login['world_id']}/drain"
+        print("Declaring named world drain and proving operator-visible progress reaches drained after the last session leaves...")
+
+        status, payload = admin_request_json(world_drain_path)
+        if status != 200:
+            raise AssertionError(f"world drain GET failed: status={status} payload={payload}")
+        initial_drain = (payload or {}).get("data", {}).get("drain", {})
+        if initial_drain.get("phase") != "idle":
+            raise AssertionError(f"world drain GET should report idle before PUT: {payload}")
+
+        wait_for_instance_active_sessions(PRIMARY_SERVER_ID, 1)
+
+        status, payload = admin_request_json(
+            world_drain_path,
+            method="PUT",
+            body_obj={
+                "replacement_owner_instance_id": None,
+            },
+        )
+        if status != 200:
+            raise AssertionError(f"world drain PUT failed: status={status} payload={payload}")
+        active_drain = (payload or {}).get("data", {}).get("drain", {})
+        if active_drain.get("phase") != "draining_sessions":
+            raise AssertionError(f"world drain PUT did not enter draining_sessions phase: {payload}")
+        if active_drain.get("summary", {}).get("active_sessions_total", 0) < 1:
+            raise AssertionError(f"world drain PUT did not report active sessions: {payload}")
+
+        first.close()
+        drained_payload = wait_for_world_drain_phase(world_drain_path, "drained")
+        drained_state = (drained_payload.get("data", {}) or {}).get("drain", {})
+        if drained_state.get("summary", {}).get("active_sessions_total") != 0:
+            raise AssertionError(f"world drain did not reach zero active sessions: {drained_payload}")
+        if drained_state.get("summary", {}).get("drain_declared") is not True:
+            raise AssertionError(f"world drain lost declared state before completion: {drained_payload}")
+
+        worlds_payload = admin_request_json("/api/v1/worlds?limit=100")[1]
+        world_item = next(
+            (
+                item
+                for item in (worlds_payload or {}).get("data", {}).get("items", [])
+                if item.get("world_id") == login["world_id"]
+            ),
+            None,
+        )
+        if not isinstance(world_item, dict):
+            raise AssertionError("world inventory item missing during drain progress proof")
+        if world_item.get("drain", {}).get("phase") != "drained":
+            raise AssertionError(f"world inventory did not reflect drained phase: {world_item}")
+
+        status, payload = admin_request_json(world_drain_path, method="DELETE")
+        if status != 200:
+            raise AssertionError(f"world drain DELETE failed: status={status} payload={payload}")
+        cleared_drain = (payload or {}).get("data", {}).get("drain", {})
+        if cleared_drain.get("phase") != "idle":
+            raise AssertionError(f"world drain DELETE did not clear back to idle: {payload}")
+
+        print(
+            "PASS world-drain-progress: "
+            f"logical_session_id={logical_session_id} resume_token_hash={make_resume_routing_key(resume_token)} "
+            f"initial_active_sessions={active_drain.get('summary', {}).get('active_sessions_total')} "
+            f"final_active_sessions={drained_state.get('summary', {}).get('active_sessions_total')}"
+        )
+    finally:
+        if world_drain_path:
+            status, payload = admin_request_json(world_drain_path, method="DELETE")
+            if status not in (0, 200):
+                raise AssertionError(f"world drain DELETE failed during cleanup: status={status} payload={payload}")
+        first.close()
+
+
+def run_world_drain_transfer_closure() -> None:
+    gateway_host = "127.0.0.1"
+    gateway_port = 36101
+    replacement_server = require_same_world_peer_server()
+    replacement_server_id = str(replacement_server["instance_id"])
+    world_owner_key = f"{CONTINUITY_WORLD_OWNER_PREFIX}{PRIMARY_WORLD_ID}"
+
+    first, login, user = acquire_session_for_backend(PRIMARY_SERVER_ID, gateway_host, gateway_port, "verify_world_drain_transfer")
+    world_drain_path = ""
+    world_transfer_path = ""
+    try:
+        logical_session_id, _resume_token = assert_initial_login(login, user)
+        if login["world_id"] != PRIMARY_WORLD_ID:
+            raise AssertionError(f"unexpected initial world residency: {login}")
+
+        world_drain_path = f"/api/v1/worlds/{login['world_id']}/drain"
+        world_transfer_path = f"/api/v1/worlds/{login['world_id']}/transfer"
+        print("Declaring named drain with same-world replacement and proving closure hands off to transfer before clear...")
+
+        wait_for_instance_active_sessions(PRIMARY_SERVER_ID, 1)
+
+        status, payload = admin_request_json(
+            world_drain_path,
+            method="PUT",
+            body_obj={
+                "replacement_owner_instance_id": replacement_server_id,
+            },
+        )
+        if status != 200:
+            raise AssertionError(f"world drain PUT failed: status={status} payload={payload}")
+        active_drain = (payload or {}).get("data", {}).get("drain", {})
+        if active_drain.get("phase") != "draining_sessions":
+            raise AssertionError(f"world drain PUT did not enter draining_sessions phase: {payload}")
+        if active_drain.get("orchestration", {}).get("phase") != "draining":
+            raise AssertionError(f"world drain orchestration did not report draining phase: {payload}")
+        if active_drain.get("orchestration", {}).get("next_action") != "wait_for_drain":
+            raise AssertionError(f"world drain orchestration next_action mismatch during active drain: {payload}")
+
+        first.close()
+        drained_payload = wait_for_world_drain_phase(world_drain_path, "drained")
+        drained_state = (drained_payload.get("data", {}) or {}).get("drain", {})
+        if drained_state.get("orchestration", {}).get("phase") != "awaiting_owner_transfer":
+            raise AssertionError(f"world drain did not hand off to owner transfer after drain completion: {drained_payload}")
+        if drained_state.get("orchestration", {}).get("next_action") != "commit_owner_transfer":
+            raise AssertionError(f"world drain orchestration next_action mismatch after drain completion: {drained_payload}")
+
+        status, payload = admin_request_json(
+            world_transfer_path,
+            method="PUT",
+            body_obj={
+                "target_owner_instance_id": replacement_server_id,
+                "expected_owner_instance_id": PRIMARY_SERVER_ID,
+                "commit_owner": True,
+            },
+        )
+        if status != 200:
+            raise AssertionError(f"world transfer PUT failed: status={status} payload={payload}")
+        if wait_for_redis_value(world_owner_key) != replacement_server_id:
+            raise AssertionError(
+                f"world owner key was not committed to replacement backend {replacement_server_id}"
+            )
+
+        status, payload = admin_request_json(world_drain_path)
+        if status != 200:
+            raise AssertionError(f"world drain GET failed after transfer commit: status={status} payload={payload}")
+        clear_ready = (payload or {}).get("data", {}).get("drain", {})
+        if clear_ready.get("phase") != "drained":
+            raise AssertionError(f"world drain phase changed unexpectedly after transfer commit: {payload}")
+        if clear_ready.get("orchestration", {}).get("phase") != "ready_to_clear":
+            raise AssertionError(f"world drain did not become ready_to_clear after transfer commit: {payload}")
+        if clear_ready.get("orchestration", {}).get("next_action") != "clear_policy":
+            raise AssertionError(f"world drain next_action did not become clear_policy after transfer commit: {payload}")
+
+        status, payload = admin_request_json(world_drain_path, method="DELETE")
+        if status != 200:
+            raise AssertionError(f"world drain DELETE failed: status={status} payload={payload}")
+        if (payload or {}).get("data", {}).get("drain", {}).get("phase") != "idle":
+            raise AssertionError(f"world drain DELETE did not clear policy after transfer closure: {payload}")
+
+        print(
+            "PASS world-drain-transfer-closure: "
+            f"logical_session_id={logical_session_id} replacement_owner={replacement_server_id} "
+            f"owner_key={wait_for_redis_value(world_owner_key)}"
+        )
+    finally:
+        if world_drain_path:
+            status, payload = admin_request_json(world_drain_path, method="DELETE")
+            if status not in (0, 200):
+                raise AssertionError(f"world drain DELETE failed during cleanup: status={status} payload={payload}")
+        first.close()
+
+
+def run_world_drain_migration_closure() -> None:
+    fallback_server = require_fallback_server()
+    fallback_server_id = str(fallback_server["instance_id"])
+    fallback_world_id = str(fallback_server["world_id"])
+
+    first, login, user = acquire_session_for_backend(PRIMARY_SERVER_ID, "127.0.0.1", 36101, "verify_world_drain_migration")
+    world_drain_path = ""
+    world_migration_path = ""
+    try:
+        logical_session_id, _ = assert_initial_login(login, user)
+        if login["world_id"] != PRIMARY_WORLD_ID:
+            raise AssertionError(f"unexpected initial world residency: {login}")
+        wait_for_instance_active_sessions(PRIMARY_SERVER_ID, minimum_sessions=1)
+        world_drain_path = f"/api/v1/worlds/{login['world_id']}/drain"
+        world_migration_path = f"/api/v1/worlds/{login['world_id']}/migration"
+
+        print("Declaring named drain plus cross-world migration and proving drain closure becomes ready_to_clear once migration is ready...")
+        status, payload = admin_request_json(
+            world_migration_path,
+            method="PUT",
+            body_obj={
+                "target_world_id": fallback_world_id,
+                "target_owner_instance_id": fallback_server_id,
+                "preserve_room": True,
+            },
+        )
+        if status != 200:
+            raise AssertionError(f"world migration PUT failed: status={status} payload={payload}")
+        migration_state = (payload or {}).get("data", {}).get("migration", {})
+        if migration_state.get("phase") != "awaiting_source_drain":
+            raise AssertionError(f"world migration PUT did not persist expected awaiting_source_drain state: {payload}")
+
+        status, payload = admin_request_json(
+            world_drain_path,
+            method="PUT",
+            body_obj={
+                "replacement_owner_instance_id": None,
+            },
+        )
+        if status != 200:
+            raise AssertionError(f"world drain PUT failed: status={status} payload={payload}")
+        active_drain = (payload or {}).get("data", {}).get("drain", {})
+        if active_drain.get("phase") != "draining_sessions":
+            raise AssertionError(f"world drain PUT did not enter draining_sessions phase: {payload}")
+        if active_drain.get("orchestration", {}).get("phase") != "draining":
+            raise AssertionError(f"world drain orchestration did not report draining phase: {payload}")
+        if active_drain.get("orchestration", {}).get("next_action") != "wait_for_drain":
+            raise AssertionError(f"world drain orchestration next_action mismatch during active drain: {payload}")
+
+        status, payload = admin_request_json(world_migration_path)
+        if status != 200:
+            raise AssertionError(f"world migration GET failed after drain declaration: status={status} payload={payload}")
+        ready_migration = (payload or {}).get("data", {}).get("migration", {})
+        if ready_migration.get("phase") != "ready_to_resume":
+            raise AssertionError(f"world migration did not become ready_to_resume after drain declaration: {payload}")
+
+        first.close()
+        drained_payload = wait_for_world_drain_phase(world_drain_path, "drained")
+        drained_state = (drained_payload.get("data", {}) or {}).get("drain", {})
+        orchestration = drained_state.get("orchestration", {})
+        if orchestration.get("phase") != "ready_to_clear":
+            raise AssertionError(f"world drain did not become ready_to_clear after migration became ready: {drained_payload}")
+        if orchestration.get("next_action") != "clear_policy":
+            raise AssertionError(f"world drain next_action did not become clear_policy after migration became ready: {drained_payload}")
+        if orchestration.get("target_world_id") != fallback_world_id:
+            raise AssertionError(f"world drain orchestration target_world_id mismatch: {drained_payload}")
+        if orchestration.get("target_owner_instance_id") != fallback_server_id:
+            raise AssertionError(f"world drain orchestration target_owner_instance_id mismatch: {drained_payload}")
+        summary = orchestration.get("summary", {})
+        if summary.get("migration_declared") is not True:
+            raise AssertionError(f"world drain orchestration did not retain migration_declared summary: {drained_payload}")
+        if summary.get("migration_ready") is not True:
+            raise AssertionError(f"world drain orchestration did not report migration_ready after drain completion: {drained_payload}")
+        if summary.get("clear_allowed") is not True:
+            raise AssertionError(f"world drain orchestration did not allow clear after migration readiness: {drained_payload}")
+
+        status, payload = admin_request_json(world_drain_path, method="DELETE")
+        if status != 200:
+            raise AssertionError(f"world drain DELETE failed: status={status} payload={payload}")
+        if (payload or {}).get("data", {}).get("drain", {}).get("phase") != "idle":
+            raise AssertionError(f"world drain DELETE did not clear policy after migration closure: {payload}")
+
+        print(
+            "PASS world-drain-migration-closure: "
+            f"logical_session_id={logical_session_id} target_world={fallback_world_id} "
+            f"target_owner={fallback_server_id}"
+        )
+    finally:
+        if world_drain_path:
+            status, payload = admin_request_json(world_drain_path, method="DELETE")
+            if status not in (0, 200):
+                raise AssertionError(f"world drain DELETE failed during cleanup: status={status} payload={payload}")
+        if world_migration_path:
+            status, payload = admin_request_json(world_migration_path, method="DELETE")
+            if status not in (0, 200):
+                raise AssertionError(f"world migration DELETE failed during cleanup: status={status} payload={payload}")
+        first.close()
+
+
+def run_world_owner_transfer_commit() -> None:
+    room = f"resume_world_transfer_room_{int(time.time())}"
+    message = f"resume_world_transfer_msg_{int(time.time() * 1000)}"
+    gateway_host = "127.0.0.1"
+    gateway_port = 36101
+    replacement_server = require_same_world_peer_server()
+    replacement_server_id = str(replacement_server["instance_id"])
+    world_owner_key = f"{CONTINUITY_WORLD_OWNER_PREFIX}{PRIMARY_WORLD_ID}"
+
+    first, login, user = acquire_session_for_backend(PRIMARY_SERVER_ID, gateway_host, gateway_port, "verify_world_transfer")
+    second = ChatClient(host="127.0.0.1", port=36100)
+    world_transfer_path = ""
+    try:
+        logical_session_id, resume_token = assert_initial_login(login, user)
+        if login["world_id"] != PRIMARY_WORLD_ID:
+            raise AssertionError(f"unexpected initial world residency: {login}")
+        first.join_room(room, user)
+
+        routing_key = make_resume_routing_key(resume_token)
+        alias_key = f"{SESSION_DIRECTORY_PREFIX}{routing_key}"
+        world_transfer_path = f"/api/v1/worlds/{login['world_id']}/transfer"
+
+        print("Committing named world owner transfer and proving same-world resume without fresh-login owner rewrite...")
+        if wait_for_redis_value(alias_key) != PRIMARY_SERVER_ID:
+            raise AssertionError(f"resume alias was not attached to {PRIMARY_SERVER_ID} before transfer proof")
+        if wait_for_redis_value(world_owner_key) != PRIMARY_SERVER_ID:
+            raise AssertionError(f"world owner key was not attached to {PRIMARY_SERVER_ID} before transfer proof")
+
+        world_restore_before = read_metric_sum(
+            "chat_continuity_world_restore_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        world_owner_restore_before = read_metric_sum(
+            "chat_continuity_world_owner_restore_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        fallback_before = read_metric_sum(
+            "chat_continuity_world_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        drain_reason_before = read_world_restore_reason_metric("draining_replacement_unhonored")
+        sticky_filtered_before = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "sticky"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        candidate_filtered_before = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "candidate"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        replacement_selected_before = read_metric_sum(
+            "gateway_world_policy_replacement_selected_total",
+            ports=GATEWAY_METRICS_PORTS,
+        )
+
+        status, payload = admin_request_json(
+            world_transfer_path,
+            method="PUT",
+            body_obj={
+                "target_owner_instance_id": replacement_server_id,
+                "expected_owner_instance_id": PRIMARY_SERVER_ID,
+                "commit_owner": True,
+            },
+        )
+        if status != 200:
+            raise AssertionError(f"world transfer PUT failed: status={status} payload={payload}")
+        transfer_payload = (payload or {}).get("data", {})
+        if transfer_payload.get("owner_instance_id") != replacement_server_id:
+            raise AssertionError(f"world transfer PUT did not commit owner to replacement target: {payload}")
+        if transfer_payload.get("owner_commit_applied") is not True:
+            raise AssertionError(f"world transfer PUT did not mark owner_commit_applied: {payload}")
+        transfer_state = transfer_payload.get("transfer", {})
+        if transfer_state.get("phase") != "owner_handoff_committed":
+            raise AssertionError(f"world transfer PUT did not reach committed phase: {payload}")
+        if wait_for_redis_value(world_owner_key) != replacement_server_id:
+            raise AssertionError(
+                f"world owner key was not committed to replacement backend {replacement_server_id}"
+            )
+
+        first.close()
+        second, resumed = resume_until_success("127.0.0.1", 36100, resume_token, user, logical_session_id)
+        resumed_backend = current_backend_for_resume_token(resume_token)
+        if resumed_backend != replacement_server_id:
+            raise AssertionError(
+                f"resume routing did not bind to committed replacement backend: {resumed_backend!r}"
+            )
+        if resumed["world_id"] != PRIMARY_WORLD_ID:
+            raise AssertionError(f"resume did not preserve same-world residency after committed transfer: {resumed}")
+
+        second.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8(message))
+        second.wait_for_self_chat(room, message, 5.0)
+
+        world_restore_after = read_metric_sum(
+            "chat_continuity_world_restore_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        world_owner_restore_after = read_metric_sum(
+            "chat_continuity_world_owner_restore_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        fallback_after = read_metric_sum(
+            "chat_continuity_world_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        drain_reason_after = read_world_restore_reason_metric("draining_replacement_unhonored")
+        sticky_filtered_after = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "sticky"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        candidate_filtered_after = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "candidate"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        replacement_selected_after = read_metric_sum(
+            "gateway_world_policy_replacement_selected_total",
+            ports=GATEWAY_METRICS_PORTS,
+        )
+
+        if world_restore_after <= world_restore_before:
+            raise AssertionError(
+                f"world restore success counter did not increase: before={world_restore_before} after={world_restore_after}"
+            )
+        if world_owner_restore_after <= world_owner_restore_before:
+            raise AssertionError(
+                "world owner restore success counter did not increase: "
+                f"before={world_owner_restore_before} after={world_owner_restore_after}"
+            )
+        if fallback_after != fallback_before:
+            raise AssertionError(
+                f"world restore fallback counter changed during committed transfer: before={fallback_before} after={fallback_after}"
+            )
+        if drain_reason_after != drain_reason_before:
+            raise AssertionError(
+                "draining_replacement_unhonored reason changed during committed transfer: "
+                f"before={drain_reason_before} after={drain_reason_after}"
+            )
+        if sticky_filtered_after <= sticky_filtered_before:
+            raise AssertionError(
+                "gateway sticky world-policy filter metric did not increase during committed transfer resume: "
+                f"before={sticky_filtered_before} after={sticky_filtered_after}"
+            )
+        if candidate_filtered_after <= candidate_filtered_before:
+            raise AssertionError(
+                "gateway candidate world-policy filter metric did not increase during committed transfer routing: "
+                f"before={candidate_filtered_before} after={candidate_filtered_after}"
+            )
+        if replacement_selected_after <= replacement_selected_before:
+            raise AssertionError(
+                "gateway replacement-selected metric did not increase during committed transfer: "
+                f"before={replacement_selected_before} after={replacement_selected_after}"
+            )
+
+        alias_backend_after = wait_for_redis_value(alias_key)
+        if alias_backend_after != replacement_server_id:
+            raise AssertionError(
+                f"resume alias was not rewritten to the committed replacement backend: {alias_backend_after!r}"
+            )
+        if wait_for_redis_value(world_owner_key) != replacement_server_id:
+            raise AssertionError(
+                f"world owner key drifted after committed transfer: expected {replacement_server_id}"
+            )
+
+        print(
+            "PASS world-owner-transfer-commit: "
+            f"logical_session_id={logical_session_id} resumed_backend={resumed_backend} "
+            f"world_restore_delta={world_restore_after - world_restore_before:.0f} "
+            f"owner_restore_delta={world_owner_restore_after - world_owner_restore_before:.0f} "
+            f"replacement_selected_delta={replacement_selected_after - replacement_selected_before:.0f}"
+        )
+    finally:
+        if world_transfer_path:
+            status, payload = admin_request_json(world_transfer_path, method="DELETE")
+            if status not in (0, 200):
+                raise AssertionError(f"world transfer DELETE failed: status={status} payload={payload}")
+        first.close()
+        second.close()
+
+
+def run_world_migration_handoff() -> None:
+    room = f"resume_world_migration_room_{int(time.time())}"
+    message = f"resume_world_migration_msg_{int(time.time() * 1000)}"
+    fallback_server = require_fallback_server()
+    fallback_server_id = str(fallback_server["instance_id"])
+    fallback_world_id = str(fallback_server["world_id"])
+
+    first, login, user = acquire_session_for_backend(PRIMARY_SERVER_ID, "127.0.0.1", 36101, "verify_world_migration")
+    second = ChatClient(host="127.0.0.1", port=36100)
+    world_policy_path = ""
+    world_migration_path = ""
+    try:
+        logical_session_id, resume_token = assert_initial_login(login, user)
+        if login["world_id"] != PRIMARY_WORLD_ID:
+            raise AssertionError(f"unexpected initial world residency: {login}")
+        first.join_room(room, user)
+
+        routing_key = make_resume_routing_key(resume_token)
+        alias_key = f"{SESSION_DIRECTORY_PREFIX}{routing_key}"
+        world_policy_path = f"/api/v1/worlds/{login['world_id']}/policy"
+        world_migration_path = f"/api/v1/worlds/{login['world_id']}/migration"
+
+        print("Declaring world migration envelope and proving cross-world resume continuity on the target owner...")
+        if wait_for_redis_value(alias_key) != PRIMARY_SERVER_ID:
+            raise AssertionError(f"resume alias was not attached to {PRIMARY_SERVER_ID} before migration proof")
+
+        status, payload = admin_request_json(
+            world_migration_path,
+            method="PUT",
+            body_obj={
+                "target_world_id": fallback_world_id,
+                "target_owner_instance_id": fallback_server_id,
+                "preserve_room": True,
+                "payload_kind": "chat-room",
+                "payload_ref": "opaque-migration-ref",
+            },
+        )
+        if status != 200:
+            raise AssertionError(f"world migration PUT failed: status={status} payload={payload}")
+        migration_payload = (payload or {}).get("data", {}).get("migration", {})
+        if migration_payload.get("phase") != "awaiting_source_drain":
+            raise AssertionError(f"world migration PUT did not persist expected state: {payload}")
+
+        status, payload = admin_request_json(
+            world_policy_path,
+            method="PUT",
+            body_obj={
+                "draining": True,
+                "replacement_owner_instance_id": None,
+            },
+        )
+        if status != 200:
+            raise AssertionError(f"world policy PUT failed: status={status} payload={payload}")
+
+        world_restore_before = read_metric_sum(
+            "chat_continuity_world_restore_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        world_restore_fallback_before = read_metric_sum(
+            "chat_continuity_world_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        world_migration_restore_before = read_metric_sum(
+            "chat_continuity_world_migration_restore_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        migration_mismatch_before = read_world_migration_reason_metric("target_owner_mismatch")
+        source_not_draining_before = read_world_migration_reason_metric("source_not_draining")
+        sticky_filtered_before = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "sticky"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        candidate_filtered_before = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "candidate"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        replacement_selected_before = read_metric_sum(
+            "gateway_world_policy_replacement_selected_total",
+            ports=GATEWAY_METRICS_PORTS,
+        )
+
+        first.close()
+        second, resumed = resume_until_success("127.0.0.1", 36100, resume_token, user, logical_session_id)
+        resumed_backend = current_backend_for_resume_token(resume_token)
+        if resumed_backend != fallback_server_id:
+            raise AssertionError(
+                f"resume routing did not bind to the migration target backend: {resumed_backend!r}"
+            )
+        if resumed["world_id"] != fallback_world_id:
+            raise AssertionError(f"resume did not migrate to world {fallback_world_id}: {resumed}")
+
+        second.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8(message))
+        second.wait_for_self_chat(room, message, 5.0)
+
+        world_restore_after = read_metric_sum(
+            "chat_continuity_world_restore_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        world_restore_fallback_after = read_metric_sum(
+            "chat_continuity_world_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        world_migration_restore_after = read_metric_sum(
+            "chat_continuity_world_migration_restore_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        migration_mismatch_after = read_world_migration_reason_metric("target_owner_mismatch")
+        source_not_draining_after = read_world_migration_reason_metric("source_not_draining")
+        sticky_filtered_after = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "sticky"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        candidate_filtered_after = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "candidate"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        replacement_selected_after = read_metric_sum(
+            "gateway_world_policy_replacement_selected_total",
+            ports=GATEWAY_METRICS_PORTS,
+        )
+
+        if world_restore_after != world_restore_before:
+            raise AssertionError(
+                f"world restore success counter changed during migration restore: before={world_restore_before} after={world_restore_after}"
+            )
+        if world_restore_fallback_after != world_restore_fallback_before:
+            raise AssertionError(
+                f"world restore fallback counter changed during migration restore: before={world_restore_fallback_before} after={world_restore_fallback_after}"
+            )
+        if world_migration_restore_after <= world_migration_restore_before:
+            raise AssertionError(
+                "world migration restore success counter did not increase: "
+                f"before={world_migration_restore_before} after={world_migration_restore_after}"
+            )
+        if migration_mismatch_after != migration_mismatch_before:
+            raise AssertionError(
+                "target_owner_mismatch reason changed during successful migration: "
+                f"before={migration_mismatch_before} after={migration_mismatch_after}"
+            )
+        if source_not_draining_after != source_not_draining_before:
+            raise AssertionError(
+                "source_not_draining reason changed during successful migration: "
+                f"before={source_not_draining_before} after={source_not_draining_after}"
+            )
+        if sticky_filtered_after <= sticky_filtered_before:
+            raise AssertionError(
+                "gateway sticky world-policy filter metric did not increase during migration resume: "
+                f"before={sticky_filtered_before} after={sticky_filtered_after}"
+            )
+        if candidate_filtered_after <= candidate_filtered_before:
+            raise AssertionError(
+                "gateway candidate world-policy filter metric did not increase during migration routing: "
+                f"before={candidate_filtered_before} after={candidate_filtered_after}"
+            )
+        if replacement_selected_after != replacement_selected_before:
+            raise AssertionError(
+                "gateway replacement-selected metric changed without a same-world replacement owner: "
+                f"before={replacement_selected_before} after={replacement_selected_after}"
+            )
+
+        alias_backend_after = wait_for_redis_value(alias_key)
+        if alias_backend_after != fallback_server_id:
+            raise AssertionError(
+                f"resume alias was not rewritten to the migration target backend: {alias_backend_after!r}"
+            )
+
+        print(
+            "PASS world-migration-handoff: "
+            f"logical_session_id={logical_session_id} resumed_backend={resumed_backend} "
+            f"world_id={resumed['world_id']} migration_restore_delta={world_migration_restore_after - world_migration_restore_before:.0f} "
+            f"sticky_delta={sticky_filtered_after - sticky_filtered_before:.0f} "
+            f"candidate_delta={candidate_filtered_after - candidate_filtered_before:.0f}"
+        )
+    finally:
+        if world_migration_path:
+            status, payload = admin_request_json(world_migration_path, method="DELETE")
+            if status not in (0, 200):
+                raise AssertionError(f"world migration DELETE failed: status={status} payload={payload}")
+        if world_policy_path:
+            status, payload = admin_request_json(world_policy_path, method="DELETE")
+            if status not in (0, 200):
+                raise AssertionError(f"world policy DELETE failed: status={status} payload={payload}")
+        first.close()
+        second.close()
+
+
+def run_world_migration_target_room_handoff() -> None:
+    source_room = f"resume_world_migration_source_{int(time.time())}"
+    target_room = f"resume_world_migration_target_{int(time.time())}"
+    target_message = f"resume_world_migration_target_msg_{int(time.time() * 1000)}"
+    fallback_server = require_fallback_server()
+    fallback_server_id = str(fallback_server["instance_id"])
+    fallback_world_id = str(fallback_server["world_id"])
+
+    first, login, user = acquire_session_for_backend(PRIMARY_SERVER_ID, "127.0.0.1", 36101, "verify_world_migration_room")
+    second = ChatClient(host="127.0.0.1", port=36100)
+    world_policy_path = ""
+    world_migration_path = ""
+    try:
+        logical_session_id, resume_token = assert_initial_login(login, user)
+        if login["world_id"] != PRIMARY_WORLD_ID:
+            raise AssertionError(f"unexpected initial world residency: {login}")
+        first.join_room(source_room, user)
+
+        routing_key = make_resume_routing_key(resume_token)
+        alias_key = f"{SESSION_DIRECTORY_PREFIX}{routing_key}"
+        world_policy_path = f"/api/v1/worlds/{login['world_id']}/policy"
+        world_migration_path = f"/api/v1/worlds/{login['world_id']}/migration"
+
+        print("Declaring app-defined target-room migration handoff and proving resume lands in the payload-selected room...")
+        if wait_for_redis_value(alias_key) != PRIMARY_SERVER_ID:
+            raise AssertionError(f"resume alias was not attached to {PRIMARY_SERVER_ID} before payload migration proof")
+
+        status, payload = admin_request_json(
+            world_migration_path,
+            method="PUT",
+            body_obj={
+                "target_world_id": fallback_world_id,
+                "target_owner_instance_id": fallback_server_id,
+                "preserve_room": False,
+                "payload_kind": "chat-room-v1",
+                "payload_ref": target_room,
+            },
+        )
+        if status != 200:
+            raise AssertionError(f"world migration PUT failed: status={status} payload={payload}")
+        migration_payload = (payload or {}).get("data", {}).get("migration", {})
+        if migration_payload.get("phase") != "awaiting_source_drain":
+            raise AssertionError(f"world migration PUT did not persist expected state: {payload}")
+
+        status, payload = admin_request_json(
+            world_policy_path,
+            method="PUT",
+            body_obj={
+                "draining": True,
+                "replacement_owner_instance_id": None,
+            },
+        )
+        if status != 200:
+            raise AssertionError(f"world policy PUT failed: status={status} payload={payload}")
+
+        world_migration_restore_before = read_metric_sum(
+            "chat_continuity_world_migration_restore_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        payload_room_handoff_before = read_metric_sum(
+            "chat_continuity_world_migration_payload_room_handoff_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        payload_room_handoff_fallback_before = read_metric_sum(
+            "chat_continuity_world_migration_payload_room_handoff_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        state_restore_before = read_metric_sum(
+            "chat_continuity_state_restore_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        state_restore_fallback_before = read_metric_sum(
+            "chat_continuity_state_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        sticky_filtered_before = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "sticky"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        candidate_filtered_before = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "candidate"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+
+        first.close()
+        second, resumed = resume_until_success("127.0.0.1", 36100, resume_token, user, logical_session_id)
+        resumed_backend = current_backend_for_resume_token(resume_token)
+        if resumed_backend != fallback_server_id:
+            raise AssertionError(
+                f"resume routing did not bind to the migration target backend: {resumed_backend!r}"
+            )
+        if resumed["world_id"] != fallback_world_id:
+            raise AssertionError(f"resume did not migrate to world {fallback_world_id}: {resumed}")
+
+        second.send_frame(MSG_CHAT_SEND, lp_utf8(source_room) + lp_utf8("should-fail"))
+        errc, message = second.wait_for_error(5.0)
+        if errc != ROOM_MISMATCH_ERRC:
+            raise AssertionError(
+                f"target-room payload handoff did not move the resumed room boundary: errc={errc} message={message!r}"
+            )
+
+        second.send_frame(MSG_CHAT_SEND, lp_utf8(target_room) + lp_utf8(target_message))
+        second.wait_for_self_chat(target_room, target_message, 5.0)
+
+        world_migration_restore_after = read_metric_sum(
+            "chat_continuity_world_migration_restore_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        payload_room_handoff_after = read_metric_sum(
+            "chat_continuity_world_migration_payload_room_handoff_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        payload_room_handoff_fallback_after = read_metric_sum(
+            "chat_continuity_world_migration_payload_room_handoff_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        state_restore_after = read_metric_sum(
+            "chat_continuity_state_restore_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        state_restore_fallback_after = read_metric_sum(
+            "chat_continuity_state_restore_fallback_total",
+            ports=SERVER_METRICS_PORTS,
+        )
+        sticky_filtered_after = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "sticky"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+        candidate_filtered_after = read_metric_sum_labeled(
+            "gateway_world_policy_filtered_total",
+            {"source": "candidate"},
+            ports=GATEWAY_METRICS_PORTS,
+        )
+
+        if world_migration_restore_after <= world_migration_restore_before:
+            raise AssertionError(
+                "world migration restore success counter did not increase: "
+                f"before={world_migration_restore_before} after={world_migration_restore_after}"
+            )
+        if payload_room_handoff_after <= payload_room_handoff_before:
+            raise AssertionError(
+                "world migration payload room handoff metric did not increase: "
+                f"before={payload_room_handoff_before} after={payload_room_handoff_after}"
+            )
+        if payload_room_handoff_fallback_after != payload_room_handoff_fallback_before:
+            raise AssertionError(
+                "payload room handoff fallback metric changed during successful target-room resume: "
+                f"before={payload_room_handoff_fallback_before} after={payload_room_handoff_fallback_after}"
+            )
+        if state_restore_after != state_restore_before:
+            raise AssertionError(
+                "generic room continuity restore metric changed during payload room handoff: "
+                f"before={state_restore_before} after={state_restore_after}"
+            )
+        if state_restore_fallback_after != state_restore_fallback_before:
+            raise AssertionError(
+                "generic room continuity fallback metric changed during payload room handoff: "
+                f"before={state_restore_fallback_before} after={state_restore_fallback_after}"
+            )
+        if sticky_filtered_after <= sticky_filtered_before:
+            raise AssertionError(
+                "gateway sticky world-policy filter metric did not increase during target-room migration resume: "
+                f"before={sticky_filtered_before} after={sticky_filtered_after}"
+            )
+        if candidate_filtered_after <= candidate_filtered_before:
+            raise AssertionError(
+                "gateway candidate world-policy filter metric did not increase during target-room migration routing: "
+                f"before={candidate_filtered_before} after={candidate_filtered_after}"
+            )
+
+        alias_backend_after = wait_for_redis_value(alias_key)
+        if alias_backend_after != fallback_server_id:
+            raise AssertionError(
+                f"resume alias was not rewritten to the migration target backend: {alias_backend_after!r}"
+            )
+
+        print(
+            "PASS world-migration-target-room-handoff: "
+            f"logical_session_id={logical_session_id} resumed_backend={resumed_backend} "
+            f"world_id={resumed['world_id']} payload_room_handoff_delta={payload_room_handoff_after - payload_room_handoff_before:.0f} "
+            f"sticky_delta={sticky_filtered_after - sticky_filtered_before:.0f} "
+            f"candidate_delta={candidate_filtered_after - candidate_filtered_before:.0f}"
+        )
+    finally:
+        if world_migration_path:
+            status, payload = admin_request_json(world_migration_path, method="DELETE")
+            if status not in (0, 200):
+                raise AssertionError(f"world migration DELETE failed: status={status} payload={payload}")
+        if world_policy_path:
+            status, payload = admin_request_json(world_policy_path, method="DELETE")
+            if status not in (0, 200):
+                raise AssertionError(f"world policy DELETE failed: status={status} payload={payload}")
+        first.close()
+        second.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -1069,6 +1956,12 @@ def main() -> int:
             "world-owner-missing-fallback",
             "world-drain-fallback",
             "world-drain-reassignment",
+            "world-drain-progress",
+            "world-drain-transfer-closure",
+            "world-drain-migration-closure",
+            "world-owner-transfer-commit",
+            "world-migration-handoff",
+            "world-migration-target-room-handoff",
             "both",
         ),
         default="both",
@@ -1092,6 +1985,18 @@ def main() -> int:
             run_world_drain_fallback()
         if args.scenario == "world-drain-reassignment":
             run_world_drain_reassignment()
+        if args.scenario == "world-drain-progress":
+            run_world_drain_progress()
+        if args.scenario == "world-drain-transfer-closure":
+            run_world_drain_transfer_closure()
+        if args.scenario == "world-drain-migration-closure":
+            run_world_drain_migration_closure()
+        if args.scenario == "world-owner-transfer-commit":
+            run_world_owner_transfer_commit()
+        if args.scenario == "world-migration-handoff":
+            run_world_migration_handoff()
+        if args.scenario == "world-migration-target-room-handoff":
+            run_world_migration_target_room_handoff()
         return 0
     except Exception as exc:
         print(f"FAIL: {exc}")

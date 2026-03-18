@@ -204,6 +204,14 @@ def main() -> int:
                     "settings": False,
                     "moderation": False,
                     "world_policy": False,
+                    "world_drain": False,
+                    "world_transfer": False,
+                    "world_migration": False,
+                    "desired_topology": False,
+                    "topology_actuation_request": False,
+                    "topology_actuation_execution": False,
+                    "topology_actuation_adapter": False,
+                    "topology_actuation_runtime_assignment": False,
                 },
             ),
             (
@@ -214,6 +222,14 @@ def main() -> int:
                     "settings": False,
                     "moderation": False,
                     "world_policy": False,
+                    "world_drain": False,
+                    "world_transfer": False,
+                    "world_migration": False,
+                    "desired_topology": False,
+                    "topology_actuation_request": False,
+                    "topology_actuation_execution": False,
+                    "topology_actuation_adapter": False,
+                    "topology_actuation_runtime_assignment": False,
                 },
             ),
             (
@@ -224,6 +240,14 @@ def main() -> int:
                     "settings": True,
                     "moderation": True,
                     "world_policy": True,
+                    "world_drain": True,
+                    "world_transfer": True,
+                    "world_migration": True,
+                    "desired_topology": True,
+                    "topology_actuation_request": True,
+                    "topology_actuation_execution": True,
+                    "topology_actuation_adapter": True,
+                    "topology_actuation_runtime_assignment": True,
                 },
             ),
         ]
@@ -247,10 +271,118 @@ def main() -> int:
         settings_path = "/api/v1/settings?key=recent_history_limit&value=35"
         moderation_path = "/api/v1/users/mute?client_id=role-matrix-user&duration_sec=30&reason=auth-check"
         world_policy_path = "/api/v1/worlds/test-world/policy"
+        world_drain_path = "/api/v1/worlds/test-world/drain"
+        world_transfer_path = "/api/v1/worlds/test-world/transfer"
+        world_migration_path = "/api/v1/worlds/test-world/migration"
+        desired_topology_path = "/api/v1/topology/desired"
+        topology_actuation_request_path = "/api/v1/topology/actuation/request"
+        topology_actuation_execution_path = "/api/v1/topology/actuation/execution"
+        topology_actuation_adapter_path = "/api/v1/topology/actuation/adapter"
+        topology_actuation_runtime_assignment_path = "/api/v1/topology/actuation/runtime-assignment"
         world_policy_body = json.dumps(
             {"draining": True, "replacement_owner_instance_id": None}
         ).encode("utf-8")
+        world_transfer_body = json.dumps(
+            {"target_owner_instance_id": "server-2", "commit_owner": True}
+        ).encode("utf-8")
+        world_drain_body = json.dumps(
+            {"replacement_owner_instance_id": None}
+        ).encode("utf-8")
+        world_migration_body = json.dumps(
+            {"target_world_id": "starter-b", "target_owner_instance_id": "server-2"}
+        ).encode("utf-8")
+        desired_topology_body = json.dumps(
+            {
+                "topology_id": "auth-check-topology",
+                "pools": [
+                    {
+                        "world_id": "starter-a",
+                        "shard": "starter",
+                        "replicas": 1,
+                    }
+                ],
+            }
+        ).encode("utf-8")
+        topology_actuation_request_body = json.dumps(
+            {
+                "request_id": "auth-check-request",
+                "basis_topology_revision": 1,
+                "actions": [
+                    {
+                        "world_id": "starter-a",
+                        "shard": "starter",
+                        "action": "scale_out_pool",
+                        "replica_delta": 1,
+                    }
+                ],
+            }
+        ).encode("utf-8")
+        topology_actuation_execution_body = json.dumps(
+            {
+                "executor_id": "auth-check-executor",
+                "request_revision": 1,
+                "actions": [
+                    {
+                        "world_id": "starter-a",
+                        "shard": "starter",
+                        "action": "scale_out_pool",
+                        "replica_delta": 1,
+                        "observed_instances_before": 1,
+                        "ready_instances_before": 1,
+                        "state": "claimed",
+                    }
+                ],
+            }
+        ).encode("utf-8")
+        topology_actuation_adapter_body = json.dumps(
+            {
+                "adapter_id": "auth-check-adapter",
+                "execution_revision": 1,
+                "actions": [
+                    {
+                        "world_id": "starter-a",
+                        "shard": "starter",
+                        "action": "scale_out_pool",
+                        "replica_delta": 1,
+                    }
+                ],
+            }
+        ).encode("utf-8")
+        topology_actuation_runtime_assignment_body = json.dumps(
+            {
+                "adapter_id": "auth-check-adapter",
+                "lease_revision": 1,
+                "assignments": [
+                    {
+                        "instance_id": "server-2",
+                        "world_id": "starter-a",
+                        "shard": "starter",
+                        "action": "scale_out_pool",
+                    }
+                ],
+            }
+        ).encode("utf-8")
         json_headers = {"Content-Type": "application/json", "Content-Length": str(len(world_policy_body))}
+        world_drain_headers = {"Content-Type": "application/json", "Content-Length": str(len(world_drain_body))}
+        world_transfer_headers = {"Content-Type": "application/json", "Content-Length": str(len(world_transfer_body))}
+        world_migration_headers = {"Content-Type": "application/json", "Content-Length": str(len(world_migration_body))}
+        desired_json_headers = {"Content-Type": "application/json", "Content-Length": str(len(desired_topology_body))}
+        topology_actuation_request_headers = {
+            "Content-Type": "application/json",
+            "Content-Length": str(len(topology_actuation_request_body)),
+        }
+        topology_actuation_execution_headers = {
+            "Content-Type": "application/json",
+            "Content-Length": str(len(topology_actuation_execution_body)),
+        }
+        topology_actuation_adapter_headers = {
+            "Content-Type": "application/json",
+            "Content-Length": str(len(topology_actuation_adapter_body)),
+        }
+        topology_actuation_runtime_assignment_headers = {
+            "Content-Type": "application/json",
+            "Content-Length": str(len(topology_actuation_runtime_assignment_body)),
+        }
 
         expect_error(
             base_url,
@@ -293,6 +425,78 @@ def main() -> int:
             method="PUT",
             data=world_policy_body,
         )
+        expect_error(
+            base_url,
+            world_drain_path,
+            403,
+            "FORBIDDEN",
+            headers={**viewer_headers, **world_drain_headers},
+            method="PUT",
+            data=world_drain_body,
+        )
+        expect_error(
+            base_url,
+            world_transfer_path,
+            403,
+            "FORBIDDEN",
+            headers={**viewer_headers, **world_transfer_headers},
+            method="PUT",
+            data=world_transfer_body,
+        )
+        expect_error(
+            base_url,
+            world_migration_path,
+            403,
+            "FORBIDDEN",
+            headers={**viewer_headers, **world_migration_headers},
+            method="PUT",
+            data=world_migration_body,
+        )
+        expect_error(
+            base_url,
+            desired_topology_path,
+            403,
+            "FORBIDDEN",
+            headers={**viewer_headers, **desired_json_headers},
+            method="PUT",
+            data=desired_topology_body,
+        )
+        expect_error(
+            base_url,
+            topology_actuation_request_path,
+            403,
+            "FORBIDDEN",
+            headers={**viewer_headers, **topology_actuation_request_headers},
+            method="PUT",
+            data=topology_actuation_request_body,
+        )
+        expect_error(
+            base_url,
+            topology_actuation_execution_path,
+            403,
+            "FORBIDDEN",
+            headers={**viewer_headers, **topology_actuation_execution_headers},
+            method="PUT",
+            data=topology_actuation_execution_body,
+        )
+        expect_error(
+            base_url,
+            topology_actuation_adapter_path,
+            403,
+            "FORBIDDEN",
+            headers={**viewer_headers, **topology_actuation_adapter_headers},
+            method="PUT",
+            data=topology_actuation_adapter_body,
+        )
+        expect_error(
+            base_url,
+            topology_actuation_runtime_assignment_path,
+            403,
+            "FORBIDDEN",
+            headers={**viewer_headers, **topology_actuation_runtime_assignment_headers},
+            method="PUT",
+            data=topology_actuation_runtime_assignment_body,
+        )
 
         expect_error(
             base_url,
@@ -326,6 +530,78 @@ def main() -> int:
             headers={**operator_headers, **json_headers},
             method="PUT",
             data=world_policy_body,
+        )
+        expect_error(
+            base_url,
+            world_drain_path,
+            403,
+            "FORBIDDEN",
+            headers={**operator_headers, **world_drain_headers},
+            method="PUT",
+            data=world_drain_body,
+        )
+        expect_error(
+            base_url,
+            world_transfer_path,
+            403,
+            "FORBIDDEN",
+            headers={**operator_headers, **world_transfer_headers},
+            method="PUT",
+            data=world_transfer_body,
+        )
+        expect_error(
+            base_url,
+            world_migration_path,
+            403,
+            "FORBIDDEN",
+            headers={**operator_headers, **world_migration_headers},
+            method="PUT",
+            data=world_migration_body,
+        )
+        expect_error(
+            base_url,
+            desired_topology_path,
+            403,
+            "FORBIDDEN",
+            headers={**operator_headers, **desired_json_headers},
+            method="PUT",
+            data=desired_topology_body,
+        )
+        expect_error(
+            base_url,
+            topology_actuation_request_path,
+            403,
+            "FORBIDDEN",
+            headers={**operator_headers, **topology_actuation_request_headers},
+            method="PUT",
+            data=topology_actuation_request_body,
+        )
+        expect_error(
+            base_url,
+            topology_actuation_execution_path,
+            403,
+            "FORBIDDEN",
+            headers={**operator_headers, **topology_actuation_execution_headers},
+            method="PUT",
+            data=topology_actuation_execution_body,
+        )
+        expect_error(
+            base_url,
+            topology_actuation_adapter_path,
+            403,
+            "FORBIDDEN",
+            headers={**operator_headers, **topology_actuation_adapter_headers},
+            method="PUT",
+            data=topology_actuation_adapter_body,
+        )
+        expect_error(
+            base_url,
+            topology_actuation_runtime_assignment_path,
+            403,
+            "FORBIDDEN",
+            headers={**operator_headers, **topology_actuation_runtime_assignment_headers},
+            method="PUT",
+            data=topology_actuation_runtime_assignment_body,
         )
         expect_not_forbidden(
             base_url,
@@ -365,6 +641,62 @@ def main() -> int:
             method="PUT",
             data=world_policy_body,
         )
+        expect_not_forbidden(
+            base_url,
+            world_drain_path,
+            headers={**admin_headers, **world_drain_headers},
+            method="PUT",
+            data=world_drain_body,
+        )
+        expect_not_forbidden(
+            base_url,
+            world_transfer_path,
+            headers={**admin_headers, **world_transfer_headers},
+            method="PUT",
+            data=world_transfer_body,
+        )
+        expect_not_forbidden(
+            base_url,
+            world_migration_path,
+            headers={**admin_headers, **world_migration_headers},
+            method="PUT",
+            data=world_migration_body,
+        )
+        expect_not_forbidden(
+            base_url,
+            desired_topology_path,
+            headers={**admin_headers, **desired_json_headers},
+            method="PUT",
+            data=desired_topology_body,
+        )
+        expect_not_forbidden(
+            base_url,
+            topology_actuation_request_path,
+            headers={**admin_headers, **topology_actuation_request_headers},
+            method="PUT",
+            data=topology_actuation_request_body,
+        )
+        expect_not_forbidden(
+            base_url,
+            topology_actuation_execution_path,
+            headers={**admin_headers, **topology_actuation_execution_headers},
+            method="PUT",
+            data=topology_actuation_execution_body,
+        )
+        expect_not_forbidden(
+            base_url,
+            topology_actuation_adapter_path,
+            headers={**admin_headers, **topology_actuation_adapter_headers},
+            method="PUT",
+            data=topology_actuation_adapter_body,
+        )
+        expect_not_forbidden(
+            base_url,
+            topology_actuation_runtime_assignment_path,
+            headers={**admin_headers, **topology_actuation_runtime_assignment_headers},
+            method="PUT",
+            data=topology_actuation_runtime_assignment_body,
+        )
 
         metrics_status, metrics_body = request_text(
             f"{base_url}/metrics",
@@ -377,6 +709,36 @@ def main() -> int:
             "admin_world_policy_write_fail_total",
             "admin_world_policy_clear_total",
             "admin_world_policy_clear_fail_total",
+            "admin_world_drain_write_total",
+            "admin_world_drain_write_fail_total",
+            "admin_world_drain_clear_total",
+            "admin_world_drain_clear_fail_total",
+            "admin_world_transfer_write_total",
+            "admin_world_transfer_write_fail_total",
+            "admin_world_transfer_clear_total",
+            "admin_world_transfer_clear_fail_total",
+            "admin_world_transfer_owner_commit_total",
+            "admin_world_transfer_owner_commit_fail_total",
+            "admin_world_migration_write_total",
+            "admin_world_migration_write_fail_total",
+            "admin_world_migration_clear_total",
+            "admin_world_migration_clear_fail_total",
+            "admin_topology_actuation_request_write_total",
+            "admin_topology_actuation_request_write_fail_total",
+            "admin_topology_actuation_request_clear_total",
+            "admin_topology_actuation_request_clear_fail_total",
+            "admin_topology_actuation_execution_write_total",
+            "admin_topology_actuation_execution_write_fail_total",
+            "admin_topology_actuation_execution_clear_total",
+            "admin_topology_actuation_execution_clear_fail_total",
+            "admin_topology_actuation_adapter_write_total",
+            "admin_topology_actuation_adapter_write_fail_total",
+            "admin_topology_actuation_adapter_clear_total",
+            "admin_topology_actuation_adapter_clear_fail_total",
+            "admin_topology_actuation_runtime_assignment_write_total",
+            "admin_topology_actuation_runtime_assignment_write_fail_total",
+            "admin_topology_actuation_runtime_assignment_clear_total",
+            "admin_topology_actuation_runtime_assignment_clear_fail_total",
         ):
             if parse_prometheus_counter(metrics_body, metric_name) != 0:
                 raise RuntimeError(

@@ -1,4 +1,5 @@
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -9,8 +10,21 @@
 #include <boost/asio/io_context.hpp>
 
 #include "server/core/api/version.hpp"
+#include "server/core/app/app_host.hpp"
+#include "server/core/app/engine_builder.hpp"
+#include "server/core/app/engine_context.hpp"
+#include "server/core/app/engine_runtime.hpp"
 #include "server/core/app/termination_signals.hpp"
 #include "server/core/build_info.hpp"
+#include "server/core/fps/direct_bind.hpp"
+#include "server/core/fps/direct_delivery.hpp"
+#include "server/core/fps/transport_quality.hpp"
+#include "server/core/fps/transport_policy.hpp"
+#include "server/core/fps/runtime.hpp"
+#include "server/core/mmorpg/migration.hpp"
+#include "server/core/mmorpg/topology.hpp"
+#include "server/core/mmorpg/world_drain.hpp"
+#include "server/core/mmorpg/world_transfer.hpp"
 #include "server/core/compression/compressor.hpp"
 #include "server/core/concurrent/job_queue.hpp"
 #include "server/core/concurrent/task_scheduler.hpp"
@@ -44,6 +58,83 @@ int main() {
     server::core::concurrent::TaskScheduler scheduler;
     scheduler.post([] {});
     (void)scheduler.poll();
+
+    server::core::app::EngineRuntime runtime =
+        server::core::app::EngineBuilder("public_api_headers_compile")
+            .declare_dependency("dep")
+            .build();
+    server::core::app::EngineContext local_context;
+    auto runtime_flag = std::make_shared<int>(1);
+    local_context.set(runtime_flag);
+    runtime.set_service(runtime_flag);
+    runtime.set_dependency_ok("dep", true);
+    runtime.mark_running();
+    runtime.start_admin_http(
+        0,
+        [] { return std::string{}; },
+        server::core::metrics::MetricsHttpServer::LogsCallback{},
+        [](const server::core::metrics::MetricsHttpServer::HttpRequest&)
+            -> std::optional<server::core::metrics::MetricsHttpServer::RouteResponse> {
+            return std::nullopt;
+        });
+    runtime.request_stop();
+    runtime.wait_for_stop(std::chrono::milliseconds(1));
+    runtime.run_shutdown();
+    runtime.mark_stopped();
+    server::core::fps::WorldRuntime fps_runtime;
+    (void)fps_runtime.stage_input(1, server::core::fps::InputCommand{.input_seq = 1});
+    (void)fps_runtime.tick();
+    (void)server::core::fps::evaluate_direct_delivery(server::core::fps::DirectDeliveryContext{
+        .direct_path_enabled_for_message = true,
+        .udp_bound = true,
+    });
+    server::core::fps::UdpSequencedMetrics udp_quality;
+    (void)udp_quality.on_packet(1, 1000);
+    (void)server::core::mmorpg::evaluate_world_migration(
+        server::core::mmorpg::ObservedWorldMigrationWorld{},
+        std::nullopt,
+        std::nullopt);
+    (void)server::core::mmorpg::collect_observed_pools(
+        std::vector<server::core::mmorpg::ObservedTopologyInstance>{});
+    (void)server::core::mmorpg::plan_topology_actuation(
+        server::core::mmorpg::DesiredTopologyDocument{},
+        std::vector<server::core::mmorpg::ObservedTopologyPool>{});
+    (void)server::core::mmorpg::evaluate_topology_actuation_request_status(
+        server::core::mmorpg::TopologyActuationRequestDocument{},
+        server::core::mmorpg::DesiredTopologyDocument{},
+        std::vector<server::core::mmorpg::ObservedTopologyPool>{});
+    (void)server::core::mmorpg::evaluate_topology_actuation_execution_status(
+        server::core::mmorpg::TopologyActuationExecutionDocument{},
+        server::core::mmorpg::TopologyActuationRequestDocument{},
+        server::core::mmorpg::DesiredTopologyDocument{},
+        std::vector<server::core::mmorpg::ObservedTopologyPool>{});
+    (void)server::core::mmorpg::evaluate_topology_actuation_realization_status(
+        server::core::mmorpg::TopologyActuationExecutionDocument{},
+        server::core::mmorpg::TopologyActuationRequestDocument{},
+        server::core::mmorpg::DesiredTopologyDocument{},
+        std::vector<server::core::mmorpg::ObservedTopologyPool>{});
+    (void)server::core::mmorpg::evaluate_topology_actuation_adapter_status(
+        server::core::mmorpg::TopologyActuationAdapterLeaseDocument{},
+        server::core::mmorpg::TopologyActuationExecutionDocument{},
+        server::core::mmorpg::TopologyActuationRequestDocument{},
+        server::core::mmorpg::DesiredTopologyDocument{},
+        std::vector<server::core::mmorpg::ObservedTopologyPool>{});
+    (void)server::core::mmorpg::find_topology_actuation_runtime_assignment(
+        server::core::mmorpg::TopologyActuationRuntimeAssignmentDocument{},
+        "server-1");
+    (void)server::core::mmorpg::evaluate_world_transfer(
+        server::core::mmorpg::ObservedWorldTransferState{});
+    (void)server::core::mmorpg::evaluate_world_drain(
+        server::core::mmorpg::ObservedWorldDrainState{});
+    (void)server::core::mmorpg::evaluate_world_drain_orchestration(
+        server::core::mmorpg::WorldDrainStatus{},
+        std::nullopt,
+        std::nullopt);
+    server::core::fps::DirectTransportRolloutPolicy rollout_policy;
+    rollout_policy.opcode_allowlist = server::core::fps::parse_direct_opcode_allowlist("0x0206");
+    (void)rollout_policy.opcode_allowed(0x0206);
+    (void)server::core::fps::evaluate_direct_attach(rollout_policy, "session-a", 1);
+    (void)server::core::fps::encode_direct_bind_request_payload(server::core::fps::DirectBindRequest{});
 
     server::core::JobQueue queue(4);
     server::core::ThreadManager workers(queue);

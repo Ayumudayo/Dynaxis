@@ -1,5 +1,5 @@
 {
-  "api_version": "2.1.0",
+  "api_version": "2.16.0",
   "stable_headers": [
     {
       "path": "server/core/api/version.hpp",
@@ -10,11 +10,59 @@
       "compatibility": "stable"
     },
     {
+      "path": "server/core/app/engine_builder.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/app/engine_context.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/app/engine_runtime.hpp",
+      "compatibility": "stable"
+    },
+    {
       "path": "server/core/app/termination_signals.hpp",
       "compatibility": "stable"
     },
     {
       "path": "server/core/build_info.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/fps/direct_bind.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/fps/direct_delivery.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/fps/transport_quality.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/fps/transport_policy.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/fps/runtime.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/mmorpg/migration.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/mmorpg/world_drain.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/mmorpg/topology.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/mmorpg/world_transfer.hpp",
       "compatibility": "stable"
     },
     {

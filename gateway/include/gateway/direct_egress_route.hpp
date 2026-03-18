@@ -2,15 +2,14 @@
 
 #include <cstdint>
 
+#include "server/core/fps/direct_delivery.hpp"
 #include "server/protocol/game_opcodes.hpp"
 
 namespace gateway {
 
-enum class DirectEgressRoute : std::uint8_t {
-    kTcpFallback = 0,
-    kUdp,
-    kRudp,
-};
+using DirectEgressRoute = server::core::fps::DirectDeliveryRoute;
+using DirectEgressReason = server::core::fps::DirectDeliveryReason;
+using DirectEgressDecision = server::core::fps::DirectDeliveryDecision;
 
 /** @brief Direct UDP/RUDP egress eligibility inputs for a backend payload. */
 struct DirectEgressContext {
@@ -26,23 +25,23 @@ inline bool is_direct_egress_msg(std::uint16_t msg_id) noexcept {
 }
 
 inline DirectEgressRoute select_direct_egress_route(const DirectEgressContext& context) noexcept {
-    if (!is_direct_egress_msg(context.msg_id) || !context.udp_bound) {
-        return DirectEgressRoute::kTcpFallback;
-    }
+    return server::core::fps::select_direct_delivery_route(server::core::fps::DirectDeliveryContext{
+        .direct_path_enabled_for_message = is_direct_egress_msg(context.msg_id),
+        .udp_bound = context.udp_bound,
+        .rudp_selected = context.rudp_selected,
+        .rudp_fallback_to_tcp = context.rudp_fallback_to_tcp,
+        .rudp_established = context.rudp_established,
+    });
+}
 
-    if (!context.rudp_selected) {
-        return DirectEgressRoute::kUdp;
-    }
-
-    if (context.rudp_fallback_to_tcp) {
-        return DirectEgressRoute::kTcpFallback;
-    }
-
-    if (context.rudp_established) {
-        return DirectEgressRoute::kRudp;
-    }
-
-    return DirectEgressRoute::kUdp;
+inline DirectEgressDecision evaluate_direct_egress(const DirectEgressContext& context) noexcept {
+    return server::core::fps::evaluate_direct_delivery(server::core::fps::DirectDeliveryContext{
+        .direct_path_enabled_for_message = is_direct_egress_msg(context.msg_id),
+        .udp_bound = context.udp_bound,
+        .rudp_selected = context.rudp_selected,
+        .rudp_fallback_to_tcp = context.rudp_fallback_to_tcp,
+        .rudp_established = context.rudp_established,
+    });
 }
 
 } // namespace gateway

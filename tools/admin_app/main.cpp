@@ -34,10 +34,13 @@
 #include <nlohmann/json.hpp>
 
 #include "redis_client_factory.hpp"
-#include "server/core/app/app_host.hpp"
-#include "server/core/app/termination_signals.hpp"
+#include "server/core/app/engine_builder.hpp"
 #include "server/core/config/runtime_settings.hpp"
 #include "server/core/metrics/build_info.hpp"
+#include "server/core/mmorpg/migration.hpp"
+#include "server/core/mmorpg/topology.hpp"
+#include "server/core/mmorpg/world_drain.hpp"
+#include "server/core/mmorpg/world_transfer.hpp"
 #include "server/core/metrics/http_server.hpp"
 #include "server/core/state/instance_registry.hpp"
 #include "server/core/state/world_lifecycle_policy.hpp"
@@ -45,6 +48,7 @@
 #include "server/core/security/admin_command_auth.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/util/paths.hpp"
+#include "server/app/topology_runtime_assignment.hpp"
 
 namespace corelog = server::core::log;
 
@@ -78,6 +82,13 @@ constexpr std::string_view kDefaultExtPluginsFallbackDir = "server/plugins_built
 constexpr std::string_view kDefaultExtScriptsDir = "server/scripts";
 constexpr std::string_view kDefaultExtScriptsFallbackDir = "server/scripts_builtin";
 constexpr std::string_view kDefaultExtScheduleStorePath = "tasks/runtime_ext_deployments_store.json";
+constexpr std::string_view kDefaultDesiredTopologyKey = "dynaxis:topology:desired";
+constexpr std::string_view kDefaultTopologyActuationRequestKey = "dynaxis:topology:actuation:request";
+constexpr std::string_view kDefaultTopologyActuationExecutionKey = "dynaxis:topology:actuation:execution";
+constexpr std::string_view kDefaultTopologyActuationAdapterKey = "dynaxis:topology:actuation:adapter";
+constexpr std::string_view kDefaultTopologyActuationRuntimeAssignmentKey =
+    "dynaxis:topology:actuation:runtime-assignment";
+constexpr std::uint32_t kDefaultContinuityLeaseTtlSec = 900;
 
 constexpr std::string_view kAdminUiFileName = "admin_ui.html";
 
@@ -355,6 +366,14 @@ constexpr std::string_view kRoleRequiredAnnouncement = "operator";
 constexpr std::string_view kRoleRequiredSettings = "admin";
 constexpr std::string_view kRoleRequiredModeration = "admin";
 constexpr std::string_view kRoleRequiredWorldPolicy = "admin";
+constexpr std::string_view kRoleRequiredWorldDrain = "admin";
+constexpr std::string_view kRoleRequiredWorldTransfer = "admin";
+constexpr std::string_view kRoleRequiredWorldMigration = "admin";
+constexpr std::string_view kRoleRequiredDesiredTopology = "admin";
+constexpr std::string_view kRoleRequiredTopologyActuationRequest = "admin";
+constexpr std::string_view kRoleRequiredTopologyActuationExecution = "admin";
+constexpr std::string_view kRoleRequiredTopologyActuationAdapter = "admin";
+constexpr std::string_view kRoleRequiredTopologyActuationRuntimeAssignment = "admin";
 
 std::string url_decode(std::string_view raw) {
     std::string out;
@@ -683,6 +702,15 @@ struct WorldPolicyWriteRequest {
     std::string error_details{"{}"};
 };
 
+struct WorldDrainWriteRequest {
+    bool ok{false};
+    std::optional<std::string> replacement_owner_instance_id;
+    std::string error_status{"400 Bad Request"};
+    std::string error_code{"BAD_REQUEST"};
+    std::string error_message{"malformed JSON body"};
+    std::string error_details{"{}"};
+};
+
 WorldPolicyWriteRequest parse_world_policy_write_request(
     const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
     WorldPolicyWriteRequest result;
@@ -731,6 +759,1024 @@ WorldPolicyWriteRequest parse_world_policy_write_request(
             result.error_details = "{\"parameter\":\"replacement_owner_instance_id\"}";
             return result;
         }
+    }
+
+    result.ok = true;
+    result.error_details = "{}";
+    return result;
+}
+
+WorldDrainWriteRequest parse_world_drain_write_request(
+    const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+    WorldDrainWriteRequest result;
+    if (request.body.empty()) {
+        result.error_message = "world drain endpoint requires a JSON body";
+        return result;
+    }
+
+    std::string content_type;
+    if (const auto it = request.headers.find("content-type"); it != request.headers.end()) {
+        content_type = to_lower_ascii(trim_ascii(it->second));
+    }
+    if (content_type.rfind("application/json", 0) != 0) {
+        result.error_status = "415 Unsupported Media Type";
+        result.error_code = "UNSUPPORTED_CONTENT_TYPE";
+        result.error_message = "world drain endpoint requires application/json";
+        return result;
+    }
+
+    const auto parsed = nlohmann::json::parse(request.body, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object()) {
+        result.error_message = "malformed JSON body";
+        return result;
+    }
+
+    if (parsed.contains("replacement_owner_instance_id")) {
+        const auto& replacement = parsed["replacement_owner_instance_id"];
+        if (replacement.is_null()) {
+            result.replacement_owner_instance_id = std::nullopt;
+        } else if (replacement.is_string()) {
+            const std::string normalized = trim_ascii(replacement.get<std::string>());
+            if (!normalized.empty()) {
+                result.replacement_owner_instance_id = normalized;
+            } else {
+                result.replacement_owner_instance_id = std::nullopt;
+            }
+        } else {
+            result.error_message = "replacement_owner_instance_id must be a string or null";
+            result.error_details = "{\"parameter\":\"replacement_owner_instance_id\"}";
+            return result;
+        }
+    }
+
+    result.ok = true;
+    result.error_details = "{}";
+    return result;
+}
+
+using DesiredTopologyPool = server::core::mmorpg::DesiredTopologyPool;
+using DesiredTopologyDocument = server::core::mmorpg::DesiredTopologyDocument;
+using TopologyActuationRequestAction = server::core::mmorpg::TopologyActuationRequestAction;
+using TopologyActuationRequestDocument = server::core::mmorpg::TopologyActuationRequestDocument;
+using TopologyActuationExecutionAction = server::core::mmorpg::TopologyActuationExecutionAction;
+using TopologyActuationExecutionDocument = server::core::mmorpg::TopologyActuationExecutionDocument;
+using TopologyActuationAdapterLeaseAction = server::core::mmorpg::TopologyActuationAdapterLeaseAction;
+using TopologyActuationAdapterLeaseDocument = server::core::mmorpg::TopologyActuationAdapterLeaseDocument;
+using TopologyActuationRuntimeAssignmentItem = server::core::mmorpg::TopologyActuationRuntimeAssignmentItem;
+using TopologyActuationRuntimeAssignmentDocument = server::core::mmorpg::TopologyActuationRuntimeAssignmentDocument;
+using WorldMigrationEnvelope = server::core::mmorpg::WorldMigrationEnvelope;
+
+struct DesiredTopologyWriteRequest {
+    bool ok{false};
+    DesiredTopologyDocument topology;
+    std::optional<std::uint64_t> expected_revision;
+    std::string error_status{"400 Bad Request"};
+    std::string error_code{"BAD_REQUEST"};
+    std::string error_message{"malformed JSON body"};
+    std::string error_details{"{}"};
+};
+
+DesiredTopologyWriteRequest parse_desired_topology_write_request(
+    const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+    DesiredTopologyWriteRequest result;
+    if (request.body.empty()) {
+        result.error_message = "desired topology endpoint requires a JSON body";
+        return result;
+    }
+
+    std::string content_type;
+    if (const auto it = request.headers.find("content-type"); it != request.headers.end()) {
+        content_type = to_lower_ascii(trim_ascii(it->second));
+    }
+    if (content_type.rfind("application/json", 0) != 0) {
+        result.error_status = "415 Unsupported Media Type";
+        result.error_code = "UNSUPPORTED_CONTENT_TYPE";
+        result.error_message = "desired topology endpoint requires application/json";
+        return result;
+    }
+
+    const auto parsed = nlohmann::json::parse(request.body, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object()) {
+        result.error_message = "malformed JSON body";
+        return result;
+    }
+
+    if (!parsed.contains("topology_id") || !parsed["topology_id"].is_string()) {
+        result.error_message = "topology_id must be a non-empty string";
+        result.error_details = "{\"parameter\":\"topology_id\"}";
+        return result;
+    }
+    result.topology.topology_id = trim_ascii(parsed["topology_id"].get<std::string>());
+    if (result.topology.topology_id.empty()) {
+        result.error_message = "topology_id must be a non-empty string";
+        result.error_details = "{\"parameter\":\"topology_id\"}";
+        return result;
+    }
+
+    if (!parsed.contains("pools") || !parsed["pools"].is_array()) {
+        result.error_message = "pools must be an array";
+        result.error_details = "{\"parameter\":\"pools\"}";
+        return result;
+    }
+
+    std::unordered_set<std::string> seen_pool_keys;
+    for (std::size_t index = 0; index < parsed["pools"].size(); ++index) {
+        const auto& item = parsed["pools"][index];
+        if (!item.is_object()) {
+            result.error_message = "each pool must be an object";
+            result.error_details = "{\"parameter\":\"pools\"}";
+            return result;
+        }
+
+        DesiredTopologyPool pool;
+        if (!item.contains("world_id") || !item["world_id"].is_string()) {
+            result.error_message = "pool.world_id must be a non-empty string";
+            result.error_details = "{\"parameter\":\"world_id\"}";
+            return result;
+        }
+        if (!item.contains("shard") || !item["shard"].is_string()) {
+            result.error_message = "pool.shard must be a non-empty string";
+            result.error_details = "{\"parameter\":\"shard\"}";
+            return result;
+        }
+
+        pool.world_id = trim_ascii(item["world_id"].get<std::string>());
+        pool.shard = trim_ascii(item["shard"].get<std::string>());
+        if (pool.world_id.empty() || pool.shard.empty()) {
+            result.error_message = "pool.world_id and pool.shard must be non-empty strings";
+            result.error_details = "{\"parameter\":\"pools\"}";
+            return result;
+        }
+
+        if (!item.contains("replicas")
+            || (!item["replicas"].is_number_unsigned() && !item["replicas"].is_number_integer())) {
+            result.error_message = "pool.replicas must be a non-negative integer";
+            result.error_details = "{\"parameter\":\"replicas\"}";
+            return result;
+        }
+        if (item["replicas"].is_number_integer() && item["replicas"].get<long long>() < 0) {
+            result.error_message = "pool.replicas must be a non-negative integer";
+            result.error_details = "{\"parameter\":\"replicas\"}";
+            return result;
+        }
+        pool.replicas = item["replicas"].get<std::uint32_t>();
+
+        if (item.contains("capacity_class")) {
+            if (!item["capacity_class"].is_string()) {
+                result.error_message = "pool.capacity_class must be a string";
+                result.error_details = "{\"parameter\":\"capacity_class\"}";
+                return result;
+            }
+            pool.capacity_class = trim_ascii(item["capacity_class"].get<std::string>());
+        }
+
+        if (item.contains("placement_tags")) {
+            if (!item["placement_tags"].is_array()) {
+                result.error_message = "pool.placement_tags must be an array of strings";
+                result.error_details = "{\"parameter\":\"placement_tags\"}";
+                return result;
+            }
+            for (const auto& tag : item["placement_tags"]) {
+                if (!tag.is_string()) {
+                    result.error_message = "pool.placement_tags must be an array of strings";
+                    result.error_details = "{\"parameter\":\"placement_tags\"}";
+                    return result;
+                }
+                const std::string normalized = trim_ascii(tag.get<std::string>());
+                if (!normalized.empty()) {
+                    pool.placement_tags.push_back(normalized);
+                }
+            }
+        }
+
+        const std::string pool_key = pool.world_id + "\n" + pool.shard;
+        if (!seen_pool_keys.emplace(pool_key).second) {
+            result.error_message = "duplicate world_id/shard pool entry";
+            result.error_details = "{\"parameter\":\"pools\"}";
+            return result;
+        }
+
+        result.topology.pools.push_back(std::move(pool));
+    }
+
+    if (parsed.contains("expected_revision")) {
+        const auto& expected_revision = parsed["expected_revision"];
+        if (expected_revision.is_null()) {
+            result.expected_revision = std::nullopt;
+        } else if (expected_revision.is_number_unsigned()) {
+            result.expected_revision = expected_revision.get<std::uint64_t>();
+        } else if (expected_revision.is_number_integer()) {
+            const auto signed_value = expected_revision.get<long long>();
+            if (signed_value < 0) {
+                result.error_message = "expected_revision must be a non-negative integer or null";
+                result.error_details = "{\"parameter\":\"expected_revision\"}";
+                return result;
+            }
+            result.expected_revision = static_cast<std::uint64_t>(signed_value);
+        } else {
+            result.error_message = "expected_revision must be a non-negative integer or null";
+            result.error_details = "{\"parameter\":\"expected_revision\"}";
+            return result;
+        }
+    }
+
+    result.ok = true;
+    result.error_details = "{}";
+    return result;
+}
+
+struct TopologyActuationRequestWriteRequest {
+    bool ok{false};
+    TopologyActuationRequestDocument request_document;
+    std::optional<std::uint64_t> expected_revision;
+    std::string error_status{"400 Bad Request"};
+    std::string error_code{"BAD_REQUEST"};
+    std::string error_message{"malformed JSON body"};
+    std::string error_details{"{}"};
+};
+
+TopologyActuationRequestWriteRequest parse_topology_actuation_request_write_request(
+    const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+    TopologyActuationRequestWriteRequest result;
+    if (request.body.empty()) {
+        result.error_message = "topology actuation request endpoint requires a JSON body";
+        return result;
+    }
+
+    std::string content_type;
+    if (const auto it = request.headers.find("content-type"); it != request.headers.end()) {
+        content_type = to_lower_ascii(trim_ascii(it->second));
+    }
+    if (content_type.rfind("application/json", 0) != 0) {
+        result.error_status = "415 Unsupported Media Type";
+        result.error_code = "UNSUPPORTED_CONTENT_TYPE";
+        result.error_message = "topology actuation request endpoint requires application/json";
+        return result;
+    }
+
+    const auto parsed = nlohmann::json::parse(request.body, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object()) {
+        result.error_message = "malformed JSON body";
+        return result;
+    }
+
+    if (!parsed.contains("request_id") || !parsed["request_id"].is_string()) {
+        result.error_message = "request_id must be a non-empty string";
+        result.error_details = "{\"parameter\":\"request_id\"}";
+        return result;
+    }
+    result.request_document.request_id = trim_ascii(parsed["request_id"].get<std::string>());
+    if (result.request_document.request_id.empty()) {
+        result.error_message = "request_id must be a non-empty string";
+        result.error_details = "{\"parameter\":\"request_id\"}";
+        return result;
+    }
+
+    if (!parsed.contains("basis_topology_revision")
+        || (!parsed["basis_topology_revision"].is_number_unsigned()
+            && !parsed["basis_topology_revision"].is_number_integer())) {
+        result.error_message = "basis_topology_revision must be a non-negative integer";
+        result.error_details = "{\"parameter\":\"basis_topology_revision\"}";
+        return result;
+    }
+    if (parsed["basis_topology_revision"].is_number_integer()
+        && parsed["basis_topology_revision"].get<long long>() < 0) {
+        result.error_message = "basis_topology_revision must be a non-negative integer";
+        result.error_details = "{\"parameter\":\"basis_topology_revision\"}";
+        return result;
+    }
+    result.request_document.basis_topology_revision = parsed["basis_topology_revision"].get<std::uint64_t>();
+
+    if (!parsed.contains("actions") || !parsed["actions"].is_array() || parsed["actions"].empty()) {
+        result.error_message = "actions must be a non-empty array";
+        result.error_details = "{\"parameter\":\"actions\"}";
+        return result;
+    }
+
+    std::unordered_set<std::string> seen_action_keys;
+    for (std::size_t index = 0; index < parsed["actions"].size(); ++index) {
+        const auto& item = parsed["actions"][index];
+        if (!item.is_object()) {
+            result.error_message = "each action must be an object";
+            result.error_details = "{\"parameter\":\"actions\"}";
+            return result;
+        }
+
+        TopologyActuationRequestAction action;
+        if (!item.contains("world_id") || !item["world_id"].is_string()) {
+            result.error_message = "action.world_id must be a non-empty string";
+            result.error_details = "{\"parameter\":\"world_id\"}";
+            return result;
+        }
+        if (!item.contains("shard") || !item["shard"].is_string()) {
+            result.error_message = "action.shard must be a non-empty string";
+            result.error_details = "{\"parameter\":\"shard\"}";
+            return result;
+        }
+        if (!item.contains("action") || !item["action"].is_string()) {
+            result.error_message = "action.action must be a known string";
+            result.error_details = "{\"parameter\":\"action\"}";
+            return result;
+        }
+        if (!item.contains("replica_delta")
+            || (!item["replica_delta"].is_number_integer() && !item["replica_delta"].is_number_unsigned())) {
+            result.error_message = "action.replica_delta must be an integer";
+            result.error_details = "{\"parameter\":\"replica_delta\"}";
+            return result;
+        }
+
+        action.world_id = trim_ascii(item["world_id"].get<std::string>());
+        action.shard = trim_ascii(item["shard"].get<std::string>());
+        if (action.world_id.empty() || action.shard.empty()) {
+            result.error_message = "action.world_id and action.shard must be non-empty strings";
+            result.error_details = "{\"parameter\":\"actions\"}";
+            return result;
+        }
+
+        const auto parsed_action = server::core::mmorpg::parse_topology_actuation_action_kind(
+            trim_ascii(item["action"].get<std::string>()));
+        if (!parsed_action.has_value()) {
+            result.error_message = "action.action must be a known topology actuation action";
+            result.error_details = "{\"parameter\":\"action\"}";
+            return result;
+        }
+        action.action = *parsed_action;
+        action.replica_delta = item["replica_delta"].get<std::int32_t>();
+
+        const std::string action_key = action.world_id + "\n" + action.shard;
+        if (!seen_action_keys.emplace(action_key).second) {
+            result.error_message = "duplicate world_id/shard actuation action entry";
+            result.error_details = "{\"parameter\":\"actions\"}";
+            return result;
+        }
+
+        result.request_document.actions.push_back(std::move(action));
+    }
+
+    if (parsed.contains("expected_revision")) {
+        const auto& expected_revision = parsed["expected_revision"];
+        if (expected_revision.is_null()) {
+            result.expected_revision = std::nullopt;
+        } else if (expected_revision.is_number_unsigned()) {
+            result.expected_revision = expected_revision.get<std::uint64_t>();
+        } else if (expected_revision.is_number_integer()) {
+            const auto signed_value = expected_revision.get<long long>();
+            if (signed_value < 0) {
+                result.error_message = "expected_revision must be a non-negative integer or null";
+                result.error_details = "{\"parameter\":\"expected_revision\"}";
+                return result;
+            }
+            result.expected_revision = static_cast<std::uint64_t>(signed_value);
+        } else {
+            result.error_message = "expected_revision must be a non-negative integer or null";
+            result.error_details = "{\"parameter\":\"expected_revision\"}";
+            return result;
+        }
+    }
+
+    result.ok = true;
+    result.error_details = "{}";
+    return result;
+}
+
+struct TopologyActuationExecutionWriteRequest {
+    bool ok{false};
+    TopologyActuationExecutionDocument execution_document;
+    std::optional<std::uint64_t> expected_revision;
+    std::string error_status{"400 Bad Request"};
+    std::string error_code{"BAD_REQUEST"};
+    std::string error_message{"malformed JSON body"};
+    std::string error_details{"{}"};
+};
+
+TopologyActuationExecutionWriteRequest parse_topology_actuation_execution_write_request(
+    const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+    TopologyActuationExecutionWriteRequest result;
+    if (request.body.empty()) {
+        result.error_message = "topology actuation execution endpoint requires a JSON body";
+        return result;
+    }
+
+    std::string content_type;
+    if (const auto it = request.headers.find("content-type"); it != request.headers.end()) {
+        content_type = to_lower_ascii(trim_ascii(it->second));
+    }
+    if (content_type.rfind("application/json", 0) != 0) {
+        result.error_status = "415 Unsupported Media Type";
+        result.error_code = "UNSUPPORTED_CONTENT_TYPE";
+        result.error_message = "topology actuation execution endpoint requires application/json";
+        return result;
+    }
+
+    const auto parsed = nlohmann::json::parse(request.body, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object()) {
+        result.error_message = "malformed JSON body";
+        return result;
+    }
+
+    if (!parsed.contains("executor_id") || !parsed["executor_id"].is_string()) {
+        result.error_message = "executor_id must be a non-empty string";
+        result.error_details = "{\"parameter\":\"executor_id\"}";
+        return result;
+    }
+    result.execution_document.executor_id = trim_ascii(parsed["executor_id"].get<std::string>());
+    if (result.execution_document.executor_id.empty()) {
+        result.error_message = "executor_id must be a non-empty string";
+        result.error_details = "{\"parameter\":\"executor_id\"}";
+        return result;
+    }
+
+    if (!parsed.contains("request_revision")
+        || (!parsed["request_revision"].is_number_unsigned() && !parsed["request_revision"].is_number_integer())) {
+        result.error_message = "request_revision must be a non-negative integer";
+        result.error_details = "{\"parameter\":\"request_revision\"}";
+        return result;
+    }
+    if (parsed["request_revision"].is_number_integer() && parsed["request_revision"].get<long long>() < 0) {
+        result.error_message = "request_revision must be a non-negative integer";
+        result.error_details = "{\"parameter\":\"request_revision\"}";
+        return result;
+    }
+    result.execution_document.request_revision = parsed["request_revision"].get<std::uint64_t>();
+
+    if (!parsed.contains("actions") || !parsed["actions"].is_array() || parsed["actions"].empty()) {
+        result.error_message = "actions must be a non-empty array";
+        result.error_details = "{\"parameter\":\"actions\"}";
+        return result;
+    }
+
+    std::unordered_set<std::string> seen_action_keys;
+    for (std::size_t index = 0; index < parsed["actions"].size(); ++index) {
+        const auto& item = parsed["actions"][index];
+        if (!item.is_object()) {
+            result.error_message = "each action must be an object";
+            result.error_details = "{\"parameter\":\"actions\"}";
+            return result;
+        }
+        if (!item.contains("world_id") || !item["world_id"].is_string()) {
+            result.error_message = "action.world_id must be a non-empty string";
+            result.error_details = "{\"parameter\":\"world_id\"}";
+            return result;
+        }
+        if (!item.contains("shard") || !item["shard"].is_string()) {
+            result.error_message = "action.shard must be a non-empty string";
+            result.error_details = "{\"parameter\":\"shard\"}";
+            return result;
+        }
+        if (!item.contains("action") || !item["action"].is_string()) {
+            result.error_message = "action.action must be a known string";
+            result.error_details = "{\"parameter\":\"action\"}";
+            return result;
+        }
+        if (!item.contains("replica_delta")
+            || (!item["replica_delta"].is_number_integer() && !item["replica_delta"].is_number_unsigned())) {
+            result.error_message = "action.replica_delta must be an integer";
+            result.error_details = "{\"parameter\":\"replica_delta\"}";
+            return result;
+        }
+        if (!item.contains("observed_instances_before")
+            || (!item["observed_instances_before"].is_number_unsigned()
+                && !item["observed_instances_before"].is_number_integer())) {
+            result.error_message = "action.observed_instances_before must be a non-negative integer";
+            result.error_details = "{\"parameter\":\"observed_instances_before\"}";
+            return result;
+        }
+        if (!item.contains("ready_instances_before")
+            || (!item["ready_instances_before"].is_number_unsigned()
+                && !item["ready_instances_before"].is_number_integer())) {
+            result.error_message = "action.ready_instances_before must be a non-negative integer";
+            result.error_details = "{\"parameter\":\"ready_instances_before\"}";
+            return result;
+        }
+        if (!item.contains("state") || !item["state"].is_string()) {
+            result.error_message = "action.state must be a known string";
+            result.error_details = "{\"parameter\":\"state\"}";
+            return result;
+        }
+
+        TopologyActuationExecutionAction action;
+        action.world_id = trim_ascii(item["world_id"].get<std::string>());
+        action.shard = trim_ascii(item["shard"].get<std::string>());
+        if (action.world_id.empty() || action.shard.empty()) {
+            result.error_message = "action.world_id and action.shard must be non-empty strings";
+            result.error_details = "{\"parameter\":\"actions\"}";
+            return result;
+        }
+
+        const auto parsed_action = server::core::mmorpg::parse_topology_actuation_action_kind(
+            trim_ascii(item["action"].get<std::string>()));
+        if (!parsed_action.has_value()) {
+            result.error_message = "action.action must be a known topology actuation action";
+            result.error_details = "{\"parameter\":\"action\"}";
+            return result;
+        }
+        action.action = *parsed_action;
+        action.replica_delta = item["replica_delta"].get<std::int32_t>();
+
+        const auto parsed_state = server::core::mmorpg::parse_topology_actuation_execution_action_state(
+            trim_ascii(item["state"].get<std::string>()));
+        if (!parsed_state.has_value()) {
+            result.error_message = "action.state must be a known execution state";
+            result.error_details = "{\"parameter\":\"state\"}";
+            return result;
+        }
+
+        const std::string action_key = action.world_id + "\n" + action.shard;
+        if (!seen_action_keys.emplace(action_key).second) {
+            result.error_message = "duplicate world_id/shard execution action entry";
+            result.error_details = "{\"parameter\":\"actions\"}";
+            return result;
+        }
+
+        result.execution_document.actions.push_back({
+            .action = std::move(action),
+            .observed_instances_before = item["observed_instances_before"].get<std::uint32_t>(),
+            .ready_instances_before = item["ready_instances_before"].get<std::uint32_t>(),
+            .state = *parsed_state,
+        });
+    }
+
+    if (parsed.contains("expected_revision")) {
+        const auto& expected_revision = parsed["expected_revision"];
+        if (expected_revision.is_null()) {
+            result.expected_revision = std::nullopt;
+        } else if (expected_revision.is_number_unsigned()) {
+            result.expected_revision = expected_revision.get<std::uint64_t>();
+        } else if (expected_revision.is_number_integer()) {
+            const auto signed_value = expected_revision.get<long long>();
+            if (signed_value < 0) {
+                result.error_message = "expected_revision must be a non-negative integer or null";
+                result.error_details = "{\"parameter\":\"expected_revision\"}";
+                return result;
+            }
+            result.expected_revision = static_cast<std::uint64_t>(signed_value);
+        } else {
+            result.error_message = "expected_revision must be a non-negative integer or null";
+            result.error_details = "{\"parameter\":\"expected_revision\"}";
+            return result;
+        }
+    }
+
+    result.ok = true;
+    result.error_details = "{}";
+    return result;
+}
+
+struct TopologyActuationAdapterWriteRequest {
+    bool ok{false};
+    TopologyActuationAdapterLeaseDocument lease_document;
+    std::optional<std::uint64_t> expected_revision;
+    std::string error_status{"400 Bad Request"};
+    std::string error_code{"BAD_REQUEST"};
+    std::string error_message{"malformed JSON body"};
+    std::string error_details{"{}"};
+};
+
+TopologyActuationAdapterWriteRequest parse_topology_actuation_adapter_write_request(
+    const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+    TopologyActuationAdapterWriteRequest result;
+    if (request.body.empty()) {
+        result.error_message = "topology actuation adapter endpoint requires a JSON body";
+        return result;
+    }
+
+    std::string content_type;
+    if (const auto it = request.headers.find("content-type"); it != request.headers.end()) {
+        content_type = to_lower_ascii(trim_ascii(it->second));
+    }
+    if (content_type.rfind("application/json", 0) != 0) {
+        result.error_status = "415 Unsupported Media Type";
+        result.error_code = "UNSUPPORTED_CONTENT_TYPE";
+        result.error_message = "topology actuation adapter endpoint requires application/json";
+        return result;
+    }
+
+    const auto parsed = nlohmann::json::parse(request.body, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object()) {
+        result.error_message = "malformed JSON body";
+        return result;
+    }
+
+    if (!parsed.contains("adapter_id") || !parsed["adapter_id"].is_string()) {
+        result.error_message = "adapter_id must be a non-empty string";
+        result.error_details = "{\"parameter\":\"adapter_id\"}";
+        return result;
+    }
+    result.lease_document.adapter_id = trim_ascii(parsed["adapter_id"].get<std::string>());
+    if (result.lease_document.adapter_id.empty()) {
+        result.error_message = "adapter_id must be a non-empty string";
+        result.error_details = "{\"parameter\":\"adapter_id\"}";
+        return result;
+    }
+
+    if (!parsed.contains("execution_revision")
+        || (!parsed["execution_revision"].is_number_unsigned() && !parsed["execution_revision"].is_number_integer())) {
+        result.error_message = "execution_revision must be a non-negative integer";
+        result.error_details = "{\"parameter\":\"execution_revision\"}";
+        return result;
+    }
+    if (parsed["execution_revision"].is_number_integer() && parsed["execution_revision"].get<long long>() < 0) {
+        result.error_message = "execution_revision must be a non-negative integer";
+        result.error_details = "{\"parameter\":\"execution_revision\"}";
+        return result;
+    }
+    result.lease_document.execution_revision = parsed["execution_revision"].get<std::uint64_t>();
+
+    if (!parsed.contains("actions") || !parsed["actions"].is_array() || parsed["actions"].empty()) {
+        result.error_message = "actions must be a non-empty array";
+        result.error_details = "{\"parameter\":\"actions\"}";
+        return result;
+    }
+
+    std::unordered_set<std::string> seen_action_keys;
+    for (const auto& item : parsed["actions"]) {
+        if (!item.is_object()) {
+            result.error_message = "each action must be an object";
+            result.error_details = "{\"parameter\":\"actions\"}";
+            return result;
+        }
+        if (!item.contains("world_id") || !item["world_id"].is_string()) {
+            result.error_message = "action.world_id must be a non-empty string";
+            result.error_details = "{\"parameter\":\"world_id\"}";
+            return result;
+        }
+        if (!item.contains("shard") || !item["shard"].is_string()) {
+            result.error_message = "action.shard must be a non-empty string";
+            result.error_details = "{\"parameter\":\"shard\"}";
+            return result;
+        }
+        if (!item.contains("action") || !item["action"].is_string()) {
+            result.error_message = "action.action must be a known string";
+            result.error_details = "{\"parameter\":\"action\"}";
+            return result;
+        }
+        if (!item.contains("replica_delta")
+            || (!item["replica_delta"].is_number_integer() && !item["replica_delta"].is_number_unsigned())) {
+            result.error_message = "action.replica_delta must be an integer";
+            result.error_details = "{\"parameter\":\"replica_delta\"}";
+            return result;
+        }
+
+        TopologyActuationAdapterLeaseAction action;
+        action.world_id = trim_ascii(item["world_id"].get<std::string>());
+        action.shard = trim_ascii(item["shard"].get<std::string>());
+        if (action.world_id.empty() || action.shard.empty()) {
+            result.error_message = "action.world_id and action.shard must be non-empty strings";
+            result.error_details = "{\"parameter\":\"actions\"}";
+            return result;
+        }
+        const auto parsed_action = server::core::mmorpg::parse_topology_actuation_action_kind(
+            trim_ascii(item["action"].get<std::string>()));
+        if (!parsed_action.has_value()) {
+            result.error_message = "action.action must be a known topology actuation action";
+            result.error_details = "{\"parameter\":\"action\"}";
+            return result;
+        }
+        action.action = *parsed_action;
+        action.replica_delta = item["replica_delta"].get<std::int32_t>();
+
+        const std::string action_key = action.world_id + "\n" + action.shard;
+        if (!seen_action_keys.emplace(action_key).second) {
+            result.error_message = "duplicate world_id/shard adapter action entry";
+            result.error_details = "{\"parameter\":\"actions\"}";
+            return result;
+        }
+
+        result.lease_document.actions.push_back(std::move(action));
+    }
+
+    if (parsed.contains("expected_revision")) {
+        const auto& expected_revision = parsed["expected_revision"];
+        if (expected_revision.is_null()) {
+            result.expected_revision = std::nullopt;
+        } else if (expected_revision.is_number_unsigned()) {
+            result.expected_revision = expected_revision.get<std::uint64_t>();
+        } else if (expected_revision.is_number_integer()) {
+            const auto signed_value = expected_revision.get<long long>();
+            if (signed_value < 0) {
+                result.error_message = "expected_revision must be a non-negative integer or null";
+                result.error_details = "{\"parameter\":\"expected_revision\"}";
+                return result;
+            }
+            result.expected_revision = static_cast<std::uint64_t>(signed_value);
+        } else {
+            result.error_message = "expected_revision must be a non-negative integer or null";
+            result.error_details = "{\"parameter\":\"expected_revision\"}";
+            return result;
+        }
+    }
+
+    result.ok = true;
+    result.error_details = "{}";
+    return result;
+}
+
+struct TopologyActuationRuntimeAssignmentWriteRequest {
+    bool ok{false};
+    TopologyActuationRuntimeAssignmentDocument document;
+    std::optional<std::uint64_t> expected_revision;
+    std::string error_status{"400 Bad Request"};
+    std::string error_code{"BAD_REQUEST"};
+    std::string error_message{"malformed JSON body"};
+    std::string error_details{"{}"};
+};
+
+TopologyActuationRuntimeAssignmentWriteRequest parse_topology_actuation_runtime_assignment_write_request(
+    const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+    TopologyActuationRuntimeAssignmentWriteRequest result;
+    if (request.body.empty()) {
+        result.error_message = "topology actuation runtime assignment endpoint requires a JSON body";
+        return result;
+    }
+
+    std::string content_type;
+    if (const auto it = request.headers.find("content-type"); it != request.headers.end()) {
+        content_type = to_lower_ascii(trim_ascii(it->second));
+    }
+    if (content_type.rfind("application/json", 0) != 0) {
+        result.error_status = "415 Unsupported Media Type";
+        result.error_code = "UNSUPPORTED_CONTENT_TYPE";
+        result.error_message = "topology actuation runtime assignment endpoint requires application/json";
+        return result;
+    }
+
+    const auto parsed = nlohmann::json::parse(request.body, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object()) {
+        result.error_message = "malformed JSON body";
+        return result;
+    }
+
+    if (!parsed.contains("adapter_id") || !parsed["adapter_id"].is_string()) {
+        result.error_message = "adapter_id must be a non-empty string";
+        result.error_details = "{\"parameter\":\"adapter_id\"}";
+        return result;
+    }
+    result.document.adapter_id = trim_ascii(parsed["adapter_id"].get<std::string>());
+    if (result.document.adapter_id.empty()) {
+        result.error_message = "adapter_id must be a non-empty string";
+        result.error_details = "{\"parameter\":\"adapter_id\"}";
+        return result;
+    }
+
+    if (!parsed.contains("lease_revision")
+        || (!parsed["lease_revision"].is_number_unsigned() && !parsed["lease_revision"].is_number_integer())) {
+        result.error_message = "lease_revision must be a non-negative integer";
+        result.error_details = "{\"parameter\":\"lease_revision\"}";
+        return result;
+    }
+    result.document.lease_revision = parsed["lease_revision"].get<std::uint64_t>();
+
+    if (!parsed.contains("assignments") || !parsed["assignments"].is_array() || parsed["assignments"].empty()) {
+        result.error_message = "assignments must be a non-empty array";
+        result.error_details = "{\"parameter\":\"assignments\"}";
+        return result;
+    }
+
+    std::unordered_set<std::string> seen_instance_ids;
+    for (const auto& item : parsed["assignments"]) {
+        if (!item.is_object()) {
+            result.error_message = "each assignment must be an object";
+            result.error_details = "{\"parameter\":\"assignments\"}";
+            return result;
+        }
+        if (!item.contains("instance_id") || !item["instance_id"].is_string()) {
+            result.error_message = "assignment.instance_id must be a non-empty string";
+            result.error_details = "{\"parameter\":\"instance_id\"}";
+            return result;
+        }
+        if (!item.contains("world_id") || !item["world_id"].is_string()) {
+            result.error_message = "assignment.world_id must be a non-empty string";
+            result.error_details = "{\"parameter\":\"world_id\"}";
+            return result;
+        }
+        if (!item.contains("shard") || !item["shard"].is_string()) {
+            result.error_message = "assignment.shard must be a non-empty string";
+            result.error_details = "{\"parameter\":\"shard\"}";
+            return result;
+        }
+        if (!item.contains("action") || !item["action"].is_string()) {
+            result.error_message = "assignment.action must be a known string";
+            result.error_details = "{\"parameter\":\"action\"}";
+            return result;
+        }
+
+        TopologyActuationRuntimeAssignmentItem assignment;
+        assignment.instance_id = trim_ascii(item["instance_id"].get<std::string>());
+        assignment.world_id = trim_ascii(item["world_id"].get<std::string>());
+        assignment.shard = trim_ascii(item["shard"].get<std::string>());
+        if (assignment.instance_id.empty() || assignment.world_id.empty() || assignment.shard.empty()) {
+            result.error_message = "assignment.instance_id, assignment.world_id, and assignment.shard must be non-empty";
+            result.error_details = "{\"parameter\":\"assignments\"}";
+            return result;
+        }
+
+        const auto parsed_action = server::core::mmorpg::parse_topology_actuation_action_kind(
+            trim_ascii(item["action"].get<std::string>()));
+        if (!parsed_action.has_value()) {
+            result.error_message = "assignment.action must be a known topology actuation action";
+            result.error_details = "{\"parameter\":\"action\"}";
+            return result;
+        }
+        assignment.action = *parsed_action;
+
+        if (!seen_instance_ids.emplace(assignment.instance_id).second) {
+            result.error_message = "duplicate runtime assignment instance_id entry";
+            result.error_details = "{\"parameter\":\"instance_id\"}";
+            return result;
+        }
+
+        result.document.assignments.push_back(std::move(assignment));
+    }
+
+    if (parsed.contains("expected_revision")) {
+        const auto& expected_revision = parsed["expected_revision"];
+        if (expected_revision.is_null()) {
+            result.expected_revision = std::nullopt;
+        } else if (expected_revision.is_number_unsigned()) {
+            result.expected_revision = expected_revision.get<std::uint64_t>();
+        } else if (expected_revision.is_number_integer()) {
+            const auto signed_value = expected_revision.get<long long>();
+            if (signed_value < 0) {
+                result.error_message = "expected_revision must be a non-negative integer or null";
+                result.error_details = "{\"parameter\":\"expected_revision\"}";
+                return result;
+            }
+            result.expected_revision = static_cast<std::uint64_t>(signed_value);
+        } else {
+            result.error_message = "expected_revision must be a non-negative integer or null";
+            result.error_details = "{\"parameter\":\"expected_revision\"}";
+            return result;
+        }
+    }
+
+    result.ok = true;
+    result.error_details = "{}";
+    return result;
+}
+
+struct WorldTransferWriteRequest {
+    bool ok{false};
+    std::string target_owner_instance_id;
+    std::optional<std::string> expected_owner_instance_id;
+    bool commit_owner{false};
+    std::string error_status{"400 Bad Request"};
+    std::string error_code{"BAD_REQUEST"};
+    std::string error_message{"malformed JSON body"};
+    std::string error_details{"{}"};
+};
+
+WorldTransferWriteRequest parse_world_transfer_write_request(
+    const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+    WorldTransferWriteRequest result;
+    if (request.body.empty()) {
+        result.error_message = "world transfer endpoint requires a JSON body";
+        return result;
+    }
+
+    std::string content_type;
+    if (const auto it = request.headers.find("content-type"); it != request.headers.end()) {
+        content_type = to_lower_ascii(trim_ascii(it->second));
+    }
+    if (content_type.rfind("application/json", 0) != 0) {
+        result.error_status = "415 Unsupported Media Type";
+        result.error_code = "UNSUPPORTED_CONTENT_TYPE";
+        result.error_message = "world transfer endpoint requires application/json";
+        return result;
+    }
+
+    const auto parsed = nlohmann::json::parse(request.body, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object()) {
+        result.error_message = "malformed JSON body";
+        return result;
+    }
+
+    if (!parsed.contains("target_owner_instance_id") || !parsed["target_owner_instance_id"].is_string()) {
+        result.error_message = "target_owner_instance_id must be a non-empty string";
+        result.error_details = "{\"parameter\":\"target_owner_instance_id\"}";
+        return result;
+    }
+    result.target_owner_instance_id = trim_ascii(parsed["target_owner_instance_id"].get<std::string>());
+    if (result.target_owner_instance_id.empty()) {
+        result.error_message = "target_owner_instance_id must be a non-empty string";
+        result.error_details = "{\"parameter\":\"target_owner_instance_id\"}";
+        return result;
+    }
+
+    if (parsed.contains("expected_owner_instance_id")) {
+        const auto& expected_owner = parsed["expected_owner_instance_id"];
+        if (expected_owner.is_null()) {
+            result.expected_owner_instance_id = std::nullopt;
+        } else if (expected_owner.is_string()) {
+            const std::string normalized = trim_ascii(expected_owner.get<std::string>());
+            if (!normalized.empty()) {
+                result.expected_owner_instance_id = normalized;
+            } else {
+                result.expected_owner_instance_id = std::nullopt;
+            }
+        } else {
+            result.error_message = "expected_owner_instance_id must be a string or null";
+            result.error_details = "{\"parameter\":\"expected_owner_instance_id\"}";
+            return result;
+        }
+    }
+
+    if (parsed.contains("commit_owner")) {
+        if (!parsed["commit_owner"].is_boolean()) {
+            result.error_message = "commit_owner must be a boolean";
+            result.error_details = "{\"parameter\":\"commit_owner\"}";
+            return result;
+        }
+        result.commit_owner = parsed["commit_owner"].get<bool>();
+    }
+
+    result.ok = true;
+    result.error_details = "{}";
+    return result;
+}
+
+struct WorldMigrationWriteRequest {
+    bool ok{false};
+    WorldMigrationEnvelope envelope;
+    std::string error_status{"400 Bad Request"};
+    std::string error_code{"BAD_REQUEST"};
+    std::string error_message{"malformed JSON body"};
+    std::string error_details{"{}"};
+};
+
+WorldMigrationWriteRequest parse_world_migration_write_request(
+    const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+    WorldMigrationWriteRequest result;
+    if (request.body.empty()) {
+        result.error_message = "world migration endpoint requires a JSON body";
+        return result;
+    }
+
+    std::string content_type;
+    if (const auto it = request.headers.find("content-type"); it != request.headers.end()) {
+        content_type = to_lower_ascii(trim_ascii(it->second));
+    }
+    if (content_type.rfind("application/json", 0) != 0) {
+        result.error_status = "415 Unsupported Media Type";
+        result.error_code = "UNSUPPORTED_CONTENT_TYPE";
+        result.error_message = "world migration endpoint requires application/json";
+        return result;
+    }
+
+    const auto parsed = nlohmann::json::parse(request.body, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object()) {
+        result.error_message = "malformed JSON body";
+        return result;
+    }
+
+    if (!parsed.contains("target_world_id") || !parsed["target_world_id"].is_string()) {
+        result.error_message = "target_world_id must be a non-empty string";
+        result.error_details = "{\"parameter\":\"target_world_id\"}";
+        return result;
+    }
+    result.envelope.target_world_id = trim_ascii(parsed["target_world_id"].get<std::string>());
+    if (result.envelope.target_world_id.empty()) {
+        result.error_message = "target_world_id must be a non-empty string";
+        result.error_details = "{\"parameter\":\"target_world_id\"}";
+        return result;
+    }
+
+    if (!parsed.contains("target_owner_instance_id") || !parsed["target_owner_instance_id"].is_string()) {
+        result.error_message = "target_owner_instance_id must be a non-empty string";
+        result.error_details = "{\"parameter\":\"target_owner_instance_id\"}";
+        return result;
+    }
+    result.envelope.target_owner_instance_id = trim_ascii(parsed["target_owner_instance_id"].get<std::string>());
+    if (result.envelope.target_owner_instance_id.empty()) {
+        result.error_message = "target_owner_instance_id must be a non-empty string";
+        result.error_details = "{\"parameter\":\"target_owner_instance_id\"}";
+        return result;
+    }
+
+    if (parsed.contains("preserve_room")) {
+        if (!parsed["preserve_room"].is_boolean()) {
+            result.error_message = "preserve_room must be a boolean";
+            result.error_details = "{\"parameter\":\"preserve_room\"}";
+            return result;
+        }
+        result.envelope.preserve_room = parsed["preserve_room"].get<bool>();
+    }
+
+    if (parsed.contains("payload_kind")) {
+        if (!parsed["payload_kind"].is_string()) {
+            result.error_message = "payload_kind must be a string";
+            result.error_details = "{\"parameter\":\"payload_kind\"}";
+            return result;
+        }
+        result.envelope.payload_kind = trim_ascii(parsed["payload_kind"].get<std::string>());
+    }
+
+    if (parsed.contains("payload_ref")) {
+        if (!parsed["payload_ref"].is_string()) {
+            result.error_message = "payload_ref must be a string";
+            result.error_details = "{\"parameter\":\"payload_ref\"}";
+            return result;
+        }
+        result.envelope.payload_ref = trim_ascii(parsed["payload_ref"].get<std::string>());
     }
 
     result.ok = true;
@@ -896,11 +1942,21 @@ std::string resource_from_path(std::string_view path) {
         std::string_view resource;
     };
 
-static constexpr std::array<ExactRoute, 20> kExactRoutes{{
+static constexpr std::array<ExactRoute, 30> kExactRoutes{{
         {"/api/v1/auth/context", "auth_context"},
         {"/api/v1/overview", "overview"},
         {"/api/v1/instances", "instances"},
         {"/api/v1/worlds", "worlds"},
+        {"/api/v1/topology/desired", "topology_desired"},
+        {"/api/v1/topology/observed", "topology_observed"},
+        {"/api/v1/topology/reconciliation", "topology_reconciliation"},
+        {"/api/v1/topology/actuation", "topology_actuation"},
+        {"/api/v1/topology/actuation/request", "topology_actuation_request"},
+        {"/api/v1/topology/actuation/status", "topology_actuation_status"},
+        {"/api/v1/topology/actuation/execution", "topology_actuation_execution"},
+        {"/api/v1/topology/actuation/execution/status", "topology_actuation_execution_status"},
+        {"/api/v1/topology/actuation/realization", "topology_actuation_realization"},
+        {"/api/v1/topology/actuation/runtime-assignment", "topology_actuation_runtime_assignment"},
         {"/api/v1/users", "users"},
         {"/api/v1/ext/inventory", "ext_inventory"},
         {"/api/v1/ext/precheck", "ext_precheck"},
@@ -935,6 +1991,30 @@ static constexpr std::array<ExactRoute, 20> kExactRoutes{{
         && path.ends_with(kWorldPolicySuffix)
         && path.size() > (kWorldPolicyPrefix.size() + kWorldPolicySuffix.size())) {
         return "world_policy";
+    }
+
+    constexpr std::string_view kWorldDrainPrefix = "/api/v1/worlds/";
+    constexpr std::string_view kWorldDrainSuffix = "/drain";
+    if (path.starts_with(kWorldDrainPrefix)
+        && path.ends_with(kWorldDrainSuffix)
+        && path.size() > (kWorldDrainPrefix.size() + kWorldDrainSuffix.size())) {
+        return "world_drain";
+    }
+
+    constexpr std::string_view kWorldTransferPrefix = "/api/v1/worlds/";
+    constexpr std::string_view kWorldTransferSuffix = "/transfer";
+    if (path.starts_with(kWorldTransferPrefix)
+        && path.ends_with(kWorldTransferSuffix)
+        && path.size() > (kWorldTransferPrefix.size() + kWorldTransferSuffix.size())) {
+        return "world_transfer";
+    }
+
+    constexpr std::string_view kWorldMigrationPrefix = "/api/v1/worlds/";
+    constexpr std::string_view kWorldMigrationSuffix = "/migration";
+    if (path.starts_with(kWorldMigrationPrefix)
+        && path.ends_with(kWorldMigrationSuffix)
+        && path.size() > (kWorldMigrationPrefix.size() + kWorldMigrationSuffix.size())) {
+        return "world_migration";
     }
 
     struct PrefixRoute {
@@ -1110,9 +2190,14 @@ std::optional<std::uint64_t> parse_prom_u64(std::string_view metrics_text, std::
 
 class AdminApp {
 public:
-    int run() {
-        server::core::app::install_termination_signal_handlers();
+    AdminApp()
+        : engine_(server::core::app::EngineBuilder("admin_app")
+                      .install_process_signal_handlers()
+                      .build())
+        , app_host_(engine_.host()) {
+    }
 
+    int run() {
         load_config();
         admin_ui_html_ = load_admin_ui_html();
         init_dependencies();
@@ -1123,37 +2208,27 @@ public:
 
         poller_running_.store(true, std::memory_order_release);
         poller_ = std::thread([this]() { poll_loop(); });
+        engine_.add_shutdown_step("stop admin poller", [this]() {
+            poller_running_.store(false, std::memory_order_release);
+            if (poller_.joinable()) {
+                poller_.join();
+            }
+        });
 
-        http_server_ = std::make_unique<server::core::metrics::MetricsHttpServer>(
+        engine_.start_admin_http(
             metrics_port_,
             [this]() { return render_metrics(); },
-            [this]() { return app_host_.healthy() && !app_host_.stop_requested(); },
-            [this]() { return app_host_.ready() && app_host_.healthy() && !app_host_.stop_requested(); },
             server::core::metrics::MetricsHttpServer::LogsCallback{},
-            [this](bool ok) { return app_host_.health_body(ok); },
-            [this](bool ok) { return app_host_.readiness_body(ok); },
             [this](const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
                 return handle_route(request);
             });
-        http_server_->start();
 
+        engine_.mark_running();
         corelog::info("admin_app started on METRICS_PORT=" + std::to_string(metrics_port_));
 
-        while (!app_host_.stop_requested()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-
-        app_host_.set_ready(false);
-        poller_running_.store(false, std::memory_order_release);
-        if (poller_.joinable()) {
-            poller_.join();
-        }
-
-        if (http_server_) {
-            http_server_->stop();
-            http_server_.reset();
-        }
-
+        engine_.wait_for_stop(std::chrono::milliseconds(100));
+        engine_.run_shutdown();
+        engine_.mark_stopped();
         corelog::info("admin_app stopped");
         return 0;
     }
@@ -1346,10 +2421,28 @@ private:
         session_prefix_ = ensure_trailing_slash(read_env_string("GATEWAY_SESSION_PREFIX", "gateway/session/"));
         redis_channel_prefix_ = read_env_string("REDIS_CHANNEL_PREFIX", "");
         continuity_prefix_ = read_env_string("SESSION_CONTINUITY_REDIS_PREFIX", redis_channel_prefix_);
+        desired_topology_key_ = read_env_string("ADMIN_DESIRED_TOPOLOGY_KEY", std::string(kDefaultDesiredTopologyKey));
+        topology_actuation_request_key_ = read_env_string(
+            "ADMIN_TOPOLOGY_ACTUATION_REQUEST_KEY",
+            std::string(kDefaultTopologyActuationRequestKey));
+        topology_actuation_execution_key_ = read_env_string(
+            "ADMIN_TOPOLOGY_ACTUATION_EXECUTION_KEY",
+            std::string(kDefaultTopologyActuationExecutionKey));
+        topology_actuation_adapter_key_ = read_env_string(
+            "ADMIN_TOPOLOGY_ACTUATION_ADAPTER_KEY",
+            std::string(kDefaultTopologyActuationAdapterKey));
+        topology_actuation_runtime_assignment_key_ = read_env_string(
+            "ADMIN_TOPOLOGY_ACTUATION_RUNTIME_ASSIGNMENT_KEY",
+            std::string(kDefaultTopologyActuationRuntimeAssignmentKey));
         if (!continuity_prefix_.empty() && continuity_prefix_.back() != ':') {
             continuity_prefix_.push_back(':');
         }
         continuity_prefix_ += "continuity:";
+        continuity_lease_ttl_sec_ = read_env_u32(
+            "SESSION_CONTINUITY_LEASE_TTL_SEC",
+            kDefaultContinuityLeaseTtlSec,
+            30,
+            7 * 24 * 60 * 60);
         registry_ttl_sec_ = read_env_u32("SERVER_REGISTRY_TTL", 30, 1, 3600);
 
         worker_metrics_raw_url_ = read_env_string(
@@ -1599,6 +2692,10 @@ private:
         return continuity_prefix_ + "world-policy:" + std::string(world_id);
     }
 
+    std::string make_world_migration_key(std::string_view world_id) const {
+        return continuity_prefix_ + "world-migration:" + std::string(world_id);
+    }
+
     std::unordered_map<std::string, std::string>
     load_world_owner_index(const std::vector<server::core::state::InstanceRecord>& items) const {
         std::unordered_map<std::string, std::string> out;
@@ -1738,13 +2835,264 @@ private:
         std::string world_id;
         std::string owner_instance_id;
         server::core::state::WorldLifecyclePolicy policy;
+        std::optional<WorldMigrationEnvelope> migration;
         std::vector<server::core::state::InstanceRecord> instances;
     };
+
+    server::core::mmorpg::ObservedWorldTransferState
+    make_world_transfer_state(const WorldInventoryEntry& world) const {
+        server::core::mmorpg::ObservedWorldTransferState state;
+        state.world_id = world.world_id;
+        state.owner_instance_id = world.owner_instance_id;
+        state.draining = world.policy.draining;
+        state.replacement_owner_instance_id = world.policy.replacement_owner_instance_id;
+        state.instances.reserve(world.instances.size());
+        for (const auto& instance : world.instances) {
+            if (instance.role != "server") {
+                continue;
+            }
+            state.instances.push_back({
+                .instance_id = instance.instance_id,
+                .ready = instance.ready,
+            });
+        }
+        return state;
+    }
+
+    server::core::mmorpg::ObservedWorldDrainState
+    make_world_drain_state(const WorldInventoryEntry& world) const {
+        server::core::mmorpg::ObservedWorldDrainState state;
+        state.world_id = world.world_id;
+        state.owner_instance_id = world.owner_instance_id;
+        state.draining = world.policy.draining;
+        state.replacement_owner_instance_id = world.policy.replacement_owner_instance_id;
+        state.instances.reserve(world.instances.size());
+        for (const auto& instance : world.instances) {
+            if (instance.role != "server") {
+                continue;
+            }
+            state.instances.push_back({
+                .instance_id = instance.instance_id,
+                .ready = instance.ready,
+                .active_sessions = instance.active_sessions,
+            });
+        }
+        return state;
+    }
+
+    std::string make_world_drain_json(
+        const WorldInventoryEntry& world,
+        const std::vector<WorldInventoryEntry>& worlds) const {
+        const auto drain = server::core::mmorpg::evaluate_world_drain(make_world_drain_state(world));
+        const auto transfer = server::core::mmorpg::evaluate_world_transfer(make_world_transfer_state(world));
+        std::optional<server::core::mmorpg::ObservedWorldMigrationWorld> target_world;
+        if (world.migration.has_value()) {
+            const auto it = std::find_if(worlds.begin(), worlds.end(), [&](const auto& candidate) {
+                return candidate.world_id == world.migration->target_world_id;
+            });
+            if (it != worlds.end()) {
+                target_world = make_observed_world_migration_world(*it);
+            }
+        }
+        const auto migration = server::core::mmorpg::evaluate_world_migration(
+            make_observed_world_migration_world(world),
+            world.migration,
+            target_world);
+        const auto orchestration = server::core::mmorpg::evaluate_world_drain_orchestration(
+            drain,
+            transfer,
+            migration);
+
+        std::ostringstream data;
+        data << "{";
+        data << "\"phase\":\"" << server::core::mmorpg::world_drain_phase_name(drain.phase) << "\",";
+        data << "\"current_owner_instance_id\":";
+        if (!drain.owner_instance_id.empty()) {
+            data << "\"" << json_escape(drain.owner_instance_id) << "\"";
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"replacement_owner_instance_id\":";
+        if (!drain.replacement_owner_instance_id.empty()) {
+            data << "\"" << json_escape(drain.replacement_owner_instance_id) << "\"";
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"summary\":{";
+        data << "\"drain_declared\":" << bool_json(drain.summary.drain_declared) << ",";
+        data << "\"replacement_declared\":" << bool_json(drain.summary.replacement_declared) << ",";
+        data << "\"owner_present\":" << bool_json(drain.summary.owner_present) << ",";
+        data << "\"replacement_present\":" << bool_json(drain.summary.replacement_present) << ",";
+        data << "\"replacement_ready\":" << bool_json(drain.summary.replacement_ready) << ",";
+        data << "\"instances_total\":" << drain.summary.instances_total << ",";
+        data << "\"ready_instances\":" << drain.summary.ready_instances << ",";
+        data << "\"active_sessions_total\":" << drain.summary.active_sessions_total << ",";
+        data << "\"owner_active_sessions\":" << drain.summary.owner_active_sessions << ",";
+        data << "\"replacement_active_sessions\":" << drain.summary.replacement_active_sessions;
+        data << "},";
+        data << "\"orchestration\":{";
+        data << "\"phase\":\""
+             << server::core::mmorpg::world_drain_orchestration_phase_name(orchestration.phase) << "\",";
+        data << "\"next_action\":\""
+             << server::core::mmorpg::world_drain_next_action_name(orchestration.next_action) << "\",";
+        data << "\"target_owner_instance_id\":";
+        if (!orchestration.target_owner_instance_id.empty()) {
+            data << "\"" << json_escape(orchestration.target_owner_instance_id) << "\"";
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"target_world_id\":";
+        if (!orchestration.target_world_id.empty()) {
+            data << "\"" << json_escape(orchestration.target_world_id) << "\"";
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"summary\":{";
+        data << "\"drain_declared\":" << bool_json(orchestration.summary.drain_declared) << ",";
+        data << "\"drained\":" << bool_json(orchestration.summary.drained) << ",";
+        data << "\"transfer_declared\":" << bool_json(orchestration.summary.transfer_declared) << ",";
+        data << "\"transfer_committed\":" << bool_json(orchestration.summary.transfer_committed) << ",";
+        data << "\"migration_declared\":" << bool_json(orchestration.summary.migration_declared) << ",";
+        data << "\"migration_ready\":" << bool_json(orchestration.summary.migration_ready) << ",";
+        data << "\"clear_allowed\":" << bool_json(orchestration.summary.clear_allowed);
+        data << "}";
+        data << "}";
+        data << "}";
+        return data.str();
+    }
+
+    std::string make_world_transfer_json(const WorldInventoryEntry& world) const {
+        const auto transfer = server::core::mmorpg::evaluate_world_transfer(make_world_transfer_state(world));
+
+        std::ostringstream data;
+        data << "{";
+        data << "\"phase\":\"" << server::core::mmorpg::world_transfer_phase_name(transfer.phase) << "\",";
+        data << "\"current_owner_instance_id\":";
+        if (!transfer.owner_instance_id.empty()) {
+            data << "\"" << json_escape(transfer.owner_instance_id) << "\"";
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"target_owner_instance_id\":";
+        if (!transfer.target_owner_instance_id.empty()) {
+            data << "\"" << json_escape(transfer.target_owner_instance_id) << "\"";
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"summary\":{";
+        data << "\"transfer_declared\":" << bool_json(transfer.summary.transfer_declared) << ",";
+        data << "\"draining\":" << bool_json(transfer.summary.draining) << ",";
+        data << "\"owner_present\":" << bool_json(transfer.summary.owner_present) << ",";
+        data << "\"target_present\":" << bool_json(transfer.summary.target_present) << ",";
+        data << "\"target_ready\":" << bool_json(transfer.summary.target_ready) << ",";
+        data << "\"owner_matches_target\":" << bool_json(transfer.summary.owner_matches_target) << ",";
+        data << "\"instances_total\":" << transfer.summary.instances_total << ",";
+        data << "\"ready_instances\":" << transfer.summary.ready_instances;
+        data << "}";
+        data << "}";
+        return data.str();
+    }
+
+    server::core::mmorpg::ObservedWorldMigrationWorld
+    make_observed_world_migration_world(const WorldInventoryEntry& world) const {
+        server::core::mmorpg::ObservedWorldMigrationWorld observed;
+        observed.world_id = world.world_id;
+        observed.current_owner_instance_id = world.owner_instance_id;
+        observed.draining = world.policy.draining;
+        observed.instances.reserve(world.instances.size());
+        for (const auto& instance : world.instances) {
+            if (instance.role != "server") {
+                continue;
+            }
+            observed.instances.push_back({
+                .instance_id = instance.instance_id,
+                .ready = instance.ready,
+            });
+        }
+        return observed;
+    }
+
+    std::string make_world_migration_json(
+        const WorldInventoryEntry& world,
+        const std::vector<WorldInventoryEntry>& worlds) const {
+        std::optional<server::core::mmorpg::ObservedWorldMigrationWorld> target_world;
+        if (world.migration.has_value()) {
+            const auto it = std::find_if(worlds.begin(), worlds.end(), [&](const auto& candidate) {
+                return candidate.world_id == world.migration->target_world_id;
+            });
+            if (it != worlds.end()) {
+                target_world = make_observed_world_migration_world(*it);
+            }
+        }
+
+        const auto migration = server::core::mmorpg::evaluate_world_migration(
+            make_observed_world_migration_world(world),
+            world.migration,
+            target_world);
+
+        std::ostringstream data;
+        data << "{";
+        data << "\"phase\":\"" << server::core::mmorpg::world_migration_phase_name(migration.phase) << "\",";
+        data << "\"target_world_id\":";
+        if (!migration.target_world_id.empty()) {
+            data << "\"" << json_escape(migration.target_world_id) << "\"";
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"target_owner_instance_id\":";
+        if (!migration.target_owner_instance_id.empty()) {
+            data << "\"" << json_escape(migration.target_owner_instance_id) << "\"";
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"payload_kind\":";
+        if (!migration.payload_kind.empty()) {
+            data << "\"" << json_escape(migration.payload_kind) << "\"";
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"payload_ref\":";
+        if (!migration.payload_ref.empty()) {
+            data << "\"" << json_escape(migration.payload_ref) << "\"";
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"updated_at_ms\":";
+        if (world.migration.has_value()) {
+            data << world.migration->updated_at_ms;
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"summary\":{";
+        data << "\"envelope_present\":" << bool_json(migration.summary.envelope_present) << ",";
+        data << "\"source_draining\":" << bool_json(migration.summary.source_draining) << ",";
+        data << "\"target_world_present\":" << bool_json(migration.summary.target_world_present) << ",";
+        data << "\"target_owner_present\":" << bool_json(migration.summary.target_owner_present) << ",";
+        data << "\"target_owner_ready\":" << bool_json(migration.summary.target_owner_ready) << ",";
+        data << "\"target_owner_matches_target_world_owner\":"
+             << bool_json(migration.summary.target_owner_matches_target_world_owner) << ",";
+        data << "\"preserve_room\":" << bool_json(migration.summary.preserve_room);
+        data << "}";
+        data << "}";
+        return data.str();
+    }
 
     std::vector<WorldInventoryEntry>
     collect_world_inventory(const std::vector<server::core::state::InstanceRecord>& items) const {
         const auto world_owner_index = load_world_owner_index(items);
         const auto world_policy_index = load_world_policy_index(items);
+        const auto world_migration_index = load_world_migration_index(items);
 
         std::unordered_map<std::string, std::size_t> world_positions;
         std::vector<WorldInventoryEntry> worlds;
@@ -1767,6 +3115,12 @@ private:
                 if (const auto policy_it = world_policy_index.find(*world_id); policy_it != world_policy_index.end()) {
                     entry.policy = policy_it->second;
                 }
+                if (const auto migration_it = world_migration_index.find(*world_id);
+                    migration_it != world_migration_index.end()
+                    && !migration_it->second.target_world_id.empty()
+                    && !migration_it->second.target_owner_instance_id.empty()) {
+                    entry.migration = migration_it->second;
+                }
                 worlds.push_back(std::move(entry));
                 index = worlds.size() - 1;
                 world_positions.emplace(*world_id, index);
@@ -1786,7 +3140,9 @@ private:
         return worlds;
     }
 
-    std::string make_world_inventory_json(const WorldInventoryEntry& world) const {
+    std::string make_world_inventory_json(const WorldInventoryEntry& world,
+                                          const std::vector<WorldInventoryEntry>& worlds,
+                                          std::optional<bool> owner_commit_applied = std::nullopt) const {
         const bool has_owner = !world.owner_instance_id.empty();
         std::ostringstream data;
         data << "{";
@@ -1799,6 +3155,13 @@ private:
         }
         data << ",";
         data << "\"policy\":" << make_world_policy_json(world.policy) << ",";
+        data << "\"drain\":" << make_world_drain_json(world, worlds) << ",";
+        data << "\"transfer\":" << make_world_transfer_json(world) << ",";
+        data << "\"migration\":" << make_world_migration_json(world, worlds) << ",";
+        if (owner_commit_applied.has_value()) {
+            data << "\"owner_commit_applied\":" << bool_json(*owner_commit_applied) << ",";
+            data << "\"continuity_lease_ttl_sec\":" << continuity_lease_ttl_sec_ << ",";
+        }
         data << "\"instances\":[";
         for (std::size_t instance_index = 0; instance_index < world.instances.size(); ++instance_index) {
             const auto& instance = world.instances[instance_index];
@@ -1814,8 +3177,1220 @@ private:
         data << "],";
         data << "\"source\":{";
         data << "\"owner_key\":\"" << json_escape(make_world_owner_key(world.world_id)) << "\",";
-        data << "\"policy_key\":\"" << json_escape(make_world_policy_key(world.world_id)) << "\"";
+        data << "\"policy_key\":\"" << json_escape(make_world_policy_key(world.world_id)) << "\",";
+        data << "\"migration_key\":\"" << json_escape(make_world_migration_key(world.world_id)) << "\"";
         data << "}";
+        data << "}";
+        return data.str();
+    }
+
+    std::optional<DesiredTopologyDocument> load_desired_topology_document() const {
+        if (!redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            return std::nullopt;
+        }
+
+        std::optional<std::string> payload;
+        try {
+            payload = redis_->get(desired_topology_key_);
+        } catch (...) {
+            payload = std::nullopt;
+        }
+
+        if (!payload.has_value() || payload->empty()) {
+            return std::nullopt;
+        }
+
+        const auto parsed = nlohmann::json::parse(*payload, nullptr, false);
+        if (parsed.is_discarded() || !parsed.is_object()) {
+            return std::nullopt;
+        }
+        if (!parsed.contains("topology_id") || !parsed["topology_id"].is_string()) {
+            return std::nullopt;
+        }
+        if (!parsed.contains("revision")
+            || (!parsed["revision"].is_number_unsigned() && !parsed["revision"].is_number_integer())) {
+            return std::nullopt;
+        }
+        if (!parsed.contains("pools") || !parsed["pools"].is_array()) {
+            return std::nullopt;
+        }
+
+        DesiredTopologyDocument document;
+        document.topology_id = trim_ascii(parsed["topology_id"].get<std::string>());
+        document.revision = parsed["revision"].get<std::uint64_t>();
+        if (parsed.contains("updated_at_ms")
+            && (parsed["updated_at_ms"].is_number_unsigned() || parsed["updated_at_ms"].is_number_integer())) {
+            document.updated_at_ms = parsed["updated_at_ms"].get<std::uint64_t>();
+        }
+
+        for (const auto& item : parsed["pools"]) {
+            if (!item.is_object()) {
+                return std::nullopt;
+            }
+            if (!item.contains("world_id") || !item["world_id"].is_string()) {
+                return std::nullopt;
+            }
+            if (!item.contains("shard") || !item["shard"].is_string()) {
+                return std::nullopt;
+            }
+            if (!item.contains("replicas")
+                || (!item["replicas"].is_number_unsigned() && !item["replicas"].is_number_integer())) {
+                return std::nullopt;
+            }
+
+            DesiredTopologyPool pool;
+            pool.world_id = trim_ascii(item["world_id"].get<std::string>());
+            pool.shard = trim_ascii(item["shard"].get<std::string>());
+            pool.replicas = item["replicas"].get<std::uint32_t>();
+            if (item.contains("capacity_class") && item["capacity_class"].is_string()) {
+                pool.capacity_class = trim_ascii(item["capacity_class"].get<std::string>());
+            }
+            if (item.contains("placement_tags") && item["placement_tags"].is_array()) {
+                for (const auto& tag : item["placement_tags"]) {
+                    if (tag.is_string()) {
+                        const std::string normalized = trim_ascii(tag.get<std::string>());
+                        if (!normalized.empty()) {
+                            pool.placement_tags.push_back(normalized);
+                        }
+                    }
+                }
+            }
+            document.pools.push_back(std::move(pool));
+        }
+
+        return document;
+    }
+
+    std::optional<TopologyActuationRequestDocument> load_topology_actuation_request_document() const {
+        if (!redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            return std::nullopt;
+        }
+
+        std::optional<std::string> payload;
+        try {
+            payload = redis_->get(topology_actuation_request_key_);
+        } catch (...) {
+            payload = std::nullopt;
+        }
+
+        if (!payload.has_value() || payload->empty()) {
+            return std::nullopt;
+        }
+
+        const auto parsed = nlohmann::json::parse(*payload, nullptr, false);
+        if (parsed.is_discarded() || !parsed.is_object()) {
+            return std::nullopt;
+        }
+        if (!parsed.contains("request_id") || !parsed["request_id"].is_string()) {
+            return std::nullopt;
+        }
+        if (!parsed.contains("revision")
+            || (!parsed["revision"].is_number_unsigned() && !parsed["revision"].is_number_integer())) {
+            return std::nullopt;
+        }
+        if (!parsed.contains("basis_topology_revision")
+            || (!parsed["basis_topology_revision"].is_number_unsigned()
+                && !parsed["basis_topology_revision"].is_number_integer())) {
+            return std::nullopt;
+        }
+        if (!parsed.contains("actions") || !parsed["actions"].is_array()) {
+            return std::nullopt;
+        }
+
+        TopologyActuationRequestDocument document;
+        document.request_id = trim_ascii(parsed["request_id"].get<std::string>());
+        document.revision = parsed["revision"].get<std::uint64_t>();
+        document.basis_topology_revision = parsed["basis_topology_revision"].get<std::uint64_t>();
+        if (parsed.contains("requested_at_ms")
+            && (parsed["requested_at_ms"].is_number_unsigned() || parsed["requested_at_ms"].is_number_integer())) {
+            document.requested_at_ms = parsed["requested_at_ms"].get<std::uint64_t>();
+        }
+
+        for (const auto& item : parsed["actions"]) {
+            if (!item.is_object()) {
+                return std::nullopt;
+            }
+            if (!item.contains("world_id") || !item["world_id"].is_string()) {
+                return std::nullopt;
+            }
+            if (!item.contains("shard") || !item["shard"].is_string()) {
+                return std::nullopt;
+            }
+            if (!item.contains("action") || !item["action"].is_string()) {
+                return std::nullopt;
+            }
+            if (!item.contains("replica_delta")
+                || (!item["replica_delta"].is_number_integer() && !item["replica_delta"].is_number_unsigned())) {
+                return std::nullopt;
+            }
+
+            const auto parsed_action = server::core::mmorpg::parse_topology_actuation_action_kind(
+                trim_ascii(item["action"].get<std::string>()));
+            if (!parsed_action.has_value()) {
+                return std::nullopt;
+            }
+
+            TopologyActuationRequestAction action;
+            action.world_id = trim_ascii(item["world_id"].get<std::string>());
+            action.shard = trim_ascii(item["shard"].get<std::string>());
+            action.action = *parsed_action;
+            action.replica_delta = item["replica_delta"].get<std::int32_t>();
+            document.actions.push_back(std::move(action));
+        }
+
+        return document;
+    }
+
+    std::optional<TopologyActuationExecutionDocument> load_topology_actuation_execution_document() const {
+        if (!redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            return std::nullopt;
+        }
+
+        std::optional<std::string> payload;
+        try {
+            payload = redis_->get(topology_actuation_execution_key_);
+        } catch (...) {
+            payload = std::nullopt;
+        }
+
+        if (!payload.has_value() || payload->empty()) {
+            return std::nullopt;
+        }
+
+        const auto parsed = nlohmann::json::parse(*payload, nullptr, false);
+        if (parsed.is_discarded() || !parsed.is_object()) {
+            return std::nullopt;
+        }
+        if (!parsed.contains("executor_id") || !parsed["executor_id"].is_string()) {
+            return std::nullopt;
+        }
+        if (!parsed.contains("revision")
+            || (!parsed["revision"].is_number_unsigned() && !parsed["revision"].is_number_integer())) {
+            return std::nullopt;
+        }
+        if (!parsed.contains("request_revision")
+            || (!parsed["request_revision"].is_number_unsigned() && !parsed["request_revision"].is_number_integer())) {
+            return std::nullopt;
+        }
+        if (!parsed.contains("actions") || !parsed["actions"].is_array()) {
+            return std::nullopt;
+        }
+
+        TopologyActuationExecutionDocument document;
+        document.executor_id = trim_ascii(parsed["executor_id"].get<std::string>());
+        document.revision = parsed["revision"].get<std::uint64_t>();
+        document.request_revision = parsed["request_revision"].get<std::uint64_t>();
+        if (parsed.contains("updated_at_ms")
+            && (parsed["updated_at_ms"].is_number_unsigned() || parsed["updated_at_ms"].is_number_integer())) {
+            document.updated_at_ms = parsed["updated_at_ms"].get<std::uint64_t>();
+        }
+
+        for (const auto& item : parsed["actions"]) {
+            if (!item.is_object()) {
+                return std::nullopt;
+            }
+            if (!item.contains("world_id") || !item["world_id"].is_string()) {
+                return std::nullopt;
+            }
+            if (!item.contains("shard") || !item["shard"].is_string()) {
+                return std::nullopt;
+            }
+            if (!item.contains("action") || !item["action"].is_string()) {
+                return std::nullopt;
+            }
+            if (!item.contains("replica_delta")
+                || (!item["replica_delta"].is_number_integer() && !item["replica_delta"].is_number_unsigned())) {
+                return std::nullopt;
+            }
+            if (!item.contains("observed_instances_before")
+                || (!item["observed_instances_before"].is_number_unsigned()
+                    && !item["observed_instances_before"].is_number_integer())) {
+                return std::nullopt;
+            }
+            if (!item.contains("ready_instances_before")
+                || (!item["ready_instances_before"].is_number_unsigned()
+                    && !item["ready_instances_before"].is_number_integer())) {
+                return std::nullopt;
+            }
+            if (!item.contains("state") || !item["state"].is_string()) {
+                return std::nullopt;
+            }
+
+            const auto parsed_action = server::core::mmorpg::parse_topology_actuation_action_kind(
+                trim_ascii(item["action"].get<std::string>()));
+            const auto parsed_state = server::core::mmorpg::parse_topology_actuation_execution_action_state(
+                trim_ascii(item["state"].get<std::string>()));
+            if (!parsed_action.has_value() || !parsed_state.has_value()) {
+                return std::nullopt;
+            }
+
+            document.actions.push_back({
+                .action = {
+                    .world_id = trim_ascii(item["world_id"].get<std::string>()),
+                    .shard = trim_ascii(item["shard"].get<std::string>()),
+                    .action = *parsed_action,
+                    .replica_delta = item["replica_delta"].get<std::int32_t>(),
+                },
+                .observed_instances_before = item["observed_instances_before"].get<std::uint32_t>(),
+                .ready_instances_before = item["ready_instances_before"].get<std::uint32_t>(),
+                .state = *parsed_state,
+            });
+        }
+
+        return document;
+    }
+
+    std::optional<TopologyActuationAdapterLeaseDocument> load_topology_actuation_adapter_document() const {
+        if (!redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            return std::nullopt;
+        }
+
+        std::optional<std::string> payload;
+        try {
+            payload = redis_->get(topology_actuation_adapter_key_);
+        } catch (...) {
+            payload = std::nullopt;
+        }
+
+        if (!payload.has_value() || payload->empty()) {
+            return std::nullopt;
+        }
+
+        const auto parsed = nlohmann::json::parse(*payload, nullptr, false);
+        if (parsed.is_discarded() || !parsed.is_object()) {
+            return std::nullopt;
+        }
+        if (!parsed.contains("adapter_id") || !parsed["adapter_id"].is_string()) {
+            return std::nullopt;
+        }
+        if (!parsed.contains("revision")
+            || (!parsed["revision"].is_number_unsigned() && !parsed["revision"].is_number_integer())) {
+            return std::nullopt;
+        }
+        if (!parsed.contains("execution_revision")
+            || (!parsed["execution_revision"].is_number_unsigned()
+                && !parsed["execution_revision"].is_number_integer())) {
+            return std::nullopt;
+        }
+        if (!parsed.contains("actions") || !parsed["actions"].is_array()) {
+            return std::nullopt;
+        }
+
+        TopologyActuationAdapterLeaseDocument document;
+        document.adapter_id = trim_ascii(parsed["adapter_id"].get<std::string>());
+        document.revision = parsed["revision"].get<std::uint64_t>();
+        document.execution_revision = parsed["execution_revision"].get<std::uint64_t>();
+        if (parsed.contains("leased_at_ms")
+            && (parsed["leased_at_ms"].is_number_unsigned() || parsed["leased_at_ms"].is_number_integer())) {
+            document.leased_at_ms = parsed["leased_at_ms"].get<std::uint64_t>();
+        }
+
+        for (const auto& item : parsed["actions"]) {
+            if (!item.is_object()) {
+                return std::nullopt;
+            }
+            if (!item.contains("world_id") || !item["world_id"].is_string()) {
+                return std::nullopt;
+            }
+            if (!item.contains("shard") || !item["shard"].is_string()) {
+                return std::nullopt;
+            }
+            if (!item.contains("action") || !item["action"].is_string()) {
+                return std::nullopt;
+            }
+            if (!item.contains("replica_delta")
+                || (!item["replica_delta"].is_number_integer() && !item["replica_delta"].is_number_unsigned())) {
+                return std::nullopt;
+            }
+
+            const auto parsed_action = server::core::mmorpg::parse_topology_actuation_action_kind(
+                trim_ascii(item["action"].get<std::string>()));
+            if (!parsed_action.has_value()) {
+                return std::nullopt;
+            }
+
+            document.actions.push_back({
+                .world_id = trim_ascii(item["world_id"].get<std::string>()),
+                .shard = trim_ascii(item["shard"].get<std::string>()),
+                .action = *parsed_action,
+                .replica_delta = item["replica_delta"].get<std::int32_t>(),
+            });
+        }
+
+        return document;
+    }
+
+    std::optional<TopologyActuationRuntimeAssignmentDocument> load_topology_actuation_runtime_assignment_document() const {
+        if (!redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            return std::nullopt;
+        }
+
+        std::optional<std::string> payload;
+        try {
+            payload = redis_->get(topology_actuation_runtime_assignment_key_);
+        } catch (...) {
+            payload = std::nullopt;
+        }
+
+        if (!payload.has_value() || payload->empty()) {
+            return std::nullopt;
+        }
+
+        return server::app::parse_topology_actuation_runtime_assignment_document(*payload);
+    }
+
+    std::string make_desired_topology_json(const DesiredTopologyDocument& topology) const {
+        std::ostringstream data;
+        data << "{";
+        data << "\"topology_id\":\"" << json_escape(topology.topology_id) << "\",";
+        data << "\"revision\":" << topology.revision << ",";
+        data << "\"updated_at_ms\":" << topology.updated_at_ms << ",";
+        data << "\"pools\":[";
+        for (std::size_t i = 0; i < topology.pools.size(); ++i) {
+            if (i > 0) {
+                data << ",";
+            }
+            const auto& pool = topology.pools[i];
+            data << "{";
+            data << "\"world_id\":\"" << json_escape(pool.world_id) << "\",";
+            data << "\"shard\":\"" << json_escape(pool.shard) << "\",";
+            data << "\"replicas\":" << pool.replicas << ",";
+            data << "\"capacity_class\":";
+            if (!pool.capacity_class.empty()) {
+                data << "\"" << json_escape(pool.capacity_class) << "\"";
+            } else {
+                data << "null";
+            }
+            data << ",";
+            data << "\"placement_tags\":[";
+            for (std::size_t tag_index = 0; tag_index < pool.placement_tags.size(); ++tag_index) {
+                if (tag_index > 0) {
+                    data << ",";
+                }
+                data << "\"" << json_escape(pool.placement_tags[tag_index]) << "\"";
+            }
+            data << "]";
+            data << "}";
+        }
+        data << "]";
+        data << "}";
+        return data.str();
+    }
+
+    std::string make_desired_topology_response_json(const std::optional<DesiredTopologyDocument>& topology) const {
+        std::ostringstream data;
+        data << "{";
+        data << "\"key\":\"" << json_escape(desired_topology_key_) << "\",";
+        data << "\"present\":" << bool_json(topology.has_value()) << ",";
+        data << "\"topology\":";
+        if (topology.has_value()) {
+            data << make_desired_topology_json(*topology);
+        } else {
+            data << "null";
+        }
+        data << "}";
+        return data.str();
+    }
+
+    std::string make_topology_actuation_request_json(const TopologyActuationRequestDocument& request_document) const {
+        std::ostringstream data;
+        data << "{";
+        data << "\"request_id\":\"" << json_escape(request_document.request_id) << "\",";
+        data << "\"revision\":" << request_document.revision << ",";
+        data << "\"requested_at_ms\":" << request_document.requested_at_ms << ",";
+        data << "\"basis_topology_revision\":" << request_document.basis_topology_revision << ",";
+        data << "\"actions\":[";
+        for (std::size_t i = 0; i < request_document.actions.size(); ++i) {
+            if (i > 0) {
+                data << ",";
+            }
+            const auto& action = request_document.actions[i];
+            data << "{";
+            data << "\"world_id\":\"" << json_escape(action.world_id) << "\",";
+            data << "\"shard\":\"" << json_escape(action.shard) << "\",";
+            data << "\"action\":\"" << json_escape(
+                std::string(server::core::mmorpg::topology_actuation_action_kind_name(action.action))) << "\",";
+            data << "\"replica_delta\":" << action.replica_delta;
+            data << "}";
+        }
+        data << "]";
+        data << "}";
+        return data.str();
+    }
+
+    std::string make_topology_actuation_request_response_json(
+        const std::optional<TopologyActuationRequestDocument>& request_document) const {
+        std::ostringstream data;
+        data << "{";
+        data << "\"key\":\"" << json_escape(topology_actuation_request_key_) << "\",";
+        data << "\"present\":" << bool_json(request_document.has_value()) << ",";
+        data << "\"request\":";
+        if (request_document.has_value()) {
+            data << make_topology_actuation_request_json(*request_document);
+        } else {
+            data << "null";
+        }
+        data << "}";
+        return data.str();
+    }
+
+    std::string make_topology_actuation_execution_json(
+        const TopologyActuationExecutionDocument& execution_document) const {
+        std::ostringstream data;
+        data << "{";
+        data << "\"executor_id\":\"" << json_escape(execution_document.executor_id) << "\",";
+        data << "\"revision\":" << execution_document.revision << ",";
+        data << "\"updated_at_ms\":" << execution_document.updated_at_ms << ",";
+        data << "\"request_revision\":" << execution_document.request_revision << ",";
+        data << "\"actions\":[";
+        for (std::size_t i = 0; i < execution_document.actions.size(); ++i) {
+            if (i > 0) {
+                data << ",";
+            }
+            const auto& item = execution_document.actions[i];
+            data << "{";
+            data << "\"world_id\":\"" << json_escape(item.action.world_id) << "\",";
+            data << "\"shard\":\"" << json_escape(item.action.shard) << "\",";
+        data << "\"action\":\""
+                 << json_escape(std::string(server::core::mmorpg::topology_actuation_action_kind_name(
+                        item.action.action)))
+                 << "\",";
+        data << "\"replica_delta\":" << item.action.replica_delta << ",";
+        data << "\"observed_instances_before\":" << item.observed_instances_before << ",";
+        data << "\"ready_instances_before\":" << item.ready_instances_before << ",";
+        data << "\"state\":\""
+                 << json_escape(std::string(server::core::mmorpg::topology_actuation_execution_action_state_name(
+                        item.state)))
+                 << "\"";
+            data << "}";
+        }
+        data << "]";
+        data << "}";
+        return data.str();
+    }
+
+    std::string make_topology_actuation_execution_response_json(
+        const std::optional<TopologyActuationExecutionDocument>& execution_document) const {
+        std::ostringstream data;
+        data << "{";
+        data << "\"key\":\"" << json_escape(topology_actuation_execution_key_) << "\",";
+        data << "\"present\":" << bool_json(execution_document.has_value()) << ",";
+        data << "\"execution\":";
+        if (execution_document.has_value()) {
+            data << make_topology_actuation_execution_json(*execution_document);
+        } else {
+            data << "null";
+        }
+        data << "}";
+        return data.str();
+    }
+
+    std::string make_topology_actuation_adapter_json(const TopologyActuationAdapterLeaseDocument& lease_document) const {
+        std::ostringstream data;
+        data << "{";
+        data << "\"adapter_id\":\"" << json_escape(lease_document.adapter_id) << "\",";
+        data << "\"revision\":" << lease_document.revision << ",";
+        data << "\"leased_at_ms\":" << lease_document.leased_at_ms << ",";
+        data << "\"execution_revision\":" << lease_document.execution_revision << ",";
+        data << "\"actions\":[";
+        for (std::size_t i = 0; i < lease_document.actions.size(); ++i) {
+            if (i > 0) {
+                data << ",";
+            }
+            const auto& action = lease_document.actions[i];
+            data << "{";
+            data << "\"world_id\":\"" << json_escape(action.world_id) << "\",";
+            data << "\"shard\":\"" << json_escape(action.shard) << "\",";
+            data << "\"action\":\""
+                 << json_escape(std::string(server::core::mmorpg::topology_actuation_action_kind_name(action.action)))
+                 << "\",";
+            data << "\"replica_delta\":" << action.replica_delta;
+            data << "}";
+        }
+        data << "]";
+        data << "}";
+        return data.str();
+    }
+
+    std::string make_topology_actuation_adapter_response_json(
+        const std::optional<TopologyActuationAdapterLeaseDocument>& lease_document) const {
+        std::ostringstream data;
+        data << "{";
+        data << "\"key\":\"" << json_escape(topology_actuation_adapter_key_) << "\",";
+        data << "\"present\":" << bool_json(lease_document.has_value()) << ",";
+        data << "\"lease\":";
+        if (lease_document.has_value()) {
+            data << make_topology_actuation_adapter_json(*lease_document);
+        } else {
+            data << "null";
+        }
+        data << "}";
+        return data.str();
+    }
+
+    std::string make_topology_actuation_runtime_assignment_json(
+        const TopologyActuationRuntimeAssignmentDocument& document) const {
+        std::ostringstream data;
+        data << "{";
+        data << "\"adapter_id\":\"" << json_escape(document.adapter_id) << "\",";
+        data << "\"revision\":" << document.revision << ",";
+        data << "\"updated_at_ms\":" << document.updated_at_ms << ",";
+        data << "\"lease_revision\":" << document.lease_revision << ",";
+        data << "\"assignments\":[";
+        for (std::size_t i = 0; i < document.assignments.size(); ++i) {
+            if (i > 0) {
+                data << ",";
+            }
+            const auto& assignment = document.assignments[i];
+            data << "{";
+            data << "\"instance_id\":\"" << json_escape(assignment.instance_id) << "\",";
+            data << "\"world_id\":\"" << json_escape(assignment.world_id) << "\",";
+            data << "\"shard\":\"" << json_escape(assignment.shard) << "\",";
+            data << "\"action\":\""
+                 << json_escape(std::string(server::core::mmorpg::topology_actuation_action_kind_name(
+                        assignment.action)))
+                 << "\"";
+            data << "}";
+        }
+        data << "]";
+        data << "}";
+        return data.str();
+    }
+
+    std::string make_topology_actuation_runtime_assignment_response_json(
+        const std::optional<TopologyActuationRuntimeAssignmentDocument>& document) const {
+        std::ostringstream data;
+        data << "{";
+        data << "\"key\":\"" << json_escape(topology_actuation_runtime_assignment_key_) << "\",";
+        data << "\"present\":" << bool_json(document.has_value()) << ",";
+        data << "\"assignment\":";
+        if (document.has_value()) {
+            data << make_topology_actuation_runtime_assignment_json(*document);
+        } else {
+            data << "null";
+        }
+        data << "}";
+        return data.str();
+    }
+
+    std::string make_observed_topology_json(const std::vector<server::core::state::InstanceRecord>& items,
+                                            std::uint64_t updated_ms) const {
+        const auto world_owner_index = load_world_owner_index(items);
+        const auto world_policy_index = load_world_policy_index(items);
+        const auto worlds = collect_world_inventory(items);
+
+        std::ostringstream data;
+        data << "{";
+        data << "\"instances\":[";
+        for (std::size_t i = 0; i < items.size(); ++i) {
+            if (i > 0) {
+                data << ",";
+            }
+            const auto& item = items[i];
+            data << "{";
+            data << "\"instance_id\":\"" << json_escape(item.instance_id) << "\",";
+            data << "\"role\":\"" << json_escape(item.role) << "\",";
+            data << "\"host\":\"" << json_escape(item.host) << "\",";
+            data << "\"port\":" << item.port << ",";
+            data << "\"game_mode\":\"" << json_escape(item.game_mode) << "\",";
+            data << "\"region\":\"" << json_escape(item.region) << "\",";
+            data << "\"shard\":\"" << json_escape(item.shard) << "\",";
+            data << "\"ready\":" << bool_json(item.ready) << ",";
+            data << "\"world_scope\":" << make_world_scope_json(item, world_owner_index, world_policy_index);
+            data << "}";
+        }
+        data << "],";
+        data << "\"worlds\":[";
+        for (std::size_t i = 0; i < worlds.size(); ++i) {
+            if (i > 0) {
+                data << ",";
+            }
+            data << make_world_inventory_json(worlds[i], worlds);
+        }
+        data << "],";
+        data << "\"summary\":{";
+        data << "\"instances_total\":" << items.size() << ",";
+        data << "\"worlds_total\":" << worlds.size();
+        data << "},";
+        data << "\"updated_at_ms\":" << updated_ms;
+        data << "}";
+        return data.str();
+    }
+
+    std::vector<server::core::mmorpg::ObservedTopologyInstance>
+    make_observed_topology_instances(const std::vector<server::core::state::InstanceRecord>& items) const {
+        std::vector<server::core::mmorpg::ObservedTopologyInstance> out;
+        out.reserve(items.size());
+        for (const auto& item : items) {
+            server::core::mmorpg::ObservedTopologyInstance observed;
+            observed.instance_id = item.instance_id;
+            observed.role = item.role;
+            observed.shard = item.shard;
+            observed.ready = item.ready;
+            if (const auto world_id = extract_world_id_from_tags(item.tags)) {
+                observed.world_id = *world_id;
+            }
+            out.push_back(std::move(observed));
+        }
+        return out;
+    }
+
+    std::unordered_map<std::string, WorldMigrationEnvelope>
+    load_world_migration_index(const std::vector<server::core::state::InstanceRecord>& items) const {
+        std::unordered_map<std::string, WorldMigrationEnvelope> out;
+        if (!redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            return out;
+        }
+
+        std::vector<std::string> world_ids;
+        std::vector<std::string> migration_keys;
+        for (const auto& item : items) {
+            const auto world_id = extract_world_id_from_tags(item.tags);
+            if (!world_id.has_value()) {
+                continue;
+            }
+            if (out.contains(*world_id)) {
+                continue;
+            }
+            world_ids.push_back(*world_id);
+            migration_keys.push_back(make_world_migration_key(*world_id));
+            out.emplace(*world_id, WorldMigrationEnvelope{});
+        }
+
+        if (migration_keys.empty()) {
+            return out;
+        }
+
+        std::vector<std::optional<std::string>> payloads(migration_keys.size());
+        bool mget_ok = false;
+        try {
+            mget_ok = redis_->mget(migration_keys, payloads);
+        } catch (...) {
+            mget_ok = false;
+        }
+
+        if (!mget_ok || payloads.size() != migration_keys.size()) {
+            payloads.clear();
+            payloads.reserve(migration_keys.size());
+            for (const auto& key : migration_keys) {
+                try {
+                    payloads.push_back(redis_->get(key));
+                } catch (...) {
+                    payloads.push_back(std::nullopt);
+                }
+            }
+        }
+
+        for (std::size_t i = 0; i < world_ids.size() && i < payloads.size(); ++i) {
+            if (!payloads[i].has_value() || payloads[i]->empty()) {
+                continue;
+            }
+            if (const auto parsed = server::core::mmorpg::parse_world_migration_envelope(*payloads[i])) {
+                out[world_ids[i]] = *parsed;
+            }
+        }
+
+        return out;
+    }
+
+    std::string make_observed_pool_json(const server::core::mmorpg::ObservedTopologyPool& pool) const {
+        std::ostringstream data;
+        data << "{";
+        data << "\"world_id\":\"" << json_escape(pool.world_id) << "\",";
+        data << "\"shard\":\"" << json_escape(pool.shard) << "\",";
+        data << "\"instances\":" << pool.instances << ",";
+        data << "\"ready_instances\":" << pool.ready_instances;
+        data << "}";
+        return data.str();
+    }
+
+    std::string make_topology_reconciliation_json(
+        const std::optional<DesiredTopologyDocument>& desired_topology,
+        const std::vector<server::core::mmorpg::ObservedTopologyPool>& observed_pools,
+        const server::core::mmorpg::TopologyReconciliation& reconciliation) const {
+        std::ostringstream data;
+        data << "{";
+        data << "\"desired\":";
+        if (desired_topology.has_value()) {
+            data << make_desired_topology_json(*desired_topology);
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"observed_pools\":[";
+        for (std::size_t i = 0; i < observed_pools.size(); ++i) {
+            if (i > 0) {
+                data << ",";
+            }
+            data << make_observed_pool_json(observed_pools[i]);
+        }
+        data << "],";
+        data << "\"summary\":{";
+        data << "\"desired_present\":" << bool_json(reconciliation.summary.desired_present) << ",";
+        data << "\"desired_pools\":" << reconciliation.summary.desired_pools << ",";
+        data << "\"observed_pools\":" << reconciliation.summary.observed_pools << ",";
+        data << "\"aligned_pools\":" << reconciliation.summary.aligned_pools << ",";
+        data << "\"missing_pools\":" << reconciliation.summary.missing_pools << ",";
+        data << "\"under_replicated_pools\":" << reconciliation.summary.under_replicated_pools << ",";
+        data << "\"over_replicated_pools\":" << reconciliation.summary.over_replicated_pools << ",";
+        data << "\"undeclared_pools\":" << reconciliation.summary.undeclared_pools << ",";
+        data << "\"no_ready_pools\":" << reconciliation.summary.no_ready_pools;
+        data << "},";
+        data << "\"pools\":[";
+        for (std::size_t i = 0; i < reconciliation.pools.size(); ++i) {
+            if (i > 0) {
+                data << ",";
+            }
+            const auto& pool = reconciliation.pools[i];
+            data << "{";
+            data << "\"world_id\":\"" << json_escape(pool.world_id) << "\",";
+            data << "\"shard\":\"" << json_escape(pool.shard) << "\",";
+            data << "\"desired_replicas\":" << pool.desired_replicas << ",";
+            data << "\"observed_instances\":" << pool.observed_instances << ",";
+            data << "\"ready_instances\":" << pool.ready_instances << ",";
+            data << "\"status\":\"" << server::core::mmorpg::topology_pool_status_name(pool.status) << "\"";
+            data << "}";
+        }
+        data << "]";
+        data << "}";
+        return data.str();
+    }
+
+    std::string make_topology_actuation_json(
+        const std::optional<DesiredTopologyDocument>& desired_topology,
+        const std::vector<server::core::mmorpg::ObservedTopologyPool>& observed_pools,
+        const server::core::mmorpg::TopologyActuationPlan& actuation) const {
+        std::ostringstream data;
+        data << "{";
+        data << "\"desired\":";
+        if (desired_topology.has_value()) {
+            data << make_desired_topology_json(*desired_topology);
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"observed_pools\":[";
+        for (std::size_t i = 0; i < observed_pools.size(); ++i) {
+            if (i > 0) {
+                data << ",";
+            }
+            data << make_observed_pool_json(observed_pools[i]);
+        }
+        data << "],";
+        data << "\"summary\":{";
+        data << "\"desired_present\":" << bool_json(actuation.summary.desired_present) << ",";
+        data << "\"actions_total\":" << actuation.summary.actions_total << ",";
+        data << "\"actionable_actions\":" << actuation.summary.actionable_actions << ",";
+        data << "\"scale_out_actions\":" << actuation.summary.scale_out_actions << ",";
+        data << "\"scale_in_actions\":" << actuation.summary.scale_in_actions << ",";
+        data << "\"readiness_recovery_actions\":" << actuation.summary.readiness_recovery_actions << ",";
+        data << "\"observe_only_actions\":" << actuation.summary.observe_only_actions;
+        data << "},";
+        data << "\"actions\":[";
+        for (std::size_t i = 0; i < actuation.actions.size(); ++i) {
+            if (i > 0) {
+                data << ",";
+            }
+            const auto& action = actuation.actions[i];
+            data << "{";
+            data << "\"world_id\":\"" << json_escape(action.world_id) << "\",";
+            data << "\"shard\":\"" << json_escape(action.shard) << "\",";
+            data << "\"status\":\"" << server::core::mmorpg::topology_pool_status_name(action.status) << "\",";
+            data << "\"action\":\"" << server::core::mmorpg::topology_actuation_action_kind_name(action.action) << "\",";
+            data << "\"actionable\":" << bool_json(action.actionable) << ",";
+            data << "\"desired_replicas\":" << action.desired_replicas << ",";
+            data << "\"observed_instances\":" << action.observed_instances << ",";
+            data << "\"ready_instances\":" << action.ready_instances << ",";
+            data << "\"replica_delta\":" << action.replica_delta;
+            data << "}";
+        }
+        data << "]";
+        data << "}";
+        return data.str();
+    }
+
+    std::string make_topology_actuation_status_json(
+        const std::optional<DesiredTopologyDocument>& desired_topology,
+        const std::optional<TopologyActuationRequestDocument>& request_document,
+        const std::vector<server::core::mmorpg::ObservedTopologyPool>& observed_pools,
+        const server::core::mmorpg::TopologyActuationPlan& actuation_plan,
+        const server::core::mmorpg::TopologyActuationRequestStatus& request_status) const {
+        std::ostringstream data;
+        data << "{";
+        data << "\"desired\":";
+        if (desired_topology.has_value()) {
+            data << make_desired_topology_json(*desired_topology);
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"request\":";
+        if (request_document.has_value()) {
+            data << make_topology_actuation_request_json(*request_document);
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"observed_pools\":[";
+        for (std::size_t i = 0; i < observed_pools.size(); ++i) {
+            if (i > 0) {
+                data << ",";
+            }
+            data << make_observed_pool_json(observed_pools[i]);
+        }
+        data << "],";
+        data << "\"plan_summary\":{";
+        data << "\"desired_present\":" << bool_json(actuation_plan.summary.desired_present) << ",";
+        data << "\"actions_total\":" << actuation_plan.summary.actions_total << ",";
+        data << "\"actionable_actions\":" << actuation_plan.summary.actionable_actions << ",";
+        data << "\"scale_out_actions\":" << actuation_plan.summary.scale_out_actions << ",";
+        data << "\"scale_in_actions\":" << actuation_plan.summary.scale_in_actions << ",";
+        data << "\"readiness_recovery_actions\":" << actuation_plan.summary.readiness_recovery_actions << ",";
+        data << "\"observe_only_actions\":" << actuation_plan.summary.observe_only_actions;
+        data << "},";
+        data << "\"summary\":{";
+        data << "\"request_present\":" << bool_json(request_status.summary.request_present) << ",";
+        data << "\"desired_present\":" << bool_json(request_status.summary.desired_present) << ",";
+        data << "\"basis_topology_revision_matches_current\":"
+             << bool_json(request_status.summary.basis_topology_revision_matches_current) << ",";
+        data << "\"basis_topology_revision\":" << request_status.summary.basis_topology_revision << ",";
+        data << "\"current_topology_revision\":" << request_status.summary.current_topology_revision << ",";
+        data << "\"actions_total\":" << request_status.summary.actions_total << ",";
+        data << "\"pending_actions\":" << request_status.summary.pending_actions << ",";
+        data << "\"satisfied_actions\":" << request_status.summary.satisfied_actions << ",";
+        data << "\"superseded_actions\":" << request_status.summary.superseded_actions;
+        data << "},";
+        data << "\"actions\":[";
+        for (std::size_t i = 0; i < request_status.actions.size(); ++i) {
+            if (i > 0) {
+                data << ",";
+            }
+            const auto& action = request_status.actions[i];
+            data << "{";
+            data << "\"world_id\":\"" << json_escape(action.world_id) << "\",";
+            data << "\"shard\":\"" << json_escape(action.shard) << "\",";
+            data << "\"requested_action\":\"" << server::core::mmorpg::topology_actuation_action_kind_name(
+                action.requested_action) << "\",";
+            data << "\"requested_replica_delta\":" << action.requested_replica_delta << ",";
+            data << "\"state\":\"" << server::core::mmorpg::topology_actuation_request_action_state_name(
+                action.state) << "\",";
+            data << "\"current_status\":";
+            if (action.current_status.has_value()) {
+                data << "\"" << server::core::mmorpg::topology_pool_status_name(*action.current_status) << "\"";
+            } else {
+                data << "null";
+            }
+            data << ",";
+            data << "\"current_action\":";
+            if (action.current_action.has_value()) {
+                data << "\"" << server::core::mmorpg::topology_actuation_action_kind_name(*action.current_action)
+                     << "\"";
+            } else {
+                data << "null";
+            }
+            data << ",";
+            data << "\"current_replica_delta\":" << action.current_replica_delta;
+            data << "}";
+        }
+        data << "]";
+        data << "}";
+        return data.str();
+    }
+
+    std::string make_topology_actuation_execution_status_json(
+        const std::optional<TopologyActuationRequestDocument>& request_document,
+        const std::optional<TopologyActuationExecutionDocument>& execution_document,
+        const server::core::mmorpg::TopologyActuationRequestStatus& request_status,
+        const server::core::mmorpg::TopologyActuationExecutionStatus& execution_status) const {
+        std::ostringstream data;
+        data << "{";
+        data << "\"request\":";
+        if (request_document.has_value()) {
+            data << make_topology_actuation_request_json(*request_document);
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"execution\":";
+        if (execution_document.has_value()) {
+            data << make_topology_actuation_execution_json(*execution_document);
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"request_summary\":{";
+        data << "\"request_present\":" << bool_json(request_status.summary.request_present) << ",";
+        data << "\"desired_present\":" << bool_json(request_status.summary.desired_present) << ",";
+        data << "\"basis_topology_revision_matches_current\":"
+             << bool_json(request_status.summary.basis_topology_revision_matches_current) << ",";
+        data << "\"basis_topology_revision\":" << request_status.summary.basis_topology_revision << ",";
+        data << "\"current_topology_revision\":" << request_status.summary.current_topology_revision << ",";
+        data << "\"actions_total\":" << request_status.summary.actions_total << ",";
+        data << "\"pending_actions\":" << request_status.summary.pending_actions << ",";
+        data << "\"satisfied_actions\":" << request_status.summary.satisfied_actions << ",";
+        data << "\"superseded_actions\":" << request_status.summary.superseded_actions;
+        data << "},";
+        data << "\"summary\":{";
+        data << "\"request_present\":" << bool_json(execution_status.summary.request_present) << ",";
+        data << "\"execution_present\":" << bool_json(execution_status.summary.execution_present) << ",";
+        data << "\"execution_revision_matches_current_request\":"
+             << bool_json(execution_status.summary.execution_revision_matches_current_request) << ",";
+        data << "\"execution_request_revision\":" << execution_status.summary.execution_request_revision << ",";
+        data << "\"current_request_revision\":" << execution_status.summary.current_request_revision << ",";
+        data << "\"actions_total\":" << execution_status.summary.actions_total << ",";
+        data << "\"available_actions\":" << execution_status.summary.available_actions << ",";
+        data << "\"claimed_actions\":" << execution_status.summary.claimed_actions << ",";
+        data << "\"completed_actions\":" << execution_status.summary.completed_actions << ",";
+        data << "\"failed_actions\":" << execution_status.summary.failed_actions << ",";
+        data << "\"stale_actions\":" << execution_status.summary.stale_actions;
+        data << "},";
+        data << "\"actions\":[";
+        for (std::size_t i = 0; i < execution_status.actions.size(); ++i) {
+            if (i > 0) {
+                data << ",";
+            }
+            const auto& action = execution_status.actions[i];
+            data << "{";
+            data << "\"world_id\":\"" << json_escape(action.world_id) << "\",";
+            data << "\"shard\":\"" << json_escape(action.shard) << "\",";
+            data << "\"requested_action\":\""
+                 << server::core::mmorpg::topology_actuation_action_kind_name(action.requested_action) << "\",";
+            data << "\"requested_replica_delta\":" << action.requested_replica_delta << ",";
+            data << "\"state\":\""
+                 << server::core::mmorpg::topology_actuation_execution_status_state_name(action.state) << "\",";
+            data << "\"request_state\":";
+            if (action.request_state.has_value()) {
+                data << "\"" << server::core::mmorpg::topology_actuation_request_action_state_name(
+                    *action.request_state) << "\"";
+            } else {
+                data << "null";
+            }
+            data << ",";
+            data << "\"execution_state\":";
+            if (action.execution_state.has_value()) {
+                data << "\"" << server::core::mmorpg::topology_actuation_execution_action_state_name(
+                    *action.execution_state) << "\"";
+            } else {
+                data << "null";
+            }
+            data << "}";
+        }
+        data << "]";
+        data << "}";
+        return data.str();
+    }
+
+    std::string make_topology_actuation_realization_json(
+        const std::optional<TopologyActuationRequestDocument>& request_document,
+        const std::optional<TopologyActuationExecutionDocument>& execution_document,
+        const std::vector<server::core::mmorpg::ObservedTopologyPool>& observed_pools,
+        const server::core::mmorpg::TopologyActuationRequestStatus& request_status,
+        const server::core::mmorpg::TopologyActuationExecutionStatus& execution_status,
+        const server::core::mmorpg::TopologyActuationRealizationStatus& realization_status) const {
+        std::ostringstream data;
+        data << "{";
+        data << "\"request\":";
+        if (request_document.has_value()) {
+            data << make_topology_actuation_request_json(*request_document);
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"execution\":";
+        if (execution_document.has_value()) {
+            data << make_topology_actuation_execution_json(*execution_document);
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"observed_pools\":[";
+        for (std::size_t i = 0; i < observed_pools.size(); ++i) {
+            if (i > 0) {
+                data << ",";
+            }
+            data << make_observed_pool_json(observed_pools[i]);
+        }
+        data << "],";
+        data << "\"request_summary\":{";
+        data << "\"request_present\":" << bool_json(request_status.summary.request_present) << ",";
+        data << "\"desired_present\":" << bool_json(request_status.summary.desired_present) << ",";
+        data << "\"basis_topology_revision_matches_current\":"
+             << bool_json(request_status.summary.basis_topology_revision_matches_current) << ",";
+        data << "\"basis_topology_revision\":" << request_status.summary.basis_topology_revision << ",";
+        data << "\"current_topology_revision\":" << request_status.summary.current_topology_revision << ",";
+        data << "\"actions_total\":" << request_status.summary.actions_total << ",";
+        data << "\"pending_actions\":" << request_status.summary.pending_actions << ",";
+        data << "\"satisfied_actions\":" << request_status.summary.satisfied_actions << ",";
+        data << "\"superseded_actions\":" << request_status.summary.superseded_actions;
+        data << "},";
+        data << "\"execution_summary\":{";
+        data << "\"request_present\":" << bool_json(execution_status.summary.request_present) << ",";
+        data << "\"execution_present\":" << bool_json(execution_status.summary.execution_present) << ",";
+        data << "\"execution_revision_matches_current_request\":"
+             << bool_json(execution_status.summary.execution_revision_matches_current_request) << ",";
+        data << "\"execution_request_revision\":" << execution_status.summary.execution_request_revision << ",";
+        data << "\"current_request_revision\":" << execution_status.summary.current_request_revision << ",";
+        data << "\"actions_total\":" << execution_status.summary.actions_total << ",";
+        data << "\"available_actions\":" << execution_status.summary.available_actions << ",";
+        data << "\"claimed_actions\":" << execution_status.summary.claimed_actions << ",";
+        data << "\"completed_actions\":" << execution_status.summary.completed_actions << ",";
+        data << "\"failed_actions\":" << execution_status.summary.failed_actions << ",";
+        data << "\"stale_actions\":" << execution_status.summary.stale_actions;
+        data << "},";
+        data << "\"summary\":{";
+        data << "\"request_present\":" << bool_json(realization_status.summary.request_present) << ",";
+        data << "\"execution_present\":" << bool_json(realization_status.summary.execution_present) << ",";
+        data << "\"execution_revision_matches_current_request\":"
+             << bool_json(realization_status.summary.execution_revision_matches_current_request) << ",";
+        data << "\"execution_request_revision\":" << realization_status.summary.execution_request_revision << ",";
+        data << "\"current_request_revision\":" << realization_status.summary.current_request_revision << ",";
+        data << "\"actions_total\":" << realization_status.summary.actions_total << ",";
+        data << "\"available_actions\":" << realization_status.summary.available_actions << ",";
+        data << "\"claimed_actions\":" << realization_status.summary.claimed_actions << ",";
+        data << "\"awaiting_observation_actions\":" << realization_status.summary.awaiting_observation_actions << ",";
+        data << "\"realized_actions\":" << realization_status.summary.realized_actions << ",";
+        data << "\"failed_actions\":" << realization_status.summary.failed_actions << ",";
+        data << "\"stale_actions\":" << realization_status.summary.stale_actions;
+        data << "},";
+        data << "\"actions\":[";
+        for (std::size_t i = 0; i < realization_status.actions.size(); ++i) {
+            if (i > 0) {
+                data << ",";
+            }
+            const auto& action = realization_status.actions[i];
+            data << "{";
+            data << "\"world_id\":\"" << json_escape(action.world_id) << "\",";
+            data << "\"shard\":\"" << json_escape(action.shard) << "\",";
+            data << "\"requested_action\":\""
+                 << server::core::mmorpg::topology_actuation_action_kind_name(action.requested_action) << "\",";
+            data << "\"requested_replica_delta\":" << action.requested_replica_delta << ",";
+            data << "\"state\":\"" << server::core::mmorpg::topology_actuation_realization_state_name(action.state)
+                 << "\",";
+            data << "\"request_state\":";
+            if (action.request_state.has_value()) {
+                data << "\"" << server::core::mmorpg::topology_actuation_request_action_state_name(
+                    *action.request_state) << "\"";
+            } else {
+                data << "null";
+            }
+            data << ",";
+            data << "\"execution_state\":";
+            if (action.execution_state.has_value()) {
+                data << "\"" << server::core::mmorpg::topology_actuation_execution_action_state_name(
+                    *action.execution_state) << "\"";
+            } else {
+                data << "null";
+            }
+            data << ",";
+            data << "\"observed_instances_before\":" << action.observed_instances_before << ",";
+            data << "\"ready_instances_before\":" << action.ready_instances_before << ",";
+            data << "\"current_observed_instances\":" << action.current_observed_instances << ",";
+            data << "\"current_ready_instances\":" << action.current_ready_instances;
+            data << "}";
+        }
+        data << "]";
+        data << "}";
+        return data.str();
+    }
+
+    std::string make_topology_actuation_adapter_status_json(
+        const std::optional<TopologyActuationAdapterLeaseDocument>& lease_document,
+        const std::optional<TopologyActuationExecutionDocument>& execution_document,
+        const server::core::mmorpg::TopologyActuationExecutionStatus& execution_status,
+        const server::core::mmorpg::TopologyActuationRealizationStatus& realization_status,
+        const server::core::mmorpg::TopologyActuationAdapterStatus& adapter_status) const {
+        std::ostringstream data;
+        data << "{";
+        data << "\"lease\":";
+        if (lease_document.has_value()) {
+            data << make_topology_actuation_adapter_json(*lease_document);
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"execution\":";
+        if (execution_document.has_value()) {
+            data << make_topology_actuation_execution_json(*execution_document);
+        } else {
+            data << "null";
+        }
+        data << ",";
+        data << "\"execution_summary\":{";
+        data << "\"request_present\":" << bool_json(execution_status.summary.request_present) << ",";
+        data << "\"execution_present\":" << bool_json(execution_status.summary.execution_present) << ",";
+        data << "\"execution_revision_matches_current_request\":"
+             << bool_json(execution_status.summary.execution_revision_matches_current_request) << ",";
+        data << "\"execution_request_revision\":" << execution_status.summary.execution_request_revision << ",";
+        data << "\"current_request_revision\":" << execution_status.summary.current_request_revision << ",";
+        data << "\"actions_total\":" << execution_status.summary.actions_total << ",";
+        data << "\"available_actions\":" << execution_status.summary.available_actions << ",";
+        data << "\"claimed_actions\":" << execution_status.summary.claimed_actions << ",";
+        data << "\"completed_actions\":" << execution_status.summary.completed_actions << ",";
+        data << "\"failed_actions\":" << execution_status.summary.failed_actions << ",";
+        data << "\"stale_actions\":" << execution_status.summary.stale_actions;
+        data << "},";
+        data << "\"realization_summary\":{";
+        data << "\"request_present\":" << bool_json(realization_status.summary.request_present) << ",";
+        data << "\"execution_present\":" << bool_json(realization_status.summary.execution_present) << ",";
+        data << "\"execution_revision_matches_current_request\":"
+             << bool_json(realization_status.summary.execution_revision_matches_current_request) << ",";
+        data << "\"execution_request_revision\":" << realization_status.summary.execution_request_revision << ",";
+        data << "\"current_request_revision\":" << realization_status.summary.current_request_revision << ",";
+        data << "\"actions_total\":" << realization_status.summary.actions_total << ",";
+        data << "\"available_actions\":" << realization_status.summary.available_actions << ",";
+        data << "\"claimed_actions\":" << realization_status.summary.claimed_actions << ",";
+        data << "\"awaiting_observation_actions\":" << realization_status.summary.awaiting_observation_actions << ",";
+        data << "\"realized_actions\":" << realization_status.summary.realized_actions << ",";
+        data << "\"failed_actions\":" << realization_status.summary.failed_actions << ",";
+        data << "\"stale_actions\":" << realization_status.summary.stale_actions;
+        data << "},";
+        data << "\"summary\":{";
+        data << "\"execution_present\":" << bool_json(adapter_status.summary.execution_present) << ",";
+        data << "\"lease_present\":" << bool_json(adapter_status.summary.lease_present) << ",";
+        data << "\"lease_revision_matches_current_execution\":"
+             << bool_json(adapter_status.summary.lease_revision_matches_current_execution) << ",";
+        data << "\"lease_execution_revision\":" << adapter_status.summary.lease_execution_revision << ",";
+        data << "\"current_execution_revision\":" << adapter_status.summary.current_execution_revision << ",";
+        data << "\"actions_total\":" << adapter_status.summary.actions_total << ",";
+        data << "\"available_actions\":" << adapter_status.summary.available_actions << ",";
+        data << "\"leased_actions\":" << adapter_status.summary.leased_actions << ",";
+        data << "\"awaiting_realization_actions\":" << adapter_status.summary.awaiting_realization_actions << ",";
+        data << "\"realized_actions\":" << adapter_status.summary.realized_actions << ",";
+        data << "\"failed_actions\":" << adapter_status.summary.failed_actions << ",";
+        data << "\"stale_actions\":" << adapter_status.summary.stale_actions;
+        data << "},";
+        data << "\"actions\":[";
+        for (std::size_t i = 0; i < adapter_status.actions.size(); ++i) {
+            if (i > 0) {
+                data << ",";
+            }
+            const auto& action = adapter_status.actions[i];
+            data << "{";
+            data << "\"world_id\":\"" << json_escape(action.world_id) << "\",";
+            data << "\"shard\":\"" << json_escape(action.shard) << "\",";
+            data << "\"requested_action\":\""
+                 << server::core::mmorpg::topology_actuation_action_kind_name(action.requested_action) << "\",";
+            data << "\"requested_replica_delta\":" << action.requested_replica_delta << ",";
+            data << "\"state\":\"" << server::core::mmorpg::topology_actuation_adapter_status_state_name(action.state)
+                 << "\",";
+            data << "\"execution_state\":";
+            if (action.execution_state.has_value()) {
+                data << "\"" << server::core::mmorpg::topology_actuation_execution_status_state_name(
+                    *action.execution_state) << "\"";
+            } else {
+                data << "null";
+            }
+            data << ",";
+            data << "\"realization_state\":";
+            if (action.realization_state.has_value()) {
+                data << "\"" << server::core::mmorpg::topology_actuation_realization_state_name(
+                    *action.realization_state) << "\"";
+            } else {
+                data << "null";
+            }
+            data << "}";
+        }
+        data << "]";
         data << "}";
         return data.str();
     }
@@ -1872,16 +4447,16 @@ private:
     }
 
     void init_dependencies() {
-        app_host_.declare_dependency("admin_api");
-        app_host_.declare_dependency("redis", server::core::app::AppHost::DependencyRequirement::kOptional);
-        app_host_.declare_dependency("wb_metrics", server::core::app::AppHost::DependencyRequirement::kOptional);
+        engine_.declare_dependency("admin_api");
+        engine_.declare_dependency("redis", server::core::app::AppHost::DependencyRequirement::kOptional);
+        engine_.declare_dependency("wb_metrics", server::core::app::AppHost::DependencyRequirement::kOptional);
 
-        app_host_.set_dependency_ok("admin_api", true);
-        app_host_.set_dependency_ok("redis", false);
-        app_host_.set_dependency_ok("wb_metrics", false);
+        engine_.set_dependency_ok("admin_api", true);
+        engine_.set_dependency_ok("redis", false);
+        engine_.set_dependency_ok("wb_metrics", false);
 
-        app_host_.set_healthy(true);
-        app_host_.set_ready(true);
+        engine_.set_healthy(true);
+        engine_.set_ready(true);
     }
 
     void init_backends() {
@@ -1896,6 +4471,7 @@ private:
                     redis_,
                     registry_prefix_,
                     std::chrono::seconds(registry_ttl_sec_));
+                engine_.set_service(redis_);
                 redis_available_.store(true, std::memory_order_relaxed);
             } else {
                 redis_available_.store(false, std::memory_order_relaxed);
@@ -3164,6 +5740,202 @@ private:
         stream << "admin_world_policy_clear_fail_total "
                << world_policy_clear_fail_total_.load(std::memory_order_relaxed) << "\n";
 
+        stream << "# TYPE admin_world_drain_requests_total counter\n";
+        stream << "admin_world_drain_requests_total "
+               << world_drain_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_drain_write_total counter\n";
+        stream << "admin_world_drain_write_total "
+               << world_drain_write_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_drain_write_fail_total counter\n";
+        stream << "admin_world_drain_write_fail_total "
+               << world_drain_write_fail_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_drain_clear_total counter\n";
+        stream << "admin_world_drain_clear_total "
+               << world_drain_clear_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_drain_clear_fail_total counter\n";
+        stream << "admin_world_drain_clear_fail_total "
+               << world_drain_clear_fail_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_transfer_requests_total counter\n";
+        stream << "admin_world_transfer_requests_total "
+               << world_transfer_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_transfer_write_total counter\n";
+        stream << "admin_world_transfer_write_total "
+               << world_transfer_write_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_transfer_write_fail_total counter\n";
+        stream << "admin_world_transfer_write_fail_total "
+               << world_transfer_write_fail_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_transfer_clear_total counter\n";
+        stream << "admin_world_transfer_clear_total "
+               << world_transfer_clear_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_transfer_clear_fail_total counter\n";
+        stream << "admin_world_transfer_clear_fail_total "
+               << world_transfer_clear_fail_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_transfer_owner_commit_total counter\n";
+        stream << "admin_world_transfer_owner_commit_total "
+               << world_transfer_owner_commit_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_transfer_owner_commit_fail_total counter\n";
+        stream << "admin_world_transfer_owner_commit_fail_total "
+               << world_transfer_owner_commit_fail_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_migration_requests_total counter\n";
+        stream << "admin_world_migration_requests_total "
+               << world_migration_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_migration_write_total counter\n";
+        stream << "admin_world_migration_write_total "
+               << world_migration_write_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_migration_write_fail_total counter\n";
+        stream << "admin_world_migration_write_fail_total "
+               << world_migration_write_fail_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_migration_clear_total counter\n";
+        stream << "admin_world_migration_clear_total "
+               << world_migration_clear_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_world_migration_clear_fail_total counter\n";
+        stream << "admin_world_migration_clear_fail_total "
+               << world_migration_clear_fail_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_desired_topology_requests_total counter\n";
+        stream << "admin_desired_topology_requests_total "
+               << desired_topology_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_desired_topology_write_total counter\n";
+        stream << "admin_desired_topology_write_total "
+               << desired_topology_write_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_desired_topology_write_fail_total counter\n";
+        stream << "admin_desired_topology_write_fail_total "
+               << desired_topology_write_fail_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_desired_topology_clear_total counter\n";
+        stream << "admin_desired_topology_clear_total "
+               << desired_topology_clear_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_desired_topology_clear_fail_total counter\n";
+        stream << "admin_desired_topology_clear_fail_total "
+               << desired_topology_clear_fail_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_observed_topology_requests_total counter\n";
+        stream << "admin_observed_topology_requests_total "
+               << observed_topology_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_reconciliation_requests_total counter\n";
+        stream << "admin_topology_reconciliation_requests_total "
+               << topology_reconciliation_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_requests_total counter\n";
+        stream << "admin_topology_actuation_requests_total "
+               << topology_actuation_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_request_requests_total counter\n";
+        stream << "admin_topology_actuation_request_requests_total "
+               << topology_actuation_request_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_request_write_total counter\n";
+        stream << "admin_topology_actuation_request_write_total "
+               << topology_actuation_request_write_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_request_write_fail_total counter\n";
+        stream << "admin_topology_actuation_request_write_fail_total "
+               << topology_actuation_request_write_fail_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_request_clear_total counter\n";
+        stream << "admin_topology_actuation_request_clear_total "
+               << topology_actuation_request_clear_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_request_clear_fail_total counter\n";
+        stream << "admin_topology_actuation_request_clear_fail_total "
+               << topology_actuation_request_clear_fail_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_status_requests_total counter\n";
+        stream << "admin_topology_actuation_status_requests_total "
+               << topology_actuation_status_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_execution_requests_total counter\n";
+        stream << "admin_topology_actuation_execution_requests_total "
+               << topology_actuation_execution_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_execution_write_total counter\n";
+        stream << "admin_topology_actuation_execution_write_total "
+               << topology_actuation_execution_write_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_execution_write_fail_total counter\n";
+        stream << "admin_topology_actuation_execution_write_fail_total "
+               << topology_actuation_execution_write_fail_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_execution_clear_total counter\n";
+        stream << "admin_topology_actuation_execution_clear_total "
+               << topology_actuation_execution_clear_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_execution_clear_fail_total counter\n";
+        stream << "admin_topology_actuation_execution_clear_fail_total "
+               << topology_actuation_execution_clear_fail_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_execution_status_requests_total counter\n";
+        stream << "admin_topology_actuation_execution_status_requests_total "
+               << topology_actuation_execution_status_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_realization_requests_total counter\n";
+        stream << "admin_topology_actuation_realization_requests_total "
+               << topology_actuation_realization_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_adapter_requests_total counter\n";
+        stream << "admin_topology_actuation_adapter_requests_total "
+               << topology_actuation_adapter_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_adapter_write_total counter\n";
+        stream << "admin_topology_actuation_adapter_write_total "
+               << topology_actuation_adapter_write_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_adapter_write_fail_total counter\n";
+        stream << "admin_topology_actuation_adapter_write_fail_total "
+               << topology_actuation_adapter_write_fail_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_adapter_clear_total counter\n";
+        stream << "admin_topology_actuation_adapter_clear_total "
+               << topology_actuation_adapter_clear_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_adapter_clear_fail_total counter\n";
+        stream << "admin_topology_actuation_adapter_clear_fail_total "
+               << topology_actuation_adapter_clear_fail_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_adapter_status_requests_total counter\n";
+        stream << "admin_topology_actuation_adapter_status_requests_total "
+               << topology_actuation_adapter_status_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_runtime_assignment_requests_total counter\n";
+        stream << "admin_topology_actuation_runtime_assignment_requests_total "
+               << topology_actuation_runtime_assignment_requests_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_runtime_assignment_write_total counter\n";
+        stream << "admin_topology_actuation_runtime_assignment_write_total "
+               << topology_actuation_runtime_assignment_write_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_runtime_assignment_write_fail_total counter\n";
+        stream << "admin_topology_actuation_runtime_assignment_write_fail_total "
+               << topology_actuation_runtime_assignment_write_fail_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_runtime_assignment_clear_total counter\n";
+        stream << "admin_topology_actuation_runtime_assignment_clear_total "
+               << topology_actuation_runtime_assignment_clear_total_.load(std::memory_order_relaxed) << "\n";
+
+        stream << "# TYPE admin_topology_actuation_runtime_assignment_clear_fail_total counter\n";
+        stream << "admin_topology_actuation_runtime_assignment_clear_fail_total "
+               << topology_actuation_runtime_assignment_clear_fail_total_.load(std::memory_order_relaxed) << "\n";
+
         stream << "# TYPE admin_instances_selector_requests_total counter\n";
         stream << "admin_instances_selector_requests_total "
                << instances_selector_requests_total_.load(std::memory_order_relaxed) << "\n";
@@ -3387,6 +6159,19 @@ private:
         const bool is_ext_precheck = (path == "/api/v1/ext/precheck");
         const bool is_ext_deployments = (path == "/api/v1/ext/deployments");
         const bool is_ext_schedules = (path == "/api/v1/ext/schedules");
+        const bool is_desired_topology = (path == "/api/v1/topology/desired");
+        const bool is_observed_topology = (path == "/api/v1/topology/observed");
+        const bool is_topology_reconciliation = (path == "/api/v1/topology/reconciliation");
+        const bool is_topology_actuation = (path == "/api/v1/topology/actuation");
+        const bool is_topology_actuation_request = (path == "/api/v1/topology/actuation/request");
+        const bool is_topology_actuation_status = (path == "/api/v1/topology/actuation/status");
+        const bool is_topology_actuation_execution = (path == "/api/v1/topology/actuation/execution");
+        const bool is_topology_actuation_execution_status = (path == "/api/v1/topology/actuation/execution/status");
+        const bool is_topology_actuation_realization = (path == "/api/v1/topology/actuation/realization");
+        const bool is_topology_actuation_adapter = (path == "/api/v1/topology/actuation/adapter");
+        const bool is_topology_actuation_adapter_status = (path == "/api/v1/topology/actuation/adapter/status");
+        const bool is_topology_actuation_runtime_assignment =
+            (path == "/api/v1/topology/actuation/runtime-assignment");
         const bool is_mute = (path == "/api/v1/users/mute");
         const bool is_unmute = (path == "/api/v1/users/unmute");
         const bool is_ban = (path == "/api/v1/users/ban");
@@ -3394,16 +6179,50 @@ private:
         const bool is_kick = (path == "/api/v1/users/kick");
         constexpr std::string_view kWorldPolicyPrefix = "/api/v1/worlds/";
         constexpr std::string_view kWorldPolicySuffix = "/policy";
+        constexpr std::string_view kWorldDrainPrefix = "/api/v1/worlds/";
+        constexpr std::string_view kWorldDrainSuffix = "/drain";
+        constexpr std::string_view kWorldTransferPrefix = "/api/v1/worlds/";
+        constexpr std::string_view kWorldTransferSuffix = "/transfer";
+        constexpr std::string_view kWorldMigrationPrefix = "/api/v1/worlds/";
+        constexpr std::string_view kWorldMigrationSuffix = "/migration";
         const bool is_world_policy = path.starts_with(kWorldPolicyPrefix)
             && path.ends_with(kWorldPolicySuffix)
             && path.size() > (kWorldPolicyPrefix.size() + kWorldPolicySuffix.size());
+        const bool is_world_drain = path.starts_with(kWorldDrainPrefix)
+            && path.ends_with(kWorldDrainSuffix)
+            && path.size() > (kWorldDrainPrefix.size() + kWorldDrainSuffix.size());
+        const bool is_world_transfer = path.starts_with(kWorldTransferPrefix)
+            && path.ends_with(kWorldTransferSuffix)
+            && path.size() > (kWorldTransferPrefix.size() + kWorldTransferSuffix.size());
+        const bool is_world_migration = path.starts_with(kWorldMigrationPrefix)
+            && path.ends_with(kWorldMigrationSuffix)
+            && path.size() > (kWorldMigrationPrefix.size() + kWorldMigrationSuffix.size());
         const bool is_user_moderation = is_mute || is_unmute || is_ban || is_unban || is_kick;
         const bool is_legacy_write_endpoint = is_disconnect || is_announce || is_settings || is_user_moderation;
+        const bool is_desired_topology_write = is_desired_topology && (method == "PUT" || method == "DELETE");
+        const bool is_topology_actuation_request_write =
+            is_topology_actuation_request && (method == "PUT" || method == "DELETE");
+        const bool is_topology_actuation_execution_write =
+            is_topology_actuation_execution && (method == "PUT" || method == "DELETE");
+        const bool is_topology_actuation_adapter_write =
+            is_topology_actuation_adapter && (method == "PUT" || method == "DELETE");
+        const bool is_topology_actuation_runtime_assignment_write =
+            is_topology_actuation_runtime_assignment && (method == "PUT" || method == "DELETE");
+        const bool is_world_drain_write = is_world_drain && (method == "PUT" || method == "DELETE");
+        const bool is_world_transfer_write = is_world_transfer && (method == "PUT" || method == "DELETE");
+        const bool is_world_migration_write = is_world_migration && (method == "PUT" || method == "DELETE");
         const bool is_ext_deployments_write = is_ext_deployments && method == "POST";
         const bool is_ext_write_endpoint = is_ext_precheck || is_ext_deployments_write || is_ext_schedules;
         const bool is_readonly_blocked_endpoint =
-            is_legacy_write_endpoint || is_ext_deployments_write || is_ext_schedules || is_world_policy;
-        const bool is_write_endpoint = is_legacy_write_endpoint || is_ext_write_endpoint || is_world_policy;
+            is_legacy_write_endpoint || is_ext_deployments_write || is_ext_schedules
+            || is_world_policy || is_world_drain_write || is_world_transfer_write || is_world_migration_write
+            || is_desired_topology_write || is_topology_actuation_request_write || is_topology_actuation_execution_write
+            || is_topology_actuation_adapter_write || is_topology_actuation_runtime_assignment_write;
+        const bool is_write_endpoint =
+            is_legacy_write_endpoint || is_ext_write_endpoint || is_world_policy
+            || is_world_drain_write || is_world_transfer_write || is_world_migration_write
+            || is_desired_topology_write || is_topology_actuation_request_write || is_topology_actuation_execution_write
+            || is_topology_actuation_adapter_write || is_topology_actuation_runtime_assignment_write;
 
         if (!is_write_endpoint && method != "GET") {
             http_errors_total_.fetch_add(1, std::memory_order_relaxed);
@@ -3495,6 +6314,141 @@ private:
                 "world policy endpoint requires PUT or DELETE"));
         }
 
+        if (is_world_drain && method != "GET" && method != "PUT" && method != "DELETE") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "world drain endpoint supports GET, PUT, and DELETE"));
+        }
+
+        if (is_world_transfer && method != "GET" && method != "PUT" && method != "DELETE") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "world transfer endpoint supports GET, PUT, and DELETE"));
+        }
+
+        if (is_world_migration && method != "GET" && method != "PUT" && method != "DELETE") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "world migration endpoint supports GET, PUT, and DELETE"));
+        }
+
+        if (is_desired_topology && method != "GET" && method != "PUT" && method != "DELETE") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "desired topology endpoint supports GET, PUT, and DELETE"));
+        }
+
+        if (is_observed_topology && method != "GET") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "observed topology endpoint requires GET"));
+        }
+
+        if (is_topology_reconciliation && method != "GET") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "topology reconciliation endpoint requires GET"));
+        }
+
+        if (is_topology_actuation && method != "GET") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "topology actuation endpoint requires GET"));
+        }
+
+        if (is_topology_actuation_request && method != "GET" && method != "PUT" && method != "DELETE") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "topology actuation request endpoint supports GET, PUT, and DELETE"));
+        }
+
+        if (is_topology_actuation_status && method != "GET") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "topology actuation status endpoint requires GET"));
+        }
+
+        if (is_topology_actuation_execution && method != "GET" && method != "PUT" && method != "DELETE") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "topology actuation execution endpoint supports GET, PUT, and DELETE"));
+        }
+
+        if (is_topology_actuation_execution_status && method != "GET") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "topology actuation execution status endpoint requires GET"));
+        }
+
+        if (is_topology_actuation_realization && method != "GET") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "topology actuation realization endpoint requires GET"));
+        }
+
+        if (is_topology_actuation_adapter && method != "GET" && method != "PUT" && method != "DELETE") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "topology actuation adapter endpoint supports GET, PUT, and DELETE"));
+        }
+
+        if (is_topology_actuation_adapter_status && method != "GET") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "topology actuation adapter status endpoint requires GET"));
+        }
+
+        if (is_topology_actuation_runtime_assignment && method != "GET" && method != "PUT" && method != "DELETE") {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(json_error(
+                request_id,
+                "405 Method Not Allowed",
+                "METHOD_NOT_ALLOWED",
+                "topology actuation runtime assignment endpoint supports GET, PUT, and DELETE"));
+        }
+
         if (is_readonly_blocked_endpoint && admin_read_only_) {
             http_errors_total_.fetch_add(1, std::memory_order_relaxed);
             return finalize(json_error(
@@ -3570,6 +6524,91 @@ private:
             return finalize(handle_worlds(request_id, query_options));
         }
 
+        if (is_desired_topology) {
+            desired_topology_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            if (method != "GET") {
+                if (auto forbidden = require_role(kRoleRequiredDesiredTopology)) {
+                    return finalize(std::move(*forbidden));
+                }
+            }
+            return finalize(handle_desired_topology(request_id, auth, request));
+        }
+
+        if (is_topology_actuation_request) {
+            topology_actuation_request_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            if (method != "GET") {
+                if (auto forbidden = require_role(kRoleRequiredTopologyActuationRequest)) {
+                    return finalize(std::move(*forbidden));
+                }
+            }
+            return finalize(handle_topology_actuation_request(request_id, auth, request));
+        }
+
+        if (is_topology_actuation_execution) {
+            topology_actuation_execution_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            if (method != "GET") {
+                if (auto forbidden = require_role(kRoleRequiredTopologyActuationExecution)) {
+                    return finalize(std::move(*forbidden));
+                }
+            }
+            return finalize(handle_topology_actuation_execution(request_id, auth, request));
+        }
+
+        if (is_topology_actuation_adapter) {
+            topology_actuation_adapter_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            if (method != "GET") {
+                if (auto forbidden = require_role(kRoleRequiredTopologyActuationAdapter)) {
+                    return finalize(std::move(*forbidden));
+                }
+            }
+            return finalize(handle_topology_actuation_adapter(request_id, auth, request));
+        }
+
+        if (is_topology_actuation_runtime_assignment) {
+            topology_actuation_runtime_assignment_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            if (method != "GET") {
+                if (auto forbidden = require_role(kRoleRequiredTopologyActuationRuntimeAssignment)) {
+                    return finalize(std::move(*forbidden));
+                }
+            }
+            return finalize(handle_topology_actuation_runtime_assignment(request_id, auth, request));
+        }
+
+        if (is_observed_topology) {
+            observed_topology_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(handle_observed_topology(request_id, query_options));
+        }
+
+        if (is_topology_reconciliation) {
+            topology_reconciliation_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(handle_topology_reconciliation(request_id, query_options));
+        }
+
+        if (is_topology_actuation) {
+            topology_actuation_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(handle_topology_actuation(request_id, query_options));
+        }
+
+        if (is_topology_actuation_status) {
+            topology_actuation_status_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(handle_topology_actuation_status(request_id, query_options));
+        }
+
+        if (is_topology_actuation_execution_status) {
+            topology_actuation_execution_status_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(handle_topology_actuation_execution_status(request_id, query_options));
+        }
+
+        if (is_topology_actuation_realization) {
+            topology_actuation_realization_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(handle_topology_actuation_realization(request_id, query_options));
+        }
+
+        if (is_topology_actuation_adapter_status) {
+            topology_actuation_adapter_status_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            return finalize(handle_topology_actuation_adapter_status(request_id, query_options));
+        }
+
         if (is_world_policy) {
             if (auto forbidden = require_role(kRoleRequiredWorldPolicy)) {
                 return finalize(std::move(*forbidden));
@@ -3579,6 +6618,45 @@ private:
             const std::size_t world_id_length = path.size() - world_id_begin - kWorldPolicySuffix.size();
             const std::string world_id = std::string(path.substr(world_id_begin, world_id_length));
             return finalize(handle_world_policy(request_id, auth, world_id, request));
+        }
+
+        if (is_world_drain) {
+            world_drain_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            if (method != "GET") {
+                if (auto forbidden = require_role(kRoleRequiredWorldDrain)) {
+                    return finalize(std::move(*forbidden));
+                }
+            }
+            const std::size_t world_id_begin = kWorldDrainPrefix.size();
+            const std::size_t world_id_length = path.size() - world_id_begin - kWorldDrainSuffix.size();
+            const std::string world_id = std::string(path.substr(world_id_begin, world_id_length));
+            return finalize(handle_world_drain(request_id, auth, world_id, request));
+        }
+
+        if (is_world_transfer) {
+            world_transfer_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            if (method != "GET") {
+                if (auto forbidden = require_role(kRoleRequiredWorldTransfer)) {
+                    return finalize(std::move(*forbidden));
+                }
+            }
+            const std::size_t world_id_begin = kWorldTransferPrefix.size();
+            const std::size_t world_id_length = path.size() - world_id_begin - kWorldTransferSuffix.size();
+            const std::string world_id = std::string(path.substr(world_id_begin, world_id_length));
+            return finalize(handle_world_transfer(request_id, auth, world_id, request));
+        }
+
+        if (is_world_migration) {
+            world_migration_requests_total_.fetch_add(1, std::memory_order_relaxed);
+            if (method != "GET") {
+                if (auto forbidden = require_role(kRoleRequiredWorldMigration)) {
+                    return finalize(std::move(*forbidden));
+                }
+            }
+            const std::size_t world_id_begin = kWorldMigrationPrefix.size();
+            const std::size_t world_id_length = path.size() - world_id_begin - kWorldMigrationSuffix.size();
+            const std::string world_id = std::string(path.substr(world_id_begin, world_id_length));
+            return finalize(handle_world_migration(request_id, auth, world_id, request));
         }
 
         constexpr std::string_view kInstancesPrefix = "/api/v1/instances/";
@@ -3708,6 +6786,18 @@ private:
         const bool allow_settings = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredSettings);
         const bool allow_moderation = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredModeration);
         const bool allow_world_policy = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredWorldPolicy);
+        const bool allow_world_drain = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredWorldDrain);
+        const bool allow_world_transfer = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredWorldTransfer);
+        const bool allow_world_migration = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredWorldMigration);
+        const bool allow_desired_topology = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredDesiredTopology);
+        const bool allow_topology_actuation_request =
+            !admin_read_only_ && has_min_role(auth.role, kRoleRequiredTopologyActuationRequest);
+        const bool allow_topology_actuation_execution =
+            !admin_read_only_ && has_min_role(auth.role, kRoleRequiredTopologyActuationExecution);
+        const bool allow_topology_actuation_adapter =
+            !admin_read_only_ && has_min_role(auth.role, kRoleRequiredTopologyActuationAdapter);
+        const bool allow_topology_actuation_runtime_assignment =
+            !admin_read_only_ && has_min_role(auth.role, kRoleRequiredTopologyActuationRuntimeAssignment);
         const bool allow_ext_deploy = !admin_read_only_ && has_min_role(auth.role, kRoleRequiredSettings);
 
         data << "\"capabilities\":{";
@@ -3716,6 +6806,15 @@ private:
         data << "\"settings\":" << bool_json(allow_settings) << ",";
         data << "\"moderation\":" << bool_json(allow_moderation) << ",";
         data << "\"world_policy\":" << bool_json(allow_world_policy) << ",";
+        data << "\"world_drain\":" << bool_json(allow_world_drain) << ",";
+        data << "\"world_transfer\":" << bool_json(allow_world_transfer) << ",";
+        data << "\"world_migration\":" << bool_json(allow_world_migration) << ",";
+        data << "\"desired_topology\":" << bool_json(allow_desired_topology) << ",";
+        data << "\"topology_actuation_request\":" << bool_json(allow_topology_actuation_request) << ",";
+        data << "\"topology_actuation_execution\":" << bool_json(allow_topology_actuation_execution) << ",";
+        data << "\"topology_actuation_adapter\":" << bool_json(allow_topology_actuation_adapter) << ",";
+        data << "\"topology_actuation_runtime_assignment\":"
+             << bool_json(allow_topology_actuation_runtime_assignment) << ",";
         data << "\"ext_deploy\":" << bool_json(allow_ext_deploy);
         data << "}";
         data << "}";
@@ -3812,6 +6911,21 @@ private:
         data << "\"links\":{";
         data << "\"instances\":\"/api/v1/instances\",";
         data << "\"worlds\":\"/api/v1/worlds\",";
+        data << "\"world_drain_template\":\"/api/v1/worlds/{world_id}/drain\",";
+        data << "\"world_transfer_template\":\"/api/v1/worlds/{world_id}/transfer\",";
+        data << "\"world_migration_template\":\"/api/v1/worlds/{world_id}/migration\",";
+        data << "\"topology_desired\":\"/api/v1/topology/desired\",";
+        data << "\"topology_observed\":\"/api/v1/topology/observed\",";
+        data << "\"topology_reconciliation\":\"/api/v1/topology/reconciliation\",";
+        data << "\"topology_actuation\":\"/api/v1/topology/actuation\",";
+        data << "\"topology_actuation_request\":\"/api/v1/topology/actuation/request\",";
+        data << "\"topology_actuation_status\":\"/api/v1/topology/actuation/status\",";
+        data << "\"topology_actuation_execution\":\"/api/v1/topology/actuation/execution\",";
+        data << "\"topology_actuation_execution_status\":\"/api/v1/topology/actuation/execution/status\",";
+        data << "\"topology_actuation_realization\":\"/api/v1/topology/actuation/realization\",";
+        data << "\"topology_actuation_adapter\":\"/api/v1/topology/actuation/adapter\",";
+        data << "\"topology_actuation_adapter_status\":\"/api/v1/topology/actuation/adapter/status\",";
+        data << "\"topology_actuation_runtime_assignment\":\"/api/v1/topology/actuation/runtime-assignment\",";
         data << "\"users\":\"/api/v1/users\",";
         data << "\"worker\":\"/api/v1/worker/write-behind\",";
         data << "\"ext_inventory\":\"/api/v1/ext/inventory\",";
@@ -4123,7 +7237,7 @@ private:
             if (i != cursor_index) {
                 data << ",";
             }
-            data << make_world_inventory_json(worlds[i]);
+            data << make_world_inventory_json(worlds[i], worlds);
         }
         data << "],";
         data << "\"paging\":{";
@@ -4215,7 +7329,7 @@ private:
                     "INTERNAL_ERROR",
                     "world inventory disappeared after policy delete");
             }
-            return json_ok(request_id, make_world_inventory_json(*refreshed_it));
+            return json_ok(request_id, make_world_inventory_json(*refreshed_it, refreshed_worlds));
         }
 
         const auto parsed = parse_world_policy_write_request(request);
@@ -4278,7 +7392,1786 @@ private:
                 "world inventory disappeared after policy write");
         }
 
-        return json_ok(request_id, make_world_inventory_json(*refreshed_it));
+        return json_ok(request_id, make_world_inventory_json(*refreshed_it, refreshed_worlds));
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_world_drain(std::uint64_t request_id,
+                       const AuthContext& auth,
+                       const std::string& world_id,
+                       const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+        (void)auth;
+        if (world_id.empty() || world_id.find('/') != std::string::npos) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(request_id, "400 Bad Request", "BAD_REQUEST", "invalid world id");
+        }
+
+        if (!registry_backend_ || !redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_UNAVAILABLE",
+                "redis registry unavailable");
+        }
+
+        std::vector<server::core::state::InstanceRecord> items;
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            items = instances_cache_;
+        }
+
+        auto find_world = [&](const std::vector<WorldInventoryEntry>& worlds)
+            -> std::vector<WorldInventoryEntry>::const_iterator {
+            return std::find_if(worlds.begin(), worlds.end(), [&](const auto& entry) {
+                return entry.world_id == world_id;
+            });
+        };
+
+        const auto worlds = collect_world_inventory(items);
+        const auto world_it = find_world(worlds);
+        if (world_it == worlds.end()) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "400 Bad Request",
+                "BAD_REQUEST",
+                "world_id does not exist in current inventory",
+                json_details("world_id", world_id));
+        }
+
+        const std::string policy_key = make_world_policy_key(world_id);
+        if (request.method == "GET") {
+            return json_ok(request_id, make_world_inventory_json(*world_it, worlds));
+        }
+
+        if (request.method == "DELETE") {
+            if (!redis_->del(policy_key)) {
+                world_drain_clear_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "503 Service Unavailable",
+                    "UPSTREAM_WRITE_FAILED",
+                    "failed to clear world drain policy");
+            }
+            world_drain_clear_total_.fetch_add(1, std::memory_order_relaxed);
+
+            const auto refreshed_worlds = collect_world_inventory(items);
+            const auto refreshed_it = find_world(refreshed_worlds);
+            if (refreshed_it == refreshed_worlds.end()) {
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "500 Internal Server Error",
+                    "INTERNAL_ERROR",
+                    "world inventory disappeared after world drain clear");
+            }
+            return json_ok(request_id, make_world_inventory_json(*refreshed_it, refreshed_worlds));
+        }
+
+        const auto parsed = parse_world_drain_write_request(request);
+        if (!parsed.ok) {
+            world_drain_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                parsed.error_status,
+                parsed.error_code,
+                parsed.error_message,
+                parsed.error_details);
+        }
+
+        if (parsed.replacement_owner_instance_id.has_value()) {
+            const bool replacement_found = std::any_of(
+                world_it->instances.begin(),
+                world_it->instances.end(),
+                [&](const auto& instance) {
+                    return instance.role == "server"
+                        && instance.instance_id == *parsed.replacement_owner_instance_id;
+                });
+            if (!replacement_found) {
+                world_drain_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "400 Bad Request",
+                    "BAD_REQUEST",
+                    "replacement_owner_instance_id must reference a known same-world server instance",
+                    json_details("replacement_owner_instance_id", *parsed.replacement_owner_instance_id));
+            }
+        }
+
+        server::core::state::WorldLifecyclePolicy next_policy;
+        next_policy.draining = true;
+        if (parsed.replacement_owner_instance_id.has_value()) {
+            next_policy.replacement_owner_instance_id = *parsed.replacement_owner_instance_id;
+        }
+
+        if (!redis_->set(policy_key, server::core::state::serialize_world_lifecycle_policy(next_policy))) {
+            world_drain_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_WRITE_FAILED",
+                "failed to persist world drain policy");
+        }
+        world_drain_write_total_.fetch_add(1, std::memory_order_relaxed);
+
+        const auto refreshed_worlds = collect_world_inventory(items);
+        const auto refreshed_it = find_world(refreshed_worlds);
+        if (refreshed_it == refreshed_worlds.end()) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "500 Internal Server Error",
+                "INTERNAL_ERROR",
+                "world inventory disappeared after world drain write");
+        }
+
+        return json_ok(request_id, make_world_inventory_json(*refreshed_it, refreshed_worlds));
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_world_transfer(std::uint64_t request_id,
+                          const AuthContext& auth,
+                          const std::string& world_id,
+                          const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+        (void)auth;
+        if (world_id.empty() || world_id.find('/') != std::string::npos) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(request_id, "400 Bad Request", "BAD_REQUEST", "invalid world id");
+        }
+
+        if (!registry_backend_ || !redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_UNAVAILABLE",
+                "redis registry unavailable");
+        }
+
+        std::vector<server::core::state::InstanceRecord> items;
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            items = instances_cache_;
+        }
+
+        auto find_world = [&](const std::vector<WorldInventoryEntry>& worlds)
+            -> std::vector<WorldInventoryEntry>::const_iterator {
+            return std::find_if(worlds.begin(), worlds.end(), [&](const auto& entry) {
+                return entry.world_id == world_id;
+            });
+        };
+
+        const auto worlds = collect_world_inventory(items);
+        const auto world_it = find_world(worlds);
+        if (world_it == worlds.end()) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "400 Bad Request",
+                "BAD_REQUEST",
+                "world_id does not exist in current inventory",
+                json_details("world_id", world_id));
+        }
+
+        const std::string policy_key = make_world_policy_key(world_id);
+        const std::string owner_key = make_world_owner_key(world_id);
+        if (request.method == "GET") {
+            return json_ok(request_id, make_world_inventory_json(*world_it, worlds, false));
+        }
+
+        if (request.method == "DELETE") {
+            if (!redis_->del(policy_key)) {
+                world_transfer_clear_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "503 Service Unavailable",
+                    "UPSTREAM_WRITE_FAILED",
+                    "failed to clear world transfer policy");
+            }
+            world_transfer_clear_total_.fetch_add(1, std::memory_order_relaxed);
+
+            const auto refreshed_worlds = collect_world_inventory(items);
+            const auto refreshed_it = find_world(refreshed_worlds);
+            if (refreshed_it == refreshed_worlds.end()) {
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "500 Internal Server Error",
+                    "INTERNAL_ERROR",
+                    "world inventory disappeared after world transfer clear");
+            }
+            return json_ok(request_id, make_world_inventory_json(*refreshed_it, refreshed_worlds, false));
+        }
+
+        const auto parsed = parse_world_transfer_write_request(request);
+        if (!parsed.ok) {
+            world_transfer_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                parsed.error_status,
+                parsed.error_code,
+                parsed.error_message,
+                parsed.error_details);
+        }
+
+        if (parsed.expected_owner_instance_id.has_value()
+            && *parsed.expected_owner_instance_id != world_it->owner_instance_id) {
+            world_transfer_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            std::ostringstream details;
+            details << "{";
+            details << "\"expected_owner_instance_id\":\""
+                    << json_escape(*parsed.expected_owner_instance_id) << "\",";
+            details << "\"actual_owner_instance_id\":";
+            if (!world_it->owner_instance_id.empty()) {
+                details << "\"" << json_escape(world_it->owner_instance_id) << "\"";
+            } else {
+                details << "null";
+            }
+            details << "}";
+            return json_error(
+                request_id,
+                "409 Conflict",
+                "OWNER_MISMATCH",
+                "expected_owner_instance_id does not match current world owner",
+                details.str());
+        }
+
+        const auto target_it = std::find_if(
+            world_it->instances.begin(),
+            world_it->instances.end(),
+            [&](const auto& instance) {
+                return instance.role == "server" && instance.instance_id == parsed.target_owner_instance_id;
+            });
+        if (target_it == world_it->instances.end()) {
+            world_transfer_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "400 Bad Request",
+                "BAD_REQUEST",
+                "target_owner_instance_id must reference a known same-world server instance",
+                json_details("target_owner_instance_id", parsed.target_owner_instance_id));
+        }
+        if (!target_it->ready) {
+            world_transfer_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "409 Conflict",
+                "TARGET_NOT_READY",
+                "target_owner_instance_id must reference a ready same-world server instance",
+                json_details("target_owner_instance_id", parsed.target_owner_instance_id));
+        }
+
+        const auto previous_policy = world_it->policy;
+        server::core::state::WorldLifecyclePolicy next_policy;
+        next_policy.draining = true;
+        next_policy.replacement_owner_instance_id = parsed.target_owner_instance_id;
+
+        if (!redis_->set(policy_key, server::core::state::serialize_world_lifecycle_policy(next_policy))) {
+            world_transfer_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_WRITE_FAILED",
+                "failed to persist world transfer policy");
+        }
+
+        bool owner_commit_applied = false;
+        if (parsed.commit_owner) {
+            if (!redis_->setex(owner_key, parsed.target_owner_instance_id, continuity_lease_ttl_sec_)) {
+                world_transfer_owner_commit_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                const bool rollback_ok = previous_policy.empty()
+                    ? redis_->del(policy_key)
+                    : redis_->set(
+                        policy_key,
+                        server::core::state::serialize_world_lifecycle_policy(previous_policy));
+                (void)rollback_ok;
+                world_transfer_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "503 Service Unavailable",
+                    "UPSTREAM_WRITE_FAILED",
+                    "failed to commit world owner boundary to replacement owner");
+            }
+            world_transfer_owner_commit_total_.fetch_add(1, std::memory_order_relaxed);
+            owner_commit_applied = true;
+        }
+
+        world_transfer_write_total_.fetch_add(1, std::memory_order_relaxed);
+
+        const auto refreshed_worlds = collect_world_inventory(items);
+        const auto refreshed_it = find_world(refreshed_worlds);
+        if (refreshed_it == refreshed_worlds.end()) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "500 Internal Server Error",
+                "INTERNAL_ERROR",
+                "world inventory disappeared after world transfer write");
+        }
+
+        return json_ok(request_id, make_world_inventory_json(*refreshed_it, refreshed_worlds, owner_commit_applied));
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_world_migration(std::uint64_t request_id,
+                           const AuthContext& auth,
+                           const std::string& world_id,
+                           const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+        (void)auth;
+        if (world_id.empty() || world_id.find('/') != std::string::npos) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(request_id, "400 Bad Request", "BAD_REQUEST", "invalid world id");
+        }
+
+        if (!registry_backend_ || !redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_UNAVAILABLE",
+                "redis registry unavailable");
+        }
+
+        std::vector<server::core::state::InstanceRecord> items;
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            items = instances_cache_;
+        }
+
+        auto find_world = [&](const std::vector<WorldInventoryEntry>& worlds)
+            -> std::vector<WorldInventoryEntry>::const_iterator {
+            return std::find_if(worlds.begin(), worlds.end(), [&](const auto& entry) {
+                return entry.world_id == world_id;
+            });
+        };
+
+        const auto worlds = collect_world_inventory(items);
+        const auto world_it = find_world(worlds);
+        if (world_it == worlds.end()) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "400 Bad Request",
+                "BAD_REQUEST",
+                "world_id does not exist in current inventory",
+                json_details("world_id", world_id));
+        }
+
+        const std::string migration_key = make_world_migration_key(world_id);
+        if (request.method == "GET") {
+            return json_ok(request_id, make_world_inventory_json(*world_it, worlds));
+        }
+
+        if (request.method == "DELETE") {
+            if (!redis_->del(migration_key)) {
+                world_migration_clear_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "503 Service Unavailable",
+                    "UPSTREAM_WRITE_FAILED",
+                    "failed to clear world migration envelope");
+            }
+            world_migration_clear_total_.fetch_add(1, std::memory_order_relaxed);
+
+            const auto refreshed_worlds = collect_world_inventory(items);
+            const auto refreshed_it = find_world(refreshed_worlds);
+            if (refreshed_it == refreshed_worlds.end()) {
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "500 Internal Server Error",
+                    "INTERNAL_ERROR",
+                    "world inventory disappeared after world migration clear");
+            }
+            return json_ok(request_id, make_world_inventory_json(*refreshed_it, refreshed_worlds));
+        }
+
+        const auto parsed = parse_world_migration_write_request(request);
+        if (!parsed.ok) {
+            world_migration_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                parsed.error_status,
+                parsed.error_code,
+                parsed.error_message,
+                parsed.error_details);
+        }
+
+        if (parsed.envelope.target_world_id == world_id) {
+            world_migration_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "400 Bad Request",
+                "BAD_REQUEST",
+                "target_world_id must differ from the source world",
+                json_details("target_world_id", parsed.envelope.target_world_id));
+        }
+
+        const auto target_world_it = std::find_if(worlds.begin(), worlds.end(), [&](const auto& entry) {
+            return entry.world_id == parsed.envelope.target_world_id;
+        });
+        if (target_world_it == worlds.end()) {
+            world_migration_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "400 Bad Request",
+                "BAD_REQUEST",
+                "target_world_id must reference a known world in current inventory",
+                json_details("target_world_id", parsed.envelope.target_world_id));
+        }
+
+        const auto target_owner_it = std::find_if(
+            target_world_it->instances.begin(),
+            target_world_it->instances.end(),
+            [&](const auto& instance) {
+                return instance.role == "server"
+                    && instance.instance_id == parsed.envelope.target_owner_instance_id;
+            });
+        if (target_owner_it == target_world_it->instances.end()) {
+            world_migration_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "400 Bad Request",
+                "BAD_REQUEST",
+                "target_owner_instance_id must reference a known server in the target world",
+                json_details("target_owner_instance_id", parsed.envelope.target_owner_instance_id));
+        }
+
+        WorldMigrationEnvelope envelope = parsed.envelope;
+        envelope.updated_at_ms = now_ms();
+
+        if (!redis_->set(migration_key, server::core::mmorpg::serialize_world_migration_envelope(envelope))) {
+            world_migration_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_WRITE_FAILED",
+                "failed to persist world migration envelope");
+        }
+        world_migration_write_total_.fetch_add(1, std::memory_order_relaxed);
+
+        const auto refreshed_worlds = collect_world_inventory(items);
+        const auto refreshed_it = find_world(refreshed_worlds);
+        if (refreshed_it == refreshed_worlds.end()) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "500 Internal Server Error",
+                "INTERNAL_ERROR",
+                "world inventory disappeared after world migration write");
+        }
+
+        return json_ok(request_id, make_world_inventory_json(*refreshed_it, refreshed_worlds));
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_desired_topology(std::uint64_t request_id,
+                            const AuthContext& auth,
+                            const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+        (void)auth;
+        if (!redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_UNAVAILABLE",
+                "redis registry unavailable");
+        }
+
+        if (request.method == "GET") {
+            return json_ok(request_id, make_desired_topology_response_json(load_desired_topology_document()));
+        }
+
+        if (request.method == "DELETE") {
+            if (!redis_->del(desired_topology_key_)) {
+                desired_topology_clear_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "503 Service Unavailable",
+                    "UPSTREAM_WRITE_FAILED",
+                    "failed to clear desired topology");
+            }
+            desired_topology_clear_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_ok(request_id, make_desired_topology_response_json(std::nullopt));
+        }
+
+        const auto parsed = parse_desired_topology_write_request(request);
+        if (!parsed.ok) {
+            desired_topology_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                parsed.error_status,
+                parsed.error_code,
+                parsed.error_message,
+                parsed.error_details);
+        }
+
+        const auto current = load_desired_topology_document();
+        const std::uint64_t current_revision = current.has_value() ? current->revision : 0;
+        if (parsed.expected_revision.has_value() && *parsed.expected_revision != current_revision) {
+            desired_topology_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            std::ostringstream details;
+            details << "{";
+            details << "\"expected_revision\":" << *parsed.expected_revision << ",";
+            details << "\"actual_revision\":" << current_revision;
+            details << "}";
+            return json_error(
+                request_id,
+                "409 Conflict",
+                "REVISION_MISMATCH",
+                "expected_revision does not match current desired topology revision",
+                details.str());
+        }
+
+        DesiredTopologyDocument next = parsed.topology;
+        next.revision = current_revision + 1;
+        next.updated_at_ms = now_ms();
+
+        nlohmann::json root;
+        root["topology_id"] = next.topology_id;
+        root["revision"] = next.revision;
+        root["updated_at_ms"] = next.updated_at_ms;
+        root["pools"] = nlohmann::json::array();
+        for (const auto& pool : next.pools) {
+            nlohmann::json item;
+            item["world_id"] = pool.world_id;
+            item["shard"] = pool.shard;
+            item["replicas"] = pool.replicas;
+            item["capacity_class"] = pool.capacity_class.empty()
+                ? nlohmann::json(nullptr)
+                : nlohmann::json(pool.capacity_class);
+            item["placement_tags"] = pool.placement_tags;
+            root["pools"].push_back(std::move(item));
+        }
+
+        if (!redis_->set(desired_topology_key_, root.dump())) {
+            desired_topology_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_WRITE_FAILED",
+                "failed to persist desired topology");
+        }
+
+        desired_topology_write_total_.fetch_add(1, std::memory_order_relaxed);
+        return json_ok(request_id, make_desired_topology_response_json(next));
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_topology_actuation_request(std::uint64_t request_id,
+                                      const AuthContext& auth,
+                                      const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+        (void)auth;
+        if (!registry_backend_ || !redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_UNAVAILABLE",
+                "redis registry unavailable");
+        }
+
+        if (request.method == "GET") {
+            return json_ok(request_id, make_topology_actuation_request_response_json(
+                load_topology_actuation_request_document()));
+        }
+
+        if (request.method == "DELETE") {
+            if (!redis_->del(topology_actuation_request_key_)) {
+                topology_actuation_request_clear_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "503 Service Unavailable",
+                    "UPSTREAM_WRITE_FAILED",
+                    "failed to clear topology actuation request");
+            }
+            topology_actuation_request_clear_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_ok(request_id, make_topology_actuation_request_response_json(std::nullopt));
+        }
+
+        std::vector<server::core::state::InstanceRecord> items;
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            items = instances_cache_;
+        }
+
+        const auto desired_topology = load_desired_topology_document();
+        if (!desired_topology.has_value()) {
+            topology_actuation_request_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "409 Conflict",
+                "NO_DESIRED_TOPOLOGY",
+                "desired topology must exist before writing an actuation request");
+        }
+
+        const auto parsed = parse_topology_actuation_request_write_request(request);
+        if (!parsed.ok) {
+            topology_actuation_request_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                parsed.error_status,
+                parsed.error_code,
+                parsed.error_message,
+                parsed.error_details);
+        }
+
+        if (parsed.request_document.basis_topology_revision != desired_topology->revision) {
+            topology_actuation_request_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            std::ostringstream details;
+            details << "{";
+            details << "\"basis_topology_revision\":" << parsed.request_document.basis_topology_revision << ",";
+            details << "\"current_topology_revision\":" << desired_topology->revision;
+            details << "}";
+            return json_error(
+                request_id,
+                "409 Conflict",
+                "TOPOLOGY_REVISION_MISMATCH",
+                "basis_topology_revision does not match current desired topology revision",
+                details.str());
+        }
+
+        const auto current = load_topology_actuation_request_document();
+        const std::uint64_t current_revision = current.has_value() ? current->revision : 0;
+        if (parsed.expected_revision.has_value() && *parsed.expected_revision != current_revision) {
+            topology_actuation_request_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            std::ostringstream details;
+            details << "{";
+            details << "\"expected_revision\":" << *parsed.expected_revision << ",";
+            details << "\"actual_revision\":" << current_revision;
+            details << "}";
+            return json_error(
+                request_id,
+                "409 Conflict",
+                "REVISION_MISMATCH",
+                "expected_revision does not match current topology actuation request revision",
+                details.str());
+        }
+
+        const auto observed_instances = make_observed_topology_instances(items);
+        const auto observed_pools = server::core::mmorpg::collect_observed_pools(observed_instances);
+        const auto actuation_plan = server::core::mmorpg::plan_topology_actuation(desired_topology, observed_pools);
+        std::unordered_map<std::string, server::core::mmorpg::TopologyActuationAction> plan_index;
+        plan_index.reserve(actuation_plan.actions.size());
+        for (const auto& action : actuation_plan.actions) {
+            plan_index.emplace(action.world_id + "\n" + action.shard, action);
+        }
+
+        for (const auto& action : parsed.request_document.actions) {
+            if (action.action == server::core::mmorpg::TopologyActuationActionKind::kObserveUndeclaredPool) {
+                topology_actuation_request_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "400 Bad Request",
+                    "BAD_REQUEST",
+                    "observe-only topology actions cannot be stored as actuation requests",
+                    json_details("action", "observe_undeclared_pool"));
+            }
+
+            const auto key = action.world_id + "\n" + action.shard;
+            const auto plan_it = plan_index.find(key);
+            if (plan_it == plan_index.end()) {
+                topology_actuation_request_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "409 Conflict",
+                    "PLAN_MISMATCH",
+                    "requested actuation action is no longer present in the current plan",
+                    json_details("world_id", action.world_id));
+            }
+            if (!plan_it->second.actionable
+                || plan_it->second.action != action.action
+                || plan_it->second.replica_delta != action.replica_delta) {
+                topology_actuation_request_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                std::ostringstream details;
+                details << "{";
+                details << "\"world_id\":\"" << json_escape(action.world_id) << "\",";
+                details << "\"shard\":\"" << json_escape(action.shard) << "\",";
+                details << "\"requested_action\":\""
+                        << server::core::mmorpg::topology_actuation_action_kind_name(action.action) << "\",";
+                details << "\"requested_replica_delta\":" << action.replica_delta << ",";
+                details << "\"current_action\":\""
+                        << server::core::mmorpg::topology_actuation_action_kind_name(plan_it->second.action) << "\",";
+                details << "\"current_replica_delta\":" << plan_it->second.replica_delta;
+                details << "}";
+                return json_error(
+                    request_id,
+                    "409 Conflict",
+                    "PLAN_MISMATCH",
+                    "requested actuation action does not match the current actionable plan",
+                    details.str());
+            }
+        }
+
+        TopologyActuationRequestDocument next = parsed.request_document;
+        next.revision = current_revision + 1;
+        next.requested_at_ms = now_ms();
+
+        nlohmann::json root;
+        root["request_id"] = next.request_id;
+        root["revision"] = next.revision;
+        root["requested_at_ms"] = next.requested_at_ms;
+        root["basis_topology_revision"] = next.basis_topology_revision;
+        root["actions"] = nlohmann::json::array();
+        for (const auto& action : next.actions) {
+            nlohmann::json item;
+            item["world_id"] = action.world_id;
+            item["shard"] = action.shard;
+            item["action"] = std::string(server::core::mmorpg::topology_actuation_action_kind_name(action.action));
+            item["replica_delta"] = action.replica_delta;
+            root["actions"].push_back(std::move(item));
+        }
+
+        if (!redis_->set(topology_actuation_request_key_, root.dump())) {
+            topology_actuation_request_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_WRITE_FAILED",
+                "failed to persist topology actuation request");
+        }
+
+        topology_actuation_request_write_total_.fetch_add(1, std::memory_order_relaxed);
+        return json_ok(request_id, make_topology_actuation_request_response_json(next));
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_topology_actuation_execution(std::uint64_t request_id,
+                                        const AuthContext& auth,
+                                        const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+        (void)auth;
+        if (!registry_backend_ || !redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_UNAVAILABLE",
+                "redis registry unavailable");
+        }
+
+        if (request.method == "GET") {
+            return json_ok(request_id, make_topology_actuation_execution_response_json(
+                load_topology_actuation_execution_document()));
+        }
+
+        if (request.method == "DELETE") {
+            if (!redis_->del(topology_actuation_execution_key_)) {
+                topology_actuation_execution_clear_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "503 Service Unavailable",
+                    "UPSTREAM_WRITE_FAILED",
+                    "failed to clear topology actuation execution progress");
+            }
+            topology_actuation_execution_clear_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_ok(request_id, make_topology_actuation_execution_response_json(std::nullopt));
+        }
+
+        const auto request_document = load_topology_actuation_request_document();
+        if (!request_document.has_value()) {
+            topology_actuation_execution_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "409 Conflict",
+                "NO_ACTUATION_REQUEST",
+                "topology actuation request must exist before writing executor progress");
+        }
+
+        const auto parsed = parse_topology_actuation_execution_write_request(request);
+        if (!parsed.ok) {
+            topology_actuation_execution_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                parsed.error_status,
+                parsed.error_code,
+                parsed.error_message,
+                parsed.error_details);
+        }
+
+        if (parsed.execution_document.request_revision != request_document->revision) {
+            topology_actuation_execution_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            std::ostringstream details;
+            details << "{";
+            details << "\"request_revision\":" << parsed.execution_document.request_revision << ",";
+            details << "\"current_request_revision\":" << request_document->revision;
+            details << "}";
+            return json_error(
+                request_id,
+                "409 Conflict",
+                "REQUEST_REVISION_MISMATCH",
+                "request_revision does not match current topology actuation request revision",
+                details.str());
+        }
+
+        const auto current = load_topology_actuation_execution_document();
+        const std::uint64_t current_revision = current.has_value() ? current->revision : 0;
+        if (parsed.expected_revision.has_value() && *parsed.expected_revision != current_revision) {
+            topology_actuation_execution_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            std::ostringstream details;
+            details << "{";
+            details << "\"expected_revision\":" << *parsed.expected_revision << ",";
+            details << "\"actual_revision\":" << current_revision;
+            details << "}";
+            return json_error(
+                request_id,
+                "409 Conflict",
+                "REVISION_MISMATCH",
+                "expected_revision does not match current topology actuation execution revision",
+                details.str());
+        }
+
+        std::vector<server::core::state::InstanceRecord> items;
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            items = instances_cache_;
+        }
+        const auto observed_instances = make_observed_topology_instances(items);
+        const auto observed_pools = server::core::mmorpg::collect_observed_pools(observed_instances);
+        std::unordered_map<std::string, server::core::mmorpg::ObservedTopologyPool> observed_pool_index;
+        observed_pool_index.reserve(observed_pools.size());
+        for (const auto& pool : observed_pools) {
+            observed_pool_index.emplace(pool.world_id + "\n" + pool.shard, pool);
+        }
+
+        std::unordered_map<std::string, server::core::mmorpg::TopologyActuationExecutionItem> current_execution_index;
+        if (current.has_value()) {
+            current_execution_index.reserve(current->actions.size());
+            for (const auto& item : current->actions) {
+                current_execution_index.emplace(item.action.world_id + "\n" + item.action.shard, item);
+            }
+        }
+
+        std::unordered_map<std::string, TopologyActuationRequestAction> request_index;
+        request_index.reserve(request_document->actions.size());
+        for (const auto& action : request_document->actions) {
+            request_index.emplace(action.world_id + "\n" + action.shard, action);
+        }
+
+        for (const auto& item : parsed.execution_document.actions) {
+            if (item.action.action == server::core::mmorpg::TopologyActuationActionKind::kObserveUndeclaredPool) {
+                topology_actuation_execution_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "400 Bad Request",
+                    "BAD_REQUEST",
+                    "observe-only topology actions cannot be stored as executor progress",
+                    json_details("action", "observe_undeclared_pool"));
+            }
+            const auto key = item.action.world_id + "\n" + item.action.shard;
+            const auto request_it = request_index.find(key);
+            if (request_it == request_index.end()
+                || request_it->second.action != item.action.action
+                || request_it->second.replica_delta != item.action.replica_delta) {
+                topology_actuation_execution_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "409 Conflict",
+                    "REQUEST_MISMATCH",
+                    "executor progress item does not match the current topology actuation request",
+                    json_details("world_id", item.action.world_id));
+            }
+
+            const auto observed_it = observed_pool_index.find(key);
+            const std::uint32_t current_observed_instances =
+                observed_it != observed_pool_index.end() ? observed_it->second.instances : 0;
+            const std::uint32_t current_ready_instances =
+                observed_it != observed_pool_index.end() ? observed_it->second.ready_instances : 0;
+            if (const auto current_execution_it = current_execution_index.find(key);
+                current_execution_it != current_execution_index.end()) {
+                if (item.observed_instances_before != current_execution_it->second.observed_instances_before
+                    || item.ready_instances_before != current_execution_it->second.ready_instances_before) {
+                    topology_actuation_execution_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                    http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                    return json_error(
+                        request_id,
+                        "409 Conflict",
+                        "BASELINE_MISMATCH",
+                        "execution baseline must remain stable across revisions for the same pool",
+                        json_details("world_id", item.action.world_id));
+                }
+            } else if (item.observed_instances_before != current_observed_instances
+                || item.ready_instances_before != current_ready_instances) {
+                topology_actuation_execution_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                std::ostringstream details;
+                details << "{";
+                details << "\"world_id\":\"" << json_escape(item.action.world_id) << "\",";
+                details << "\"shard\":\"" << json_escape(item.action.shard) << "\",";
+                details << "\"observed_instances_before\":" << item.observed_instances_before << ",";
+                details << "\"ready_instances_before\":" << item.ready_instances_before << ",";
+                details << "\"current_observed_instances\":" << current_observed_instances << ",";
+                details << "\"current_ready_instances\":" << current_ready_instances;
+                details << "}";
+                return json_error(
+                    request_id,
+                    "409 Conflict",
+                    "BASELINE_MISMATCH",
+                    "execution baseline must match the current observed pool on first claim",
+                    details.str());
+            }
+        }
+
+        TopologyActuationExecutionDocument next = parsed.execution_document;
+        next.revision = current_revision + 1;
+        next.updated_at_ms = now_ms();
+
+        nlohmann::json root;
+        root["executor_id"] = next.executor_id;
+        root["revision"] = next.revision;
+        root["updated_at_ms"] = next.updated_at_ms;
+        root["request_revision"] = next.request_revision;
+        root["actions"] = nlohmann::json::array();
+        for (const auto& item : next.actions) {
+            nlohmann::json action;
+            action["world_id"] = item.action.world_id;
+            action["shard"] = item.action.shard;
+            action["action"] = std::string(server::core::mmorpg::topology_actuation_action_kind_name(
+                item.action.action));
+            action["replica_delta"] = item.action.replica_delta;
+            action["observed_instances_before"] = item.observed_instances_before;
+            action["ready_instances_before"] = item.ready_instances_before;
+            action["state"] = std::string(server::core::mmorpg::topology_actuation_execution_action_state_name(
+                item.state));
+            root["actions"].push_back(std::move(action));
+        }
+
+        if (!redis_->set(topology_actuation_execution_key_, root.dump())) {
+            topology_actuation_execution_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_WRITE_FAILED",
+                "failed to persist topology actuation execution progress");
+        }
+
+        topology_actuation_execution_write_total_.fetch_add(1, std::memory_order_relaxed);
+        return json_ok(request_id, make_topology_actuation_execution_response_json(next));
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_observed_topology(std::uint64_t request_id, const QueryOptions& options) {
+        if (!registry_backend_ || !redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_UNAVAILABLE",
+                "redis registry unavailable");
+        }
+
+        std::vector<server::core::state::InstanceRecord> items;
+        std::uint64_t updated_ms = 0;
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            items = instances_cache_;
+            updated_ms = instances_updated_at_ms_;
+        }
+
+        if (options.timeout_ms > 0) {
+            const std::uint64_t now = now_ms();
+            if (updated_ms == 0 || now > updated_ms + options.timeout_ms) {
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "503 Service Unavailable",
+                    "STALE_CACHE",
+                    "instances cache is older than timeout_ms",
+                    json_details("timeout_ms", std::to_string(options.timeout_ms)));
+            }
+        }
+
+        return json_ok(request_id, make_observed_topology_json(items, updated_ms));
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_topology_reconciliation(std::uint64_t request_id, const QueryOptions& options) {
+        if (!registry_backend_ || !redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_UNAVAILABLE",
+                "redis registry unavailable");
+        }
+
+        std::vector<server::core::state::InstanceRecord> items;
+        std::uint64_t updated_ms = 0;
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            items = instances_cache_;
+            updated_ms = instances_updated_at_ms_;
+        }
+
+        if (options.timeout_ms > 0) {
+            const std::uint64_t now = now_ms();
+            if (updated_ms == 0 || now > updated_ms + options.timeout_ms) {
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "503 Service Unavailable",
+                    "STALE_CACHE",
+                    "instances cache is older than timeout_ms",
+                    json_details("timeout_ms", std::to_string(options.timeout_ms)));
+            }
+        }
+
+        const auto desired_topology = load_desired_topology_document();
+        const auto observed_instances = make_observed_topology_instances(items);
+        const auto observed_pools = server::core::mmorpg::collect_observed_pools(observed_instances);
+        const auto reconciliation =
+            server::core::mmorpg::reconcile_topology(desired_topology, observed_pools);
+
+        return json_ok(
+            request_id,
+            make_topology_reconciliation_json(desired_topology, observed_pools, reconciliation));
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_topology_actuation(std::uint64_t request_id, const QueryOptions& options) {
+        if (!registry_backend_ || !redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_UNAVAILABLE",
+                "redis registry unavailable");
+        }
+
+        std::vector<server::core::state::InstanceRecord> items;
+        std::uint64_t updated_ms = 0;
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            items = instances_cache_;
+            updated_ms = instances_updated_at_ms_;
+        }
+
+        if (options.timeout_ms > 0) {
+            const std::uint64_t now = now_ms();
+            if (updated_ms == 0 || now > updated_ms + options.timeout_ms) {
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "503 Service Unavailable",
+                    "STALE_CACHE",
+                    "instances cache is older than timeout_ms",
+                    json_details("timeout_ms", std::to_string(options.timeout_ms)));
+            }
+        }
+
+        const auto desired_topology = load_desired_topology_document();
+        const auto observed_instances = make_observed_topology_instances(items);
+        const auto observed_pools = server::core::mmorpg::collect_observed_pools(observed_instances);
+        const auto actuation =
+            server::core::mmorpg::plan_topology_actuation(desired_topology, observed_pools);
+
+        return json_ok(
+            request_id,
+            make_topology_actuation_json(desired_topology, observed_pools, actuation));
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_topology_actuation_status(std::uint64_t request_id, const QueryOptions& options) {
+        if (!registry_backend_ || !redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_UNAVAILABLE",
+                "redis registry unavailable");
+        }
+
+        std::vector<server::core::state::InstanceRecord> items;
+        std::uint64_t updated_ms = 0;
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            items = instances_cache_;
+            updated_ms = instances_updated_at_ms_;
+        }
+
+        if (options.timeout_ms > 0) {
+            const std::uint64_t now = now_ms();
+            if (updated_ms == 0 || now > updated_ms + options.timeout_ms) {
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "503 Service Unavailable",
+                    "STALE_CACHE",
+                    "instances cache is older than timeout_ms",
+                    json_details("timeout_ms", std::to_string(options.timeout_ms)));
+            }
+        }
+
+        const auto desired_topology = load_desired_topology_document();
+        const auto request_document = load_topology_actuation_request_document();
+        const auto observed_instances = make_observed_topology_instances(items);
+        const auto observed_pools = server::core::mmorpg::collect_observed_pools(observed_instances);
+        const auto actuation_plan = server::core::mmorpg::plan_topology_actuation(desired_topology, observed_pools);
+        const auto request_status = server::core::mmorpg::evaluate_topology_actuation_request_status(
+            request_document,
+            desired_topology,
+            observed_pools);
+
+        return json_ok(
+            request_id,
+            make_topology_actuation_status_json(
+                desired_topology,
+                request_document,
+                observed_pools,
+                actuation_plan,
+                request_status));
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_topology_actuation_execution_status(std::uint64_t request_id, const QueryOptions& options) {
+        if (!registry_backend_ || !redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_UNAVAILABLE",
+                "redis registry unavailable");
+        }
+
+        std::vector<server::core::state::InstanceRecord> items;
+        std::uint64_t updated_ms = 0;
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            items = instances_cache_;
+            updated_ms = instances_updated_at_ms_;
+        }
+
+        if (options.timeout_ms > 0) {
+            const std::uint64_t now = now_ms();
+            if (updated_ms == 0 || now > updated_ms + options.timeout_ms) {
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "503 Service Unavailable",
+                    "STALE_CACHE",
+                    "instances cache is older than timeout_ms",
+                    json_details("timeout_ms", std::to_string(options.timeout_ms)));
+            }
+        }
+
+        const auto desired_topology = load_desired_topology_document();
+        const auto request_document = load_topology_actuation_request_document();
+        const auto execution_document = load_topology_actuation_execution_document();
+        const auto observed_instances = make_observed_topology_instances(items);
+        const auto observed_pools = server::core::mmorpg::collect_observed_pools(observed_instances);
+        const auto request_status = server::core::mmorpg::evaluate_topology_actuation_request_status(
+            request_document,
+            desired_topology,
+            observed_pools);
+        const auto execution_status = server::core::mmorpg::evaluate_topology_actuation_execution_status(
+            execution_document,
+            request_document,
+            desired_topology,
+            observed_pools);
+
+        return json_ok(
+            request_id,
+            make_topology_actuation_execution_status_json(
+                request_document,
+                execution_document,
+                request_status,
+                execution_status));
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_topology_actuation_realization(std::uint64_t request_id, const QueryOptions& options) {
+        if (!registry_backend_ || !redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_UNAVAILABLE",
+                "redis registry unavailable");
+        }
+
+        std::vector<server::core::state::InstanceRecord> items;
+        std::uint64_t updated_ms = 0;
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            items = instances_cache_;
+            updated_ms = instances_updated_at_ms_;
+        }
+
+        if (options.timeout_ms > 0) {
+            const std::uint64_t now = now_ms();
+            if (updated_ms == 0 || now > updated_ms + options.timeout_ms) {
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "503 Service Unavailable",
+                    "STALE_CACHE",
+                    "instances cache is older than timeout_ms",
+                    json_details("timeout_ms", std::to_string(options.timeout_ms)));
+            }
+        }
+
+        const auto desired_topology = load_desired_topology_document();
+        const auto request_document = load_topology_actuation_request_document();
+        const auto execution_document = load_topology_actuation_execution_document();
+        const auto observed_instances = make_observed_topology_instances(items);
+        const auto observed_pools = server::core::mmorpg::collect_observed_pools(observed_instances);
+        const auto request_status = server::core::mmorpg::evaluate_topology_actuation_request_status(
+            request_document,
+            desired_topology,
+            observed_pools);
+        const auto execution_status = server::core::mmorpg::evaluate_topology_actuation_execution_status(
+            execution_document,
+            request_document,
+            desired_topology,
+            observed_pools);
+        const auto realization_status = server::core::mmorpg::evaluate_topology_actuation_realization_status(
+            execution_document,
+            request_document,
+            desired_topology,
+            observed_pools);
+
+        return json_ok(
+            request_id,
+            make_topology_actuation_realization_json(
+                request_document,
+                execution_document,
+                observed_pools,
+                request_status,
+                execution_status,
+                realization_status));
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_topology_actuation_adapter(std::uint64_t request_id,
+                                      const AuthContext& auth,
+                                      const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+        (void)auth;
+        if (!registry_backend_ || !redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_UNAVAILABLE",
+                "redis registry unavailable");
+        }
+
+        if (request.method == "GET") {
+            return json_ok(request_id, make_topology_actuation_adapter_response_json(
+                load_topology_actuation_adapter_document()));
+        }
+
+        if (request.method == "DELETE") {
+            if (!redis_->del(topology_actuation_adapter_key_)) {
+                topology_actuation_adapter_clear_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "503 Service Unavailable",
+                    "UPSTREAM_WRITE_FAILED",
+                    "failed to clear topology actuation adapter lease");
+            }
+            topology_actuation_adapter_clear_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_ok(request_id, make_topology_actuation_adapter_response_json(std::nullopt));
+        }
+
+        const auto execution_document = load_topology_actuation_execution_document();
+        if (!execution_document.has_value()) {
+            topology_actuation_adapter_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "409 Conflict",
+                "NO_ACTUATION_EXECUTION",
+                "topology actuation execution progress must exist before writing adapter lease");
+        }
+        const auto request_document = load_topology_actuation_request_document();
+        const auto desired_topology = load_desired_topology_document();
+        std::vector<server::core::state::InstanceRecord> items;
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            items = instances_cache_;
+        }
+        const auto observed_instances = make_observed_topology_instances(items);
+        const auto observed_pools = server::core::mmorpg::collect_observed_pools(observed_instances);
+
+        const auto parsed = parse_topology_actuation_adapter_write_request(request);
+        if (!parsed.ok) {
+            topology_actuation_adapter_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                parsed.error_status,
+                parsed.error_code,
+                parsed.error_message,
+                parsed.error_details);
+        }
+
+        if (parsed.lease_document.execution_revision != execution_document->revision) {
+            topology_actuation_adapter_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            std::ostringstream details;
+            details << "{";
+            details << "\"execution_revision\":" << parsed.lease_document.execution_revision << ",";
+            details << "\"current_execution_revision\":" << execution_document->revision;
+            details << "}";
+            return json_error(
+                request_id,
+                "409 Conflict",
+                "EXECUTION_REVISION_MISMATCH",
+                "execution_revision does not match current topology actuation execution revision",
+                details.str());
+        }
+
+        const auto current = load_topology_actuation_adapter_document();
+        const std::uint64_t current_revision = current.has_value() ? current->revision : 0;
+        if (parsed.expected_revision.has_value() && *parsed.expected_revision != current_revision) {
+            topology_actuation_adapter_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            std::ostringstream details;
+            details << "{";
+            details << "\"expected_revision\":" << *parsed.expected_revision << ",";
+            details << "\"actual_revision\":" << current_revision;
+            details << "}";
+            return json_error(
+                request_id,
+                "409 Conflict",
+                "REVISION_MISMATCH",
+                "expected_revision does not match current topology actuation adapter revision",
+                details.str());
+        }
+
+        const auto adapter_status = server::core::mmorpg::evaluate_topology_actuation_adapter_status(
+            std::nullopt,
+            execution_document,
+            request_document,
+            desired_topology,
+            observed_pools);
+        std::unordered_map<std::string, server::core::mmorpg::TopologyActuationAdapterStatusAction> status_index;
+        status_index.reserve(adapter_status.actions.size());
+        for (const auto& action : adapter_status.actions) {
+            status_index.emplace(action.world_id + "\n" + action.shard, action);
+        }
+
+        for (const auto& action : parsed.lease_document.actions) {
+            const auto key = action.world_id + "\n" + action.shard;
+            const auto status_it = status_index.find(key);
+            if (status_it == status_index.end()
+                || status_it->second.requested_action != action.action
+                || status_it->second.requested_replica_delta != action.replica_delta) {
+                topology_actuation_adapter_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "409 Conflict",
+                    "ADAPTER_MISMATCH",
+                    "adapter lease item does not match the current execution/realization boundary",
+                    json_details("world_id", action.world_id));
+            }
+            if (status_it->second.state == server::core::mmorpg::TopologyActuationAdapterStatusState::kStale) {
+                topology_actuation_adapter_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "409 Conflict",
+                    "ADAPTER_MISMATCH",
+                    "stale execution items cannot be leased to an adapter",
+                    json_details("world_id", action.world_id));
+            }
+        }
+
+        TopologyActuationAdapterLeaseDocument next = parsed.lease_document;
+        next.revision = current_revision + 1;
+        next.leased_at_ms = now_ms();
+
+        nlohmann::json root;
+        root["adapter_id"] = next.adapter_id;
+        root["revision"] = next.revision;
+        root["leased_at_ms"] = next.leased_at_ms;
+        root["execution_revision"] = next.execution_revision;
+        root["actions"] = nlohmann::json::array();
+        for (const auto& action : next.actions) {
+            nlohmann::json item;
+            item["world_id"] = action.world_id;
+            item["shard"] = action.shard;
+            item["action"] = std::string(server::core::mmorpg::topology_actuation_action_kind_name(action.action));
+            item["replica_delta"] = action.replica_delta;
+            root["actions"].push_back(std::move(item));
+        }
+
+        if (!redis_->set(topology_actuation_adapter_key_, root.dump())) {
+            topology_actuation_adapter_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_WRITE_FAILED",
+                "failed to persist topology actuation adapter lease");
+        }
+
+        topology_actuation_adapter_write_total_.fetch_add(1, std::memory_order_relaxed);
+        return json_ok(request_id, make_topology_actuation_adapter_response_json(next));
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_topology_actuation_runtime_assignment(
+        std::uint64_t request_id,
+        const AuthContext& auth,
+        const server::core::metrics::MetricsHttpServer::HttpRequest& request) {
+        (void)auth;
+        if (!registry_backend_ || !redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_UNAVAILABLE",
+                "redis registry unavailable");
+        }
+
+        if (request.method == "GET") {
+            return json_ok(
+                request_id,
+                make_topology_actuation_runtime_assignment_response_json(
+                    load_topology_actuation_runtime_assignment_document()));
+        }
+
+        if (request.method == "DELETE") {
+            if (!redis_->del(topology_actuation_runtime_assignment_key_)) {
+                topology_actuation_runtime_assignment_clear_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "503 Service Unavailable",
+                    "UPSTREAM_WRITE_FAILED",
+                    "failed to clear topology actuation runtime assignment");
+            }
+            topology_actuation_runtime_assignment_clear_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_ok(
+                request_id,
+                make_topology_actuation_runtime_assignment_response_json(std::nullopt));
+        }
+
+        const auto lease_document = load_topology_actuation_adapter_document();
+        if (!lease_document.has_value()) {
+            topology_actuation_runtime_assignment_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "409 Conflict",
+                "NO_ACTUATION_ADAPTER",
+                "topology actuation adapter lease must exist before writing runtime assignment");
+        }
+
+        const auto parsed = parse_topology_actuation_runtime_assignment_write_request(request);
+        if (!parsed.ok) {
+            topology_actuation_runtime_assignment_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                parsed.error_status,
+                parsed.error_code,
+                parsed.error_message,
+                parsed.error_details);
+        }
+
+        if (parsed.document.adapter_id != lease_document->adapter_id) {
+            topology_actuation_runtime_assignment_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "409 Conflict",
+                "ADAPTER_MISMATCH",
+                "adapter_id does not match the current topology actuation adapter lease",
+                json_details("adapter_id", parsed.document.adapter_id));
+        }
+
+        if (parsed.document.lease_revision != lease_document->revision) {
+            topology_actuation_runtime_assignment_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            std::ostringstream details;
+            details << "{";
+            details << "\"lease_revision\":" << parsed.document.lease_revision << ",";
+            details << "\"current_lease_revision\":" << lease_document->revision;
+            details << "}";
+            return json_error(
+                request_id,
+                "409 Conflict",
+                "LEASE_REVISION_MISMATCH",
+                "lease_revision does not match current topology actuation adapter revision",
+                details.str());
+        }
+
+        const auto current = load_topology_actuation_runtime_assignment_document();
+        const std::uint64_t current_revision = current.has_value() ? current->revision : 0;
+        if (parsed.expected_revision.has_value() && *parsed.expected_revision != current_revision) {
+            topology_actuation_runtime_assignment_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            std::ostringstream details;
+            details << "{";
+            details << "\"expected_revision\":" << *parsed.expected_revision << ",";
+            details << "\"actual_revision\":" << current_revision;
+            details << "}";
+            return json_error(
+                request_id,
+                "409 Conflict",
+                "REVISION_MISMATCH",
+                "expected_revision does not match current topology actuation runtime assignment revision",
+                details.str());
+        }
+
+        std::vector<server::core::state::InstanceRecord> items;
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            items = instances_cache_;
+        }
+        std::unordered_map<std::string, server::core::state::InstanceRecord> instance_index;
+        instance_index.reserve(items.size());
+        for (const auto& item : items) {
+            instance_index.emplace(item.instance_id, item);
+        }
+
+        std::unordered_map<std::string, std::uint32_t> lease_capacity_by_pool;
+        lease_capacity_by_pool.reserve(lease_document->actions.size());
+        for (const auto& action : lease_document->actions) {
+            if (action.action != server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool) {
+                continue;
+            }
+            lease_capacity_by_pool.emplace(action.world_id + "\n" + action.shard, static_cast<std::uint32_t>(
+                std::max(action.replica_delta, 0)));
+        }
+
+        std::unordered_map<std::string, std::uint32_t> assigned_by_pool;
+        for (const auto& assignment : parsed.document.assignments) {
+            if (assignment.action != server::core::mmorpg::TopologyActuationActionKind::kScaleOutPool) {
+                topology_actuation_runtime_assignment_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "409 Conflict",
+                    "UNSUPPORTED_ASSIGNMENT_ACTION",
+                    "runtime assignment currently supports scale_out_pool only",
+                    json_details("instance_id", assignment.instance_id));
+            }
+
+            const auto instance_it = instance_index.find(assignment.instance_id);
+            if (instance_it == instance_index.end()) {
+                topology_actuation_runtime_assignment_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "409 Conflict",
+                    "INSTANCE_NOT_FOUND",
+                    "runtime assignment instance_id does not exist in the current observed topology",
+                    json_details("instance_id", assignment.instance_id));
+            }
+
+            const auto& record = instance_it->second;
+            if (record.role != "server") {
+                topology_actuation_runtime_assignment_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "409 Conflict",
+                    "INVALID_ASSIGNMENT_TARGET",
+                    "runtime assignment target must be a server instance",
+                    json_details("instance_id", assignment.instance_id));
+            }
+            if (!record.ready) {
+                topology_actuation_runtime_assignment_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "409 Conflict",
+                    "INVALID_ASSIGNMENT_TARGET",
+                    "runtime assignment target must be ready",
+                    json_details("instance_id", assignment.instance_id));
+            }
+            if (record.active_sessions != 0) {
+                topology_actuation_runtime_assignment_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "409 Conflict",
+                    "INVALID_ASSIGNMENT_TARGET",
+                    "runtime assignment target must have zero active sessions",
+                    json_details("instance_id", assignment.instance_id));
+            }
+
+            const auto current_world_id = extract_world_id_from_tags(record.tags);
+            if (current_world_id.has_value()
+                && *current_world_id == assignment.world_id
+                && record.shard == assignment.shard) {
+                topology_actuation_runtime_assignment_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "409 Conflict",
+                    "NO_TOPOLOGY_CHANGE",
+                    "runtime assignment must change the current instance world_id or shard",
+                    json_details("instance_id", assignment.instance_id));
+            }
+
+            const std::string pool_key = assignment.world_id + "\n" + assignment.shard;
+            const auto lease_it = lease_capacity_by_pool.find(pool_key);
+            if (lease_it == lease_capacity_by_pool.end()) {
+                topology_actuation_runtime_assignment_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "409 Conflict",
+                    "ASSIGNMENT_MISMATCH",
+                    "runtime assignment item does not match the current adapter lease",
+                    json_details("instance_id", assignment.instance_id));
+            }
+
+            const auto assigned_count = ++assigned_by_pool[pool_key];
+            if (assigned_count > lease_it->second) {
+                topology_actuation_runtime_assignment_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "409 Conflict",
+                    "ASSIGNMENT_CAPACITY_EXCEEDED",
+                    "runtime assignments exceed the current leased replica capacity",
+                    json_details("world_id", assignment.world_id));
+            }
+        }
+
+        TopologyActuationRuntimeAssignmentDocument next = parsed.document;
+        next.revision = current_revision + 1;
+        next.updated_at_ms = now_ms();
+
+        nlohmann::json root;
+        root["adapter_id"] = next.adapter_id;
+        root["revision"] = next.revision;
+        root["updated_at_ms"] = next.updated_at_ms;
+        root["lease_revision"] = next.lease_revision;
+        root["assignments"] = nlohmann::json::array();
+        for (const auto& assignment : next.assignments) {
+            nlohmann::json item;
+            item["instance_id"] = assignment.instance_id;
+            item["world_id"] = assignment.world_id;
+            item["shard"] = assignment.shard;
+            item["action"] = std::string(server::core::mmorpg::topology_actuation_action_kind_name(assignment.action));
+            root["assignments"].push_back(std::move(item));
+        }
+
+        if (!redis_->set(topology_actuation_runtime_assignment_key_, root.dump())) {
+            topology_actuation_runtime_assignment_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_WRITE_FAILED",
+                "failed to persist topology actuation runtime assignment");
+        }
+
+        topology_actuation_runtime_assignment_write_total_.fetch_add(1, std::memory_order_relaxed);
+        return json_ok(
+            request_id,
+            make_topology_actuation_runtime_assignment_response_json(next));
+    }
+
+    server::core::metrics::MetricsHttpServer::RouteResponse
+    handle_topology_actuation_adapter_status(std::uint64_t request_id, const QueryOptions& options) {
+        if (!registry_backend_ || !redis_ || !redis_available_.load(std::memory_order_relaxed)) {
+            http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+            return json_error(
+                request_id,
+                "503 Service Unavailable",
+                "UPSTREAM_UNAVAILABLE",
+                "redis registry unavailable");
+        }
+
+        std::vector<server::core::state::InstanceRecord> items;
+        std::uint64_t updated_ms = 0;
+        {
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            items = instances_cache_;
+            updated_ms = instances_updated_at_ms_;
+        }
+
+        if (options.timeout_ms > 0) {
+            const std::uint64_t now = now_ms();
+            if (updated_ms == 0 || now > updated_ms + options.timeout_ms) {
+                http_errors_total_.fetch_add(1, std::memory_order_relaxed);
+                return json_error(
+                    request_id,
+                    "503 Service Unavailable",
+                    "STALE_CACHE",
+                    "instances cache is older than timeout_ms",
+                    json_details("timeout_ms", std::to_string(options.timeout_ms)));
+            }
+        }
+
+        const auto desired_topology = load_desired_topology_document();
+        const auto request_document = load_topology_actuation_request_document();
+        const auto execution_document = load_topology_actuation_execution_document();
+        const auto lease_document = load_topology_actuation_adapter_document();
+        const auto observed_instances = make_observed_topology_instances(items);
+        const auto observed_pools = server::core::mmorpg::collect_observed_pools(observed_instances);
+        const auto execution_status = server::core::mmorpg::evaluate_topology_actuation_execution_status(
+            execution_document,
+            request_document,
+            desired_topology,
+            observed_pools);
+        const auto realization_status = server::core::mmorpg::evaluate_topology_actuation_realization_status(
+            execution_document,
+            request_document,
+            desired_topology,
+            observed_pools);
+        const auto adapter_status = server::core::mmorpg::evaluate_topology_actuation_adapter_status(
+            lease_document,
+            execution_document,
+            request_document,
+            desired_topology,
+            observed_pools);
+
+        return json_ok(
+            request_id,
+            make_topology_actuation_adapter_status_json(
+                lease_document,
+                execution_document,
+                execution_status,
+                realization_status,
+                adapter_status));
     }
 
     server::core::metrics::MetricsHttpServer::RouteResponse
@@ -5677,8 +10570,8 @@ private:
             body.str()};
     }
 
-    server::core::app::AppHost app_host_{"admin_app"};
-    std::unique_ptr<server::core::metrics::MetricsHttpServer> http_server_;
+    server::core::app::EngineRuntime engine_;
+    server::core::app::AppHost& app_host_;
 
     std::uint16_t metrics_port_{kDefaultAdminPort};
     std::uint16_t instance_metrics_port_{kDefaultInstanceMetricsPort};
@@ -5690,6 +10583,12 @@ private:
     std::string session_prefix_;
     std::string redis_channel_prefix_;
     std::string continuity_prefix_;
+    std::string desired_topology_key_;
+    std::string topology_actuation_request_key_;
+    std::string topology_actuation_execution_key_;
+    std::string topology_actuation_adapter_key_;
+    std::string topology_actuation_runtime_assignment_key_;
+    std::uint32_t continuity_lease_ttl_sec_{kDefaultContinuityLeaseTtlSec};
     std::uint32_t registry_ttl_sec_{30};
 
     std::string worker_metrics_raw_url_;
@@ -5754,6 +10653,55 @@ private:
     std::atomic<std::uint64_t> world_policy_write_fail_total_{0};
     std::atomic<std::uint64_t> world_policy_clear_total_{0};
     std::atomic<std::uint64_t> world_policy_clear_fail_total_{0};
+    std::atomic<std::uint64_t> world_drain_requests_total_{0};
+    std::atomic<std::uint64_t> world_drain_write_total_{0};
+    std::atomic<std::uint64_t> world_drain_write_fail_total_{0};
+    std::atomic<std::uint64_t> world_drain_clear_total_{0};
+    std::atomic<std::uint64_t> world_drain_clear_fail_total_{0};
+    std::atomic<std::uint64_t> world_transfer_requests_total_{0};
+    std::atomic<std::uint64_t> world_transfer_write_total_{0};
+    std::atomic<std::uint64_t> world_transfer_write_fail_total_{0};
+    std::atomic<std::uint64_t> world_transfer_clear_total_{0};
+    std::atomic<std::uint64_t> world_transfer_clear_fail_total_{0};
+    std::atomic<std::uint64_t> world_transfer_owner_commit_total_{0};
+    std::atomic<std::uint64_t> world_transfer_owner_commit_fail_total_{0};
+    std::atomic<std::uint64_t> world_migration_requests_total_{0};
+    std::atomic<std::uint64_t> world_migration_write_total_{0};
+    std::atomic<std::uint64_t> world_migration_write_fail_total_{0};
+    std::atomic<std::uint64_t> world_migration_clear_total_{0};
+    std::atomic<std::uint64_t> world_migration_clear_fail_total_{0};
+    std::atomic<std::uint64_t> desired_topology_requests_total_{0};
+    std::atomic<std::uint64_t> desired_topology_write_total_{0};
+    std::atomic<std::uint64_t> desired_topology_write_fail_total_{0};
+    std::atomic<std::uint64_t> desired_topology_clear_total_{0};
+    std::atomic<std::uint64_t> desired_topology_clear_fail_total_{0};
+    std::atomic<std::uint64_t> observed_topology_requests_total_{0};
+    std::atomic<std::uint64_t> topology_reconciliation_requests_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_requests_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_request_requests_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_request_write_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_request_write_fail_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_request_clear_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_request_clear_fail_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_status_requests_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_execution_requests_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_execution_write_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_execution_write_fail_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_execution_clear_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_execution_clear_fail_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_execution_status_requests_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_realization_requests_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_adapter_requests_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_adapter_write_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_adapter_write_fail_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_adapter_clear_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_adapter_clear_fail_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_adapter_status_requests_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_runtime_assignment_requests_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_runtime_assignment_write_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_runtime_assignment_write_fail_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_runtime_assignment_clear_total_{0};
+    std::atomic<std::uint64_t> topology_actuation_runtime_assignment_clear_fail_total_{0};
     std::atomic<std::uint64_t> instances_selector_requests_total_{0};
     std::atomic<std::uint64_t> instances_selector_mismatch_total_{0};
     std::atomic<std::uint64_t> session_lookup_requests_total_{0};

@@ -80,7 +80,7 @@ bool ready_ok() {
     return (services::get<server::app::chat::ChatService>() != nullptr);
 }
 
-std::string render_logs() {
+std::string render_logs_impl() {
     auto logs = corelog::recent(200);
     std::ostringstream body_stream;
     if (logs.empty()) {
@@ -93,7 +93,7 @@ std::string render_logs() {
     return body_stream.str();
 }
 
-std::string render_metrics() {
+std::string render_metrics_impl() {
     auto snap = server::core::runtime_metrics::snapshot();
     std::ostringstream stream;
 
@@ -180,6 +180,29 @@ std::string render_metrics() {
     append_counter(
         "chat_continuity_world_owner_restore_fallback_total",
         continuity_metrics.world_owner_restore_fallback_total);
+    append_counter(
+        "chat_continuity_world_migration_restore_total",
+        continuity_metrics.world_migration_restore_total);
+    append_counter(
+        "chat_continuity_world_migration_restore_fallback_total",
+        continuity_metrics.world_migration_restore_fallback_total);
+    stream << "# TYPE chat_continuity_world_migration_restore_fallback_reason_total counter\n";
+    stream << "chat_continuity_world_migration_restore_fallback_reason_total{reason=\"target_world_missing\"} "
+           << continuity_metrics.world_migration_restore_fallback_target_world_missing_total << "\n";
+    stream << "chat_continuity_world_migration_restore_fallback_reason_total{reason=\"target_owner_missing\"} "
+           << continuity_metrics.world_migration_restore_fallback_target_owner_missing_total << "\n";
+    stream << "chat_continuity_world_migration_restore_fallback_reason_total{reason=\"target_owner_not_ready\"} "
+           << continuity_metrics.world_migration_restore_fallback_target_owner_not_ready_total << "\n";
+    stream << "chat_continuity_world_migration_restore_fallback_reason_total{reason=\"target_owner_mismatch\"} "
+           << continuity_metrics.world_migration_restore_fallback_target_owner_mismatch_total << "\n";
+    stream << "chat_continuity_world_migration_restore_fallback_reason_total{reason=\"source_not_draining\"} "
+           << continuity_metrics.world_migration_restore_fallback_source_not_draining_total << "\n";
+    append_counter(
+        "chat_continuity_world_migration_payload_room_handoff_total",
+        continuity_metrics.world_migration_payload_room_handoff_total);
+    append_counter(
+        "chat_continuity_world_migration_payload_room_handoff_fallback_total",
+        continuity_metrics.world_migration_payload_room_handoff_fallback_total);
 
     append_counter("chat_accept_total", snap.accept_total);
     append_counter("chat_session_started_total", snap.session_started_total);
@@ -543,6 +566,14 @@ std::string render_metrics() {
 
 } // namespace
 
+std::string render_metrics_text() {
+    return render_metrics_impl();
+}
+
+std::string render_logs_text() {
+    return render_logs_impl();
+}
+
 MetricsServer::MetricsServer(unsigned short port)
     : port_(port) {
 }
@@ -558,10 +589,10 @@ void MetricsServer::start() {
 
     http_server_ = std::make_unique<server::core::metrics::MetricsHttpServer>(
         port_,
-        []() { return render_metrics(); },
+        []() { return render_metrics_text(); },
         []() { return health_ok(); },
         []() { return ready_ok(); },
-        []() { return render_logs(); },
+        []() { return render_logs_text(); },
         [](bool ok) {
             if (const auto host = services::get<server::core::app::AppHost>()) {
                 return host->health_body(ok);

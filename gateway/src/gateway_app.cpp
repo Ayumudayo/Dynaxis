@@ -32,6 +32,7 @@
 
 #include "gateway/gateway_connection.hpp"
 #include "gateway/registry_backend_factory.hpp"
+#include "server/core/app/engine_builder.hpp"
 #include "server/core/net/queue_budget.hpp"
 #include "server/core/state/instance_registry.hpp"
 #include "server/core/state/world_lifecycle_policy.hpp"
@@ -150,34 +151,6 @@ bool parse_env_bool(const char* key, bool fallback) {
         }
     }
     return fallback;
-}
-
-void write_be64(std::uint64_t value, std::vector<std::uint8_t>& out) {
-    out.push_back(static_cast<std::uint8_t>((value >> 56) & 0xFFu));
-    out.push_back(static_cast<std::uint8_t>((value >> 48) & 0xFFu));
-    out.push_back(static_cast<std::uint8_t>((value >> 40) & 0xFFu));
-    out.push_back(static_cast<std::uint8_t>((value >> 32) & 0xFFu));
-    out.push_back(static_cast<std::uint8_t>((value >> 24) & 0xFFu));
-    out.push_back(static_cast<std::uint8_t>((value >> 16) & 0xFFu));
-    out.push_back(static_cast<std::uint8_t>((value >> 8) & 0xFFu));
-    out.push_back(static_cast<std::uint8_t>(value & 0xFFu));
-}
-
-bool read_be64(std::span<const std::uint8_t>& in, std::uint64_t& out) {
-    if (in.size() < 8) {
-        return false;
-    }
-
-    out = (static_cast<std::uint64_t>(in[0]) << 56)
-        | (static_cast<std::uint64_t>(in[1]) << 48)
-        | (static_cast<std::uint64_t>(in[2]) << 40)
-        | (static_cast<std::uint64_t>(in[3]) << 32)
-        | (static_cast<std::uint64_t>(in[4]) << 24)
-        | (static_cast<std::uint64_t>(in[5]) << 16)
-        | (static_cast<std::uint64_t>(in[6]) << 8)
-        | static_cast<std::uint64_t>(in[7]);
-    in = in.subspan(8);
-    return true;
 }
 
 std::string to_hex(std::span<const std::uint8_t> bytes) {
@@ -858,9 +831,9 @@ const std::string& GatewayApp::BackendConnection::session_id() const {
 
 GatewayApp::GatewayApp()
     : hive_(std::make_shared<server::core::net::Hive>(io_))
+    , engine_(server::core::app::EngineBuilder("gateway_app").build())
+    , app_host_(engine_.host())
     , authenticator_(std::make_shared<auth::NoopAuthenticator>()) {
-    app_host_.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kBootstrapping);
-    
     configure_gateway();
 
     boot_id_ = make_boot_id();
@@ -872,10 +845,12 @@ GatewayApp::GatewayApp()
     }
 
     configure_infrastructure();
+    engine_.set_service(hive_);
+    engine_.set_service(authenticator_);
 
     // Redis is required for backend discovery and sticky routing.
-    app_host_.declare_dependency("redis", server::core::app::AppHost::DependencyRequirement::kRequired);
-    app_host_.set_ready(false);
+    engine_.declare_dependency("redis", server::core::app::AppHost::DependencyRequirement::kRequired);
+    engine_.set_ready(false);
 
     if (const char* port_env = std::getenv("METRICS_PORT")) {
         try {
@@ -885,7 +860,7 @@ GatewayApp::GatewayApp()
         }
     }
 
-    app_host_.start_admin_http(metrics_port_, [this]() {
+    engine_.start_admin_http(metrics_port_, [this]() {
         std::ostringstream stream;
 
         // Build metadata (git hash/describe + build time)
@@ -1185,7 +1160,7 @@ GatewayApp::GatewayApp()
         return stream.str();
     });
 
-    app_host_.add_shutdown_step("stop gateway", [this]() { stop(); });
+    engine_.add_shutdown_step("stop gateway", [this]() { stop(); });
 }
 
 GatewayApp::~GatewayApp() {
@@ -1195,17 +1170,15 @@ GatewayApp::~GatewayApp() {
 int GatewayApp::run() {
     start_listener();
     start_udp_listener();
-    app_host_.set_ready(true);
-    app_host_.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kRunning);
+    engine_.mark_running();
     start_infrastructure_probe();
-    app_host_.install_asio_termination_signals(io_, {});
+    engine_.install_asio_termination_signals(io_, {});
 
     server::core::log::info("GatewayApp starting main loop");
     hive_->run();
 
-    stop_infrastructure_probe();
-    app_host_.set_ready(false);
-    app_host_.set_lifecycle_phase(server::core::app::AppHost::LifecyclePhase::kStopped);
+    engine_.run_shutdown();
+    engine_.mark_stopped();
     server::core::log::info("GatewayApp stopped");
     return 0;
 }
@@ -1473,19 +1446,15 @@ std::vector<std::uint8_t> GatewayApp::make_udp_bind_res_frame(std::uint16_t code
                                                                std::string_view message,
                                                                std::uint32_t seq) const {
     namespace proto = server::core::protocol;
-
-    std::vector<std::uint8_t> payload;
-    payload.reserve(2 + 2 + session_id.size() + 8 + 8 + 2 + token.size() + 2 + message.size());
-
-    std::array<std::uint8_t, 2> code_buf{};
-    proto::write_be16(code, code_buf.data());
-    payload.insert(payload.end(), code_buf.begin(), code_buf.end());
-
-    proto::write_lp_utf8(payload, session_id);
-    write_be64(nonce, payload);
-    write_be64(expires_unix_ms, payload);
-    proto::write_lp_utf8(payload, token);
-    proto::write_lp_utf8(payload, message);
+    const auto payload = server::core::fps::encode_direct_bind_response_payload(
+        code,
+        server::core::fps::DirectBindTicket{
+            .session_id = std::string(session_id),
+            .nonce = nonce,
+            .expires_unix_ms = expires_unix_ms,
+            .token = std::string(token),
+        },
+        message);
 
     proto::PacketHeader header{};
     header.length = static_cast<std::uint16_t>(payload.size());
@@ -1539,8 +1508,12 @@ std::optional<std::vector<std::uint8_t>> GatewayApp::make_udp_bind_ticket_frame(
         it->second.udp_endpoint = {};
         it->second.udp_sequenced_metrics.reset();
         it->second.rudp_fallback_to_tcp = false;
-        it->second.rudp_selected = rudp_rollout_policy_.session_selected(session_id, nonce)
-            && !rudp_rollout_policy_.opcode_allowlist.empty();
+        const auto attach_decision = server::core::fps::evaluate_direct_attach(
+            rudp_rollout_policy_,
+            session_id,
+            nonce);
+        it->second.rudp_selected =
+            attach_decision.mode == server::core::fps::DirectAttachMode::kRudpCanary;
         if (it->second.rudp_selected) {
             it->second.rudp_engine = std::make_unique<server::core::net::rudp::RudpEngine>(rudp_config_);
         } else {
@@ -1564,38 +1537,7 @@ std::optional<std::vector<std::uint8_t>> GatewayApp::make_udp_bind_ticket_frame(
 }
 
 bool GatewayApp::parse_udp_bind_req(std::span<const std::uint8_t> payload, ParsedUdpBindRequest& out) const {
-    namespace proto = server::core::protocol;
-
-    std::span<const std::uint8_t> in = payload;
-    std::string session_id;
-    if (!proto::read_lp_utf8(in, session_id)) {
-        return false;
-    }
-
-    std::uint64_t nonce = 0;
-    if (!read_be64(in, nonce)) {
-        return false;
-    }
-
-    std::uint64_t expires_unix_ms = 0;
-    if (!read_be64(in, expires_unix_ms)) {
-        return false;
-    }
-
-    std::string token;
-    if (!proto::read_lp_utf8(in, token)) {
-        return false;
-    }
-
-    if (!in.empty()) {
-        return false;
-    }
-
-    out.session_id = std::move(session_id);
-    out.nonce = nonce;
-    out.expires_unix_ms = expires_unix_ms;
-    out.token = std::move(token);
-    return true;
+    return server::core::fps::decode_direct_bind_request_payload(payload, out);
 }
 
 std::uint16_t GatewayApp::apply_udp_bind_request(const ParsedUdpBindRequest& req,
@@ -1731,7 +1673,7 @@ bool GatewayApp::try_send_direct_client_frame(std::string_view session_id,
     }
 
     boost::asio::ip::udp::endpoint endpoint;
-    DirectEgressRoute route = DirectEgressRoute::kTcpFallback;
+    DirectEgressDecision decision{};
 
     {
         std::lock_guard<std::mutex> lock(session_mutex_);
@@ -1744,7 +1686,7 @@ bool GatewayApp::try_send_direct_client_frame(std::string_view session_id,
         const bool rudp_established =
             it->second.rudp_engine != nullptr
             && it->second.rudp_engine->state().lifecycle == server::core::net::rudp::LifecycleState::kEstablished;
-        route = select_direct_egress_route(DirectEgressContext{
+        decision = evaluate_direct_egress(DirectEgressContext{
             .msg_id = msg_id,
             .udp_bound = it->second.udp_bound,
             .rudp_selected = it->second.rudp_selected,
@@ -1753,7 +1695,7 @@ bool GatewayApp::try_send_direct_client_frame(std::string_view session_id,
         });
         endpoint = it->second.udp_endpoint;
 
-        if (route == DirectEgressRoute::kRudp) {
+        if (decision.route == DirectEgressRoute::kRudp) {
             std::vector<std::uint8_t> datagram;
             const auto channel = server::protocol::opcode_policy(msg_id).channel;
             if (!it->second.rudp_engine->queue_unreliable_payload(frame, channel, unix_time_ms(), datagram)) {
@@ -1768,7 +1710,7 @@ bool GatewayApp::try_send_direct_client_frame(std::string_view session_id,
         }
     }
 
-    if (route == DirectEgressRoute::kUdp) {
+    if (decision.route == DirectEgressRoute::kUdp) {
         send_udp_datagram(std::vector<std::uint8_t>(frame.begin(), frame.end()), endpoint);
         (void)udp_direct_state_delta_total_.fetch_add(1, std::memory_order_relaxed);
         return true;
@@ -1798,15 +1740,13 @@ void GatewayApp::trace_udp_bind_send(std::span<const std::uint8_t> frame,
     std::uint64_t expires_unix_ms = 0;
     std::string message;
     const auto payload = frame.subspan(proto::k_header_bytes);
-    if (payload.size() >= 2) {
-        code = proto::read_be16(payload.data());
-        auto in = payload.subspan(2);
-        (void)proto::read_lp_utf8(in, session_id);
-        (void)read_be64(in, nonce);
-        (void)read_be64(in, expires_unix_ms);
-        std::string ignored_token;
-        (void)proto::read_lp_utf8(in, ignored_token);
-        (void)proto::read_lp_utf8(in, message);
+    server::core::fps::DirectBindResponse bind_response{};
+    if (server::core::fps::decode_direct_bind_response_payload(payload, bind_response)) {
+        code = bind_response.code;
+        session_id = bind_response.ticket.session_id;
+        nonce = bind_response.ticket.nonce;
+        expires_unix_ms = bind_response.ticket.expires_unix_ms;
+        message = bind_response.message;
     }
 
     server::core::log::info(

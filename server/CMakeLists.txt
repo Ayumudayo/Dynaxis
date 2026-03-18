@@ -39,6 +39,9 @@ target_include_directories(server_chat_runtime PUBLIC ${CMAKE_CURRENT_LIST_DIR}/
 target_include_directories(server_chat_runtime PRIVATE ${CMAKE_BINARY_DIR}/proto)
 target_link_libraries(server_chat_runtime PUBLIC server_core wire_proto)
 target_link_libraries(server_chat_runtime PRIVATE ${CMAKE_DL_LIBS})
+if (TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(server_chat_runtime PRIVATE nlohmann_json::nlohmann_json)
+endif()
 
 if (TARGET generate_game_opcodes)
     add_dependencies(server_chat_runtime generate_game_opcodes)
@@ -64,6 +67,9 @@ target_include_directories(server_app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(server_app PRIVATE server_app_config server_app_backends server_chat_runtime server_fps_runtime server_core wire_proto)
 # dlopen/dlsym (Linux)
 target_link_libraries(server_app PRIVATE ${CMAKE_DL_LIBS})
+if (TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(server_app PRIVATE nlohmann_json::nlohmann_json)
+endif()
 # protobuf 생성 헤더 경로 추가
 target_include_directories(server_app PRIVATE ${CMAKE_BINARY_DIR}/proto)
 

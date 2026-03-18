@@ -314,6 +314,22 @@ docker run --rm --network "dynaxis-stack_dynaxis-stack" \
   bash -lc "cmake --preset linux-release -DBUILD_SERVER_TESTS=OFF -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=OFF >/tmp/loadgen-configure.log && cmake --build build-linux --target stack_loadgen >/tmp/loadgen-build.log && ./build-linux/stack_loadgen --host gateway-1 --port 6000 --udp-port 7000 --scenario tools/loadgen/scenarios/udp_attach_login_only.json --report build/loadgen/udp_attach_login_only.trace.json --verbose"
 ```
 
+Linux host-network container example:
+
+```bash
+docker run --rm --network host \
+  -v "$(pwd):/workspace" \
+  -w /workspace \
+  dynaxis-base:latest \
+  bash -lc "./build-linux/stack_loadgen --host 127.0.0.1 --port 36100 --udp-port 7000 --scenario tools/loadgen/scenarios/mixed_direct_udp_fps_soak.json --report build/loadgen/mixed_direct_udp_fps_soak.hostnet.json"
+```
+
+UDP-only netem rehearsal example:
+
+```bash
+python tests/python/verify_fps_netem_rehearsal.py --scenario fps-pair
+```
+
 ## Report
 
 실행 결과는 JSON으로 남는다. 핵심 필드:
@@ -382,6 +398,55 @@ docker run --rm --network "dynaxis-stack_dynaxis-stack" \
   - `rudp_ping_only` OFF path: `success=6 errors=0 udp_bind_ok=4 rudp_attach_ok=0 rudp_attach_fallback=4 throughput_rps=0.28 p95_ms=1.32`
   - `mixed_direct_rudp_ping_soak` OFF path: `success=467 errors=0 udp_bind_ok=4 rudp_attach_ok=0 rudp_attach_fallback=4 throughput_rps=7.39 p95_ms=11.83`
   - retained metrics/log artifacts live under `build/engine-roadmap-fps/metrics/` and `build/engine-roadmap-fps/logs/`
+- 2026-03-18 FPS direct-path soak verification snapshot:
+  - `mixed_direct_udp_fps_soak`: `success=508 errors=0 udp_bind_ok=4 fps_direct_updates=222 throughput_rps=8.04 p95_ms=31.62`
+    - report: `build/loadgen/mixed_direct_udp_fps_soak.20260318-010307Z.host.json`
+  - `mixed_direct_rudp_fps_soak`: `success=507 errors=0 udp_bind_ok=4 rudp_attach_ok=4 fps_direct_updates=218 throughput_rps=8.02 p95_ms=31.60`
+    - report: `build/loadgen/mixed_direct_rudp_fps_soak.20260318-010307Z.host.json`
+- 2026-03-18 Phase 5 budget hardening snapshot:
+  - `mixed_session_soak_long`: `success=636 errors=0 throughput_rps=9.60 p95_ms=15.04`
+    - report: `build/loadgen/mixed_session_soak_long.20260318-021023Z.json`
+    - note: on this Windows workstation, host `:6000` collides with a local X server, so the control sample was captured from a same-network Linux container against `haproxy:6000`
+  - `mixed_direct_udp_soak_long`: `success=1126 errors=0 udp_bind_ok=8 throughput_rps=8.91 p95_ms=13.62`
+    - report: `build/loadgen/mixed_direct_udp_soak_long.20260318-021023Z.host.json`
+  - `mixed_direct_rudp_soak_long` success path: `success=1126 errors=0 udp_bind_ok=8 rudp_attach_ok=8 throughput_rps=8.92 p95_ms=16.96`
+    - report: `build/loadgen/mixed_direct_rudp_soak_long.20260318-021023Z.host.json`
+  - `mixed_direct_rudp_soak_long` focused success-path rerun: `success=1126 errors=0 udp_bind_ok=8 rudp_attach_ok=8 throughput_rps=8.92 p95_ms=13.40`
+    - report: `build/loadgen/mixed_direct_rudp_soak_long.20260317-173024Z.host.json`
+    - note: the focused `--capture-set rudp-success-only` rerun confirmed that the earlier `p95_ms=16.96` sample was bounded variance rather than a new steady-state baseline
+  - `mixed_direct_rudp_soak_long` fallback path: `success=1124 errors=0 udp_bind_ok=8 rudp_attach_fallback=8 throughput_rps=8.91 p95_ms=12.51`
+    - report: `build/loadgen/mixed_direct_rudp_soak_long.20260318-021023Z.fallback.host.json`
+  - `mixed_direct_rudp_soak_long` OFF path: `success=1126 errors=0 udp_bind_ok=8 rudp_attach_fallback=8 throughput_rps=8.92 p95_ms=12.54`
+    - report: `build/loadgen/mixed_direct_rudp_soak_long.20260318-021023Z.off.host.json`
+  - `mixed_direct_udp_fps_soak` rerun: `success=509 errors=0 udp_bind_ok=4 fps_direct_updates=219 throughput_rps=8.06 p95_ms=31.57`
+    - report: `build/loadgen/mixed_direct_udp_fps_soak.20260318-021023Z.host.json`
+  - `mixed_direct_rudp_fps_soak` rerun: `success=509 errors=0 udp_bind_ok=4 rudp_attach_ok=4 fps_direct_updates=220 throughput_rps=8.05 p95_ms=31.62`
+    - report: `build/loadgen/mixed_direct_rudp_fps_soak.20260318-021023Z.host.json`
+- 2026-03-18 Linux hostnet hardening snapshot:
+  - `mixed_session_soak_long`: `success=637 errors=0 throughput_rps=9.61 p95_ms=13.37`
+    - report: `build/loadgen/mixed_session_soak_long.20260318-060310Z.json`
+  - `mixed_direct_udp_soak_long`: `success=1132 errors=0 udp_bind_ok=8 throughput_rps=8.97 p95_ms=12.78`
+    - report: `build/loadgen/mixed_direct_udp_soak_long.20260318-060310Z.host.json`
+  - `mixed_direct_rudp_soak_long` success path: `success=1125 errors=0 udp_bind_ok=8 rudp_attach_ok=8 throughput_rps=8.91 p95_ms=12.22`
+    - report: `build/loadgen/mixed_direct_rudp_soak_long.20260318-060310Z.host.json`
+  - `mixed_direct_udp_fps_soak`: `success=511 errors=0 udp_bind_ok=4 fps_direct_updates=221 throughput_rps=8.08 p95_ms=31.97`
+    - report: `build/loadgen/mixed_direct_udp_fps_soak.20260318-060310Z.host.json`
+  - `mixed_direct_rudp_fps_soak`: `success=508 errors=0 udp_bind_ok=4 rudp_attach_ok=4 fps_direct_updates=219 throughput_rps=8.03 p95_ms=32.32`
+    - report: `build/loadgen/mixed_direct_rudp_fps_soak.20260318-060310Z.host.json`
+  - note: this host-network container path is the current scheduled/manual Linux hardening artifact path; same-network bridge container mode remains diagnostic only because it widens FPS `p95_ms`
+  - focused OFF-path history:
+    - `build/loadgen/mixed_direct_rudp_soak_long.20260318-113911Z-off1.off.host.json`: `success=1127 errors=0 throughput_rps=8.93 p95_ms=12.00`
+    - `build/loadgen/mixed_direct_rudp_soak_long.20260318-113911Z-off2.off.host.json`: `success=1123 errors=0 throughput_rps=8.90 p95_ms=13.32`
+    - `build/loadgen/mixed_direct_rudp_soak_long.20260318-113911Z-off3.off.host.json`: `success=1125 errors=0 throughput_rps=8.91 p95_ms=12.13`
+    - note: current hostnet OFF-path history does not justify a second Linux-only numeric band
+- 2026-03-18 OS-level UDP netem rehearsal snapshot:
+  - artifact: `build/phase5-evidence/20260318-121332Z/netem/manifest.json`
+  - `mixed_direct_udp_fps_soak`: `success=502 errors=0 udp_bind_ok=4 throughput_rps=7.94 p95_ms=75.25`
+    - report: `build/loadgen/mixed_direct_udp_fps_soak.20260318-121332Z.netem.json`
+  - `mixed_direct_rudp_fps_soak`: `success=505 errors=0 udp_bind_ok=4 rudp_attach_ok=4 throughput_rps=7.99 p95_ms=74.71`
+    - report: `build/loadgen/mixed_direct_rudp_fps_soak.20260318-121332Z.netem.json`
+  - metric deltas: `gateway_udp_loss_estimated_total +4`, `gateway_udp_jitter_ms_last -> 37`
+  - note: this is a manual ops-only rehearsal path that shapes UDP egress inside the loadgen container; it is intentionally separate from the accepted Phase 5 baseline and `ci-hardening`
 - current FPS first-slice contract:
   - direct UDP/RUDP proof frame: `MSG_PING`
   - response path for that proof: TCP `MSG_PONG`

@@ -15,6 +15,8 @@
 
 namespace server::core::app {
 
+class EngineRuntime;
+
 /**
  * @brief 서비스 프로세스 공통 런타임 제어를 모아 둔 경량 호스트입니다.
  *
@@ -162,9 +164,13 @@ public:
      * @brief admin HTTP 서버를 시작합니다.
      * @param port 수신 포트
      * @param metrics_callback `/metrics` 본문 생성 콜백
+     * @param logs_callback `/logs` 본문 생성 콜백
+     * @param route_callback 기본 라우트 외 사용자 정의 라우트 콜백
      */
     void start_admin_http(unsigned short port,
-                          server::core::metrics::MetricsHttpServer::MetricsCallback metrics_callback);
+                          server::core::metrics::MetricsHttpServer::MetricsCallback metrics_callback,
+                          server::core::metrics::MetricsHttpServer::LogsCallback logs_callback = {},
+                          server::core::metrics::MetricsHttpServer::RouteCallback route_callback = {});
 
     /**
      * @brief admin HTTP 서버를 중지합니다.
@@ -193,6 +199,8 @@ public:
                                           std::function<void()> on_shutdown);
 
 private:
+    friend class EngineRuntime;
+
     struct DependencyRegistry;
     struct ShutdownRegistry;
 
@@ -212,6 +220,7 @@ private:
 
     std::unique_ptr<server::core::metrics::MetricsHttpServer> admin_http_;
     std::unique_ptr<boost::asio::signal_set> signals_;
+    bool admin_http_shutdown_step_registered_{false};
 };
 
 } // namespace server::core::app

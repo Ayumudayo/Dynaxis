@@ -50,6 +50,7 @@ struct ServerConfig {
     std::string redis_channel_prefix;
     bool use_redis_pubsub = true;
     std::string gateway_id = "gw-default";
+    std::string topology_runtime_assignment_key = "dynaxis:topology:actuation:runtime-assignment";
 
     // Graceful drain (P1-4)
     std::uint64_t shutdown_drain_timeout_ms = 15'000;
@@ -79,6 +80,7 @@ struct ServerConfig {
     std::int32_t fps_interest_cell_size_mm = 10'000;
     std::int32_t fps_interest_radius_cells = 1;
     std::uint32_t fps_max_interest_recipients_per_tick = 64;
+    std::uint32_t fps_max_delta_actors_per_tick = 32;
     std::uint32_t fps_history_ticks = 64;
 
     /**

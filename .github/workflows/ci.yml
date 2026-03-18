@@ -101,7 +101,7 @@ jobs:
         run: |
           python tools/check_doxygen_coverage.py
 
-      - name: Validate Core API Contracts
+      - name: Validate Core API Boundary And Governance
         shell: pwsh
         run: |
           python tools/check_core_api_contracts.py
@@ -127,7 +127,7 @@ jobs:
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Release
 
-      - name: Run Windows Unit Tests (ctest)
+      - name: Run Windows Tests Including Public API And Installed Consumer (ctest)
         shell: pwsh
         run: |
           ctest --preset windows-test --parallel 8 --output-on-failure

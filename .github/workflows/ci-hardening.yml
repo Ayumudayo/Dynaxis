@@ -104,6 +104,28 @@ jobs:
         run: |
           PERF_P95_MAX_MS=300 PERF_P99_MAX_MS=700 PERF_MIN_THROUGHPUT_RPS=10 python3 tests/python/verify_soak_perf_gate.py
 
+      - name: Set Phase 5 Run ID
+        id: phase5-run
+        run: |
+          echo "run_id=$(date -u +%Y%m%d-%H%M%SZ)-gha-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Capture Phase 5 Budget Evidence (Linux Hostnet)
+        run: |
+          python3 tests/python/capture_phase5_evidence.py \
+            --run-id "${{ steps.phase5-run.outputs.run_id }}" \
+            --include-budget-hardening \
+            --execution-mode hostnet-container
+
+      - name: Upload Phase 5 Budget Evidence Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase5-budget-evidence-${{ steps.phase5-run.outputs.run_id }}
+          if-no-files-found: warn
+          path: |
+            build/phase5-evidence/${{ steps.phase5-run.outputs.run_id }}/
+            build/loadgen/*.${{ steps.phase5-run.outputs.run_id }}*.json
+
       - name: Dump Stack Logs (On Failure)
         if: failure()
         run: |
