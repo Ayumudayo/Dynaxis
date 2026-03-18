@@ -146,6 +146,11 @@ jobs:
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Release -Target core_public_api_stable_header_scenarios
 
+      - name: Build Core Public API FPS Capability Smoke Target (Release)
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Release -Target core_public_api_fps_capability_smoke
+
       - name: Run Core Public API Consumer Tests
         shell: pwsh
         run: |
