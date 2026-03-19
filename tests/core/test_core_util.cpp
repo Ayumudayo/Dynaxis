@@ -68,3 +68,24 @@ TEST_F(ServiceRegistryTest, TypeSafety) {
     auto retrieved = get<AnotherService>();
     EXPECT_EQ(retrieved, nullptr);
 }
+
+TEST_F(ServiceRegistryTest, OwnedEntriesRestorePreviousOwnerWhenCleared) {
+    auto left = std::make_shared<TestService>();
+    left->name = "left";
+    auto right = std::make_shared<TestService>();
+    right->name = "right";
+
+    auto& registry = Registry::instance();
+    registry.set_owned<TestService>(1, left);
+    registry.set_owned<TestService>(2, right);
+
+    ASSERT_TRUE(has<TestService>());
+    EXPECT_EQ(require<TestService>().name, "right");
+
+    registry.clear_owned(2);
+    ASSERT_TRUE(has<TestService>());
+    EXPECT_EQ(require<TestService>().name, "left");
+
+    registry.clear_owned(1);
+    EXPECT_FALSE(has<TestService>());
+}

@@ -1,20 +1,26 @@
-# FPS Capability API Guide
+# Realtime Capability API Guide
 
 ## Stability
 
 | Header | Stability |
 |---|---|
-| `server/core/fps/direct_bind.hpp` | `[Stable]` |
-| `server/core/fps/direct_delivery.hpp` | `[Stable]` |
-| `server/core/fps/transport_quality.hpp` | `[Stable]` |
-| `server/core/fps/transport_policy.hpp` | `[Stable]` |
-| `server/core/fps/runtime.hpp` | `[Stable]` |
+| `server/core/realtime/direct_bind.hpp` | `[Stable]` |
+| `server/core/realtime/direct_delivery.hpp` | `[Stable]` |
+| `server/core/realtime/transport_quality.hpp` | `[Stable]` |
+| `server/core/realtime/transport_policy.hpp` | `[Stable]` |
+| `server/core/realtime/runtime.hpp` | `[Stable]` |
+
+## Canonical Naming
+- canonical include path family: `server/core/realtime/**`
+- canonical namespace: `server::core::realtime`
+- `server/core/fps/**` is a 2.x compatibility wrapper only and is planned for removal in 3.0
+- migration guide: `docs/core-api/fps-to-realtime-migration.md`
 
 ## Scope
-- This surface promotes the engine-neutral fixed-step FPS runtime substrate.
+- This surface promotes the engine-neutral fixed-step realtime runtime substrate.
 - It does not expose gateway transport internals, session implementation details, combat rules, or game-specific schemas.
 - The public contract is the authoritative tick/runtime/replication model, not the app-local wire encoding.
-- direct UDP/RUDP transport rollout is still broader than this guide, but bind payload contract is now public via `direct_bind.hpp`, rollout/canary/allowlist policy is public via `transport_policy.hpp`, and direct delta route selection policy is public via `direct_delivery.hpp`.
+- direct UDP/RUDP transport rollout is still broader than this guide, but bind payload contract is public via `direct_bind.hpp`, rollout/canary/allowlist policy is public via `transport_policy.hpp`, and direct delta route selection policy is public via `direct_delivery.hpp`.
 
 ## Public Contract
 - `DirectBindRequest`, `DirectBindTicket`, and `DirectBindResponse` define the bind payload contract for direct UDP attach.
@@ -80,10 +86,11 @@
 - no migration/session continuity behavior
 
 ## Public Proof
-- contract proof target: `CorePublicApiFpsCapabilitySmoke`
+- contract proof target: `CorePublicApiRealtimeCapabilitySmoke`
+- transitional wrapper proof: `CoreFpsCompatSmoke`
 - installed consumer proof: `CoreInstalledPackageConsumer`
 - preferred Phase 2 acceptance proof:
-  - `CorePublicApiFpsCapabilitySmoke`
+  - `CorePublicApiRealtimeCapabilitySmoke`
   - `tests/python/verify_fps_rudp_transport_matrix.py --scenario phase2-acceptance`
 - lower-level stack transport proof:
   - `tests/python/verify_fps_rudp_transport_matrix.py`

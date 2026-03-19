@@ -40,6 +40,8 @@ The control-plane document API, reconciliation read model, and one narrow live r
   - `PUT /api/v1/topology/actuation/adapter`
   - `DELETE /api/v1/topology/actuation/adapter`
   - `GET /api/v1/topology/actuation/adapter/status`
+- Kubernetes-first workload orchestration contract now exists through:
+  - `server/core/worlds/kubernetes.hpp`
 - runtime-assignment actuation control now exists through:
   - `GET /api/v1/topology/actuation/runtime-assignment`
   - `PUT /api/v1/topology/actuation/runtime-assignment`
@@ -100,6 +102,7 @@ Each pool contains:
 - a future tranche may add:
   - pool-oriented scaling APIs
   - runtime reconciliation / actuation
+- the stable K8s contract already names workload binding and lifecycle phases, but concrete manifests/controller loops remain future work
 - that tranche must stay orchestrator-agnostic at the contract level
 - it must preserve the split between:
   - startup manifests for local/proof stacks

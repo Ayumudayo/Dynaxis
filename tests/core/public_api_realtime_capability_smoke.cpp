@@ -4,11 +4,11 @@
 #include <string>
 
 #include "server/core/api/version.hpp"
-#include "server/core/fps/direct_bind.hpp"
-#include "server/core/fps/direct_delivery.hpp"
-#include "server/core/fps/transport_quality.hpp"
-#include "server/core/fps/runtime.hpp"
-#include "server/core/fps/transport_policy.hpp"
+#include "server/core/realtime/direct_bind.hpp"
+#include "server/core/realtime/direct_delivery.hpp"
+#include "server/core/realtime/transport_quality.hpp"
+#include "server/core/realtime/runtime.hpp"
+#include "server/core/realtime/transport_policy.hpp"
 
 namespace {
 
@@ -25,23 +25,23 @@ bool require_true(bool condition, const char* message) {
 int main() {
     (void)server::core::api::version_string();
 
-    server::core::fps::FixedStepDriver driver(30, 4);
+    server::core::realtime::FixedStepDriver driver(30, 4);
     if (!require_true(
             driver.consume_elapsed(std::chrono::milliseconds(200)) == 4,
             "fixed-step driver should bound catch-up work")) {
         return 1;
     }
 
-    server::core::fps::WorldRuntime runtime(server::core::fps::RuntimeConfig{
+    server::core::realtime::WorldRuntime runtime(server::core::realtime::RuntimeConfig{
         .max_delta_actors_per_tick = 1,
     });
 
-    const auto staged_1 = runtime.stage_input(1, server::core::fps::InputCommand{
+    const auto staged_1 = runtime.stage_input(1, server::core::realtime::InputCommand{
         .input_seq = 1,
         .move_x_mm = 100,
     });
     if (!require_true(
-            staged_1.disposition == server::core::fps::StageInputDisposition::kAccepted,
+            staged_1.disposition == server::core::realtime::StageInputDisposition::kAccepted,
             "first staged input should be accepted")) {
         return 1;
     }
@@ -49,12 +49,12 @@ int main() {
         return 1;
     }
 
-    const auto staged_2 = runtime.stage_input(2, server::core::fps::InputCommand{
+    const auto staged_2 = runtime.stage_input(2, server::core::realtime::InputCommand{
         .input_seq = 1,
         .move_x_mm = 150,
     });
     if (!require_true(
-            staged_2.disposition == server::core::fps::StageInputDisposition::kAccepted,
+            staged_2.disposition == server::core::realtime::StageInputDisposition::kAccepted,
             "second staged input should be accepted")) {
         return 1;
     }
@@ -65,7 +65,7 @@ int main() {
     }
     for (const auto& update : first_tick) {
         if (!require_true(
-                update.kind == server::core::fps::ReplicationKind::kSnapshot,
+                update.kind == server::core::realtime::ReplicationKind::kSnapshot,
                 "first tick should emit snapshots")) {
             return 1;
         }
@@ -76,21 +76,21 @@ int main() {
         return 1;
     }
 
-    const auto stale = runtime.stage_input(1, server::core::fps::InputCommand{
+    const auto stale = runtime.stage_input(1, server::core::realtime::InputCommand{
         .input_seq = 0,
         .move_x_mm = 999,
     });
     if (!require_true(
-            stale.disposition == server::core::fps::StageInputDisposition::kRejectedStale,
+            stale.disposition == server::core::realtime::StageInputDisposition::kRejectedStale,
             "older input should be rejected as stale")) {
         return 1;
     }
 
-    const auto staged_3 = runtime.stage_input(1, server::core::fps::InputCommand{
+    const auto staged_3 = runtime.stage_input(1, server::core::realtime::InputCommand{
         .input_seq = 2,
         .move_x_mm = 100,
     });
-    const auto staged_4 = runtime.stage_input(2, server::core::fps::InputCommand{
+    const auto staged_4 = runtime.stage_input(2, server::core::realtime::InputCommand{
         .input_seq = 2,
         .move_x_mm = 150,
     });
@@ -106,13 +106,13 @@ int main() {
     }
     for (const auto& update : second_tick) {
         if (!require_true(
-                update.kind == server::core::fps::ReplicationKind::kSnapshot,
+                update.kind == server::core::realtime::ReplicationKind::kSnapshot,
                 "delta budget overflow should fall back to snapshot")) {
             return 1;
         }
     }
 
-    const auto rewind = runtime.rewind_at_or_before(server::core::fps::RewindQuery{
+    const auto rewind = runtime.rewind_at_or_before(server::core::realtime::RewindQuery{
         .actor_id = *actor_id,
         .server_tick = 2,
     });
@@ -123,41 +123,41 @@ int main() {
         return 1;
     }
 
-    server::core::fps::DirectTransportRolloutPolicy rollout_policy;
+    server::core::realtime::DirectTransportRolloutPolicy rollout_policy;
     rollout_policy.enabled = true;
     rollout_policy.canary_percent = 100;
-    rollout_policy.opcode_allowlist = server::core::fps::parse_direct_opcode_allowlist("0x0206,0x0208");
+    rollout_policy.opcode_allowlist = server::core::realtime::parse_direct_opcode_allowlist("0x0206,0x0208");
 
-    const auto attach = server::core::fps::evaluate_direct_attach(rollout_policy, "fps-proof", 7);
+    const auto attach = server::core::realtime::evaluate_direct_attach(rollout_policy, "fps-proof", 7);
     if (!require_true(
-            attach.mode == server::core::fps::DirectAttachMode::kRudpCanary,
+            attach.mode == server::core::realtime::DirectAttachMode::kRudpCanary,
             "attach evaluation should select RUDP canary")) {
         return 1;
     }
     if (!require_true(
-            attach.reason == server::core::fps::DirectAttachReason::kCanarySelected,
+            attach.reason == server::core::realtime::DirectAttachReason::kCanarySelected,
             "attach evaluation should report canary selection")) {
         return 1;
     }
 
-    const auto delivery = server::core::fps::evaluate_direct_delivery(server::core::fps::DirectDeliveryContext{
+    const auto delivery = server::core::realtime::evaluate_direct_delivery(server::core::realtime::DirectDeliveryContext{
         .direct_path_enabled_for_message = true,
         .udp_bound = true,
         .rudp_selected = true,
         .rudp_established = true,
     });
     if (!require_true(
-            delivery.route == server::core::fps::DirectDeliveryRoute::kRudp,
+            delivery.route == server::core::realtime::DirectDeliveryRoute::kRudp,
             "direct delivery should choose RUDP when established")) {
         return 1;
     }
     if (!require_true(
-            delivery.reason == server::core::fps::DirectDeliveryReason::kRudpDirect,
+            delivery.reason == server::core::realtime::DirectDeliveryReason::kRudpDirect,
             "direct delivery should report RUDP reason")) {
         return 1;
     }
 
-    server::core::fps::UdpSequencedMetrics udp_quality;
+    server::core::realtime::UdpSequencedMetrics udp_quality;
     (void)udp_quality.on_packet(100, 1000);
     const auto quality = udp_quality.on_packet(102, 1015);
     if (!require_true(quality.accepted, "udp quality tracker should accept forward progress")) {
@@ -167,15 +167,15 @@ int main() {
         return 1;
     }
 
-    const auto bind_request_payload = server::core::fps::encode_direct_bind_request_payload(server::core::fps::DirectBindRequest{
+    const auto bind_request_payload = server::core::realtime::encode_direct_bind_request_payload(server::core::realtime::DirectBindRequest{
         .session_id = "fps-proof",
         .nonce = 9,
         .expires_unix_ms = 1000,
         .token = "token",
     });
-    server::core::fps::DirectBindRequest bind_request{};
+    server::core::realtime::DirectBindRequest bind_request{};
     if (!require_true(
-            server::core::fps::decode_direct_bind_request_payload(bind_request_payload, bind_request),
+            server::core::realtime::decode_direct_bind_request_payload(bind_request_payload, bind_request),
             "bind request payload should decode")) {
         return 1;
     }
@@ -183,18 +183,18 @@ int main() {
         return 1;
     }
 
-    const auto bind_response_payload = server::core::fps::encode_direct_bind_response_payload(
+    const auto bind_response_payload = server::core::realtime::encode_direct_bind_response_payload(
         0,
-        server::core::fps::DirectBindTicket{
+        server::core::realtime::DirectBindTicket{
             .session_id = "fps-proof",
             .nonce = 9,
             .expires_unix_ms = 1000,
             .token = "token",
         },
         "issued");
-    server::core::fps::DirectBindResponse bind_response{};
+    server::core::realtime::DirectBindResponse bind_response{};
     if (!require_true(
-            server::core::fps::decode_direct_bind_response_payload(bind_response_payload, bind_response),
+            server::core::realtime::decode_direct_bind_response_payload(bind_response_payload, bind_response),
             "bind response payload should decode")) {
         return 1;
     }
@@ -212,3 +212,4 @@ int main() {
 
     return 0;
 }
+

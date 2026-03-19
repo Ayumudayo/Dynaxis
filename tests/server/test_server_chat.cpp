@@ -803,11 +803,11 @@ TEST_F(ChatServiceTest, ContinuityResumeUsesAppDefinedMigrationPayloadRoomHandof
 
     JoinRoom("source-room");
 
-    server::core::state::WorldLifecyclePolicy policy{};
+    server::core::discovery::WorldLifecyclePolicy policy{};
     policy.draining = true;
     EXPECT_TRUE(redis_->set(
         server::app::chat::ChatServiceContinuityTester::WorldPolicyKey(*chat_service_, "starter-a"),
-        server::core::state::serialize_world_lifecycle_policy(policy)));
+        server::core::discovery::serialize_world_lifecycle_policy(policy)));
     EXPECT_TRUE(redis_->set(
         server::app::chat::ChatServiceContinuityTester::WorldOwnerKey(*chat_service_, "starter-b"),
         "server-test-a"));

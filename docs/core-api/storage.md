@@ -1,37 +1,41 @@
-# 스토리지(Storage) API 가이드
+# 스토리지 실행(Storage Execution) API 가이드
 
 ## 안정성
-- 이 모듈은 현재 `[Stable]` 공개 헤더를 제공하지 않습니다.
-- 저장소 계약은 `[Internal]`로 분류되며 호환성 보장 없이 변경될 수 있습니다.
+- canonical stable 공개 헤더는 아래 네 개입니다.
+  - `server/core/storage_execution/unit_of_work.hpp`
+  - `server/core/storage_execution/connection_pool.hpp`
+  - `server/core/storage_execution/db_worker_pool.hpp`
+  - `server/core/storage_execution/retry_backoff.hpp`
+- shared Redis client contract, concrete Redis/Postgres adapter, chat repository DTO/UoW 계층은 계속 `[Internal]` 또는 app-owned로 남습니다.
 
-## 현재 계약 형태
-- 내부 계약은 repository 인터페이스, `IUnitOfWork`, `IConnectionPool`, `DbWorkerPool`, shared Redis client contract를 포함합니다.
-- repository DTO와 인터페이스 집합은 채팅 도메인(`user/room/message/membership/session`)에 종속되어 있습니다.
-- generic transaction 경계와 shared Redis client contract는 `core/storage/*`로 이동했지만, concrete Postgres/Redis factory와 구현은 여전히 `server/storage/*` 내부 seam으로 유지됩니다.
-- concrete Postgres/Redis 경로는 narrower factory target(`server_storage_pg_factory`, `server_storage_redis_factory`)과 implementation object로 분리되어 있으며, 기존 broader target 이름은 compatibility umbrella로 남아 있습니다.
-- 공개 엔진 소비자는 저장소 내부 구현에 직접 의존하지 않아야 합니다.
+## stable surface 범위
+- `IUnitOfWork`
+  - 도메인 저장소 accessor를 포함하지 않는 generic commit/rollback transaction 경계입니다.
+- `IConnectionPool` + `PoolOptions`
+  - generic unit-of-work 생성과 health check를 노출하는 adapter boundary입니다.
+- `DbWorkerPool`
+  - generic `IUnitOfWork` seam 위에서 비동기 storage task를 실행하는 worker pool입니다.
+- `RetryBackoffPolicy`
+  - linear delay와 exponential full-jitter delay를 공용 계산으로 제공하는 retry helper입니다.
 
-## Package-First 상태
+## 의도적 비승격 영역
+- 채팅 도메인 repository 인터페이스와 DTO(`user/room/message/membership/session`)는 `server/storage/*`에 남습니다.
+- shared Redis client contract과 concrete Redis factory는 gateway/server/tools 공용 internal seam으로 유지됩니다.
+- concrete Postgres 연결 구현과 repository-aware factory는 `server/storage/*` app-owned seam으로 유지됩니다.
+- stable consumer는 canonical `storage_execution` surface만 직접 사용하고, chat repository 계층이나 internal Redis client contract에 직접 의존하지 않아야 합니다.
 
-- 첫 package-first extraction milestone은 아래 두 factory seam만 대상으로 합니다.
+## package-first 상태
+- storage factory package milestone은 계속 아래 seam을 기준으로 유지합니다.
   - `server_storage_pg_factory`
   - `server_storage_redis_factory`
 - 설치된 소비자는 아래 imported target 이름을 사용합니다.
   - `server_storage_pg_factory::server_storage_pg_factory`
   - `server_storage_redis_factory::server_storage_redis_factory`
-- `server_storage_pg`, `server_storage_redis`는 계속 monorepo 내부 compatibility umbrella로 남고, 설치 패키지의 우선 surface로 취급하지 않습니다.
+- `server_storage_pg_factory` consumer는 generic connection-pool 옵션을 `server::core::storage_execution::PoolOptions`로 다룹니다.
+- `server_storage_pg`, `server_storage_redis`는 monorepo 내부 compatibility umbrella로 남고, canonical package surface로 취급하지 않습니다.
 - `server_state_redis_factory`는 외부 소비자 수요가 확인되기 전까지 패키지화 대상에서 제외합니다.
-- 이 패키지들은 install/export/consumer proof를 제공하지만, 저장소 계약 자체는 여전히 `[Internal]`입니다.
-- 패키지 소비 시 기대되는 의존성은 아래와 같습니다.
-  - `server_storage_pg_factory` -> `server_core`, `libpqxx`
-  - `server_storage_redis_factory` -> `server_core`, `redis++`
-- 첫 milestone의 의도적 제한은 아래와 같습니다.
-  - app-local helper target은 패키지로 승격하지 않음
-  - compatibility umbrella는 monorepo 내부 용도로 유지
-  - `server_state_redis_factory`는 defer
-  - raw source repo split은 defer
 
 ## 사용 규칙
-- repository 호출은 `IUnitOfWork`의 commit/rollback 경계 내부에서 수행합니다.
-- 비동기 DB 실행은 앱/서비스 어댑터 뒤로 숨깁니다.
-- factory target 분리가 이뤄졌더라도 저장소 심볼은 여전히 `[Internal]`이며, package-first 추출이 열리더라도 factory seam부터 검토합니다.
+- repository 호출은 generic `IUnitOfWork` 경계 내부에서 수행하되, repository accessor 자체는 app-owned UoW에서 가져옵니다.
+- 비동기 DB 실행은 `DbWorkerPool` 같은 generic execution seam 뒤로 숨기고, 도메인 DTO 해석은 app/service 계층에 둡니다.
+- retry/backoff는 app-local while-loop에 묻히지 않게 `RetryBackoffPolicy` helper를 재사용합니다.

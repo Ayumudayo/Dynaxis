@@ -30,10 +30,11 @@ Only current-state guides, contracts, and reference docs belong here. Historical
 - `docs/ops/engine-readiness-baseline.md` - accepted common-baseline checkpoint ledger
 - `docs/ops/engine-readiness-decision.md` - accepted baseline decision and downstream ownership notes
 - `docs/ops/quantified-release-evidence.md` - Phase 5 release-evidence inventory, artifact paths, and provisional thresholds
+- `docs/ops/worlds-kubernetes-localdev.md` - topology-driven Kubernetes local/dev harness entrypoint and limits
 - `docs/ops/session-continuity-contract.md` - current continuity ownership and restore rules
 - `docs/ops/mmorpg-world-residency-contract.md` - current world residency/lifecycle/runtime contract
 - `docs/ops/mmorpg-desired-topology-contract.md` - current desired-topology, actuation, and orchestration contract
-- `docs/ops/fps-runtime-contract.md` - current FPS transport/runtime substrate contract
+- `docs/ops/realtime-runtime-contract.md` - current realtime transport/runtime substrate contract
 
 ## Extensibility
 

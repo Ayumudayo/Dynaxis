@@ -3,7 +3,7 @@
 ## 적용 범위
 - `docs/core-api-boundary.md`에서 `Stable`로 지정한 헤더에 적용합니다.
 - `Transitional`, `Internal` 헤더에는 적용하지 않습니다.
-- 단, 본 문서의 "플러그인 ABI 호환성 규칙" 절은 확장 ABI(`Transitional`)에 대한 별도 거버넌스 규칙입니다.
+- 단, 본 문서의 "플러그인 ABI 호환성 규칙" 절은 service-owned 확장 ABI(`Transitional`)에 대한 별도 거버넌스 규칙입니다.
 
 ## 안정성 배지 의미
 - `[Stable]`: 호환성 보장 대상
@@ -31,7 +31,7 @@
   - 기존 값을 바꾸지 않는 새 상수 추가
   - 문서 보완만 수행한 변경
 
-## 플러그인 ABI 호환성 규칙 (`[Transitional]`)
+## 플러그인 ABI 호환성 규칙 (`[Transitional]`, service-owned)
 
 적용 대상:
 - `server/include/server/chat/chat_hook_plugin_abi.hpp`

@@ -56,7 +56,7 @@
 ### 2.5 확장성(`core::plugin`, `core::scripting`)
 - `core::plugin`과 `core::scripting`은 plugin/Lua extensibility를 위한 platform mechanism 계층이다.
 - `server/`는 chat hook ABI, plugin chain policy, Lua host bindings 같은 service-specific contract만 소유한다.
-- 현재는 `Transitional`로 관리하며, Stable 승급은 외부 소비자 증거와 migration-note discipline 이후에만 검토한다.
+- reusable mechanism layer는 이제 `Stable`로 관리하고, chat-specific ABI/binding은 `Transitional`로 분리해 관리한다.
 
 ### 2.6 설정/관측성
 - 과거에는 `.env` 로딩 유틸을 두었으나, 현재 `server_app`/`gateway_app`은 실행 환경에서 주입된 환경 변수를 사용한다.
@@ -87,7 +87,7 @@
 | --- | --- | --- |
 | Hive/Connection 재사용 | Gateway는 `core::net::TransportConnection`, Server는 `core::net::Session` 중심으로 사용 | 필요 시 공통 수명주기 규칙을 추출 가능 |
 | 인증 플러그인 | `auth::IAuthenticator` 인터페이스로 구현, 기본은 NoopAuthenticator | 외부 OAuth 연동 시 구현 교체 |
-| 스크립팅 훅 | Lua/plugin extensibility는 이미 `core::plugin` + `core::scripting` 기반 capability로 존재 | 추가 소비자(gateway/wb_worker) 확대와 Stable 승급 여부는 후속 검증 |
+| 스크립팅 훅 | Lua/plugin extensibility는 이미 `core::plugin` + `core::scripting` 기반 stable mechanism capability로 존재 | 추가 소비자(gateway/wb_worker) 확대와 service-specific ABI 안정화는 후속 검증 |
 | ECS/플러그인 | 채팅 외 모듈을 위한 Entity 시스템은 backlog에 남겨둠 | 필요 시 별도 설계/작업 메모로 후속 추적 |
 | 관측성 표준화 | `/metrics` + structured log를 기본 제공, OpenTelemetry 추가 검토 | server_app에 우선 적용 후 Gateway/LB로 확장 |
 

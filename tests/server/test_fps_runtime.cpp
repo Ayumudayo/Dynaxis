@@ -1,16 +1,16 @@
 #include <gtest/gtest.h>
 
-#include "server/core/fps/runtime.hpp"
+#include "server/core/realtime/runtime.hpp"
 
 namespace {
 
-using server::core::fps::FixedStepDriver;
-using server::core::fps::InputCommand;
-using server::core::fps::ReplicationKind;
-using server::core::fps::RewindQuery;
-using server::core::fps::RuntimeConfig;
-using server::core::fps::StageInputDisposition;
-using server::core::fps::WorldRuntime;
+using server::core::realtime::FixedStepDriver;
+using server::core::realtime::InputCommand;
+using server::core::realtime::ReplicationKind;
+using server::core::realtime::RewindQuery;
+using server::core::realtime::RuntimeConfig;
+using server::core::realtime::StageInputDisposition;
+using server::core::realtime::WorldRuntime;
 
 TEST(FixedStepDriverTest, BoundsCatchUpSteps) {
     FixedStepDriver driver(30, 4);

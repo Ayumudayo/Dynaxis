@@ -18,8 +18,8 @@
  */
 namespace server::storage::postgres {
 
-using server::core::storage::IUnitOfWork;
-using server::core::storage::PoolOptions;
+using server::core::storage_execution::IUnitOfWork;
+using server::core::storage_execution::PoolOptions;
 using server::storage::IRepositoryConnectionPool;
 using server::storage::IRepositoryUnitOfWork;
 using server::storage::IUserRepository;

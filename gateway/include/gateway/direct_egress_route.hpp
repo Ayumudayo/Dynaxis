@@ -2,14 +2,14 @@
 
 #include <cstdint>
 
-#include "server/core/fps/direct_delivery.hpp"
+#include "server/core/realtime/direct_delivery.hpp"
 #include "server/protocol/game_opcodes.hpp"
 
 namespace gateway {
 
-using DirectEgressRoute = server::core::fps::DirectDeliveryRoute;
-using DirectEgressReason = server::core::fps::DirectDeliveryReason;
-using DirectEgressDecision = server::core::fps::DirectDeliveryDecision;
+using DirectEgressRoute = server::core::realtime::DirectDeliveryRoute;
+using DirectEgressReason = server::core::realtime::DirectDeliveryReason;
+using DirectEgressDecision = server::core::realtime::DirectDeliveryDecision;
 
 /** @brief Direct UDP/RUDP egress eligibility inputs for a backend payload. */
 struct DirectEgressContext {
@@ -25,7 +25,7 @@ inline bool is_direct_egress_msg(std::uint16_t msg_id) noexcept {
 }
 
 inline DirectEgressRoute select_direct_egress_route(const DirectEgressContext& context) noexcept {
-    return server::core::fps::select_direct_delivery_route(server::core::fps::DirectDeliveryContext{
+    return server::core::realtime::select_direct_delivery_route(server::core::realtime::DirectDeliveryContext{
         .direct_path_enabled_for_message = is_direct_egress_msg(context.msg_id),
         .udp_bound = context.udp_bound,
         .rudp_selected = context.rudp_selected,
@@ -35,7 +35,7 @@ inline DirectEgressRoute select_direct_egress_route(const DirectEgressContext& c
 }
 
 inline DirectEgressDecision evaluate_direct_egress(const DirectEgressContext& context) noexcept {
-    return server::core::fps::evaluate_direct_delivery(server::core::fps::DirectDeliveryContext{
+    return server::core::realtime::evaluate_direct_delivery(server::core::realtime::DirectDeliveryContext{
         .direct_path_enabled_for_message = is_direct_egress_msg(context.msg_id),
         .udp_bound = context.udp_bound,
         .rudp_selected = context.rudp_selected,

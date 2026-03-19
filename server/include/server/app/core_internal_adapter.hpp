@@ -7,6 +7,10 @@
 #include <memory>
 #include <string>
 
+#include "server/core/discovery/instance_registry.hpp"
+#include "server/core/storage_execution/connection_pool.hpp"
+#include "server/core/storage_execution/db_worker_pool.hpp"
+
 namespace boost::asio {
 class io_context;
 }
@@ -18,11 +22,6 @@ struct SessionOptions;
 class Session;
 }
 
-namespace server::core::storage {
-class IConnectionPool;
-class DbWorkerPool;
-}
-
 namespace server::core::storage::redis {
 struct Options;
 class IRedisClient;
@@ -30,10 +29,6 @@ class IRedisClient;
 
 namespace server::storage {
 class IRepositoryConnectionPool;
-}
-
-namespace server::core::state {
-class IInstanceStateBackend;
 }
 
 namespace server::core::net {
@@ -87,7 +82,7 @@ std::shared_ptr<SessionListenerHandle> make_session_listener_handle(
  * @param prepare_statements prepared statement 사용 여부
  * @return 공유 커넥션 풀 인터페이스
  */
-std::shared_ptr<server::core::storage::IConnectionPool> make_postgres_connection_pool(
+std::shared_ptr<server::core::storage_execution::IConnectionPool> make_postgres_connection_pool(
     const std::string& db_uri,
     std::size_t min_size,
     std::size_t max_size,
@@ -107,7 +102,7 @@ std::shared_ptr<server::core::storage::redis::IRedisClient> make_redis_client(
     const std::string& redis_uri,
     const server::core::storage::redis::Options& options);
 
-std::shared_ptr<server::core::state::IInstanceStateBackend> make_registry_backend(
+std::shared_ptr<server::core::discovery::IInstanceStateBackend> make_registry_backend(
     const std::shared_ptr<server::core::storage::redis::IRedisClient>& redis_client,
     const std::string& key_prefix,
     std::chrono::seconds ttl);
@@ -118,7 +113,7 @@ std::shared_ptr<server::core::state::IInstanceStateBackend> make_registry_backen
  * @return 풀이 존재하고 정상 상태면 `true`
  */
 bool connection_pool_health_check(
-    const std::shared_ptr<server::core::storage::IConnectionPool>& connection_pool) noexcept;
+    const std::shared_ptr<server::core::storage_execution::IConnectionPool>& connection_pool) noexcept;
 
 /**
  * @brief 커넥션 풀에 연결된 DB worker 풀을 생성합니다.
@@ -126,8 +121,8 @@ bool connection_pool_health_check(
  * @param queue_capacity worker 풀 최대 대기 작업 수
  * @return 공유 DB worker 풀 인스턴스
  */
-std::shared_ptr<server::core::storage::DbWorkerPool> make_db_worker_pool(
-    const std::shared_ptr<server::core::storage::IConnectionPool>& connection_pool,
+std::shared_ptr<server::core::storage_execution::DbWorkerPool> make_db_worker_pool(
+    const std::shared_ptr<server::core::storage_execution::IConnectionPool>& connection_pool,
     std::size_t queue_capacity);
 
 /**
@@ -136,7 +131,7 @@ std::shared_ptr<server::core::storage::DbWorkerPool> make_db_worker_pool(
  * @param thread_count 시작할 worker 스레드 수
  */
 void start_db_worker_pool(
-    const std::shared_ptr<server::core::storage::DbWorkerPool>& worker_pool,
+    const std::shared_ptr<server::core::storage_execution::DbWorkerPool>& worker_pool,
     std::size_t thread_count);
 
 /**
@@ -144,7 +139,7 @@ void start_db_worker_pool(
  * @param worker_pool 대상 DB worker 풀
  */
 void stop_db_worker_pool(
-    const std::shared_ptr<server::core::storage::DbWorkerPool>& worker_pool) noexcept;
+    const std::shared_ptr<server::core::storage_execution::DbWorkerPool>& worker_pool) noexcept;
 
 /**
  * @brief 런타임 상태에서 활성 연결 수를 읽습니다.
@@ -166,7 +161,7 @@ void register_connection_runtime_state_service(
  * @param connection_pool 커넥션 풀 서비스 인스턴스
  */
 void register_connection_pool_service(
-    const std::shared_ptr<server::core::storage::IConnectionPool>& connection_pool);
+    const std::shared_ptr<server::core::storage_execution::IConnectionPool>& connection_pool);
 
 void register_repository_connection_pool_service(
     const std::shared_ptr<server::storage::IRepositoryConnectionPool>& connection_pool);
@@ -176,7 +171,7 @@ void register_repository_connection_pool_service(
  * @param worker_pool DB worker 풀 서비스 인스턴스
  */
 void register_db_worker_pool_service(
-    const std::shared_ptr<server::core::storage::DbWorkerPool>& worker_pool);
+    const std::shared_ptr<server::core::storage_execution::DbWorkerPool>& worker_pool);
 
 /** @brief server_core 유틸리티의 프로세스 크래시 핸들러를 설치합니다. */
 void install_crash_handler();

@@ -23,6 +23,8 @@ int main() {
         .build();
     runtime.set_dependency_ok("sample", true);
     runtime.mark_running();
+    const auto runtime_snapshot = runtime.snapshot();
+    (void)runtime_snapshot;
 
     server::core::concurrent::TaskScheduler scheduler;
     scheduler.post([] {});

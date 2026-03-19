@@ -38,8 +38,11 @@ Use this document for both PR review and release-time validation when a change t
   - `core_public_api_smoke`
   - `core_public_api_headers_compile`
   - `core_public_api_stable_header_scenarios`
+  - `core_public_api_extensibility_smoke`
+  - `core_public_api_realtime_capability_smoke`
   - `CoreInstalledPackageConsumer` (install/configure/build + consumer executables run)
   - `pwsh scripts/run_linux_installed_consumer.ps1` (Linux container parity smoke)
+- [ ] compatibility wrapper를 유지하는 rename/deprecation tranche라면 `CoreFpsCompatSmoke`가 통과함
 - [ ] API 거버넌스 검증 통과:
   - `python tools/check_core_api_contracts.py --check-boundary`
   - `python tools/check_core_api_contracts.py --check-boundary-fixtures`
@@ -52,11 +55,17 @@ cmake --build build-windows --config Debug --target `
   core_public_api_smoke `
   core_public_api_headers_compile `
   core_public_api_stable_header_scenarios `
+  core_public_api_extensibility_smoke `
+  core_public_api_realtime_capability_smoke `
+  core_fps_compat_smoke `
   --parallel
 
 build-windows/tests/Debug/core_public_api_smoke.exe
 build-windows/tests/Debug/core_public_api_headers_compile.exe
 build-windows/tests/Debug/core_public_api_stable_header_scenarios.exe
+build-windows/tests/Debug/core_public_api_extensibility_smoke.exe
+build-windows/tests/Debug/core_public_api_realtime_capability_smoke.exe
+build-windows/tests/Debug/core_fps_compat_smoke.exe
 
 python tools/check_core_api_contracts.py --check-boundary
 python tools/check_core_api_contracts.py --check-boundary-fixtures

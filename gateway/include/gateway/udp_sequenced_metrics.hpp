@@ -1,9 +1,9 @@
 #pragma once
 
-#include "server/core/fps/transport_quality.hpp"
+#include "server/core/realtime/transport_quality.hpp"
 
 namespace gateway {
 
-using UdpSequencedMetrics = server::core::fps::UdpSequencedMetrics;
+using UdpSequencedMetrics = server::core::realtime::UdpSequencedMetrics;
 
 } // namespace gateway

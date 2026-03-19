@@ -7,14 +7,17 @@
 ## 현재 점검 스냅샷
 
 ### 과도기(Transitional) 헤더
-- `docs/core-api-boundary.md` 기준 현재 `Transitional` 헤더는 extensibility 계층 6개입니다.
-  - `server/core/plugin/shared_library.hpp`
-  - `server/core/plugin/plugin_host.hpp`
-  - `server/core/plugin/plugin_chain_host.hpp`
-  - `server/core/scripting/script_watcher.hpp`
-  - `server/core/scripting/lua_runtime.hpp`
-  - `server/core/scripting/lua_sandbox.hpp`
-- 현재 package/public-api 예제와 installed-consumer 경로는 이 헤더들을 사용하지 않습니다.
+- `docs/core-api-boundary.md` 기준 현재 `Transitional` 헤더는 compatibility wrapper와 service-owned chat extensibility 계층입니다.
+  - `server/core/fps/direct_bind.hpp`
+  - `server/core/fps/direct_delivery.hpp`
+  - `server/core/fps/transport_quality.hpp`
+  - `server/core/fps/transport_policy.hpp`
+  - `server/core/fps/runtime.hpp`
+  - `server/core/mmorpg/migration.hpp`
+  - `server/core/mmorpg/topology.hpp`
+  - `server/core/mmorpg/world_drain.hpp`
+  - `server/core/mmorpg/world_transfer.hpp`
+- 현재 package/public-api 예제와 installed-consumer 경로는 reusable core extensibility mechanism을 `Stable` 헤더로 사용하고, chat-specific transitional ABI는 사용하지 않습니다.
 
 ### 최상위 모듈별 Internal 헤더 사용 현황
 - `server`는 일부 구현 경로에서만 internal 헤더를 포함합니다.
@@ -61,7 +64,7 @@
 
 ## 종료 기준
 - `docs/core-api-boundary.md`의 `Transitional` 인벤토리가 실제 현재 public package surface와 일치합니다.
-- `Transitional` 헤더는 공개 예제/installed-consumer 경로로 전파되지 않습니다.
+- chat-specific `Transitional` 헤더는 공개 예제/installed-consumer 경로로 전파되지 않습니다.
 - `gateway`, `tools`는 internal `core` 헤더 include가 없는 상태를 유지합니다.
 - `server` internal include는 구현 어댑터 내부에 한정되고 공개/예제 계약으로 전파되지 않습니다.
 

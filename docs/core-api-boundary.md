@@ -23,19 +23,31 @@
 | `server/core/api/version.hpp` | Stable | 공개 API 버전 신호입니다. stable 헤더 변경 시 이 버전을 갱신해야 합니다. |
 | `server/core/app/app_host.hpp` | Stable | server/gateway/tools 전반에서 사용하는 런타임 호스트 계약 |
 | `server/core/app/engine_builder.hpp` | Stable | bootstrap 초기 lifecycle/dependency/admin-http 기본값을 선언적으로 구성하는 공용 조립 빌더 |
-| `server/core/app/engine_context.hpp` | Stable | 인스턴스 범위의 타입 기반 composition context. 앱 bootstrap이 core primitive를 지역적으로 조립하는 기준 표면 |
-| `server/core/app/engine_runtime.hpp` | Stable | `AppHost` + `EngineContext`를 묶어 lifecycle/dependency/shutdown/admin-http 제어를 공통화하는 런타임 조립 표면 |
+| `server/core/app/engine_context.hpp` | Stable | 인스턴스 범위의 타입 기반 composition context. 앱 bootstrap이 core primitive를 지역적으로 조립하고 `service_count()`로 local ownership을 관측하는 기준 표면 |
+| `server/core/app/engine_runtime.hpp` | Stable | `AppHost` + `EngineContext`를 묶어 lifecycle/dependency/shutdown/admin-http 제어를 공통화하고, `snapshot()` 및 runtime-owned compatibility bridge cleanup으로 embeddability를 제공하는 런타임 조립 표면 |
 | `server/core/app/termination_signals.hpp` | Stable | non-Asio 루프 및 공용 종료 시그널링을 위한 프로세스 전역 종료 폴링 계약 |
 | `server/core/build_info.hpp` | Stable | 모든 바이너리가 사용하는 빌드 메타데이터 계약 |
-| `server/core/fps/direct_bind.hpp` | Stable | direct UDP bind request/response payload와 bind ticket data contract를 정의하는 FPS ingress surface |
-| `server/core/fps/direct_delivery.hpp` | Stable | direct UDP/RUDP delta delivery route selection policy를 app-local opcode 판별과 분리해 노출하는 FPS transport policy surface |
-| `server/core/fps/transport_quality.hpp` | Stable | direct UDP sequenced ingress의 loss/jitter/reorder/duplicate quality signal contract를 노출하는 FPS transport quality surface |
-| `server/core/fps/transport_policy.hpp` | Stable | direct UDP/RUDP rollout enablement, canary selection, opcode allowlist parsing을 정의하는 FPS transport policy surface |
-| `server/core/fps/runtime.hpp` | Stable | fixed-step authoritative tick, generic snapshot/delta shaping, coarse interest, rewind/history query를 제공하는 FPS engine capability surface |
+| `server/core/realtime/direct_bind.hpp` | Stable | direct UDP bind request/response payload와 bind ticket data contract를 정의하는 canonical realtime ingress surface |
+| `server/core/realtime/direct_delivery.hpp` | Stable | direct UDP/RUDP delta delivery route selection policy를 app-local opcode 판별과 분리해 노출하는 canonical realtime transport policy surface |
+| `server/core/realtime/transport_quality.hpp` | Stable | direct UDP sequenced ingress의 loss/jitter/reorder/duplicate quality signal contract를 노출하는 canonical realtime transport quality surface |
+| `server/core/realtime/transport_policy.hpp` | Stable | direct UDP/RUDP rollout enablement, canary selection, opcode allowlist parsing을 정의하는 canonical realtime transport policy surface |
+| `server/core/realtime/runtime.hpp` | Stable | fixed-step authoritative tick, generic snapshot/delta shaping, coarse interest, rewind/history query를 제공하는 canonical realtime engine capability surface |
+| `server/core/discovery/instance_registry.hpp` | Stable | shared instance record/selector/backend interface와 in-memory discovery backend를 노출하는 canonical discovery surface |
+| `server/core/discovery/world_lifecycle_policy.hpp` | Stable | world drain/replacement owner 정책의 serialization/parse contract를 노출하는 canonical discovery shared-state surface |
+| `server/core/storage_execution/unit_of_work.hpp` | Stable | 도메인 repository accessor를 포함하지 않는 canonical storage execution transaction boundary |
+| `server/core/storage_execution/connection_pool.hpp` | Stable | generic unit-of-work factory, pool tuning 옵션, health-check adapter 경계를 노출하는 canonical storage execution surface |
+| `server/core/storage_execution/db_worker_pool.hpp` | Stable | generic transaction seam 위에서 비동기 storage task를 실행하는 canonical worker-pool surface |
+| `server/core/storage_execution/retry_backoff.hpp` | Stable | linear/exponential-full-jitter retry backoff 계산을 공용화하는 canonical storage execution retry helper surface |
 | `server/core/worlds/migration.hpp` | Stable | draining source world에서 target world owner로의 migration envelope/status evaluation을 정의하는 world migration runtime surface |
+| `server/core/worlds/kubernetes.hpp` | Stable | desired topology, adapter lease, runtime assignment, drain orchestration을 Kubernetes workload lifecycle vocabulary로 해석하는 K8s-first world orchestration contract |
 | `server/core/worlds/world_drain.hpp` | Stable | live world drain phase/progress evaluation을 정의하는 world-drain runtime surface |
 | `server/core/worlds/topology.hpp` | Stable | desired topology document, observed topology pool aggregation, desired-vs-observed reconciliation status, read-only topology actuation planning, revisioned actuation request/status evaluation, executor-facing execution progress/status evaluation, observed-topology realization/adoption evaluation, adapter-facing lease/status evaluation, runtime-assignment document/instance lookup helper를 정의하는 world topology control-plane surface |
 | `server/core/worlds/world_transfer.hpp` | Stable | live world owner handoff의 phase/status 평가 contract를 정의하는 world owner-transfer runtime surface |
+| `server/core/fps/direct_bind.hpp` | Transitional | `server/core/realtime/direct_bind.hpp`의 compatibility wrapper. 2.x 동안 기존 genre-specific include 경로를 유지하고 3.0에서 제거 예정인 shim |
+| `server/core/fps/direct_delivery.hpp` | Transitional | `server/core/realtime/direct_delivery.hpp`의 compatibility wrapper |
+| `server/core/fps/transport_quality.hpp` | Transitional | `server/core/realtime/transport_quality.hpp`의 compatibility wrapper |
+| `server/core/fps/transport_policy.hpp` | Transitional | `server/core/realtime/transport_policy.hpp`의 compatibility wrapper |
+| `server/core/fps/runtime.hpp` | Transitional | `server/core/realtime/runtime.hpp`의 compatibility wrapper |
 | `server/core/mmorpg/migration.hpp` | Transitional | `server/core/worlds/migration.hpp`의 compatibility wrapper. 기존 genre-specific include 경로를 한 릴리스 주기 동안 유지하기 위한 shim |
 | `server/core/mmorpg/world_drain.hpp` | Transitional | `server/core/worlds/world_drain.hpp`의 compatibility wrapper |
 | `server/core/mmorpg/topology.hpp` | Transitional | `server/core/worlds/topology.hpp`의 compatibility wrapper |
@@ -66,23 +78,24 @@
 | `server/core/protocol/protocol_errors.hpp` | Stable | 프로토콜 응답 공용 오류 코드 상수 |
 | `server/core/protocol/protocol_flags.hpp` | Stable | 프로토콜 플래그/기능 비트 공용 상수 |
 | `server/core/protocol/system_opcodes.hpp` | Stable | server/client 경로에서 소비하는 생성 opcode 계약 |
-| `server/core/plugin/shared_library.hpp` | Transitional | service-neutral extensibility mechanism. 동적 로더 RAII wrapper로 platform capability의 기반 표면 |
-| `server/core/plugin/plugin_host.hpp` | Transitional | 플러그인 로딩/리로드 제네릭 호스트로 core platform capability의 주 메커니즘 |
-| `server/core/plugin/plugin_chain_host.hpp` | Transitional | 디렉터리 스캔/체인 구성/리로드 정책이 안정화 중인 core 확장 체인 표면 |
+| `server/core/plugin/shared_library.hpp` | Stable | service-neutral extensibility mechanism. 동적 로더 RAII wrapper로 stable plugin loading foundation을 제공하는 core platform capability |
+| `server/core/plugin/plugin_host.hpp` | Stable | cache-copy + validator + lock/sentinel semantics를 제공하는 단일 플러그인 로드/리로드 host contract |
+| `server/core/plugin/plugin_chain_host.hpp` | Stable | 다중 플러그인 체인 스캔/정렬/리로드 orchestration contract |
 | `server/core/runtime_metrics.hpp` | Stable | server/gateway/tools 관측 경로가 사용하는 프로세스 전역 런타임 카운터/스냅샷 계약 |
 | `server/core/state/instance_registry.hpp` | Internal | `InstanceRecord`/selector/backend-interface 같은 shared discovery contract이지만 discovery adapter/sticky routing 안정화가 끝나지 않은 internal 경계 |
+| `server/core/state/world_lifecycle_policy.hpp` | Internal | canonical discovery wrapper 아래에 남겨 둔 underlying world lifecycle policy implementation header |
 | `server/core/state/redis_instance_registry.hpp` | Internal | Redis-backed discovery adapter/runtime seam의 canonical header. ownership은 core로 옮겼지만 아직 Stable 승격 전인 transitional/internal 경계 |
 | `server/core/state/redis_backend_factory.hpp` | Internal | Redis-backed discovery backend factory seam의 canonical header. gateway/server/tools가 공유하지만 compatibility/promotion 전략이 아직 고정되지 않은 internal 경계 |
-| `server/core/scripting/script_watcher.hpp` | Transitional | 파일 감시/sentinel 정책을 제공하는 core extensibility mechanism |
-| `server/core/scripting/lua_runtime.hpp` | Transitional | Lua cold-hook 실행/메트릭 표면으로 core platform capability의 런타임 계층 |
-| `server/core/scripting/lua_sandbox.hpp` | Transitional | instruction/memory 제한 및 허용 라이브러리 정책을 정교화 중인 core sandbox 계층 |
+| `server/core/scripting/script_watcher.hpp` | Stable | 파일 감시/sentinel 정책을 제공하는 core extensibility watcher contract |
+| `server/core/scripting/lua_runtime.hpp` | Stable | Lua script load/call/reload, host API registration, metrics를 제공하는 stable core runtime capability |
+| `server/core/scripting/lua_sandbox.hpp` | Stable | instruction/memory 제한 및 허용 라이브러리 정책을 정의하는 stable core sandbox contract |
 | `server/core/security/admin_command_auth.hpp` | Internal | admin control-plane 서명 검증/nonce replay 보호를 위한 내부 인증 helper |
 | `server/core/security/cipher.hpp` | Stable | 키/IV 크기 검증과 인증 실패 신호를 포함한 AES-256-GCM 암복호화 계약 |
 | `server/core/trace/context.hpp` | Internal | 로그/상관관계 추적 컨텍스트의 구현 결합 helper |
-| `server/core/storage/connection_pool.hpp` | Internal | generic transaction/UoW factory + health-check SPI. repository 접근자는 포함하지 않음 |
-| `server/core/storage/db_worker_pool.hpp` | Internal | generic `IUnitOfWork` commit/rollback seam 위에서 동작하는 비동기 DB 실행 helper |
+| `server/core/storage/connection_pool.hpp` | Internal | underlying generic transaction/UoW factory + health-check SPI. stable consumer surface는 `server/core/storage_execution/connection_pool.hpp` |
+| `server/core/storage/db_worker_pool.hpp` | Internal | underlying async DB execution helper implementation. stable consumer surface는 `server/core/storage_execution/db_worker_pool.hpp` |
 | `server/core/storage/redis/client.hpp` | Internal | gateway/server/tools가 공유하는 Redis client contract. concrete redis-plus-plus adapter와 factory는 여전히 server-owned |
-| `server/core/storage/unit_of_work.hpp` | Internal | 도메인 저장소 accessor 없는 generic commit/rollback transaction 경계 |
+| `server/core/storage/unit_of_work.hpp` | Internal | underlying generic commit/rollback transaction 경계. stable consumer surface는 `server/core/storage_execution/unit_of_work.hpp` |
 | `server/core/util/crash_handler.hpp` | Internal | 앱 엔트리포인트용 프로세스 레벨 크래시 훅 |
 | `server/core/util/log.hpp` | Stable | 모든 바이너리가 사용하는 공통 로깅 계약 |
 | `server/core/util/paths.hpp` | Stable | 도구/서비스에서 사용하는 실행 파일 경로 helper |

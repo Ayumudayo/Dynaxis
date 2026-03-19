@@ -21,7 +21,7 @@ server 역할 요약:
 - `server_app`은 chat/runtime state, Redis Pub/Sub fanout, Redis Streams write-behind 발행을 소유한다.
 - gateway/L4 계층은 연결과 라우팅을 담당하고, room/runtime state는 server가 소유한다.
 
-> 구현 경계: shared instance-discovery contract(`InstanceRecord`, selector, backend interface)는 `server_core`의 internal `core::state`에 있고, Redis registry adapter는 `server_state`, sticky `SessionDirectory` 구현은 `gateway`에 남아 있다.
+> 구현 경계: shared instance-discovery contract(`InstanceRecord`, selector, backend interface)와 world lifecycle policy contract는 `server_core`의 stable `core::discovery` surface에 있고, Redis/Consul adapter와 sticky `SessionDirectory` 구현은 여전히 internal/app-owned 경계에 남아 있다.
 
 ## 2. Gateway 세부
 ### 2.1 주요 컴포넌트

@@ -34,7 +34,7 @@ For control-plane and failure-path diagrams, use [docs/ops/architecture-diagrams
 - Engine readiness baseline: [docs/ops/engine-readiness-baseline.md](docs/ops/engine-readiness-baseline.md)
 - Session continuity: [docs/ops/session-continuity-contract.md](docs/ops/session-continuity-contract.md)
 - World residency/lifecycle: [docs/ops/mmorpg-world-residency-contract.md](docs/ops/mmorpg-world-residency-contract.md)
-- FPS transport/runtime substrate: [docs/ops/fps-runtime-contract.md](docs/ops/fps-runtime-contract.md)
+- Realtime transport/runtime substrate: [docs/ops/realtime-runtime-contract.md](docs/ops/realtime-runtime-contract.md)
 - Observability and operations: [docs/ops/observability.md](docs/ops/observability.md), [docs/ops/runbook.md](docs/ops/runbook.md)
 
 ## Subprojects

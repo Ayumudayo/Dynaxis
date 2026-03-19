@@ -10,11 +10,18 @@
 
 ### 변경됨(Changed)
 - `server/core/worlds/{migration,topology,world_drain,world_transfer}.hpp`를 canonical stable public surface로 승격하고, repo-owned consumer/docs/tests를 `server::core::worlds` 기준으로 정렬했습니다.
-- `server/core/fps/direct_bind.hpp`를 추가해 direct UDP bind request/response payload와 bind ticket data contract를 stable public engine surface로 승격했습니다.
-- `server/core/fps/transport_policy.hpp`를 추가해 direct UDP/RUDP rollout enablement, canary selection, opcode allowlist parsing policy를 stable public engine surface로 승격했습니다.
-- `server/core/fps/direct_delivery.hpp`를 추가해 direct UDP/RUDP delta delivery route selection policy를 stable public engine surface로 승격했습니다.
-- `server/core/fps/transport_quality.hpp`를 추가해 direct UDP sequenced ingress의 loss/jitter/reorder/duplicate quality signal contract를 stable public engine surface로 승격했습니다.
-- `server/core/fps/runtime.hpp`를 추가해 fixed-step authoritative tick, generic snapshot/delta shaping, coarse interest management, rewind/history query substrate를 stable public engine capability로 승격했습니다.
+- `server/core/realtime/{direct_bind,direct_delivery,transport_quality,transport_policy,runtime}.hpp`를 canonical stable public surface로 고정하고, repo-owned consumer/docs/tests를 `server::core::realtime` 기준으로 정렬했습니다.
+- `server/core/discovery/{instance_registry,world_lifecycle_policy}.hpp`를 canonical stable public surface로 추가하고, repo-owned gateway/server/tools/tests/docs를 `server::core::discovery` 기준으로 정렬했습니다.
+- `server/core/storage_execution/{unit_of_work,connection_pool,db_worker_pool,retry_backoff}.hpp`를 canonical stable public surface로 추가하고, repo-owned server/bootstrap, worker, package-consumer, public-api proof를 `server::core::storage_execution` 기준으로 정렬했습니다.
+- `server/core/plugin/{shared_library,plugin_host,plugin_chain_host}.hpp`와 `server/core/scripting/{script_watcher,lua_runtime,lua_sandbox}.hpp`를 stable core extensibility mechanism으로 승격하고, dedicated `CorePublicApiExtensibilitySmoke`와 installed-consumer runtime proof를 추가했습니다.
+- `server/core/worlds/kubernetes.hpp`를 stable public surface로 추가해 desired topology + adapter lease + runtime assignment + drain orchestration을 Kubernetes-first workload lifecycle vocabulary로 해석하는 contract를 승격했습니다.
+- `server/core/app/engine_runtime.hpp`에 `Snapshot` / `snapshot()`을 추가하고, `server/core/app/engine_context.hpp`에 `service_count()`를 추가해 canonical consumer가 lifecycle/service ownership을 instance 단위로 관측할 수 있게 했습니다.
+- `server/core/util/service_registry.hpp`의 compatibility bridge가 runtime-owner 단위 clear를 지원하도록 확장되어, 한 runtime의 `clear_global_services()`가 다른 runtime의 shim entries를 지우지 않게 했습니다.
+- `server/core/realtime/direct_bind.hpp`를 추가해 direct UDP bind request/response payload와 bind ticket data contract를 stable public engine surface로 승격했습니다.
+- `server/core/realtime/transport_policy.hpp`를 추가해 direct UDP/RUDP rollout enablement, canary selection, opcode allowlist parsing policy를 stable public engine surface로 승격했습니다.
+- `server/core/realtime/direct_delivery.hpp`를 추가해 direct UDP/RUDP delta delivery route selection policy를 stable public engine surface로 승격했습니다.
+- `server/core/realtime/transport_quality.hpp`를 추가해 direct UDP sequenced ingress의 loss/jitter/reorder/duplicate quality signal contract를 stable public engine surface로 승격했습니다.
+- `server/core/realtime/runtime.hpp`를 추가해 fixed-step authoritative tick, generic snapshot/delta shaping, coarse interest management, rewind/history query substrate를 stable public engine capability로 승격했습니다.
 - `server/core/worlds/migration.hpp`를 추가해 draining source world에서 target world owner로의 migration envelope/status evaluation contract를 stable public engine surface로 승격했습니다.
 - `server/core/worlds/world_drain.hpp`를 추가하고 `evaluate_world_drain_orchestration()`까지 확장해 live world drain phase/progress/orchestration evaluation contract를 stable public engine surface로 승격했습니다.
 - `server/core/worlds/topology.hpp`를 추가하고 read-only topology actuation planning, revisioned topology actuation request document/status, executor-facing execution progress/status evaluation, observed-topology realization/adoption evaluation, adapter-facing lease/status evaluation, runtime-assignment document/instance lookup helper까지 확장해 revisioned desired topology document, observed topology pool aggregation, desired-vs-observed reconciliation status/actuation contract를 stable public engine surface로 승격했습니다.
@@ -35,4 +42,6 @@
 - Migration: `docs/core-api/runtime-build-info-rename.md`
 
 ### 사용 중단(Deprecated)
+- `server/core/fps/{direct_bind,direct_delivery,transport_quality,transport_policy,runtime}.hpp`는 `server/core/realtime/**`로의 전환을 위한 2.x compatibility wrapper로만 유지됩니다.
+- Migration: `docs/core-api/fps-to-realtime-migration.md`
 - `server/core/mmorpg/{migration,topology,world_drain,world_transfer}.hpp`는 `server/core/worlds/**`로의 전환을 위한 compatibility wrapper로만 유지됩니다.

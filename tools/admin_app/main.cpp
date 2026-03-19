@@ -42,8 +42,8 @@
 #include "server/core/worlds/world_drain.hpp"
 #include "server/core/worlds/world_transfer.hpp"
 #include "server/core/metrics/http_server.hpp"
-#include "server/core/state/instance_registry.hpp"
-#include "server/core/state/world_lifecycle_policy.hpp"
+#include "server/core/discovery/instance_registry.hpp"
+#include "server/core/discovery/world_lifecycle_policy.hpp"
 #include "server/core/storage/redis/client.hpp"
 #include "server/core/security/admin_command_auth.hpp"
 #include "server/core/util/log.hpp"
@@ -189,7 +189,7 @@ struct QueryParseResult {
 };
 
 struct SelectorParseResult {
-    server::core::state::InstanceSelector selector;
+    server::core::discovery::InstanceSelector selector;
     bool selector_specified{false};
     bool all_specified{false};
     bool ok{true};
@@ -1923,10 +1923,10 @@ void append_selector_command_fields(std::unordered_map<std::string, std::string>
 }
 
 void append_selector_response_json(std::ostringstream& data, const SelectorParseResult& selector_parse) {
-    const auto selector_layer = server::core::state::classify_selector_policy_layer(selector_parse.selector);
+    const auto selector_layer = server::core::discovery::classify_selector_policy_layer(selector_parse.selector);
     data << "\"selector\":{";
     data << "\"applied\":" << bool_json(selector_parse.selector_specified) << ",";
-    data << "\"layer\":\"" << server::core::state::selector_policy_layer_name(selector_layer) << "\"";
+    data << "\"layer\":\"" << server::core::discovery::selector_policy_layer_name(selector_layer) << "\"";
     data << "}";
 }
 
@@ -2306,7 +2306,7 @@ private:
     struct ExtCommandSpec {
         std::string command_id;
         std::string artifact_id;
-        server::core::state::InstanceSelector selector;
+        server::core::discovery::InstanceSelector selector;
         bool selector_specified{false};
         std::optional<std::uint64_t> run_at_utc;
         ExtRolloutStrategy rollout;
@@ -2335,7 +2335,7 @@ private:
         std::string actor;
         std::string status{"pending"};
         std::string status_reason;
-        server::core::state::InstanceSelector selector;
+        server::core::discovery::InstanceSelector selector;
         bool selector_specified{false};
         std::optional<std::uint64_t> run_at_utc;
         ExtRolloutStrategy rollout;
@@ -2676,11 +2676,11 @@ private:
         }
     }
 
-    std::string make_instance_metrics_url(const server::core::state::InstanceRecord& item) const {
+    std::string make_instance_metrics_url(const server::core::discovery::InstanceRecord& item) const {
         return "http://" + item.host + ":" + std::to_string(instance_metrics_port_) + "/metrics";
     }
 
-    std::string make_instance_ready_url(const server::core::state::InstanceRecord& item) const {
+    std::string make_instance_ready_url(const server::core::discovery::InstanceRecord& item) const {
         return "http://" + item.host + ":" + std::to_string(instance_metrics_port_) + "/readyz";
     }
 
@@ -2697,7 +2697,7 @@ private:
     }
 
     std::unordered_map<std::string, std::string>
-    load_world_owner_index(const std::vector<server::core::state::InstanceRecord>& items) const {
+    load_world_owner_index(const std::vector<server::core::discovery::InstanceRecord>& items) const {
         std::unordered_map<std::string, std::string> out;
         if (!redis_ || !redis_available_.load(std::memory_order_relaxed)) {
             return out;
@@ -2749,9 +2749,9 @@ private:
         return out;
     }
 
-    std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy>
-    load_world_policy_index(const std::vector<server::core::state::InstanceRecord>& items) const {
-        std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy> out;
+    std::unordered_map<std::string, server::core::discovery::WorldLifecyclePolicy>
+    load_world_policy_index(const std::vector<server::core::discovery::InstanceRecord>& items) const {
+        std::unordered_map<std::string, server::core::discovery::WorldLifecyclePolicy> out;
         if (!redis_ || !redis_available_.load(std::memory_order_relaxed)) {
             return out;
         }
@@ -2768,7 +2768,7 @@ private:
             }
             world_ids.push_back(*world_id);
             policy_keys.push_back(make_world_policy_key(*world_id));
-            out.emplace(*world_id, server::core::state::WorldLifecyclePolicy{});
+            out.emplace(*world_id, server::core::discovery::WorldLifecyclePolicy{});
         }
 
         if (policy_keys.empty()) {
@@ -2799,14 +2799,14 @@ private:
             if (!payloads[i].has_value() || payloads[i]->empty()) {
                 continue;
             }
-            if (const auto parsed = server::core::state::parse_world_lifecycle_policy(*payloads[i])) {
+            if (const auto parsed = server::core::discovery::parse_world_lifecycle_policy(*payloads[i])) {
                 out[world_ids[i]] = *parsed;
             }
         }
         return out;
     }
 
-    std::string make_world_policy_json(const server::core::state::WorldLifecyclePolicy& policy) const {
+    std::string make_world_policy_json(const server::core::discovery::WorldLifecyclePolicy& policy) const {
         std::ostringstream data;
         data << "{";
         data << "\"draining\":" << bool_json(policy.draining) << ",";
@@ -2824,9 +2824,9 @@ private:
 
     std::string make_world_policy_json(
         std::string_view world_id,
-        const std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy>& world_policy_index) const {
+        const std::unordered_map<std::string, server::core::discovery::WorldLifecyclePolicy>& world_policy_index) const {
         const auto policy_it = world_policy_index.find(std::string(world_id));
-        const server::core::state::WorldLifecyclePolicy empty_policy{};
+        const server::core::discovery::WorldLifecyclePolicy empty_policy{};
         const auto& policy = policy_it == world_policy_index.end() ? empty_policy : policy_it->second;
         return make_world_policy_json(policy);
     }
@@ -2834,9 +2834,9 @@ private:
     struct WorldInventoryEntry {
         std::string world_id;
         std::string owner_instance_id;
-        server::core::state::WorldLifecyclePolicy policy;
+        server::core::discovery::WorldLifecyclePolicy policy;
         std::optional<WorldMigrationEnvelope> migration;
-        std::vector<server::core::state::InstanceRecord> instances;
+        std::vector<server::core::discovery::InstanceRecord> instances;
     };
 
     server::core::worlds::ObservedWorldTransferState
@@ -3089,7 +3089,7 @@ private:
     }
 
     std::vector<WorldInventoryEntry>
-    collect_world_inventory(const std::vector<server::core::state::InstanceRecord>& items) const {
+    collect_world_inventory(const std::vector<server::core::discovery::InstanceRecord>& items) const {
         const auto world_owner_index = load_world_owner_index(items);
         const auto world_policy_index = load_world_policy_index(items);
         const auto world_migration_index = load_world_migration_index(items);
@@ -3773,7 +3773,7 @@ private:
         return data.str();
     }
 
-    std::string make_observed_topology_json(const std::vector<server::core::state::InstanceRecord>& items,
+    std::string make_observed_topology_json(const std::vector<server::core::discovery::InstanceRecord>& items,
                                             std::uint64_t updated_ms) const {
         const auto world_owner_index = load_world_owner_index(items);
         const auto world_policy_index = load_world_policy_index(items);
@@ -3818,7 +3818,7 @@ private:
     }
 
     std::vector<server::core::worlds::ObservedTopologyInstance>
-    make_observed_topology_instances(const std::vector<server::core::state::InstanceRecord>& items) const {
+    make_observed_topology_instances(const std::vector<server::core::discovery::InstanceRecord>& items) const {
         std::vector<server::core::worlds::ObservedTopologyInstance> out;
         out.reserve(items.size());
         for (const auto& item : items) {
@@ -3836,7 +3836,7 @@ private:
     }
 
     std::unordered_map<std::string, WorldMigrationEnvelope>
-    load_world_migration_index(const std::vector<server::core::state::InstanceRecord>& items) const {
+    load_world_migration_index(const std::vector<server::core::discovery::InstanceRecord>& items) const {
         std::unordered_map<std::string, WorldMigrationEnvelope> out;
         if (!redis_ || !redis_available_.load(std::memory_order_relaxed)) {
             return out;
@@ -4396,9 +4396,9 @@ private:
     }
 
     std::string make_world_scope_json(
-        const server::core::state::InstanceRecord& item,
+        const server::core::discovery::InstanceRecord& item,
         const std::unordered_map<std::string, std::string>& world_owner_index,
-        const std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy>& world_policy_index) const {
+        const std::unordered_map<std::string, server::core::discovery::WorldLifecyclePolicy>& world_policy_index) const {
         const auto world_id = extract_world_id_from_tags(item.tags);
         if (!world_id.has_value()) {
             return "null";
@@ -4427,7 +4427,7 @@ private:
         return data.str();
     }
 
-    std::string probe_instance_ready_reason(const server::core::state::InstanceRecord& item) const {
+    std::string probe_instance_ready_reason(const server::core::discovery::InstanceRecord& item) const {
         const std::string fallback = item.ready ? "ready (registry)" : "not ready (registry)";
         const auto ready_url = parse_http_url(make_instance_ready_url(item));
         if (!ready_url) {
@@ -4464,18 +4464,18 @@ private:
             server::core::storage::redis::Options options{};
             options.pool_max = read_env_u32("REDIS_POOL_MAX", 10, 1, 256);
             redis_ = admin_app::make_redis_client(redis_uri_, options);
-
-            if (redis_ && redis_->health_check()) {
-                app_host_.set_dependency_ok("redis", true);
-                registry_backend_ = admin_app::make_registry_backend(
-                    redis_,
-                    registry_prefix_,
-                    std::chrono::seconds(registry_ttl_sec_));
+            registry_backend_ = admin_app::make_registry_backend(
+                redis_,
+                registry_prefix_,
+                std::chrono::seconds(registry_ttl_sec_));
+            if (redis_) {
                 engine_.set_service(redis_);
-                redis_available_.store(true, std::memory_order_relaxed);
-            } else {
-                redis_available_.store(false, std::memory_order_relaxed);
-                app_host_.set_dependency_ok("redis", false);
+            }
+
+            const bool redis_ready = redis_ && redis_->health_check();
+            redis_available_.store(redis_ready, std::memory_order_relaxed);
+            app_host_.set_dependency_ok("redis", redis_ready);
+            if (!redis_ready) {
                 corelog::warn("admin_app redis unavailable; instances/session endpoints will return upstream errors");
             }
         } else {
@@ -4504,12 +4504,15 @@ private:
         }
 
         try {
+            if (!redis_ || !redis_->health_check()) {
+                throw std::runtime_error("redis health check failed");
+            }
             auto items = registry_backend_->list_instances();
             std::sort(items.begin(), items.end(), [](const auto& lhs, const auto& rhs) {
                 return lhs.instance_id < rhs.instance_id;
             });
 
-            std::unordered_map<std::string, server::core::state::InstanceRecord> index;
+            std::unordered_map<std::string, server::core::discovery::InstanceRecord> index;
             index.reserve(items.size());
             std::unordered_map<std::string, InstanceDetailSnapshot> details;
             details.reserve(items.size());
@@ -4905,9 +4908,9 @@ private:
         return &ext_inventory_cache_[it->second];
     }
 
-    std::vector<server::core::state::InstanceRecord> resolve_ext_targets(const server::core::state::InstanceSelector& selector,
+    std::vector<server::core::discovery::InstanceRecord> resolve_ext_targets(const server::core::discovery::InstanceSelector& selector,
                                                                      bool selector_specified) const {
-        std::vector<server::core::state::InstanceRecord> targets;
+        std::vector<server::core::discovery::InstanceRecord> targets;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
             targets = instances_cache_;
@@ -4916,7 +4919,7 @@ private:
         if (!selector_specified) {
             return targets;
         }
-        return server::core::state::select_instances(targets, selector, nullptr);
+        return server::core::discovery::select_instances(targets, selector, nullptr);
     }
 
     bool parse_rollout_strategy_json(const nlohmann::json& root,
@@ -6949,9 +6952,9 @@ private:
                 "redis registry unavailable");
         }
 
-        std::vector<server::core::state::InstanceRecord> items;
+        std::vector<server::core::discovery::InstanceRecord> items;
         std::uint64_t updated_ms = 0;
-        server::core::state::SelectorMatchStats selector_stats{};
+        server::core::discovery::SelectorMatchStats selector_stats{};
         bool selector_applied = false;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
@@ -6973,11 +6976,11 @@ private:
         }
         if (selector_parse.selector_specified) {
             selector_applied = true;
-            items = server::core::state::select_instances(items, selector_parse.selector, &selector_stats);
+            items = server::core::discovery::select_instances(items, selector_parse.selector, &selector_stats);
             instances_selector_requests_total_.fetch_add(1, std::memory_order_relaxed);
             instances_selector_mismatch_total_.fetch_add(selector_stats.selector_mismatch, std::memory_order_relaxed);
         }
-        const auto selector_layer = server::core::state::classify_selector_policy_layer(selector_parse.selector);
+        const auto selector_layer = server::core::discovery::classify_selector_policy_layer(selector_parse.selector);
 
         if (options.timeout_overridden) {
             const std::uint64_t now = now_ms();
@@ -7020,7 +7023,7 @@ private:
         const std::size_t remaining = items.size() - cursor_index;
         const std::size_t take = std::min<std::size_t>(remaining, static_cast<std::size_t>(options.limit));
         const std::size_t end_index = cursor_index + take;
-        std::vector<server::core::state::InstanceRecord> page_items;
+        std::vector<server::core::discovery::InstanceRecord> page_items;
         page_items.reserve(take);
         for (std::size_t i = cursor_index; i < end_index; ++i) {
             page_items.push_back(items[i]);
@@ -7082,7 +7085,7 @@ private:
         data << "},";
         data << "\"selector\":{";
         data << "\"applied\":" << bool_json(selector_applied) << ",";
-        data << "\"layer\":\"" << server::core::state::selector_policy_layer_name(selector_layer) << "\",";
+        data << "\"layer\":\"" << server::core::discovery::selector_policy_layer_name(selector_layer) << "\",";
         data << "\"scanned\":" << selector_stats.scanned << ",";
         data << "\"matched\":" << selector_stats.matched << ",";
         data << "\"mismatch\":" << selector_stats.selector_mismatch;
@@ -7112,7 +7115,7 @@ private:
                 "redis registry unavailable");
         }
 
-        std::optional<server::core::state::InstanceRecord> item;
+        std::optional<server::core::discovery::InstanceRecord> item;
         std::optional<InstanceDetailSnapshot> detail;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
@@ -7178,7 +7181,7 @@ private:
                 "redis registry unavailable");
         }
 
-        std::vector<server::core::state::InstanceRecord> items;
+        std::vector<server::core::discovery::InstanceRecord> items;
         std::uint64_t updated_ms = 0;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
@@ -7284,7 +7287,7 @@ private:
                 "redis registry unavailable");
         }
 
-        std::vector<server::core::state::InstanceRecord> items;
+        std::vector<server::core::discovery::InstanceRecord> items;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
             items = instances_cache_;
@@ -7362,13 +7365,13 @@ private:
             }
         }
 
-        server::core::state::WorldLifecyclePolicy policy;
+        server::core::discovery::WorldLifecyclePolicy policy;
         policy.draining = parsed.draining;
         if (parsed.replacement_owner_instance_id.has_value()) {
             policy.replacement_owner_instance_id = *parsed.replacement_owner_instance_id;
         }
 
-        if (!redis_->set(policy_key, server::core::state::serialize_world_lifecycle_policy(policy))) {
+        if (!redis_->set(policy_key, server::core::discovery::serialize_world_lifecycle_policy(policy))) {
             world_policy_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
             http_errors_total_.fetch_add(1, std::memory_order_relaxed);
             return json_error(
@@ -7415,7 +7418,7 @@ private:
                 "redis registry unavailable");
         }
 
-        std::vector<server::core::state::InstanceRecord> items;
+        std::vector<server::core::discovery::InstanceRecord> items;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
             items = instances_cache_;
@@ -7502,13 +7505,13 @@ private:
             }
         }
 
-        server::core::state::WorldLifecyclePolicy next_policy;
+        server::core::discovery::WorldLifecyclePolicy next_policy;
         next_policy.draining = true;
         if (parsed.replacement_owner_instance_id.has_value()) {
             next_policy.replacement_owner_instance_id = *parsed.replacement_owner_instance_id;
         }
 
-        if (!redis_->set(policy_key, server::core::state::serialize_world_lifecycle_policy(next_policy))) {
+        if (!redis_->set(policy_key, server::core::discovery::serialize_world_lifecycle_policy(next_policy))) {
             world_drain_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
             http_errors_total_.fetch_add(1, std::memory_order_relaxed);
             return json_error(
@@ -7553,7 +7556,7 @@ private:
                 "redis registry unavailable");
         }
 
-        std::vector<server::core::state::InstanceRecord> items;
+        std::vector<server::core::discovery::InstanceRecord> items;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
             items = instances_cache_;
@@ -7672,11 +7675,11 @@ private:
         }
 
         const auto previous_policy = world_it->policy;
-        server::core::state::WorldLifecyclePolicy next_policy;
+        server::core::discovery::WorldLifecyclePolicy next_policy;
         next_policy.draining = true;
         next_policy.replacement_owner_instance_id = parsed.target_owner_instance_id;
 
-        if (!redis_->set(policy_key, server::core::state::serialize_world_lifecycle_policy(next_policy))) {
+        if (!redis_->set(policy_key, server::core::discovery::serialize_world_lifecycle_policy(next_policy))) {
             world_transfer_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
             http_errors_total_.fetch_add(1, std::memory_order_relaxed);
             return json_error(
@@ -7694,7 +7697,7 @@ private:
                     ? redis_->del(policy_key)
                     : redis_->set(
                         policy_key,
-                        server::core::state::serialize_world_lifecycle_policy(previous_policy));
+                        server::core::discovery::serialize_world_lifecycle_policy(previous_policy));
                 (void)rollback_ok;
                 world_transfer_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
                 http_errors_total_.fetch_add(1, std::memory_order_relaxed);
@@ -7744,7 +7747,7 @@ private:
                 "redis registry unavailable");
         }
 
-        std::vector<server::core::state::InstanceRecord> items;
+        std::vector<server::core::discovery::InstanceRecord> items;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
             items = instances_cache_;
@@ -8012,7 +8015,7 @@ private:
             return json_ok(request_id, make_topology_actuation_request_response_json(std::nullopt));
         }
 
-        std::vector<server::core::state::InstanceRecord> items;
+        std::vector<server::core::discovery::InstanceRecord> items;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
             items = instances_cache_;
@@ -8256,7 +8259,7 @@ private:
                 details.str());
         }
 
-        std::vector<server::core::state::InstanceRecord> items;
+        std::vector<server::core::discovery::InstanceRecord> items;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
             items = instances_cache_;
@@ -8398,7 +8401,7 @@ private:
                 "redis registry unavailable");
         }
 
-        std::vector<server::core::state::InstanceRecord> items;
+        std::vector<server::core::discovery::InstanceRecord> items;
         std::uint64_t updated_ms = 0;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
@@ -8433,7 +8436,7 @@ private:
                 "redis registry unavailable");
         }
 
-        std::vector<server::core::state::InstanceRecord> items;
+        std::vector<server::core::discovery::InstanceRecord> items;
         std::uint64_t updated_ms = 0;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
@@ -8476,7 +8479,7 @@ private:
                 "redis registry unavailable");
         }
 
-        std::vector<server::core::state::InstanceRecord> items;
+        std::vector<server::core::discovery::InstanceRecord> items;
         std::uint64_t updated_ms = 0;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
@@ -8519,7 +8522,7 @@ private:
                 "redis registry unavailable");
         }
 
-        std::vector<server::core::state::InstanceRecord> items;
+        std::vector<server::core::discovery::InstanceRecord> items;
         std::uint64_t updated_ms = 0;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
@@ -8571,7 +8574,7 @@ private:
                 "redis registry unavailable");
         }
 
-        std::vector<server::core::state::InstanceRecord> items;
+        std::vector<server::core::discovery::InstanceRecord> items;
         std::uint64_t updated_ms = 0;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
@@ -8627,7 +8630,7 @@ private:
                 "redis registry unavailable");
         }
 
-        std::vector<server::core::state::InstanceRecord> items;
+        std::vector<server::core::discovery::InstanceRecord> items;
         std::uint64_t updated_ms = 0;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
@@ -8724,7 +8727,7 @@ private:
         }
         const auto request_document = load_topology_actuation_request_document();
         const auto desired_topology = load_desired_topology_document();
-        std::vector<server::core::state::InstanceRecord> items;
+        std::vector<server::core::discovery::InstanceRecord> items;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
             items = instances_cache_;
@@ -8956,12 +8959,12 @@ private:
                 details.str());
         }
 
-        std::vector<server::core::state::InstanceRecord> items;
+        std::vector<server::core::discovery::InstanceRecord> items;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
             items = instances_cache_;
         }
-        std::unordered_map<std::string, server::core::state::InstanceRecord> instance_index;
+        std::unordered_map<std::string, server::core::discovery::InstanceRecord> instance_index;
         instance_index.reserve(items.size());
         for (const auto& item : items) {
             instance_index.emplace(item.instance_id, item);
@@ -9120,7 +9123,7 @@ private:
                 "redis registry unavailable");
         }
 
-        std::vector<server::core::state::InstanceRecord> items;
+        std::vector<server::core::discovery::InstanceRecord> items;
         std::uint64_t updated_ms = 0;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
@@ -9689,7 +9692,7 @@ private:
                 "redis session lookup failed");
         }
 
-        std::optional<server::core::state::InstanceRecord> backend;
+        std::optional<server::core::discovery::InstanceRecord> backend;
         if (backend_id && !backend_id->empty()) {
             std::lock_guard<std::mutex> lock(cache_mutex_);
             if (const auto it = instances_index_.find(*backend_id); it != instances_index_.end()) {
@@ -9701,7 +9704,7 @@ private:
             : std::unordered_map<std::string, std::string>{};
         const auto world_policy_index = backend
             ? load_world_policy_index({*backend})
-            : std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy>{};
+            : std::unordered_map<std::string, server::core::discovery::WorldLifecyclePolicy>{};
 
         std::ostringstream data;
         data << "{";
@@ -9853,12 +9856,12 @@ private:
             }
         }
 
-        std::unordered_map<std::string, server::core::state::InstanceRecord> instances;
+        std::unordered_map<std::string, server::core::discovery::InstanceRecord> instances;
         {
             std::lock_guard<std::mutex> lock(cache_mutex_);
             instances = instances_index_;
         }
-        std::vector<server::core::state::InstanceRecord> instance_records;
+        std::vector<server::core::discovery::InstanceRecord> instance_records;
         instance_records.reserve(instances.size());
         for (const auto& [instance_id, record] : instances) {
             (void)instance_id;
@@ -10617,15 +10620,15 @@ private:
     std::string auth_bearer_role_;
 
     std::shared_ptr<server::core::storage::redis::IRedisClient> redis_;
-    std::shared_ptr<server::core::state::IInstanceStateBackend> registry_backend_;
+    std::shared_ptr<server::core::discovery::IInstanceStateBackend> registry_backend_;
 
     std::thread poller_;
     std::atomic<bool> poller_running_{false};
 
     mutable std::mutex cache_mutex_;
     mutable std::mutex ext_mutex_;
-    std::vector<server::core::state::InstanceRecord> instances_cache_;
-    std::unordered_map<std::string, server::core::state::InstanceRecord> instances_index_;
+    std::vector<server::core::discovery::InstanceRecord> instances_cache_;
+    std::unordered_map<std::string, server::core::discovery::InstanceRecord> instances_index_;
     std::unordered_map<std::string, InstanceDetailSnapshot> instance_details_index_;
     std::uint64_t instances_updated_at_ms_{0};
     WorkerSnapshot worker_cache_;

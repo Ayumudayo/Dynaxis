@@ -50,4 +50,4 @@ The baseline itself is closed; this file remains as the retained checkpoint ledg
 - `docs/ops/engine-readiness-decision.md`
 - `docs/ops/session-continuity-contract.md`
 - `docs/ops/mmorpg-world-residency-contract.md`
-- `docs/ops/fps-runtime-contract.md`
+- `docs/ops/realtime-runtime-contract.md`

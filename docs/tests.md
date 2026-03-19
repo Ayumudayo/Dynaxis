@@ -31,9 +31,12 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
   - `core_public_api_smoke`
   - `core_public_api_headers_compile`
   - `core_public_api_stable_header_scenarios`
-  - `core_public_api_fps_capability_smoke`
+  - `core_public_api_extensibility_smoke`
+  - `core_public_api_realtime_capability_smoke`
+  - `core_fps_compat_smoke`
 - public `server_core` package-first 검증:
   - `ctest --test-dir build-windows -C Debug -R "CoreInstalledPackageConsumer|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure`
+  - `CoreInstalledPackageConsumer`는 `server_core_installed_consumer`와 `server_core_extensibility_consumer` 둘 다 실행한다
   - `pwsh scripts/run_linux_installed_consumer.ps1`
 - additional package extraction 관련 검증:
   - `ctest --test-dir build-windows -C Debug -R "FactoryPgInstalledPackageConsumer|FactoryRedisInstalledPackageConsumer" --output-on-failure`
@@ -69,7 +72,7 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
   - `python tests/python/verify_session_continuity_restart.py --scenario world-owner-transfer-commit`
   - `python tests/python/verify_session_continuity_restart.py --scenario world-migration-handoff`
   - `python tests/python/verify_session_continuity_restart.py --scenario world-migration-target-room-handoff`
-- FPS transport/runtime:
+- Realtime transport/runtime (current FPS workload proof):
   - `python tests/python/verify_fps_state_transport.py`
   - `python tests/python/verify_fps_rudp_transport_matrix.py --scenario phase2-acceptance`
   - acceptance stages:
@@ -101,6 +104,84 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
   - `python tests/python/verify_fps_netem_rehearsal.py --scenario fps-pair` is the preferred manual ops-only entrypoint when OS-level `tc netem` loss/jitter/reorder shaping must be rehearsed on the Linux stack path
   - validated manual rehearsal artifact:
     - `build/phase5-evidence/20260318-121332Z/netem/manifest.json`
+- Kubernetes local/dev worlds harness:
+  - `python tests/python/verify_worlds_kubernetes_localdev.py`
+  - optional kubectl client validation:
+    - `python tests/python/verify_worlds_kubernetes_localdev.py --kubectl-validate`
+    - if `kubectl` is installed but no current context or reachable API server exists, the script reports a skip and still passes the deterministic manifest proof
+  - generator/wrapper:
+    - `python scripts/generate_k8s_topology.py --topology-config docker/stack/topologies/default.json`
+    - `pwsh scripts/run_k8s_localdev_worlds.ps1 -KubectlValidate`
+  - optional live `kind` runner/proof:
+    - `pwsh scripts/run_k8s_localdev_kind.ps1 -Action up`
+    - `python tests/python/verify_worlds_kubernetes_kind.py`
+    - skips cleanly when `docker`, `kubectl`, `kind`, or the local `dynaxis-*:local` images are unavailable
+  - optional live `kind` control-plane proof:
+    - `python tests/python/verify_worlds_kubernetes_kind_control_plane.py`
+    - proves one desired-topology plus runtime-assignment roundtrip through `admin-app` over a temporary `kubectl port-forward`
+  - optional live `kind` world-closure proof:
+    - `python tests/python/verify_worlds_kubernetes_kind_closure.py`
+    - proves cross-world drain-to-migration closure on the default topology and same-world drain-to-transfer closure on the same-world topology
+  - optional live `kind` continuity proof:
+    - `python tests/python/verify_worlds_kubernetes_kind_continuity.py`
+    - proves client-observable resume on live clusters for both cross-world migration and same-world transfer commit
+  - optional live `kind` multi-gateway proof:
+    - `python tests/python/verify_worlds_kubernetes_kind_multigateway.py`
+    - proves `gateway-1` login plus `gateway-2` resume for both migration and transfer-commit flows
+  - optional live `kind` restart proof:
+    - `python tests/python/verify_worlds_kubernetes_kind_restart.py`
+    - proves gateway rollout restart and source server StatefulSet rollout restart while continuity resume remains available
+  - optional live `kind` locator-fallback proof:
+    - `python tests/python/verify_worlds_kubernetes_kind_locator_fallback.py`
+    - proves exact resume alias loss still recovers through the locator hint plus selector hit/fallback path on live clusters
+  - optional live `kind` world-state fallback proof:
+    - `python tests/python/verify_worlds_kubernetes_kind_world_state_fallback.py`
+    - proves missing persisted world/world-owner state still falls back safely on the original backend and records explicit reason metrics
+  - optional live `kind` Redis dependency outage proof:
+    - `python tests/python/verify_worlds_kubernetes_kind_redis_outage.py`
+    - proves `admin_app` detects Redis loss, registry-backed endpoints return `503`, `/readyz` stays green, and observed topology recovers after Redis returns
+  - optional live `kind` worker metrics outage proof:
+    - `python tests/python/verify_worlds_kubernetes_kind_worker_outage.py`
+    - proves `admin_app` detects `wb_worker` metrics-path loss, `/api/v1/worker/write-behind` returns `503`, `/readyz` stays green, and the worker snapshot recovers after the path returns
+  - optional live `kind` gateway ingress impairment proof:
+    - `python tests/python/verify_worlds_kubernetes_kind_gateway_ingress_impairment.py`
+    - proves required Redis loss makes gateway readiness drop and fresh ingress reject while one existing bridged session still exchanges room traffic
+  - optional live `kind` resume impairment proof:
+    - `python tests/python/verify_worlds_kubernetes_kind_resume_impairment.py`
+    - proves required Redis loss blocks cross-gateway continuity resume for a disconnected session, then restores the same logical session with usable post-recovery traffic after recovery
+  - optional live `kind` multi-fault impairment proof:
+    - `python tests/python/verify_worlds_kubernetes_kind_multifault_impairment.py`
+    - proves required Redis loss plus `gateway-2` pod churn block resume until both recover, then restores the same logical session afterward
+  - optional live `kind` metrics-budget proof:
+    - `python tests/python/verify_worlds_kubernetes_kind_metrics_budget.py`
+    - proves the current migration and transfer continuity stories also emit the expected gateway/server metrics without unexpected fallback growth
+  - preferred manual/release evidence runner:
+    - `python tests/python/capture_worlds_kubernetes_kind_evidence.py --run-id <run_id>`
+    - writes `build/k8s-kind-evidence/<run_id>/manifest.json` plus one log per proof
+  - focused fallback capture:
+    - `python tests/python/capture_worlds_kubernetes_kind_evidence.py --run-id <run_id> --capture-set fallback-only`
+    - writes `build/k8s-kind-evidence/<run_id>/kind-locator-fallback/locator-fallback.json`
+  - focused world-state capture:
+    - `python tests/python/capture_worlds_kubernetes_kind_evidence.py --run-id <run_id> --capture-set world-state-only`
+    - writes `build/k8s-kind-evidence/<run_id>/kind-world-state-fallback/world-state-fallback.json`
+  - focused outage capture:
+    - `python tests/python/capture_worlds_kubernetes_kind_evidence.py --run-id <run_id> --capture-set outage-only`
+    - writes `build/k8s-kind-evidence/<run_id>/kind-redis-outage/redis-outage.json`
+  - focused worker-outage capture:
+    - `python tests/python/capture_worlds_kubernetes_kind_evidence.py --run-id <run_id> --capture-set worker-outage-only`
+    - writes `build/k8s-kind-evidence/<run_id>/kind-worker-outage/worker-outage.json`
+  - focused impairment capture:
+    - `python tests/python/capture_worlds_kubernetes_kind_evidence.py --run-id <run_id> --capture-set impairment-only`
+    - writes `build/k8s-kind-evidence/<run_id>/kind-gateway-ingress-impairment/gateway-ingress-impairment.json`
+  - focused resume-impairment capture:
+    - `python tests/python/capture_worlds_kubernetes_kind_evidence.py --run-id <run_id> --capture-set resume-impairment-only`
+    - writes `build/k8s-kind-evidence/<run_id>/kind-resume-impairment/resume-impairment.json`
+  - focused multifault capture:
+    - `python tests/python/capture_worlds_kubernetes_kind_evidence.py --run-id <run_id> --capture-set multifault-only`
+    - writes `build/k8s-kind-evidence/<run_id>/kind-multifault-impairment/multifault-impairment.json`
+  - focused metrics capture:
+    - `python tests/python/capture_worlds_kubernetes_kind_evidence.py --run-id <run_id> --capture-set metrics-only`
+    - writes `build/k8s-kind-evidence/<run_id>/kind-metrics-budget/metrics-budget.json`
 
 ## Load Generator
 
@@ -153,3 +234,48 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
   - workflow-dispatch-only Conan current-cache strategy probe; not a merge gate
   - uploads `build/conan-strategy-poc/windows-conan-current-cache.json`
   - current framed baseline artifact: `build/conan-strategy-poc-gh-run-23246958472/conan-strategy-poc-windows-23246958472/windows-conan-current-cache.json`
+- `KubernetesWorldsLocalDevManifestCheck`
+  - local/ctest manifest proof for the topology-driven Kubernetes worlds harness
+  - validates generated manifests and summary artifacts without requiring a live cluster
+- `KubernetesWorldsKindLiveCheck`
+  - optional live `kind` ctest for the topology-driven Kubernetes worlds harness
+  - applies the generated manifest to an ephemeral `kind` cluster and skips with return code `77` when prerequisites are unavailable
+- `KubernetesWorldsKindControlPlaneCheck`
+  - optional live `kind` control-plane ctest for the topology-driven Kubernetes worlds harness
+  - port-forwards `admin-app` and proves one topology actuation/runtime-assignment roundtrip; skips with return code `77` when prerequisites are unavailable
+- `KubernetesWorldsKindClosureCheck`
+  - optional live `kind` closure ctest for the topology-driven Kubernetes worlds harness
+  - proves named drain closure through migration and transfer orchestration on live clusters; skips with return code `77` when prerequisites are unavailable
+- `KubernetesWorldsKindContinuityCheck`
+  - optional live `kind` continuity ctest for the topology-driven Kubernetes worlds harness
+  - proves resume routing and logical-session continuity over `gateway-1` after migration/transfer flows; skips with return code `77` when prerequisites are unavailable
+- `KubernetesWorldsKindMultiGatewayCheck`
+  - optional live `kind` multi-gateway ctest for the topology-driven Kubernetes worlds harness
+  - proves continuity survives a gateway hop by resuming through `gateway-2` after a `gateway-1` login; skips with return code `77` when prerequisites are unavailable
+- `KubernetesWorldsKindRestartCheck`
+  - optional live `kind` restart ctest for the topology-driven Kubernetes worlds harness
+  - proves simple fault-injection continuity rehearsal across gateway and server rollouts; skips with return code `77` when prerequisites are unavailable
+- `KubernetesWorldsKindMetricsBudgetCheck`
+  - optional live `kind` metrics-budget ctest for the topology-driven Kubernetes worlds harness
+  - proves the current multi-gateway migration/transfer stories also emit the expected gateway/server success counters and avoid unexpected fallback growth; skips with return code `77` when prerequisites are unavailable
+- `KubernetesWorldsKindLocatorFallbackCheck`
+  - optional live `kind` locator-fallback ctest for the topology-driven Kubernetes worlds harness
+  - proves continuity survives exact alias-key loss by falling back to the locator hint plus selector hit/fallback path; skips with return code `77` when prerequisites are unavailable
+- `KubernetesWorldsKindWorldStateFallbackCheck`
+  - optional live `kind` world-state fallback ctest for the topology-driven Kubernetes worlds harness
+  - proves continuity survives missing persisted world/world-owner state by falling back safely on the original backend and recording explicit reason metrics; skips with return code `77` when prerequisites are unavailable
+- `KubernetesWorldsKindRedisOutageCheck`
+  - optional live `kind` Redis dependency outage ctest for the topology-driven Kubernetes worlds harness
+  - proves `admin_app` detects Redis loss, registry-backed endpoints degrade, and observed topology recovers after Redis returns; skips with return code `77` when prerequisites are unavailable
+- `KubernetesWorldsKindWorkerOutageCheck`
+  - optional live `kind` worker metrics outage ctest for the topology-driven Kubernetes worlds harness
+  - proves `admin_app` detects `wb_worker` metrics-path loss, the worker endpoint degrades, and the snapshot recovers after the path returns; skips with return code `77` when prerequisites are unavailable
+- `KubernetesWorldsKindGatewayIngressImpairmentCheck`
+  - optional live `kind` gateway ingress impairment ctest for the topology-driven Kubernetes worlds harness
+  - proves required Redis loss drops gateway readiness and rejects fresh ingress while one existing bridged session continues to exchange traffic; skips with return code `77` when prerequisites are unavailable
+- `KubernetesWorldsKindResumeImpairmentCheck`
+  - optional live `kind` resume impairment ctest for the topology-driven Kubernetes worlds harness
+  - proves required Redis loss blocks cross-gateway continuity resume for a disconnected session, then restores the same logical session with usable post-recovery traffic after recovery; skips with return code `77` when prerequisites are unavailable
+- `KubernetesWorldsKindMultiFaultImpairmentCheck`
+  - optional live `kind` multi-fault impairment ctest for the topology-driven Kubernetes worlds harness
+  - proves required Redis loss plus `gateway-2` pod churn block resume until both recover, then restores the same logical session afterward; skips with return code `77` when prerequisites are unavailable

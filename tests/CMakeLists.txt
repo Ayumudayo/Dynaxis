@@ -12,6 +12,41 @@ target_link_libraries(protocol_fuzz_harness PRIVATE
 add_test(NAME ProtocolFuzzHarness COMMAND protocol_fuzz_harness)
 set_tests_properties(ProtocolFuzzHarness PROPERTIES LABELS "fuzz")
 
+if (BUILD_GTEST_TESTS OR BUILD_CONTRACT_TESTS)
+    add_library(test_plugin_runtime_v1 MODULE
+        core/plugin_runtime_v1.cpp
+    )
+    target_include_directories(test_plugin_runtime_v1 PRIVATE
+        ${CMAKE_SOURCE_DIR}/tests/core
+    )
+    set_target_properties(test_plugin_runtime_v1 PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "test_plugin_runtime_v1"
+    )
+
+    add_library(test_plugin_runtime_v2 MODULE
+        core/plugin_runtime_v2.cpp
+    )
+    target_include_directories(test_plugin_runtime_v2 PRIVATE
+        ${CMAKE_SOURCE_DIR}/tests/core
+    )
+    set_target_properties(test_plugin_runtime_v2 PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "test_plugin_runtime_v2"
+    )
+
+    add_library(test_plugin_runtime_invalid MODULE
+        core/plugin_runtime_invalid.cpp
+    )
+    target_include_directories(test_plugin_runtime_invalid PRIVATE
+        ${CMAKE_SOURCE_DIR}/tests/core
+    )
+    set_target_properties(test_plugin_runtime_invalid PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "test_plugin_runtime_invalid"
+    )
+endif()
+
 if (BUILD_GTEST_TESTS)
     find_package(GTest CONFIG REQUIRED)
 
@@ -83,6 +118,7 @@ if (BUILD_GTEST_TESTS)
         core/test_mmorpg_compat_headers.cpp
         core/test_mmorpg_world_drain.cpp
         core/test_mmorpg_topology.cpp
+        core/test_worlds_kubernetes.cpp
         core/test_mmorpg_world_transfer.cpp
         core/test_direct_bind_contract.cpp
         core/test_core_net.cpp
@@ -108,39 +144,6 @@ if (BUILD_GTEST_TESTS)
     target_link_libraries(core_general_tests PRIVATE
         GTest::gtest_main
         server_core
-    )
-
-    add_library(test_plugin_runtime_v1 MODULE
-        core/plugin_runtime_v1.cpp
-    )
-    target_include_directories(test_plugin_runtime_v1 PRIVATE
-        ${CMAKE_SOURCE_DIR}/tests/core
-    )
-    set_target_properties(test_plugin_runtime_v1 PROPERTIES
-        PREFIX ""
-        OUTPUT_NAME "test_plugin_runtime_v1"
-    )
-
-    add_library(test_plugin_runtime_v2 MODULE
-        core/plugin_runtime_v2.cpp
-    )
-    target_include_directories(test_plugin_runtime_v2 PRIVATE
-        ${CMAKE_SOURCE_DIR}/tests/core
-    )
-    set_target_properties(test_plugin_runtime_v2 PROPERTIES
-        PREFIX ""
-        OUTPUT_NAME "test_plugin_runtime_v2"
-    )
-
-    add_library(test_plugin_runtime_invalid MODULE
-        core/plugin_runtime_invalid.cpp
-    )
-    target_include_directories(test_plugin_runtime_invalid PRIVATE
-        ${CMAKE_SOURCE_DIR}/tests/core
-    )
-    set_target_properties(test_plugin_runtime_invalid PROPERTIES
-        PREFIX ""
-        OUTPUT_NAME "test_plugin_runtime_invalid"
     )
 
     add_executable(core_plugin_runtime_tests
@@ -364,17 +367,53 @@ if (BUILD_CONTRACT_TESTS)
     add_test(NAME CorePublicApiStableHeaderScenarios COMMAND core_public_api_stable_header_scenarios)
     set_tests_properties(CorePublicApiStableHeaderScenarios PROPERTIES LABELS "contract;public-api;smoke")
 
-    add_executable(core_public_api_fps_capability_smoke
-        core/public_api_fps_capability_smoke.cpp
+    add_executable(core_public_api_realtime_capability_smoke
+        core/public_api_realtime_capability_smoke.cpp
     )
-    target_include_directories(core_public_api_fps_capability_smoke PRIVATE
+    target_include_directories(core_public_api_realtime_capability_smoke PRIVATE
         ${CMAKE_SOURCE_DIR}/core/include
     )
-    target_link_libraries(core_public_api_fps_capability_smoke PRIVATE
+    target_link_libraries(core_public_api_realtime_capability_smoke PRIVATE
         server_core
     )
-    add_test(NAME CorePublicApiFpsCapabilitySmoke COMMAND core_public_api_fps_capability_smoke)
-    set_tests_properties(CorePublicApiFpsCapabilitySmoke PROPERTIES LABELS "contract;public-api;fps")
+    add_test(NAME CorePublicApiRealtimeCapabilitySmoke COMMAND core_public_api_realtime_capability_smoke)
+    set_tests_properties(CorePublicApiRealtimeCapabilitySmoke PROPERTIES LABELS "contract;public-api;realtime")
+
+    add_executable(core_fps_compat_smoke
+        core/fps_compat_smoke.cpp
+    )
+    target_include_directories(core_fps_compat_smoke PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/include
+    )
+    target_link_libraries(core_fps_compat_smoke PRIVATE
+        server_core
+    )
+    add_test(NAME CoreFpsCompatSmoke COMMAND core_fps_compat_smoke)
+    set_tests_properties(CoreFpsCompatSmoke PROPERTIES LABELS "contract;compat")
+
+    if (TARGET test_plugin_runtime_v1 AND TARGET test_plugin_runtime_v2)
+        add_executable(core_public_api_extensibility_smoke
+            core/public_api_extensibility_smoke.cpp
+        )
+        target_include_directories(core_public_api_extensibility_smoke PRIVATE
+            ${CMAKE_SOURCE_DIR}/core/include
+            ${CMAKE_SOURCE_DIR}/tests/core
+        )
+        target_compile_definitions(core_public_api_extensibility_smoke PRIVATE
+            TEST_PLUGIN_RUNTIME_V1_FILE="$<TARGET_FILE_NAME:test_plugin_runtime_v1>"
+            TEST_PLUGIN_RUNTIME_V2_FILE="$<TARGET_FILE_NAME:test_plugin_runtime_v2>"
+        )
+        target_link_libraries(core_public_api_extensibility_smoke PRIVATE
+            server_core
+            ${CMAKE_DL_LIBS}
+        )
+        add_dependencies(core_public_api_extensibility_smoke
+            test_plugin_runtime_v1
+            test_plugin_runtime_v2
+        )
+        add_test(NAME CorePublicApiExtensibilitySmoke COMMAND core_public_api_extensibility_smoke)
+        set_tests_properties(CorePublicApiExtensibilitySmoke PROPERTIES LABELS "contract;public-api;extensibility")
+    endif()
 
     add_test(
       NAME CoreInstalledPackageConsumer
@@ -571,6 +610,66 @@ if (Python3_Interpreter_FOUND)
               "${CMAKE_SOURCE_DIR}/tests/python/verify_session_continuity_restart.py"
               --scenario world-migration-target-room-handoff
     )
+    add_test(
+      NAME KubernetesWorldsLocalDevManifestCheck
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/verify_worlds_kubernetes_localdev.py"
+    )
+    add_test(
+      NAME KubernetesWorldsKindLiveCheck
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/verify_worlds_kubernetes_kind.py"
+    )
+    add_test(
+      NAME KubernetesWorldsKindControlPlaneCheck
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/verify_worlds_kubernetes_kind_control_plane.py"
+    )
+    add_test(
+      NAME KubernetesWorldsKindClosureCheck
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/verify_worlds_kubernetes_kind_closure.py"
+    )
+    add_test(
+      NAME KubernetesWorldsKindContinuityCheck
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/verify_worlds_kubernetes_kind_continuity.py"
+    )
+    add_test(
+      NAME KubernetesWorldsKindMultiGatewayCheck
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/verify_worlds_kubernetes_kind_multigateway.py"
+    )
+    add_test(
+      NAME KubernetesWorldsKindRestartCheck
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/verify_worlds_kubernetes_kind_restart.py"
+    )
+    add_test(
+      NAME KubernetesWorldsKindMetricsBudgetCheck
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/verify_worlds_kubernetes_kind_metrics_budget.py"
+    )
+    add_test(
+      NAME KubernetesWorldsKindLocatorFallbackCheck
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/verify_worlds_kubernetes_kind_locator_fallback.py"
+    )
+    add_test(
+      NAME KubernetesWorldsKindWorldStateFallbackCheck
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/verify_worlds_kubernetes_kind_world_state_fallback.py"
+    )
+    add_test(
+      NAME KubernetesWorldsKindRedisOutageCheck
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/verify_worlds_kubernetes_kind_redis_outage.py"
+    )
+    add_test(
+      NAME KubernetesWorldsKindWorkerOutageCheck
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/verify_worlds_kubernetes_kind_worker_outage.py"
+    )
+    add_test(
+      NAME KubernetesWorldsKindGatewayIngressImpairmentCheck
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/verify_worlds_kubernetes_kind_gateway_ingress_impairment.py"
+    )
+    add_test(
+      NAME KubernetesWorldsKindResumeImpairmentCheck
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/verify_worlds_kubernetes_kind_resume_impairment.py"
+    )
+    add_test(
+      NAME KubernetesWorldsKindMultiFaultImpairmentCheck
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/verify_worlds_kubernetes_kind_multifault_impairment.py"
+    )
 
     set_tests_properties(
       StackPythonVerifyPluginMetrics
@@ -615,6 +714,109 @@ if (Python3_Interpreter_FOUND)
       StackPythonVerifyWorldMigrationHandoff
       PROPERTIES
         LABELS "python;stack;continuity"
+        SKIP_RETURN_CODE 77
+        RUN_SERIAL TRUE
+    )
+    set_tests_properties(
+      KubernetesWorldsLocalDevManifestCheck
+      PROPERTIES
+        LABELS "python;kubernetes;worlds"
+    )
+    set_tests_properties(
+      KubernetesWorldsKindLiveCheck
+      PROPERTIES
+        LABELS "python;kubernetes;worlds;kind"
+        SKIP_RETURN_CODE 77
+        RUN_SERIAL TRUE
+    )
+    set_tests_properties(
+      KubernetesWorldsKindControlPlaneCheck
+      PROPERTIES
+        LABELS "python;kubernetes;worlds;kind;control-plane"
+        SKIP_RETURN_CODE 77
+        RUN_SERIAL TRUE
+    )
+    set_tests_properties(
+      KubernetesWorldsKindClosureCheck
+      PROPERTIES
+        LABELS "python;kubernetes;worlds;kind;closure"
+        SKIP_RETURN_CODE 77
+        RUN_SERIAL TRUE
+    )
+    set_tests_properties(
+      KubernetesWorldsKindContinuityCheck
+      PROPERTIES
+        LABELS "python;kubernetes;worlds;kind;continuity"
+        SKIP_RETURN_CODE 77
+        RUN_SERIAL TRUE
+    )
+    set_tests_properties(
+      KubernetesWorldsKindMultiGatewayCheck
+      PROPERTIES
+        LABELS "python;kubernetes;worlds;kind;multigateway"
+        SKIP_RETURN_CODE 77
+        RUN_SERIAL TRUE
+    )
+    set_tests_properties(
+      KubernetesWorldsKindRestartCheck
+      PROPERTIES
+        LABELS "python;kubernetes;worlds;kind;restart"
+        SKIP_RETURN_CODE 77
+        RUN_SERIAL TRUE
+    )
+    set_tests_properties(
+      KubernetesWorldsKindMetricsBudgetCheck
+      PROPERTIES
+        LABELS "python;kubernetes;worlds;kind;metrics"
+        SKIP_RETURN_CODE 77
+        RUN_SERIAL TRUE
+    )
+    set_tests_properties(
+      KubernetesWorldsKindLocatorFallbackCheck
+      PROPERTIES
+        LABELS "python;kubernetes;worlds;kind;fallback"
+        SKIP_RETURN_CODE 77
+        RUN_SERIAL TRUE
+    )
+    set_tests_properties(
+      KubernetesWorldsKindWorldStateFallbackCheck
+      PROPERTIES
+        LABELS "python;kubernetes;worlds;kind;fallback"
+        SKIP_RETURN_CODE 77
+        RUN_SERIAL TRUE
+    )
+    set_tests_properties(
+      KubernetesWorldsKindRedisOutageCheck
+      PROPERTIES
+        LABELS "python;kubernetes;worlds;kind;outage"
+        SKIP_RETURN_CODE 77
+        RUN_SERIAL TRUE
+    )
+    set_tests_properties(
+      KubernetesWorldsKindWorkerOutageCheck
+      PROPERTIES
+        LABELS "python;kubernetes;worlds;kind;outage"
+        SKIP_RETURN_CODE 77
+        RUN_SERIAL TRUE
+    )
+    set_tests_properties(
+      KubernetesWorldsKindGatewayIngressImpairmentCheck
+      PROPERTIES
+        LABELS "python;kubernetes;worlds;kind;impairment"
+        SKIP_RETURN_CODE 77
+        RUN_SERIAL TRUE
+    )
+    set_tests_properties(
+      KubernetesWorldsKindResumeImpairmentCheck
+      PROPERTIES
+        LABELS "python;kubernetes;worlds;kind;impairment"
+        SKIP_RETURN_CODE 77
+        RUN_SERIAL TRUE
+    )
+    set_tests_properties(
+      KubernetesWorldsKindMultiFaultImpairmentCheck
+      PROPERTIES
+        LABELS "python;kubernetes;worlds;kind;impairment"
         SKIP_RETURN_CODE 77
         RUN_SERIAL TRUE
     )

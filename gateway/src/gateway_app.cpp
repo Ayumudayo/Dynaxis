@@ -34,8 +34,8 @@
 #include "gateway/registry_backend_factory.hpp"
 #include "server/core/app/engine_builder.hpp"
 #include "server/core/net/queue_budget.hpp"
-#include "server/core/state/instance_registry.hpp"
-#include "server/core/state/world_lifecycle_policy.hpp"
+#include "server/core/discovery/instance_registry.hpp"
+#include "server/core/discovery/world_lifecycle_policy.hpp"
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
@@ -290,11 +290,11 @@ std::string make_world_policy_key(std::string_view continuity_prefix, std::strin
     return std::string(continuity_prefix) + "world-policy:" + std::string(world_id);
 }
 
-std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy>
+std::unordered_map<std::string, server::core::discovery::WorldLifecyclePolicy>
 load_world_policy_index(server::core::storage::redis::IRedisClient* redis_client,
                         std::string_view continuity_prefix,
-                        const std::vector<server::core::state::InstanceRecord>& items) {
-    std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy> out;
+                        const std::vector<server::core::discovery::InstanceRecord>& items) {
+    std::unordered_map<std::string, server::core::discovery::WorldLifecyclePolicy> out;
     if (!redis_client || continuity_prefix.empty()) {
         return out;
     }
@@ -311,7 +311,7 @@ load_world_policy_index(server::core::storage::redis::IRedisClient* redis_client
         }
         world_ids.push_back(*world_id);
         policy_keys.push_back(make_world_policy_key(continuity_prefix, *world_id));
-        out.emplace(*world_id, server::core::state::WorldLifecyclePolicy{});
+        out.emplace(*world_id, server::core::discovery::WorldLifecyclePolicy{});
     }
 
     if (policy_keys.empty()) {
@@ -342,7 +342,7 @@ load_world_policy_index(server::core::storage::redis::IRedisClient* redis_client
         if (!payloads[i].has_value() || payloads[i]->empty()) {
             continue;
         }
-        if (const auto parsed = server::core::state::parse_world_lifecycle_policy(*payloads[i])) {
+        if (const auto parsed = server::core::discovery::parse_world_lifecycle_policy(*payloads[i])) {
             out[world_ids[i]] = *parsed;
         }
     }
@@ -358,8 +358,8 @@ struct WorldPolicyBackendDecision {
 };
 
 WorldPolicyBackendDecision evaluate_world_policy_backend(
-    const server::core::state::InstanceRecord& record,
-    const std::unordered_map<std::string, server::core::state::WorldLifecyclePolicy>& world_policy_index) {
+    const server::core::discovery::InstanceRecord& record,
+    const std::unordered_map<std::string, server::core::discovery::WorldLifecyclePolicy>& world_policy_index) {
     WorldPolicyBackendDecision decision;
     const auto world_id = extract_world_id_from_tags(record.tags);
     if (!world_id.has_value()) {
@@ -1446,9 +1446,9 @@ std::vector<std::uint8_t> GatewayApp::make_udp_bind_res_frame(std::uint16_t code
                                                                std::string_view message,
                                                                std::uint32_t seq) const {
     namespace proto = server::core::protocol;
-    const auto payload = server::core::fps::encode_direct_bind_response_payload(
+    const auto payload = server::core::realtime::encode_direct_bind_response_payload(
         code,
-        server::core::fps::DirectBindTicket{
+        server::core::realtime::DirectBindTicket{
             .session_id = std::string(session_id),
             .nonce = nonce,
             .expires_unix_ms = expires_unix_ms,
@@ -1508,12 +1508,12 @@ std::optional<std::vector<std::uint8_t>> GatewayApp::make_udp_bind_ticket_frame(
         it->second.udp_endpoint = {};
         it->second.udp_sequenced_metrics.reset();
         it->second.rudp_fallback_to_tcp = false;
-        const auto attach_decision = server::core::fps::evaluate_direct_attach(
+        const auto attach_decision = server::core::realtime::evaluate_direct_attach(
             rudp_rollout_policy_,
             session_id,
             nonce);
         it->second.rudp_selected =
-            attach_decision.mode == server::core::fps::DirectAttachMode::kRudpCanary;
+            attach_decision.mode == server::core::realtime::DirectAttachMode::kRudpCanary;
         if (it->second.rudp_selected) {
             it->second.rudp_engine = std::make_unique<server::core::net::rudp::RudpEngine>(rudp_config_);
         } else {
@@ -1537,7 +1537,7 @@ std::optional<std::vector<std::uint8_t>> GatewayApp::make_udp_bind_ticket_frame(
 }
 
 bool GatewayApp::parse_udp_bind_req(std::span<const std::uint8_t> payload, ParsedUdpBindRequest& out) const {
-    return server::core::fps::decode_direct_bind_request_payload(payload, out);
+    return server::core::realtime::decode_direct_bind_request_payload(payload, out);
 }
 
 std::uint16_t GatewayApp::apply_udp_bind_request(const ParsedUdpBindRequest& req,
@@ -1740,8 +1740,8 @@ void GatewayApp::trace_udp_bind_send(std::span<const std::uint8_t> frame,
     std::uint64_t expires_unix_ms = 0;
     std::string message;
     const auto payload = frame.subspan(proto::k_header_bytes);
-    server::core::fps::DirectBindResponse bind_response{};
-    if (server::core::fps::decode_direct_bind_response_payload(payload, bind_response)) {
+    server::core::realtime::DirectBindResponse bind_response{};
+    if (server::core::realtime::decode_direct_bind_response_payload(payload, bind_response)) {
         code = bind_response.code;
         session_id = bind_response.ticket.session_id;
         nonce = bind_response.ticket.nonce;
@@ -1770,7 +1770,7 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
     }
 
     const auto world_policy_index = load_world_policy_index(redis_client_.get(), continuity_prefix_, instances);
-    const auto backend_policy_decision = [&](const server::core::state::InstanceRecord& record) {
+    const auto backend_policy_decision = [&](const server::core::discovery::InstanceRecord& record) {
         return evaluate_world_policy_backend(record, world_policy_index);
     };
 
@@ -1797,7 +1797,7 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
         }
     }
 
-    std::optional<server::core::state::InstanceSelector> resume_locator_selector;
+    std::optional<server::core::discovery::InstanceSelector> resume_locator_selector;
     if (is_resume_routing_key(client_id)) {
         if (auto hint = load_resume_locator_hint(client_id)) {
             (void)resume_locator_lookup_hit_total_.fetch_add(1, std::memory_order_relaxed);
@@ -1820,15 +1820,15 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
     }
 
     const auto build_candidates =
-        [&](const std::optional<server::core::state::InstanceSelector>& selector) {
-            std::vector<const server::core::state::InstanceRecord*> candidates;
+        [&](const std::optional<server::core::discovery::InstanceSelector>& selector) {
+            std::vector<const server::core::discovery::InstanceRecord*> candidates;
             std::unordered_set<std::string> filtered_world_ids;
             std::uint64_t min_effective_load = std::numeric_limits<std::uint64_t>::max();
             for (const auto& rec : instances) {
                 if (!rec.ready || rec.instance_id.empty() || rec.host.empty() || rec.port == 0) {
                     continue;
                 }
-                if (selector.has_value() && !server::core::state::matches_selector(rec, *selector)) {
+                if (selector.has_value() && !server::core::discovery::matches_selector(rec, *selector)) {
                     continue;
                 }
                 const auto policy_decision = backend_policy_decision(rec);
@@ -1949,9 +1949,9 @@ std::optional<GatewayApp::ResumeLocatorHint> GatewayApp::load_resume_locator_hin
     return parse_resume_locator_hint(*payload);
 }
 
-std::optional<server::core::state::InstanceSelector> GatewayApp::make_resume_locator_selector(
+std::optional<server::core::discovery::InstanceSelector> GatewayApp::make_resume_locator_selector(
     const ResumeLocatorHint& hint) const {
-    server::core::state::InstanceSelector selector{};
+    server::core::discovery::InstanceSelector selector{};
     if (!hint.world_id.empty()) {
         selector.tags.push_back("world:" + hint.world_id);
     }
@@ -1979,7 +1979,7 @@ std::optional<server::core::state::InstanceSelector> GatewayApp::make_resume_loc
 }
 
 void GatewayApp::persist_resume_locator_hint(std::string_view routing_key,
-                                             const server::core::state::InstanceRecord& record) {
+                                             const server::core::discovery::InstanceRecord& record) {
     if (!redis_client_ || routing_key.empty() || !is_resume_routing_key(routing_key) || resume_locator_ttl_sec_ == 0) {
         return;
     }

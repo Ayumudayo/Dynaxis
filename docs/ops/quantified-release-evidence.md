@@ -44,9 +44,9 @@ It exists to convert the current mixture of proof scripts, loadgen samples, and 
 
 | Evidence ID | What It Must Prove | Preferred Runner | Artifact Path | Committed Owner |
 | --- | --- | --- | --- | --- |
-| `transport-impairment-matrix` | direct UDP/RUDP attach, OFF, rollout fallback, protocol fallback, restart, deterministic packet-quality impairment all stay correct | `python tests/python/verify_fps_rudp_transport_matrix.py --scenario phase2-acceptance --no-build *> build/phase5-evidence/<run_id>/fps/phase2-acceptance.log` | `build/phase5-evidence/<run_id>/fps/phase2-acceptance.log` | `docs/ops/fps-runtime-contract.md` |
+| `transport-impairment-matrix` | direct UDP/RUDP attach, OFF, rollout fallback, protocol fallback, restart, deterministic packet-quality impairment all stay correct | `python tests/python/verify_fps_rudp_transport_matrix.py --scenario phase2-acceptance --no-build *> build/phase5-evidence/<run_id>/fps/phase2-acceptance.log` | `build/phase5-evidence/<run_id>/fps/phase2-acceptance.log` | `docs/ops/realtime-runtime-contract.md` |
 | `mixed-transport-soak` | long mixed TCP + direct UDP/RUDP traffic remains clean under attach, fallback, and OFF policy modes | loadgen commands from `tools/loadgen/README.md` for `mixed_session_soak_long`, `mixed_direct_udp_soak_long`, `mixed_direct_rudp_soak_long`, plus fallback/OFF env variants | `build/loadgen/mixed_session_soak_long.json`, `build/loadgen/mixed_direct_udp_soak_long.host.json`, `build/loadgen/mixed_direct_rudp_soak_long.host.json`, `build/loadgen/mixed_direct_rudp_soak_long.fallback.host.json`, `build/loadgen/mixed_direct_rudp_soak_long.off.host.json` | this document |
-| `fps-direct-path-budget` | gameplay-frequency direct path keeps acceptable latency/throughput/error behavior on direct UDP and RUDP | loadgen commands from `tools/loadgen/README.md` for `mixed_direct_udp_ping_soak`, `mixed_direct_rudp_ping_soak`, `mixed_direct_udp_fps_soak`, `mixed_direct_rudp_fps_soak` | `build/loadgen/mixed_direct_udp_ping_soak.host.json`, `build/loadgen/mixed_direct_rudp_ping_soak.host.json`, `build/loadgen/mixed_direct_udp_fps_soak.host.json`, `build/loadgen/mixed_direct_rudp_fps_soak.host.json` | `docs/ops/fps-runtime-contract.md` |
+| `fps-direct-path-budget` | gameplay-frequency direct path keeps acceptable latency/throughput/error behavior on direct UDP and RUDP | loadgen commands from `tools/loadgen/README.md` for `mixed_direct_udp_ping_soak`, `mixed_direct_rudp_ping_soak`, `mixed_direct_udp_fps_soak`, `mixed_direct_rudp_fps_soak` | `build/loadgen/mixed_direct_udp_ping_soak.host.json`, `build/loadgen/mixed_direct_rudp_ping_soak.host.json`, `build/loadgen/mixed_direct_udp_fps_soak.host.json`, `build/loadgen/mixed_direct_rudp_fps_soak.host.json` | `docs/ops/realtime-runtime-contract.md` |
 | `mmorpg-handoff-rehearsal` | desired/observed topology, drain closure, owner transfer, migration handoff, and live runtime assignment remain reproducible in one supported matrix | `python tests/python/verify_mmorpg_runtime_matrix.py --scenario phase3-acceptance --no-build *> build/phase5-evidence/<run_id>/mmorpg/phase3-acceptance.log` | `build/phase5-evidence/<run_id>/mmorpg/phase3-acceptance.log` | `docs/ops/mmorpg-world-residency-contract.md` |
 | `continuity-restart-recovery` | gateway/server restart and continuity fallback behavior remain reproducible through one named recovery runner | `python tests/python/verify_continuity_recovery_matrix.py --scenario phase5-recovery-baseline --no-build *> build/phase5-evidence/<run_id>/continuity/phase5-recovery-baseline.log` | `build/phase5-evidence/<run_id>/continuity/phase5-recovery-baseline.log` | `docs/ops/session-continuity-contract.md` |
 
@@ -322,7 +322,7 @@ It exists to convert the current mixture of proof scripts, loadgen samples, and 
 ## Related Docs
 
 - `docs/tests.md`
-- `docs/ops/fps-runtime-contract.md`
+- `docs/ops/realtime-runtime-contract.md`
 - `docs/ops/session-continuity-contract.md`
 - `docs/ops/mmorpg-world-residency-contract.md`
 - `tools/loadgen/README.md`

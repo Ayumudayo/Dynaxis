@@ -1,10 +1,13 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 
 #include <boost/asio/io_context.hpp>
 
@@ -26,6 +29,17 @@ public:
     using MetricsCallback = server::core::metrics::MetricsHttpServer::MetricsCallback;
     using LogsCallback = server::core::metrics::MetricsHttpServer::LogsCallback;
     using RouteCallback = server::core::metrics::MetricsHttpServer::RouteCallback;
+
+    struct Snapshot {
+        std::string name;
+        LifecyclePhase lifecycle_phase{LifecyclePhase::kInit};
+        bool healthy{true};
+        bool ready{false};
+        bool dependencies_ok{true};
+        bool stop_requested{false};
+        std::size_t context_service_count{0};
+        std::size_t compatibility_bridge_count{0};
+    };
 
     explicit EngineRuntime(std::string name);
     ~EngineRuntime();
@@ -57,7 +71,9 @@ public:
     template <typename T>
     void bridge_service(std::shared_ptr<T> service) {
         context().set(service);
-        server::core::util::services::set(std::move(service));
+        const auto key = server::core::util::services::detail::type_key<T>();
+        server::core::util::services::Registry::instance().set_owned<T>(bridge_owner_token(), std::move(service));
+        remember_bridge_key(key);
     }
 
     template <typename T>
@@ -103,12 +119,24 @@ public:
     void install_process_signal_handlers();
     void install_asio_termination_signals(boost::asio::io_context& io,
                                           std::function<void()> on_shutdown = {});
+    [[nodiscard]] Snapshot snapshot() const;
     void clear_global_services() noexcept;
 
 private:
+    struct BridgeState {
+        mutable std::mutex mutex;
+        std::unordered_set<std::string> keys;
+    };
+
+    [[nodiscard]] server::core::util::services::Registry::OwnerToken bridge_owner_token() const noexcept;
+    void remember_bridge_key(std::string key);
+    void clear_bridge_keys() noexcept;
+    [[nodiscard]] std::size_t compatibility_bridge_count() const noexcept;
+
     std::string name_;
     std::unique_ptr<EngineContext> context_;
     std::unique_ptr<AppHost> host_;
+    std::shared_ptr<BridgeState> bridge_state_;
 };
 
 } // namespace server::core::app

@@ -1,19 +1,21 @@
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <random>
 #include <stdexcept>
 #include <thread>
 
 #include <gtest/gtest.h>
 
 #include "server/core/runtime_metrics.hpp"
-#include "server/core/storage/db_worker_pool.hpp"
+#include "server/core/storage_execution/db_worker_pool.hpp"
+#include "server/core/storage_execution/retry_backoff.hpp"
 
 using namespace std::chrono_literals;
 using server::core::runtime_metrics::snapshot;
-using server::core::storage::DbWorkerPool;
-using server::core::storage::IConnectionPool;
-using server::core::storage::IUnitOfWork;
+using server::core::storage_execution::DbWorkerPool;
+using server::core::storage_execution::IConnectionPool;
+using server::core::storage_execution::IUnitOfWork;
 
 /**
  * @brief DbWorkerPool의 커밋/롤백/실패 메트릭 반영 동작을 검증합니다.
@@ -152,4 +154,39 @@ TEST(DbWorkerPoolTests, SubmitThrowsWhenNotRunning) {
     DbWorkerPool workers(pool);
 
     EXPECT_THROW(workers.submit([](IUnitOfWork&) {}, true), std::runtime_error);
+}
+
+TEST(DbWorkerPoolTests, RetryBackoffLinearModeUsesExactScaledDelay) {
+    const auto delay = server::core::storage_execution::retry_backoff_upper_bound_ms(
+        server::core::storage_execution::RetryBackoffPolicy{
+            .mode = server::core::storage_execution::RetryBackoffMode::kLinear,
+            .base_delay_ms = 250,
+            .max_delay_ms = 1'000,
+        },
+        3);
+
+    EXPECT_EQ(delay, 750u);
+}
+
+TEST(DbWorkerPoolTests, RetryBackoffExponentialFullJitterCapsUpperBoundAndSamplesWithinRange) {
+    const auto upper_bound = server::core::storage_execution::retry_backoff_upper_bound_ms(
+        server::core::storage_execution::RetryBackoffPolicy{
+            .mode = server::core::storage_execution::RetryBackoffMode::kExponentialFullJitter,
+            .base_delay_ms = 500,
+            .max_delay_ms = 2'000,
+        },
+        3);
+    EXPECT_EQ(upper_bound, 2'000u);
+
+    std::mt19937_64 rng(13);
+    const auto sampled = server::core::storage_execution::sample_retry_backoff_delay_ms(
+        server::core::storage_execution::RetryBackoffPolicy{
+            .mode = server::core::storage_execution::RetryBackoffMode::kExponentialFullJitter,
+            .base_delay_ms = 500,
+            .max_delay_ms = 2'000,
+        },
+        3,
+        rng);
+
+    EXPECT_LE(sampled, upper_bound);
 }
