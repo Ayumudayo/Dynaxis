@@ -1,10 +1,10 @@
-#include "server/core/fps/runtime.hpp"
+#include "server/core/realtime/runtime.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 
-namespace server::core::fps {
+namespace server::core::realtime {
 
 namespace {
 
@@ -368,4 +368,4 @@ RuntimeConfig WorldRuntime::config() const {
     return config_;
 }
 
-} // namespace server::core::fps
+} // namespace server::core::realtime

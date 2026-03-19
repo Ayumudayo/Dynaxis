@@ -7,15 +7,16 @@
 ## 현재 결정
 
 - plugin/Lua extensibility는 app-layer convenience가 아니라 `server_core`의 **platform capability**다.
-- 다만 현재 성숙도는 `Stable`이 아니라 `Transitional`이며, core mechanism과 service-specific contract를 분리해서 다룬다.
+- reusable core mechanism(`server/core/plugin/*`, `server/core/scripting/*`)은 이제 `Stable`로 분류한다.
+- chat hook ABI, chat plugin chain policy, chat Lua bindings는 계속 `Transitional` / app-owned contract로 분리해서 다룬다.
 - governance 세부 규칙은 `docs/extensibility/governance.md`를 기준으로 한다.
 
 ## 현재 확장 표면
 
 | 표면 | 위치 | 성숙도 | 비고 |
 |---|---|---|---|
-| Shared library + plugin host | `core/include/server/core/plugin/shared_library.hpp`, `core/include/server/core/plugin/plugin_host.hpp`, `core/include/server/core/plugin/plugin_chain_host.hpp` | Transitional | service-neutral 메커니즘 계층. chat 외 소비자 확장은 아직 후속 과제 |
-| Script watcher + Lua sandbox/runtime | `core/include/server/core/scripting/script_watcher.hpp`, `core/include/server/core/scripting/lua_sandbox.hpp`, `core/include/server/core/scripting/lua_runtime.hpp` | Transitional | core 메커니즘 계층. 런타임 토글/한계/메트릭 규약이 안정화 중 |
+| Shared library + plugin host | `core/include/server/core/plugin/shared_library.hpp`, `core/include/server/core/plugin/plugin_host.hpp`, `core/include/server/core/plugin/plugin_chain_host.hpp` | Stable | service-neutral 메커니즘 계층. dedicated public-api smoke와 installed-consumer proof가 있는 stable core capability |
+| Script watcher + Lua sandbox/runtime | `core/include/server/core/scripting/script_watcher.hpp`, `core/include/server/core/scripting/lua_sandbox.hpp`, `core/include/server/core/scripting/lua_runtime.hpp` | Stable | core 메커니즘 계층. reload/limit/metrics/runtime proof가 stable governance 기준으로 정렬됨 |
 | Chat hook plugin ABI v1/v2 | `server/include/server/chat/chat_hook_plugin_abi.hpp` | Transitional | 로더는 `chat_hook_api_v2()`를 우선 탐색하고, 미존재 시 `chat_hook_api_v1()`로 폴백합니다. |
 | Chat Lua bindings | `server/src/scripting/chat_lua_bindings.cpp` | Transitional | core Lua runtime을 chat service 정책/행동으로 연결하는 첫 concrete consumer |
 
@@ -63,6 +64,8 @@
 
 ### 테스트 기준
 - 코어: `tests/core/test_lua_runtime.cpp`
+- core stable-header smoke: `CorePublicApiExtensibilitySmoke`
+- installed package consumer: `CoreInstalledPackageConsumer` -> `server_core_extensibility_consumer`
 - 서버 바인딩: `tests/server/test_chat_lua_bindings.cpp`
 
 ## Staged Stabilization Plan
@@ -72,7 +75,7 @@
 - 요구사항:
   - core 전용 테스트로 reload/error isolation/limit/metrics 계약을 고정
   - service-specific ABI와 binding이 core header에 스며들지 않도록 유지
-  - 여전히 `Transitional`로 유지
+  - 상태: 완료. reusable mechanism은 stable로 승격됨
 
 ### Stage 2 - Service contract hardening
 - 대상: chat hook ABI v1/v2, chat plugin chain, chat Lua bindings
@@ -81,10 +84,11 @@
   - sample plugin/script와 control-plane 문서를 같은 규칙으로 유지
 
 ### Stage 3 - External consumer proof
-- 대상: 향후 gateway/wb_worker 또는 out-of-tree consumer
-- 요구사항:
-  - non-chat consumer 또는 package-consumer 검증 추가
-  - migration-note discipline과 compatibility evidence가 쌓인 뒤에만 일부 core mechanism을 `Stable` 후보로 검토
+- 대상: reusable core mechanism
+- 결과:
+  - `CorePublicApiExtensibilitySmoke`가 actual plugin load/chain + Lua runtime/watcher behavior를 stable-header-only contract로 검증한다
+  - `CoreInstalledPackageConsumer`는 `server_core_extensibility_consumer` 실행까지 포함해 installed package path를 검증한다
+  - reusable core mechanism은 이 evidence를 기준으로 `Stable`로 승격되었고, chat-specific ABI/binding은 그대로 transitional로 남는다
 
 ## 확장 ABI 거버넌스 규칙
 - 확장 ABI 변경은 PR 설명에서 호환/파괴 변경으로 분류해야 합니다.

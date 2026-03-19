@@ -110,6 +110,7 @@ python tools/gen_opcode_docs.py --check
 ## Conventions
 - Naming/namespace and repo hygiene: `docs/naming-conventions.md` (역할 기반 네이밍, 파일/함수 snake_case, 코드 심볼 ASCII).
 - Headers: `.hpp` + `#pragma once`, include 순서(표준 -> 서드파티 -> 프로젝트).
+- Doxygen: public API 헤더의 class/struct/public 함수와 핵심 런타임 표면을 바꿀 때는 Doxygen 주석도 같이 갱신한다. 마감 전 `python tools/check_doxygen_coverage.py` 또는 `ctest --test-dir build-windows -C Release -R "DoxygenCoverageToolTests" --output-on-failure`로 커버리지를 확인한다.
 - CMake: 소스는 명시적으로 나열(= `file(GLOB ...)` 금지). 옵션은 `BUILD_SERVER_STACK`, `BUILD_GATEWAY_APP`, `BUILD_SERVER_TESTS`, `BUILD_GTEST_TESTS`, `BUILD_CONTRACT_TESTS`, `BUILD_WRITE_BEHIND_TOOLS` 중심.
 - Conan2: `conanfile.py` + `conan.lock` 기반으로 Windows 개발 의존성을 고정하며(리눅스/도커 런타임은 시스템 패키지 기반).
 - Metrics: `/metrics`는 Prometheus text format. 포트는 `METRICS_PORT`로 제어(서비스별 환경 변수로 주입).
@@ -144,6 +145,7 @@ python tools/gen_opcode_docs.py --check
 - Diff behavior between main and your changes when relevant
 - Ask yourself: "Would a staff engineer approve this?"
 - Run tests, check logs, demonstrate correctness
+- If public headers, exported contracts, or core runtime surfaces changed, include Doxygen coverage validation in the proof set instead of treating comments as optional cleanup
 
 ### 3. Demand Elegance (Balanced)
 - For non-trivial changes: pause and ask "is there a more elegant way?"

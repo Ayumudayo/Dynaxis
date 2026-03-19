@@ -21,6 +21,11 @@ bool EngineContext::has_impl(const std::string& key) const {
     return services_.find(key) != services_.end();
 }
 
+std::size_t EngineContext::service_count() const noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return services_.size();
+}
+
 void EngineContext::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     services_.clear();

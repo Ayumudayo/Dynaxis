@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace server::core::fps {
+namespace server::core::realtime {
 
 /** @brief Fixed-step accumulator that bounds catch-up work for authoritative engine ticks. */
 class FixedStepDriver {
@@ -174,4 +174,4 @@ private:
     std::set<std::uint32_t> removed_actor_ids_;
 };
 
-} // namespace server::core::fps
+} // namespace server::core::realtime

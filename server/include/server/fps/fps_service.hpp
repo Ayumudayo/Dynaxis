@@ -6,24 +6,24 @@
 #include <span>
 #include <unordered_map>
 
-#include "server/core/fps/runtime.hpp"
+#include "server/core/realtime/runtime.hpp"
 
 namespace server::core { class Session; }
 
 namespace server::app::fps {
 
-using FixedStepDriver = server::core::fps::FixedStepDriver;
-using RuntimeConfig = server::core::fps::RuntimeConfig;
-using InputCommand = server::core::fps::InputCommand;
-using ActorTransformSample = server::core::fps::ActorTransformSample;
-using RuntimeSnapshot = server::core::fps::RuntimeSnapshot;
-using StageInputDisposition = server::core::fps::StageInputDisposition;
-using StageInputResult = server::core::fps::StageInputResult;
-using ReplicationKind = server::core::fps::ReplicationKind;
-using ReplicationUpdate = server::core::fps::ReplicationUpdate;
-using RewindQuery = server::core::fps::RewindQuery;
-using RewindResult = server::core::fps::RewindResult;
-using WorldRuntime = server::core::fps::WorldRuntime;
+using FixedStepDriver = server::core::realtime::FixedStepDriver;
+using RuntimeConfig = server::core::realtime::RuntimeConfig;
+using InputCommand = server::core::realtime::InputCommand;
+using ActorTransformSample = server::core::realtime::ActorTransformSample;
+using RuntimeSnapshot = server::core::realtime::RuntimeSnapshot;
+using StageInputDisposition = server::core::realtime::StageInputDisposition;
+using StageInputResult = server::core::realtime::StageInputResult;
+using ReplicationKind = server::core::realtime::ReplicationKind;
+using ReplicationUpdate = server::core::realtime::ReplicationUpdate;
+using RewindQuery = server::core::realtime::RewindQuery;
+using RewindResult = server::core::realtime::RewindResult;
+using WorldRuntime = server::core::realtime::WorldRuntime;
 
 /** @brief Session-facing FPS entrypoint that decodes input and dispatches replication output. */
 class FpsService {

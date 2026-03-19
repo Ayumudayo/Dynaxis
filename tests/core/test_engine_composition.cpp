@@ -18,6 +18,22 @@ struct EngineCompositionService {
     int value{0};
 };
 
+struct EngineBridgeSharedService {
+    int value{0};
+};
+
+struct EngineSnapshotLeftService {
+    int value{0};
+};
+
+struct EngineSnapshotRightService {
+    int value{0};
+};
+
+struct EngineBridgeOtherService {
+    int value{0};
+};
+
 } // namespace
 
 TEST(EngineCompositionTest, EngineContextIsInstanceScoped) {
@@ -139,4 +155,73 @@ TEST(EngineCompositionTest, WaitForStopAndRunShutdownStandardizeNormalTeardown) 
 
     runtime.run_shutdown();
     EXPECT_EQ(shutdown_count.load(std::memory_order_relaxed), 1);
+}
+
+TEST(EngineCompositionTest, ClearGlobalServicesOnlyClearsOwnedCompatibilityEntries) {
+    server::core::util::services::clear();
+
+    server::core::app::EngineRuntime left =
+        server::core::app::EngineBuilder("engine_runtime_left_bridge_test").build();
+    server::core::app::EngineRuntime right =
+        server::core::app::EngineBuilder("engine_runtime_right_bridge_test").build();
+
+    auto left_service = std::make_shared<EngineBridgeSharedService>();
+    left_service->value = 10;
+    auto right_service = std::make_shared<EngineBridgeSharedService>();
+    right_service->value = 20;
+
+    left.bridge_service(left_service);
+    right.bridge_service(right_service);
+
+    ASSERT_TRUE(server::core::util::services::has<EngineBridgeSharedService>());
+    EXPECT_EQ(server::core::util::services::require<EngineBridgeSharedService>().value, 20);
+
+    right.clear_global_services();
+    ASSERT_TRUE(server::core::util::services::has<EngineBridgeSharedService>());
+    EXPECT_EQ(server::core::util::services::require<EngineBridgeSharedService>().value, 10);
+
+    left.clear_global_services();
+    EXPECT_FALSE(server::core::util::services::has<EngineBridgeSharedService>());
+}
+
+TEST(EngineCompositionTest, DualRuntimeSnapshotsRemainIsolated) {
+    server::core::util::services::clear();
+
+    server::core::app::EngineRuntime left =
+        server::core::app::EngineBuilder("engine_runtime_left_snapshot").build();
+    server::core::app::EngineRuntime right =
+        server::core::app::EngineBuilder("engine_runtime_right_snapshot").build();
+
+    left.set_service(std::make_shared<EngineSnapshotLeftService>());
+    right.set_service(std::make_shared<EngineSnapshotRightService>());
+    left.bridge_service(std::make_shared<EngineBridgeSharedService>());
+    right.bridge_service(std::make_shared<EngineBridgeOtherService>());
+
+    left.mark_running();
+    right.request_stop();
+
+    const auto left_snapshot = left.snapshot();
+    const auto right_snapshot = right.snapshot();
+
+    EXPECT_EQ(left_snapshot.name, "engine_runtime_left_snapshot");
+    EXPECT_EQ(right_snapshot.name, "engine_runtime_right_snapshot");
+    EXPECT_EQ(left_snapshot.lifecycle_phase, AppHost::LifecyclePhase::kRunning);
+    EXPECT_EQ(right_snapshot.lifecycle_phase, AppHost::LifecyclePhase::kStopping);
+    EXPECT_TRUE(left_snapshot.ready);
+    EXPECT_FALSE(right_snapshot.ready);
+    EXPECT_FALSE(left_snapshot.stop_requested);
+    EXPECT_TRUE(right_snapshot.stop_requested);
+    EXPECT_EQ(left_snapshot.context_service_count, 2u);
+    EXPECT_EQ(right_snapshot.context_service_count, 2u);
+    EXPECT_EQ(left_snapshot.compatibility_bridge_count, 1u);
+    EXPECT_EQ(right_snapshot.compatibility_bridge_count, 1u);
+
+    left.clear_global_services();
+
+    const auto left_after_clear = left.snapshot();
+    const auto right_after_clear = right.snapshot();
+    EXPECT_EQ(left_after_clear.compatibility_bridge_count, 0u);
+    EXPECT_EQ(right_after_clear.compatibility_bridge_count, 1u);
+
+    server::core::util::services::clear();
 }

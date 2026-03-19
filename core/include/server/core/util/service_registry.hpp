@@ -1,6 +1,7 @@
 #pragma once
 
 #include <any>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -8,6 +9,7 @@
 #include <type_traits>
 #include <typeinfo>
 #include <unordered_map>
+#include <vector>
 
 namespace server::core::util::services {
 
@@ -46,6 +48,9 @@ std::string type_key() {
  */
 class Registry {
 public:
+    using OwnerToken = std::uintptr_t;
+    static constexpr OwnerToken kUnowned = 0;
+
     static Registry& instance();
 
     template <typename T>
@@ -54,7 +59,16 @@ public:
         if (!service) {
             throw std::invalid_argument("서비스 포인터가 null 입니다.");
         }
-        set_any(detail::type_key<T>(), std::move(service));
+        set_any(detail::type_key<T>(), std::move(service), kUnowned);
+    }
+
+    template <typename T>
+    void set_owned(OwnerToken owner, std::shared_ptr<T> service) {
+        static_assert(!std::is_void_v<T>, "void 타입은 서비스 레지스트리에 등록할 수 없습니다.");
+        if (!service) {
+            throw std::invalid_argument("서비스 포인터가 null 입니다.");
+        }
+        set_any(detail::type_key<T>(), std::move(service), owner);
     }
 
     template <typename T, typename... Args>
@@ -92,17 +106,24 @@ public:
         return has_impl(detail::type_key<T>());
     }
 
+    void clear_owned(OwnerToken owner);
     void clear();
 
 private:
+    /** @brief one typed registration slot과 owner token을 함께 저장하는 internal entry입니다. */
+    struct Entry {
+        std::any value;
+        OwnerToken owner_token{kUnowned};
+    };
+
     Registry() = default;
 
-    void set_any(std::string key, std::any value);
+    void set_any(std::string key, std::any value, OwnerToken owner);
     std::any get_any(const std::string& key) const;
     bool has_impl(const std::string& key) const;
 
     mutable std::mutex mutex_;
-    std::unordered_map<std::string, std::any> services_;
+    std::unordered_map<std::string, std::vector<Entry>> services_;
 };
 
 template <typename T>

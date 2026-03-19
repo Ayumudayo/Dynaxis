@@ -16,6 +16,7 @@
 #include "../wb_common/redis_client_factory.hpp"
 #include "server/core/storage/redis/client.hpp"
 #include "server/core/app/engine_builder.hpp"
+#include "server/core/storage_execution/retry_backoff.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/trace/context.hpp"
 #include "server/core/metrics/build_info.hpp"
@@ -349,13 +350,15 @@ private:
     }
 
     void SleepDbReconnectBackoff() {
-        const auto capped_attempt = std::min<std::uint32_t>(db_reconnect_attempt_, 16);
-        const auto base = static_cast<std::uint64_t>(std::max<long long>(1, config_.db_reconnect_base_ms));
-        const auto cap = static_cast<std::uint64_t>(std::max<long long>(base, config_.db_reconnect_max_ms));
-        const auto exp = std::min<std::uint64_t>(cap, base * (1ull << capped_attempt));
-
-        std::uniform_int_distribution<std::uint64_t> dist(0, exp);
-        const auto delay = dist(rng_);
+        const auto delay = server::core::storage_execution::sample_retry_backoff_delay_ms(
+            server::core::storage_execution::RetryBackoffPolicy{
+                .mode = server::core::storage_execution::RetryBackoffMode::kExponentialFullJitter,
+                .base_delay_ms = static_cast<std::uint64_t>(std::max<long long>(1, config_.db_reconnect_base_ms)),
+                .max_delay_ms = static_cast<std::uint64_t>(
+                    std::max<long long>(std::max<long long>(1, config_.db_reconnect_base_ms), config_.db_reconnect_max_ms)),
+            },
+            db_reconnect_attempt_,
+            rng_);
 
         wb_db_reconnect_backoff_ms_last_.store(delay, std::memory_order_relaxed);
         std::this_thread::sleep_for(std::chrono::milliseconds(delay));
@@ -521,10 +524,13 @@ private:
             if (attempt > 0) {
                 wb_flush_retry_attempt_total_.fetch_add(1, std::memory_order_relaxed);
 
-                const auto delay_ms = std::min<std::uint64_t>(
-                    static_cast<std::uint64_t>(config_.retry_backoff_ms) * attempt,
-                    30000ull
-                );
+                const auto delay_ms = server::core::storage_execution::retry_backoff_upper_bound_ms(
+                    server::core::storage_execution::RetryBackoffPolicy{
+                        .mode = server::core::storage_execution::RetryBackoffMode::kLinear,
+                        .base_delay_ms = static_cast<std::uint64_t>(std::max<long long>(1, config_.retry_backoff_ms)),
+                        .max_delay_ms = 30000ull,
+                    },
+                    attempt);
                 wb_flush_retry_delay_ms_last_.store(delay_ms, std::memory_order_relaxed);
                 std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
             }

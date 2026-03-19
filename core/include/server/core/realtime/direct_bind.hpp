@@ -9,7 +9,7 @@
 
 #include "server/core/protocol/packet.hpp"
 
-namespace server::core::fps {
+namespace server::core::realtime {
 
 /** @brief Direct UDP bind request payload contract. */
 struct DirectBindRequest {
@@ -132,4 +132,4 @@ inline bool decode_direct_bind_response_payload(std::span<const std::uint8_t> pa
     return in.empty();
 }
 
-} // namespace server::core::fps
+} // namespace server::core::realtime

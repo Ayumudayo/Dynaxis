@@ -3,7 +3,7 @@ add_library(server_core
     src/app/engine_builder.cpp
     src/app/engine_context.cpp
     src/app/engine_runtime.cpp
-    src/fps/runtime.cpp
+    src/realtime/runtime.cpp
     src/net/acceptor.cpp
     src/net/session.cpp
     src/net/dispatcher.cpp
@@ -41,6 +41,7 @@ add_library(server_core::server_core ALIAS server_core)
 
 configure_luajit_submodule(LUAJIT_VENDOR_TARGET)
 configure_sol2_submodule(SOL2_VENDOR_TARGET)
+include(GNUInstallDirs)
 
 # -----------------------------------------------------------------------------
 # Build metadata (git hash/describe + build time)
@@ -100,7 +101,17 @@ endif()
 target_link_libraries(server_core PUBLIC OpenSSL::SSL OpenSSL::Crypto lz4::lz4)
 
 if (LUAJIT_VENDOR_TARGET)
-    target_link_libraries(server_core PRIVATE $<BUILD_INTERFACE:${LUAJIT_VENDOR_TARGET}>)
+    get_target_property(LUAJIT_VENDOR_LOCATION ${LUAJIT_VENDOR_TARGET} IMPORTED_LOCATION)
+    get_filename_component(LUAJIT_VENDOR_INSTALL_NAME "${LUAJIT_VENDOR_LOCATION}" NAME)
+
+    target_link_libraries(server_core PUBLIC
+        $<BUILD_INTERFACE:${LUAJIT_VENDOR_TARGET}>
+        $<INSTALL_INTERFACE:$<INSTALL_PREFIX>/${CMAKE_INSTALL_LIBDIR}/${LUAJIT_VENDOR_INSTALL_NAME}>
+    )
+
+    if (UNIX AND NOT APPLE)
+        target_link_libraries(server_core PUBLIC $<INSTALL_INTERFACE:m> $<INSTALL_INTERFACE:dl>)
+    endif()
 endif()
 
 if (SOL2_VENDOR_TARGET)
@@ -142,7 +153,6 @@ if (TARGET generate_wire_codec)
     add_dependencies(server_core generate_wire_codec)
 endif()
 
-include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 set(SERVER_CORE_PACKAGE_VERSION "1.0.0")
@@ -179,6 +189,12 @@ install(FILES
         "${CMAKE_CURRENT_BINARY_DIR}/server_coreConfig.cmake"
         "${CMAKE_CURRENT_BINARY_DIR}/server_coreConfigVersion.cmake"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/server_core")
+
+if (LUAJIT_VENDOR_TARGET)
+    install(FILES
+            "${LUAJIT_VENDOR_LOCATION}"
+            DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+endif()
 
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"

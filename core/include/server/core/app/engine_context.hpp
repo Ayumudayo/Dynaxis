@@ -76,6 +76,9 @@ public:
         return has_impl(server::core::util::services::detail::type_key<T>());
     }
 
+    [[nodiscard]] std::size_t service_count() const noexcept;
+    [[nodiscard]] bool empty() const noexcept { return service_count() == 0; }
+
     void clear();
 
 private:

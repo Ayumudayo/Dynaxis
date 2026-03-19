@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace server::core::fps {
+namespace server::core::realtime {
 
 /** @brief Direct UDP/RUDP delivery route selected for a replication payload. */
 enum class DirectDeliveryRoute : std::uint8_t {
@@ -77,4 +77,4 @@ inline DirectDeliveryRoute select_direct_delivery_route(const DirectDeliveryCont
     return evaluate_direct_delivery(context).route;
 }
 
-} // namespace server::core::fps
+} // namespace server::core::realtime

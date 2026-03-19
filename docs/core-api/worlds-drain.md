@@ -6,7 +6,6 @@
 
 - canonical include path: `server/core/worlds/world_drain.hpp`
 - canonical namespace: `server::core::worlds`
-- `server/core/mmorpg/world_drain.hpp`는 compatibility wrapper로만 유지된다
 
 ## Scope
 

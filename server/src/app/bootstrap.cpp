@@ -39,7 +39,7 @@
 #include "server/core/concurrent/task_scheduler.hpp"
 #include "server/core/memory/memory_pool.hpp"
 #include "server/core/runtime_metrics.hpp"
-#include "server/core/state/instance_registry.hpp"
+#include "server/core/discovery/instance_registry.hpp"
 #include "server/core/storage/redis/client.hpp"
 #include "server/core/scripting/lua_runtime.hpp"
 #include "server/core/scripting/script_watcher.hpp"
@@ -157,7 +157,7 @@ std::string to_lower_ascii(std::string_view value) {
 }
 
 struct AdminSelectorParseResult {
-        server::core::state::InstanceSelector selector;
+        server::core::discovery::InstanceSelector selector;
     bool selector_specified{false};
     bool valid{true};
 };
@@ -278,12 +278,12 @@ int run_server(int argc, char** argv) {
     core::concurrent::TaskScheduler scheduler;
     std::shared_ptr<asio::steady_timer> scheduler_timer;
     std::shared_ptr<asio::steady_timer> fps_tick_timer;
-    std::shared_ptr<core::storage::DbWorkerPool> db_workers;
+    std::shared_ptr<core::storage_execution::DbWorkerPool> db_workers;
     std::shared_ptr<core::scripting::LuaRuntime> lua_runtime;
     std::shared_ptr<asio::strand<asio::io_context::executor_type>> lua_reload_strand;
     std::shared_ptr<core::scripting::ScriptWatcher> lua_script_watcher;
-        std::shared_ptr<server::core::state::IInstanceStateBackend> registry_backend;
-        server::core::state::InstanceRecord registry_record{};
+        std::shared_ptr<server::core::discovery::IInstanceStateBackend> registry_backend;
+        server::core::discovery::InstanceRecord registry_record{};
     bool registry_registered = false;
     auto engine = server::core::app::EngineBuilder("server_app").build();
     auto& app_host = engine.host();
@@ -610,7 +610,7 @@ int run_server(int argc, char** argv) {
         }
 
         // 4. DB 커넥션 풀 구성
-        std::shared_ptr<core::storage::IConnectionPool> db_pool;
+        std::shared_ptr<core::storage_execution::IConnectionPool> db_pool;
         std::shared_ptr<server::storage::IRepositoryConnectionPool> repository_pool;
         if (!config.db_uri.empty()) {
             corelog::info("Detected DB_URI (redacted)");
@@ -719,7 +719,7 @@ int run_server(int argc, char** argv) {
                 };
             const auto apply_runtime_assignment =
                 [base_shard = config.server_shard, base_tags = config.server_tags, load_runtime_assignment](
-                    server::core::state::InstanceRecord& record) {
+                    server::core::discovery::InstanceRecord& record) {
                     const auto assignment = load_runtime_assignment();
                     record.shard = server::app::resolve_topology_runtime_assignment_shard(base_shard, assignment);
                     record.tags = server::app::apply_topology_runtime_assignment_tags(base_tags, assignment);
@@ -917,7 +917,7 @@ int run_server(int argc, char** argv) {
             config.admin_command_signing_secret,
             admin_verify_options);
 
-        server::core::state::InstanceRecord local_instance_selector_context{};
+        server::core::discovery::InstanceRecord local_instance_selector_context{};
         local_instance_selector_context.instance_id = config.server_instance_id;
         local_instance_selector_context.role = config.server_role;
         local_instance_selector_context.game_mode = config.server_game_mode;
@@ -1070,7 +1070,7 @@ int run_server(int argc, char** argv) {
                         if (selector_parse.selector_specified) {
                             bool target_match = false;
                             if (selector_parse.valid) {
-                        target_match = server::core::state::matches_selector(
+                        target_match = server::core::discovery::matches_selector(
                                     local_instance_selector_context,
                                     selector_parse.selector);
                             }
@@ -1088,8 +1088,8 @@ int run_server(int argc, char** argv) {
 
                                 std::string layer = "invalid";
                                 if (selector_parse.valid) {
-                        layer = std::string(server::core::state::selector_policy_layer_name(
-                            server::core::state::classify_selector_policy_layer(selector_parse.selector)));
+                        layer = std::string(server::core::discovery::selector_policy_layer_name(
+                            server::core::discovery::classify_selector_policy_layer(selector_parse.selector)));
                                 }
 
                                 corelog::info(

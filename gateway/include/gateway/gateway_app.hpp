@@ -27,11 +27,11 @@
 #include "gateway/udp_bind_abuse_guard.hpp"
 #include "gateway/udp_sequenced_metrics.hpp"
 #include "server/core/app/engine_runtime.hpp"
-#include "server/core/fps/direct_bind.hpp"
+#include "server/core/realtime/direct_bind.hpp"
 #include "server/core/net/hive.hpp"
 #include "server/core/net/listener.hpp"
 #include "server/core/net/rudp/rudp_engine.hpp"
-#include "server/core/state/instance_registry.hpp"
+#include "server/core/discovery/instance_registry.hpp"
 #include "server/core/storage/redis/client.hpp"
 #include "gateway/session_directory.hpp"
 
@@ -73,7 +73,7 @@ public:
 
     /** @brief backend 선택 결과입니다. */
     struct SelectedBackend {
-        server::core::state::InstanceRecord record;
+        server::core::discovery::InstanceRecord record;
         bool sticky_hit{false};
     };
 
@@ -88,7 +88,7 @@ public:
     };
 
     /** @brief TCP 응답으로 전달되는 UDP bind ticket 정보입니다. */
-    using UdpBindTicket = server::core::fps::DirectBindTicket;
+    using UdpBindTicket = server::core::realtime::DirectBindTicket;
 
     /**
      * @brief backend 서버와의 TCP 연결을 관리하는 내부 클래스입니다.
@@ -298,10 +298,10 @@ public:
                               bool sticky_hit);
     std::string make_resume_locator_key(std::string_view routing_key) const;
     std::optional<ResumeLocatorHint> load_resume_locator_hint(std::string_view routing_key);
-    std::optional<server::core::state::InstanceSelector> make_resume_locator_selector(
+    std::optional<server::core::discovery::InstanceSelector> make_resume_locator_selector(
         const ResumeLocatorHint& hint) const;
     void persist_resume_locator_hint(std::string_view routing_key,
-                                     const server::core::state::InstanceRecord& record);
+                                     const server::core::discovery::InstanceRecord& record);
     void configure_gateway();
     void configure_infrastructure();
     void start_listener();
@@ -310,7 +310,7 @@ public:
      void do_udp_receive();
 
      /** @brief UDP bind 요청 payload 파싱 결과입니다. */
-     using ParsedUdpBindRequest = server::core::fps::DirectBindRequest;
+     using ParsedUdpBindRequest = server::core::realtime::DirectBindRequest;
 
      std::vector<std::uint8_t> make_udp_bind_res_frame(std::uint16_t code,
                                                         const UdpBindTicket& ticket,
@@ -425,7 +425,7 @@ public:
 
     // 상태 및 저장소
     std::shared_ptr<server::core::storage::redis::IRedisClient> redis_client_;
-    std::shared_ptr<server::core::state::IInstanceStateBackend> backend_registry_;
+    std::shared_ptr<server::core::discovery::IInstanceStateBackend> backend_registry_;
     std::unique_ptr<SessionDirectory> session_directory_;
     std::string redis_uri_;
     std::string continuity_prefix_;

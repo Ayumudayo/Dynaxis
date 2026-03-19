@@ -36,6 +36,6 @@ The decision remains historical but still explains why the baseline was allowed 
 
 - continuity and restart semantics: `docs/ops/session-continuity-contract.md`
 - world residency/lifecycle and operator policy: `docs/ops/mmorpg-world-residency-contract.md`
-- gameplay-frequency transport/runtime substrate: `docs/ops/fps-runtime-contract.md`
+- gameplay-frequency transport/runtime substrate: `docs/ops/realtime-runtime-contract.md`
 
 This document is not a live branch tracker anymore; it is the retained explanation for why the shared baseline was allowed to close.

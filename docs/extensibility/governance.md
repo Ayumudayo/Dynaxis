@@ -8,7 +8,7 @@
 
 - `core/include/server/core/plugin/*`, `core/include/server/core/scripting/*`는 서비스 재사용을 위한 메커니즘 계층이다.
 - `server/include/server/chat/chat_hook_plugin_abi.hpp`, `server/src/chat/*`, `server/src/scripting/chat_lua_bindings.cpp`는 첫 번째 concrete consumer인 chat service 계층이다.
-- 현재 단계에서 extensibility는 app convenience가 아니라 **core platform capability under Transitional governance**로 본다.
+- 현재 단계에서 extensibility는 app convenience가 아니라 **stable core mechanism + transitional service contract**로 본다.
 
 ## 1. Capability Boundary
 
@@ -32,12 +32,17 @@
 
 ### 2.1 Stable
 
-- Not used for extensibility surfaces in the current tranche.
-- Promotion to `Stable` requires external-consumer-oriented verification, migration-note discipline, and at least one release cadence with documented expectations.
+- `core/include/server/core/plugin/shared_library.hpp`
+- `core/include/server/core/plugin/plugin_host.hpp`
+- `core/include/server/core/plugin/plugin_chain_host.hpp`
+- `core/include/server/core/scripting/script_watcher.hpp`
+- `core/include/server/core/scripting/lua_sandbox.hpp`
+- `core/include/server/core/scripting/lua_runtime.hpp`
+- 이 메커니즘 헤더들은 external-consumer-oriented verification과 installed-package proof를 확보했으므로 일반 `Stable` API 규칙을 적용한다.
 
 ### 2.2 Transitional
 
-- Default level for current extensibility surfaces.
+- chat hook ABI, chat plugin chain policy, chat Lua bindings의 기본 level이다.
 - API/ABI evolution is allowed, but must be documented, tested, and categorized as additive vs breaking.
 - Any change to loader precedence, reload semantics, host-call meaning, or hook decision behavior must update the corresponding docs in the same change.
 
@@ -99,11 +104,10 @@ Treat these as breaking for transitional governance purposes:
 
 ## 5. Staged Stabilization Plan
 
-### Stage 1 - Mechanism hardening (current)
+### Stage 1 - Mechanism hardening (completed)
 
-- Keep `plugin_host`, `plugin_chain_host`, `script_watcher`, `lua_sandbox`, and `lua_runtime` as `Transitional`.
-- Require core tests to cover reload, error isolation, runtime limits, and metrics behavior.
-- Keep service-specific ABI/binding logic out of core.
+- `plugin_host`, `plugin_chain_host`, `script_watcher`, `lua_sandbox`, and `lua_runtime` now have core tests plus stable public-api/package proof.
+- service-specific ABI/binding logic stays out of core.
 
 ### Stage 2 - Service contract hardening
 
@@ -111,11 +115,11 @@ Treat these as breaking for transitional governance purposes:
 - Require server-level tests for deny/modify propagation, auto-disable, ordering, and sample artifacts.
 - Keep control-plane rollout/conflict docs aligned with actual behavior.
 
-### Stage 3 - External consumer proof
+### Stage 3 - External consumer proof (completed for core mechanism)
 
-- Add package/consumer-style verification for extensibility surfaces where possible.
-- Prove a non-chat or out-of-tree consumer scenario before any promotion to `Stable`.
-- Only after that evidence exists should specific mechanism headers be considered for `Stable` classification.
+- `CorePublicApiExtensibilitySmoke` proves stable-header plugin load/chain plus Lua runtime/watcher behavior.
+- `CoreInstalledPackageConsumer` runs `server_core_extensibility_consumer` to cover the installed package path.
+- reusable core mechanism headers are `Stable`; service-specific chat contracts remain `Transitional`.
 
 ## 6. Migration-Note Policy
 

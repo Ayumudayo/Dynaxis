@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace server::core::fps {
+namespace server::core::realtime {
 
 /**
  * @brief Tracks sequenced direct-UDP transport quality for one bound session.
@@ -85,4 +85,4 @@ private:
     std::uint64_t last_interarrival_ms_{0};
 };
 
-} // namespace server::core::fps
+} // namespace server::core::realtime

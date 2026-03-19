@@ -13,7 +13,7 @@ make_redis_client(const std::string& redis_uri,
     return server::storage::redis::make_redis_client(redis_uri, options);
 }
 
-std::shared_ptr<server::core::state::IInstanceStateBackend>
+std::shared_ptr<server::core::discovery::IInstanceStateBackend>
 make_registry_backend(const std::shared_ptr<server::core::storage::redis::IRedisClient>& redis_client,
                       std::string key_prefix,
                       std::chrono::seconds ttl) {

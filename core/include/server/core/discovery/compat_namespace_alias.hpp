@@ -2,7 +2,6 @@
 
 namespace server::core {
 
-namespace mmorpg = worlds;
+namespace discovery = state;
 
 } // namespace server::core
-

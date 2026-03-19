@@ -7,7 +7,8 @@ namespace server::core::app {
 EngineRuntime::EngineRuntime(std::string name)
     : name_(std::move(name))
     , context_(std::make_unique<EngineContext>())
-    , host_(std::make_unique<AppHost>(name_)) {
+    , host_(std::make_unique<AppHost>(name_))
+    , bridge_state_(std::make_shared<BridgeState>()) {
 }
 
 EngineRuntime::~EngineRuntime() = default;
@@ -138,8 +139,50 @@ void EngineRuntime::install_asio_termination_signals(boost::asio::io_context& io
     host_->install_asio_termination_signals(io, std::move(on_shutdown));
 }
 
+EngineRuntime::Snapshot EngineRuntime::snapshot() const {
+    return Snapshot{
+        .name = name_,
+        .lifecycle_phase = lifecycle_phase(),
+        .healthy = healthy(),
+        .ready = ready(),
+        .dependencies_ok = dependencies_ok(),
+        .stop_requested = stop_requested(),
+        .context_service_count = context_->service_count(),
+        .compatibility_bridge_count = compatibility_bridge_count(),
+    };
+}
+
 void EngineRuntime::clear_global_services() noexcept {
-    server::core::util::services::clear();
+    server::core::util::services::Registry::instance().clear_owned(bridge_owner_token());
+    clear_bridge_keys();
+}
+
+server::core::util::services::Registry::OwnerToken EngineRuntime::bridge_owner_token() const noexcept {
+    return reinterpret_cast<server::core::util::services::Registry::OwnerToken>(bridge_state_.get());
+}
+
+void EngineRuntime::remember_bridge_key(std::string key) {
+    if (!bridge_state_) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(bridge_state_->mutex);
+    bridge_state_->keys.insert(std::move(key));
+}
+
+void EngineRuntime::clear_bridge_keys() noexcept {
+    if (!bridge_state_) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(bridge_state_->mutex);
+    bridge_state_->keys.clear();
+}
+
+std::size_t EngineRuntime::compatibility_bridge_count() const noexcept {
+    if (!bridge_state_) {
+        return 0;
+    }
+    std::lock_guard<std::mutex> lock(bridge_state_->mutex);
+    return bridge_state_->keys.size();
 }
 
 } // namespace server::core::app

@@ -1,12 +1,22 @@
-# FPS Runtime Contract
+# Realtime Runtime Contract
 
-This document records the current FPS-oriented transport/runtime substrate that is now merged into `main`.
-It defines the live ownership boundary and the intentionally narrow proof scope for gameplay-frequency transport and replication.
+This document records the current realtime-oriented transport/runtime substrate now merged into `main`.
+Today the substrate is exercised primarily through the FPS input workload, and the public engine contract is the canonical `server/core/realtime/**` surface.
+
+## Canonical Surface
+
+- canonical public headers:
+  - `server/core/realtime/direct_bind.hpp`
+  - `server/core/realtime/direct_delivery.hpp`
+  - `server/core/realtime/transport_quality.hpp`
+  - `server/core/realtime/transport_policy.hpp`
+  - `server/core/realtime/runtime.hpp`
+- canonical namespace: `server::core::realtime`
 
 ## Current Scope
 
 - direct UDP/RUDP proof moved beyond attach-only visibility and now covers direct `MSG_PING` plus direct `MSG_FPS_INPUT` ingress
-- the server contains a public `server/core/fps/runtime.hpp` fixed-step runtime for authoritative 2D actor transforms
+- the server contains a public `server/core/realtime/runtime.hpp` fixed-step runtime for authoritative 2D actor transforms
 - replication currently uses reliable TCP snapshots plus gameplay-frequency delta delivery
 - coarse interest filtering and actor history retention are implemented as engine substrate, not game-rule logic
 
@@ -20,7 +30,7 @@ It defines the live ownership boundary and the intentionally narrow proof scope 
 
 ### Fixed-step runtime
 
-- the FPS runtime uses its own fixed-step timer/accumulator; it does not repurpose `TaskScheduler` as an authoritative tick
+- the realtime runtime uses its own fixed-step timer/accumulator; it does not repurpose `TaskScheduler` as an authoritative tick
 - the runtime owns:
   - latest per-session staged input
   - actor creation on first FPS input
@@ -66,7 +76,7 @@ It defines the live ownership boundary and the intentionally narrow proof scope 
   - `tools/loadgen/scenarios/mixed_direct_udp_fps_soak.json`
   - `tools/loadgen/scenarios/mixed_direct_rudp_fps_soak.json`
 - stack/runtime verification:
-  - `CorePublicApiFpsCapabilitySmoke`
+  - `CorePublicApiRealtimeCapabilitySmoke`
   - `tests/python/verify_fps_state_transport.py`
   - `tests/python/verify_fps_rudp_transport.py --scenario attach`
   - `tests/python/verify_fps_rudp_transport.py --scenario off`
@@ -84,7 +94,7 @@ It defines the live ownership boundary and the intentionally narrow proof scope 
 ## Phase 2 Acceptance Boundary
 
 - current Phase 2 acceptance evidence is:
-  - public-consumer FPS capability proof through `CorePublicApiFpsCapabilitySmoke`
+  - public-consumer realtime capability proof through `CorePublicApiRealtimeCapabilitySmoke`
   - installed-consumer runtime proof through `CoreInstalledPackageConsumer`
   - direct UDP/RUDP fallback/restart/impaired-network proof through `tests/python/verify_fps_rudp_transport_matrix.py --scenario phase2-acceptance`
 - the remaining larger transport gap is no longer Phase 2 substrate proof; it is richer quantified/network-shaping evidence such as fuller OS-level netem rehearsal, which belongs to later release-evidence work

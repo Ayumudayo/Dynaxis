@@ -7,10 +7,10 @@
 #include "server/core/net/acceptor.hpp"
 #include "server/core/net/connection_runtime_state.hpp"
 #include "server/core/net/session.hpp"
-#include "server/core/storage/connection_pool.hpp"
-#include "server/core/storage/db_worker_pool.hpp"
+#include "server/core/storage_execution/connection_pool.hpp"
+#include "server/core/storage_execution/db_worker_pool.hpp"
 #include "server/core/storage/redis/client.hpp"
-#include "server/core/state/instance_registry.hpp"
+#include "server/core/discovery/instance_registry.hpp"
 #include "server/core/util/service_registry.hpp"
 #include "server/core/util/crash_handler.hpp"
 #include "server/storage/connection_pool.hpp"
@@ -64,14 +64,14 @@ std::shared_ptr<SessionListenerHandle> make_session_listener_handle(
     return handle;
 }
 
-std::shared_ptr<server::core::storage::IConnectionPool> make_postgres_connection_pool(
+std::shared_ptr<server::core::storage_execution::IConnectionPool> make_postgres_connection_pool(
     const std::string& db_uri,
     std::size_t min_size,
     std::size_t max_size,
     std::uint32_t connect_timeout_ms,
     std::uint32_t query_timeout_ms,
     bool prepare_statements) {
-    server::core::storage::PoolOptions options{};
+    server::core::storage_execution::PoolOptions options{};
     options.min_size = min_size;
     options.max_size = max_size;
     options.connect_timeout_ms = connect_timeout_ms;
@@ -87,7 +87,7 @@ std::shared_ptr<server::storage::IRepositoryConnectionPool> make_repository_conn
     std::uint32_t connect_timeout_ms,
     std::uint32_t query_timeout_ms,
     bool prepare_statements) {
-    server::core::storage::PoolOptions options{};
+    server::core::storage_execution::PoolOptions options{};
     options.min_size = min_size;
     options.max_size = max_size;
     options.connect_timeout_ms = connect_timeout_ms;
@@ -102,7 +102,7 @@ std::shared_ptr<server::core::storage::redis::IRedisClient> make_redis_client(
     return server::storage::redis::make_redis_client(redis_uri, options);
 }
 
-std::shared_ptr<server::core::state::IInstanceStateBackend> make_registry_backend(
+std::shared_ptr<server::core::discovery::IInstanceStateBackend> make_registry_backend(
     const std::shared_ptr<server::core::storage::redis::IRedisClient>& redis_client,
     const std::string& key_prefix,
     std::chrono::seconds ttl) {
@@ -114,7 +114,7 @@ std::shared_ptr<server::core::state::IInstanceStateBackend> make_registry_backen
 }
 
 bool connection_pool_health_check(
-    const std::shared_ptr<server::core::storage::IConnectionPool>& connection_pool) noexcept {
+    const std::shared_ptr<server::core::storage_execution::IConnectionPool>& connection_pool) noexcept {
     try {
         return connection_pool && connection_pool->health_check();
     } catch (...) {
@@ -122,14 +122,14 @@ bool connection_pool_health_check(
     }
 }
 
-std::shared_ptr<server::core::storage::DbWorkerPool> make_db_worker_pool(
-    const std::shared_ptr<server::core::storage::IConnectionPool>& connection_pool,
+std::shared_ptr<server::core::storage_execution::DbWorkerPool> make_db_worker_pool(
+    const std::shared_ptr<server::core::storage_execution::IConnectionPool>& connection_pool,
     std::size_t queue_capacity) {
-    return std::make_shared<server::core::storage::DbWorkerPool>(connection_pool, queue_capacity);
+    return std::make_shared<server::core::storage_execution::DbWorkerPool>(connection_pool, queue_capacity);
 }
 
 void start_db_worker_pool(
-    const std::shared_ptr<server::core::storage::DbWorkerPool>& worker_pool,
+    const std::shared_ptr<server::core::storage_execution::DbWorkerPool>& worker_pool,
     std::size_t thread_count) {
     if (!worker_pool) {
         return;
@@ -138,7 +138,7 @@ void start_db_worker_pool(
 }
 
 void stop_db_worker_pool(
-    const std::shared_ptr<server::core::storage::DbWorkerPool>& worker_pool) noexcept {
+    const std::shared_ptr<server::core::storage_execution::DbWorkerPool>& worker_pool) noexcept {
     if (!worker_pool) {
         return;
     }
@@ -162,7 +162,7 @@ void register_connection_runtime_state_service(
 }
 
 void register_connection_pool_service(
-    const std::shared_ptr<server::core::storage::IConnectionPool>& connection_pool) {
+    const std::shared_ptr<server::core::storage_execution::IConnectionPool>& connection_pool) {
     server::core::util::services::set(connection_pool);
 }
 
@@ -172,7 +172,7 @@ void register_repository_connection_pool_service(
 }
 
 void register_db_worker_pool_service(
-    const std::shared_ptr<server::core::storage::DbWorkerPool>& worker_pool) {
+    const std::shared_ptr<server::core::storage_execution::DbWorkerPool>& worker_pool) {
     server::core::util::services::set(worker_pool);
 }
 

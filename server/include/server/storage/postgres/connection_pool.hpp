@@ -3,7 +3,8 @@
 #include <memory>
 #include <string>
 
-namespace server::core::storage { struct PoolOptions; }
+#include "server/core/storage_execution/connection_pool.hpp"
+
 namespace server::storage { class IRepositoryConnectionPool; }
 
 namespace server::storage::postgres {
@@ -16,6 +17,6 @@ namespace server::storage::postgres {
  */
 std::shared_ptr<server::storage::IRepositoryConnectionPool>
 make_connection_pool(const std::string& db_uri,
-                     const server::core::storage::PoolOptions& opts);
+                     const server::core::storage_execution::PoolOptions& opts);
 
 } // namespace server::storage::postgres

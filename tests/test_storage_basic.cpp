@@ -4,8 +4,8 @@
 #include <string>
 #include <chrono>
 
+#include "server/core/storage_execution/connection_pool.hpp"
 #include "server/storage/postgres/connection_pool.hpp"
-#include "server/core/storage/connection_pool.hpp"
 #include "server/storage/connection_pool.hpp"
 #include "server/storage/repositories.hpp"
 
@@ -31,7 +31,7 @@ TEST(StorageBasic, RoomMessageMembershipHappyPath) {
     if (!db || !*db) {
         GTEST_SKIP() << "DB_URI 미설정 — 테스트 건너뜀";
     }
-    server::core::storage::PoolOptions popts{};
+    server::core::storage_execution::PoolOptions popts{};
     auto pool = server::storage::postgres::make_connection_pool(db, popts);
     ASSERT_TRUE(pool);
     if (!pool->health_check()) {

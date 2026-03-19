@@ -890,7 +890,7 @@ std::optional<std::string> ChatService::load_continuity_world_owner(const std::s
     return redis_->get(make_continuity_world_owner_key(world_id));
 }
 
-std::optional<server::core::state::WorldLifecyclePolicy>
+std::optional<server::core::discovery::WorldLifecyclePolicy>
 ChatService::load_continuity_world_policy(const std::string& world_id) {
     if (!redis_ || world_id.empty()) {
         return std::nullopt;
@@ -900,7 +900,7 @@ ChatService::load_continuity_world_policy(const std::string& world_id) {
     if (!payload.has_value() || payload->empty()) {
         return std::nullopt;
     }
-    return server::core::state::parse_world_lifecycle_policy(*payload);
+    return server::core::discovery::parse_world_lifecycle_policy(*payload);
 }
 
 std::optional<server::core::worlds::WorldMigrationEnvelope>

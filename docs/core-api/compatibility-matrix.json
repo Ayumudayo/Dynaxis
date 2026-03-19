@@ -1,5 +1,5 @@
 {
-  "api_version": "2.17.0",
+  "api_version": "3.0.0",
   "stable_headers": [
     {
       "path": "server/core/api/version.hpp",
@@ -30,27 +30,83 @@
       "compatibility": "stable"
     },
     {
-      "path": "server/core/fps/direct_bind.hpp",
+      "path": "server/core/realtime/direct_bind.hpp",
       "compatibility": "stable"
     },
     {
-      "path": "server/core/fps/direct_delivery.hpp",
+      "path": "server/core/realtime/direct_delivery.hpp",
       "compatibility": "stable"
     },
     {
-      "path": "server/core/fps/transport_quality.hpp",
+      "path": "server/core/realtime/transport_quality.hpp",
       "compatibility": "stable"
     },
     {
-      "path": "server/core/fps/transport_policy.hpp",
+      "path": "server/core/realtime/transport_policy.hpp",
       "compatibility": "stable"
     },
     {
-      "path": "server/core/fps/runtime.hpp",
+      "path": "server/core/realtime/runtime.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/discovery/instance_registry.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/discovery/world_lifecycle_policy.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/storage_execution/connection_pool.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/storage_execution/db_worker_pool.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/storage_execution/retry_backoff.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/storage_execution/unit_of_work.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/plugin/shared_library.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/plugin/plugin_host.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/plugin/plugin_chain_host.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/scripting/script_watcher.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/scripting/lua_runtime.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/scripting/lua_sandbox.hpp",
       "compatibility": "stable"
     },
     {
       "path": "server/core/worlds/migration.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/worlds/aws.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/worlds/kubernetes.hpp",
       "compatibility": "stable"
     },
     {

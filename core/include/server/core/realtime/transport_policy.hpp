@@ -6,7 +6,7 @@
 #include <system_error>
 #include <unordered_set>
 
-namespace server::core::fps {
+namespace server::core::realtime {
 
 namespace detail {
 
@@ -164,4 +164,4 @@ inline DirectAttachDecision evaluate_direct_attach(const DirectTransportRolloutP
     };
 }
 
-} // namespace server::core::fps
+} // namespace server::core::realtime

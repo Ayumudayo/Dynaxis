@@ -1,7 +1,7 @@
 # Extensibility Overview
 
 Dynaxis currently treats native plugin/Lua extensibility as a reusable platform capability, not as a one-off chat feature.
-The implementation is present in the live stack and is governed as `Transitional`, not as a future plan.
+The reusable core mechanism is now governed as `Stable`, while chat-specific ABI/bindings remain `Transitional`.
 
 ## Current Capability
 
@@ -27,6 +27,8 @@ The implementation is present in the live stack and is governed as `Transitional
 
 - server tests under `tests/server/` cover hook integration and auto-disable behavior
 - core tests under `tests/core/` cover plugin host, chain host, Lua runtime, and Lua sandbox behavior
+- `CorePublicApiExtensibilitySmoke` covers stable-header plugin load/chain plus Lua runtime/watcher behavior
+- `CoreInstalledPackageConsumer` runs `server_core_extensibility_consumer` from the installed package path
 - Python admin/control-plane verification lives in `tests/python/verify_admin_api.py`, `verify_admin_auth.py`, and `verify_admin_read_only.py`
 
 ## Related Docs

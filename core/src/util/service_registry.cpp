@@ -54,24 +54,54 @@ Registry& Registry::instance() {
     return singleton;
 }
 
-void Registry::set_any(std::string key, std::any value) {
+void Registry::set_any(std::string key, std::any value, OwnerToken owner) {
     // Registry는 경량 DI 용도로 사용되므로 std::any로 원시 포인터도 안전하게 저장한다.
+    // owner token을 함께 보관해 runtime별 compatibility bridge 정리를 분리한다.
     std::lock_guard<std::mutex> lock(mutex_);
-    services_[std::move(key)] = std::move(value);
+    auto& entries = services_[key];
+    entries.erase(
+        std::remove_if(
+            entries.begin(),
+            entries.end(),
+            [owner](const Entry& entry) { return entry.owner_token == owner; }),
+        entries.end());
+    entries.push_back(Entry{
+        .value = std::move(value),
+        .owner_token = owner,
+    });
 }
 
 std::any Registry::get_any(const std::string& key) const {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = services_.find(key);
-    if (it == services_.end()) {
+    if (it == services_.end() || it->second.empty()) {
         return {};
     }
-    return it->second;
+    return it->second.back().value;
 }
 
 bool Registry::has_impl(const std::string& key) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return services_.find(key) != services_.end();
+    const auto it = services_.find(key);
+    return it != services_.end() && !it->second.empty();
+}
+
+void Registry::clear_owned(OwnerToken owner) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto it = services_.begin(); it != services_.end();) {
+        auto& entries = it->second;
+        entries.erase(
+            std::remove_if(
+                entries.begin(),
+                entries.end(),
+                [owner](const Entry& entry) { return entry.owner_token == owner; }),
+            entries.end());
+        if (entries.empty()) {
+            it = services_.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 void Registry::clear() {
