@@ -30,6 +30,7 @@ public:
     using LogsCallback = server::core::metrics::MetricsHttpServer::LogsCallback;
     using RouteCallback = server::core::metrics::MetricsHttpServer::RouteCallback;
 
+    /** @brief canonical consumer가 읽는 instance-scoped lifecycle/service ownership snapshot입니다. */
     struct Snapshot {
         std::string name;
         LifecyclePhase lifecycle_phase{LifecyclePhase::kInit};
@@ -123,6 +124,7 @@ public:
     void clear_global_services() noexcept;
 
 private:
+    /** @brief runtime가 올린 compatibility bridge key 집합을 추적하는 shared state입니다. */
     struct BridgeState {
         mutable std::mutex mutex;
         std::unordered_set<std::string> keys;

@@ -110,6 +110,7 @@ public:
     void clear();
 
 private:
+    /** @brief one typed registration slot과 owner token을 함께 저장하는 internal entry입니다. */
     struct Entry {
         std::any value;
         OwnerToken owner_token{kUnowned};
