@@ -37,6 +37,7 @@ STABLE_HEADERS = {
     "server/core/scripting/lua_runtime.hpp",
     "server/core/scripting/lua_sandbox.hpp",
     "server/core/worlds/migration.hpp",
+    "server/core/worlds/aws.hpp",
     "server/core/worlds/kubernetes.hpp",
     "server/core/worlds/world_drain.hpp",
     "server/core/worlds/topology.hpp",

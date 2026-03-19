@@ -119,6 +119,7 @@ if (BUILD_GTEST_TESTS)
         core/test_mmorpg_world_drain.cpp
         core/test_mmorpg_topology.cpp
         core/test_worlds_kubernetes.cpp
+        core/test_worlds_aws.cpp
         core/test_mmorpg_world_transfer.cpp
         core/test_direct_bind_contract.cpp
         core/test_core_net.cpp

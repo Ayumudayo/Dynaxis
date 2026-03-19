@@ -30,6 +30,7 @@
 #include "server/core/storage_execution/retry_backoff.hpp"
 #include "server/core/storage_execution/unit_of_work.hpp"
 #include "server/core/worlds/migration.hpp"
+#include "server/core/worlds/aws.hpp"
 #include "server/core/worlds/kubernetes.hpp"
 #include "server/core/worlds/world_drain.hpp"
 #include "server/core/worlds/topology.hpp"
@@ -430,6 +431,45 @@ int main() {
     if (!require_true(
             kubernetes_scale_out.phase == server::core::worlds::KubernetesPoolOrchestrationPhase::kComplete,
             "kubernetes scale-out contract should report complete once workload and assignment are aligned")) {
+        return 1;
+    }
+    const auto aws_binding = server::core::worlds::make_aws_pool_binding(
+        kubernetes_binding,
+        server::core::worlds::AwsAdapterDefaults{
+            .cluster_name = "eks-consumer",
+            .placement = {
+                .region = "ap-northeast-2",
+                .availability_zones = {"ap-northeast-2a", "ap-northeast-2c"},
+                .subnet_ids = {"subnet-a", "subnet-c"},
+            },
+            .listener_port = 7000,
+            .redis_prefix = "consumer-redis",
+            .postgres_prefix = "consumer-pg",
+        });
+    if (!require_true(aws_binding.identity.cluster_name == "eks-consumer", "aws binding cluster identity mismatch")) {
+        return 1;
+    }
+    const auto aws_status = server::core::worlds::evaluate_aws_pool_adapter_status(
+        aws_binding,
+        server::core::worlds::AwsLoadBalancerObservation{
+            .load_balancer_attached = true,
+            .target_group_attached = true,
+            .targets_healthy = true,
+        },
+        server::core::worlds::AwsManagedDependencyObservation{
+            .redis_ready = true,
+            .postgres_ready = true,
+        },
+        server::core::worlds::TopologyActuationAdapterLeaseAction{
+            .world_id = "starter-a",
+            .shard = "alpha",
+            .action = server::core::worlds::TopologyActuationActionKind::kScaleOutPool,
+            .replica_delta = 1,
+        },
+        topology_runtime_assignment);
+    if (!require_true(
+            aws_status.phase == server::core::worlds::AwsPoolAdapterPhase::kComplete,
+            "aws adapter status should report complete once load balancer, managed dependencies, and runtime assignments are aligned")) {
         return 1;
     }
     const auto world_transfer = server::core::worlds::evaluate_world_transfer(

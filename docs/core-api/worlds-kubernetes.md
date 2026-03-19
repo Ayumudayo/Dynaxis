@@ -99,6 +99,9 @@
 - no pod scheduling or service/LB attachment semantics
 - no provider-specific metadata
 
+Provider-specific LB / region / managed dependency mapping moved to:
+- `docs/core-api/worlds-aws.md`
+
 ## Public Proof
 
 - unit contract: `WorldsKubernetesContractTest.*`

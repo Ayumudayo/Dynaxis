@@ -33,6 +33,7 @@
 #include "server/core/storage_execution/retry_backoff.hpp"
 #include "server/core/storage_execution/unit_of_work.hpp"
 #include "server/core/worlds/migration.hpp"
+#include "server/core/worlds/aws.hpp"
 #include "server/core/worlds/kubernetes.hpp"
 #include "server/core/worlds/world_drain.hpp"
 #include "server/core/worlds/topology.hpp"
@@ -402,6 +403,35 @@ void scenario_worlds_kubernetes() {
             .replica_delta = 1,
         },
         std::nullopt);
+    const auto aws_binding = server::core::worlds::make_aws_pool_binding(
+        binding,
+        server::core::worlds::AwsAdapterDefaults{
+            .cluster_name = "eks-stable-scenarios",
+            .placement = {
+                .region = "ap-northeast-2",
+                .availability_zones = {"ap-northeast-2a", "ap-northeast-2c"},
+                .subnet_ids = {"subnet-a", "subnet-c"},
+            },
+            .listener_port = 7000,
+        });
+    (void)server::core::worlds::evaluate_aws_pool_adapter_status(
+        aws_binding,
+        server::core::worlds::AwsLoadBalancerObservation{
+            .load_balancer_attached = true,
+            .target_group_attached = true,
+            .targets_healthy = true,
+        },
+        server::core::worlds::AwsManagedDependencyObservation{
+            .redis_ready = true,
+            .postgres_ready = true,
+        },
+        server::core::worlds::TopologyActuationAdapterLeaseAction{
+            .world_id = "starter-a",
+            .shard = "alpha",
+            .action = server::core::worlds::TopologyActuationActionKind::kScaleOutPool,
+            .replica_delta = 1,
+        },
+        assignment_document);
 }
 
 void scenario_storage_execution() {

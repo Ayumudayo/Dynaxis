@@ -1,5 +1,5 @@
 {
-  "api_version": "2.23.0",
+  "api_version": "2.24.0",
   "stable_headers": [
     {
       "path": "server/core/api/version.hpp",
@@ -99,6 +99,10 @@
     },
     {
       "path": "server/core/worlds/migration.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/worlds/aws.hpp",
       "compatibility": "stable"
     },
     {

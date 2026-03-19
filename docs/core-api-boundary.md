@@ -39,6 +39,7 @@
 | `server/core/storage_execution/db_worker_pool.hpp` | Stable | generic transaction seam 위에서 비동기 storage task를 실행하는 canonical worker-pool surface |
 | `server/core/storage_execution/retry_backoff.hpp` | Stable | linear/exponential-full-jitter retry backoff 계산을 공용화하는 canonical storage execution retry helper surface |
 | `server/core/worlds/migration.hpp` | Stable | draining source world에서 target world owner로의 migration envelope/status evaluation을 정의하는 world migration runtime surface |
+| `server/core/worlds/aws.hpp` | Stable | Kubernetes-first pool binding을 AWS-specific world identity, load balancer attachment, managed Redis/Postgres naming, region/zone placement metadata로 해석하는 provider adapter contract |
 | `server/core/worlds/kubernetes.hpp` | Stable | desired topology, adapter lease, runtime assignment, drain orchestration을 Kubernetes workload lifecycle vocabulary로 해석하는 K8s-first world orchestration contract |
 | `server/core/worlds/world_drain.hpp` | Stable | live world drain phase/progress evaluation을 정의하는 world-drain runtime surface |
 | `server/core/worlds/topology.hpp` | Stable | desired topology document, observed topology pool aggregation, desired-vs-observed reconciliation status, read-only topology actuation planning, revisioned actuation request/status evaluation, executor-facing execution progress/status evaluation, observed-topology realization/adoption evaluation, adapter-facing lease/status evaluation, runtime-assignment document/instance lookup helper를 정의하는 world topology control-plane surface |
