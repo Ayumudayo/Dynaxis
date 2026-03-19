@@ -1,7 +1,7 @@
 # Realtime Runtime Contract
 
 This document records the current realtime-oriented transport/runtime substrate now merged into `main`.
-Today the substrate is exercised primarily through the FPS input workload, but the public engine contract is the canonical `server/core/realtime/**` surface rather than the older `server/core/fps/**` wrapper path.
+Today the substrate is exercised primarily through the FPS input workload, and the public engine contract is the canonical `server/core/realtime/**` surface.
 
 ## Canonical Surface
 
@@ -12,7 +12,6 @@ Today the substrate is exercised primarily through the FPS input workload, but t
   - `server/core/realtime/transport_policy.hpp`
   - `server/core/realtime/runtime.hpp`
 - canonical namespace: `server::core::realtime`
-- `server/core/fps/**` remains a 2.x compatibility wrapper only; migration/removal plan is tracked in `docs/core-api/fps-to-realtime-migration.md`
 
 ## Current Scope
 
@@ -78,7 +77,6 @@ Today the substrate is exercised primarily through the FPS input workload, but t
   - `tools/loadgen/scenarios/mixed_direct_rudp_fps_soak.json`
 - stack/runtime verification:
   - `CorePublicApiRealtimeCapabilitySmoke`
-  - `CoreFpsCompatSmoke`
   - `tests/python/verify_fps_state_transport.py`
   - `tests/python/verify_fps_rudp_transport.py --scenario attach`
   - `tests/python/verify_fps_rudp_transport.py --scenario off`
@@ -97,7 +95,6 @@ Today the substrate is exercised primarily through the FPS input workload, but t
 
 - current Phase 2 acceptance evidence is:
   - public-consumer realtime capability proof through `CorePublicApiRealtimeCapabilitySmoke`
-  - transitional fps wrapper proof through `CoreFpsCompatSmoke`
   - installed-consumer runtime proof through `CoreInstalledPackageConsumer`
   - direct UDP/RUDP fallback/restart/impaired-network proof through `tests/python/verify_fps_rudp_transport_matrix.py --scenario phase2-acceptance`
 - the remaining larger transport gap is no longer Phase 2 substrate proof; it is richer quantified/network-shaping evidence such as fuller OS-level netem rehearsal, which belongs to later release-evidence work

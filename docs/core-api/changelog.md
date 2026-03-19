@@ -39,10 +39,9 @@
 - `server/core/net/connection.hpp`의 송신 큐 수명주기 계약을 명시하고, close 중 큐 정리와 in-flight write가 충돌하지 않도록 버퍼 소유권 규칙을 강화했습니다.
 
 ### 파괴적 변경(Breaking)
+- `server/core/fps/{direct_bind,direct_delivery,transport_quality,transport_policy,runtime}.hpp` compatibility wrapper path를 제거했습니다. canonical public surface는 `server/core/realtime/**`만 지원합니다.
+- Migration: `docs/core-api/fps-to-realtime-migration.md`
+- `server/core/mmorpg/{migration,topology,world_drain,world_transfer}.hpp` compatibility wrapper path를 제거했습니다. canonical public surface는 `server/core/worlds/**`만 지원합니다.
+- Migration: `docs/core-api/mmorpg-to-worlds-migration.md`
 - `server/core/build_info.hpp`와 `server/core/metrics/build_info.hpp`가 legacy 브랜드 토큰을 직접 노출하지 않도록 정리되면서 기본 build info 메트릭 이름이 `knights_build_info`에서 `runtime_build_info`로 변경되었습니다.
 - Migration: `docs/core-api/runtime-build-info-rename.md`
-
-### 사용 중단(Deprecated)
-- `server/core/fps/{direct_bind,direct_delivery,transport_quality,transport_policy,runtime}.hpp`는 `server/core/realtime/**`로의 전환을 위한 2.x compatibility wrapper로만 유지됩니다.
-- Migration: `docs/core-api/fps-to-realtime-migration.md`
-- `server/core/mmorpg/{migration,topology,world_drain,world_transfer}.hpp`는 `server/core/worlds/**`로의 전환을 위한 compatibility wrapper로만 유지됩니다.

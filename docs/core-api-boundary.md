@@ -44,15 +44,6 @@
 | `server/core/worlds/world_drain.hpp` | Stable | live world drain phase/progress evaluation을 정의하는 world-drain runtime surface |
 | `server/core/worlds/topology.hpp` | Stable | desired topology document, observed topology pool aggregation, desired-vs-observed reconciliation status, read-only topology actuation planning, revisioned actuation request/status evaluation, executor-facing execution progress/status evaluation, observed-topology realization/adoption evaluation, adapter-facing lease/status evaluation, runtime-assignment document/instance lookup helper를 정의하는 world topology control-plane surface |
 | `server/core/worlds/world_transfer.hpp` | Stable | live world owner handoff의 phase/status 평가 contract를 정의하는 world owner-transfer runtime surface |
-| `server/core/fps/direct_bind.hpp` | Transitional | `server/core/realtime/direct_bind.hpp`의 compatibility wrapper. 2.x 동안 기존 genre-specific include 경로를 유지하고 3.0에서 제거 예정인 shim |
-| `server/core/fps/direct_delivery.hpp` | Transitional | `server/core/realtime/direct_delivery.hpp`의 compatibility wrapper |
-| `server/core/fps/transport_quality.hpp` | Transitional | `server/core/realtime/transport_quality.hpp`의 compatibility wrapper |
-| `server/core/fps/transport_policy.hpp` | Transitional | `server/core/realtime/transport_policy.hpp`의 compatibility wrapper |
-| `server/core/fps/runtime.hpp` | Transitional | `server/core/realtime/runtime.hpp`의 compatibility wrapper |
-| `server/core/mmorpg/migration.hpp` | Transitional | `server/core/worlds/migration.hpp`의 compatibility wrapper. 기존 genre-specific include 경로를 한 릴리스 주기 동안 유지하기 위한 shim |
-| `server/core/mmorpg/world_drain.hpp` | Transitional | `server/core/worlds/world_drain.hpp`의 compatibility wrapper |
-| `server/core/mmorpg/topology.hpp` | Transitional | `server/core/worlds/topology.hpp`의 compatibility wrapper |
-| `server/core/mmorpg/world_transfer.hpp` | Transitional | `server/core/worlds/world_transfer.hpp`의 compatibility wrapper |
 | `server/core/compression/compressor.hpp` | Stable | 비정상/손상 입력에 대한 명시적 오류 신호를 포함한 LZ4 압축/해제 계약 |
 | `server/core/concurrent/job_queue.hpp` | Stable | 명시적 stop 및 backpressure 동작을 포함한 bounded/unbounded FIFO 큐 계약 |
 | `server/core/concurrent/locked_queue.hpp` | Internal | 내부 worker 배선에 사용하는 저수준 큐 기본 구성요소 |

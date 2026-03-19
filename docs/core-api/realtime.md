@@ -13,8 +13,7 @@
 ## Canonical Naming
 - canonical include path family: `server/core/realtime/**`
 - canonical namespace: `server::core::realtime`
-- `server/core/fps/**` is a 2.x compatibility wrapper only and is planned for removal in 3.0
-- migration guide: `docs/core-api/fps-to-realtime-migration.md`
+- removal/migration note: `docs/core-api/fps-to-realtime-migration.md`
 
 ## Scope
 - This surface promotes the engine-neutral fixed-step realtime runtime substrate.
@@ -87,7 +86,6 @@
 
 ## Public Proof
 - contract proof target: `CorePublicApiRealtimeCapabilitySmoke`
-- transitional wrapper proof: `CoreFpsCompatSmoke`
 - installed consumer proof: `CoreInstalledPackageConsumer`
 - preferred Phase 2 acceptance proof:
   - `CorePublicApiRealtimeCapabilitySmoke`

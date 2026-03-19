@@ -7,16 +7,7 @@
 ## 현재 점검 스냅샷
 
 ### 과도기(Transitional) 헤더
-- `docs/core-api-boundary.md` 기준 현재 `Transitional` 헤더는 compatibility wrapper와 service-owned chat extensibility 계층입니다.
-  - `server/core/fps/direct_bind.hpp`
-  - `server/core/fps/direct_delivery.hpp`
-  - `server/core/fps/transport_quality.hpp`
-  - `server/core/fps/transport_policy.hpp`
-  - `server/core/fps/runtime.hpp`
-  - `server/core/mmorpg/migration.hpp`
-  - `server/core/mmorpg/topology.hpp`
-  - `server/core/mmorpg/world_drain.hpp`
-  - `server/core/mmorpg/world_transfer.hpp`
+- `docs/core-api-boundary.md` 기준 현재 `Transitional` 헤더는 service-owned chat extensibility 계층만 남아 있습니다.
 - 현재 package/public-api 예제와 installed-consumer 경로는 reusable core extensibility mechanism을 `Stable` 헤더로 사용하고, chat-specific transitional ABI는 사용하지 않습니다.
 
 ### 최상위 모듈별 Internal 헤더 사용 현황

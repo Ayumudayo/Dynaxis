@@ -115,7 +115,6 @@ if (BUILD_GTEST_TESTS)
         core/test_app_host_lifecycle.cpp
         core/test_engine_composition.cpp
         core/test_mmorpg_migration.cpp
-        core/test_mmorpg_compat_headers.cpp
         core/test_mmorpg_world_drain.cpp
         core/test_mmorpg_topology.cpp
         core/test_worlds_kubernetes.cpp
@@ -380,17 +379,17 @@ if (BUILD_CONTRACT_TESTS)
     add_test(NAME CorePublicApiRealtimeCapabilitySmoke COMMAND core_public_api_realtime_capability_smoke)
     set_tests_properties(CorePublicApiRealtimeCapabilitySmoke PROPERTIES LABELS "contract;public-api;realtime")
 
-    add_executable(core_fps_compat_smoke
-        core/fps_compat_smoke.cpp
+    add_executable(core_public_api_worlds_aws_smoke
+        core/public_api_worlds_aws_smoke.cpp
     )
-    target_include_directories(core_fps_compat_smoke PRIVATE
+    target_include_directories(core_public_api_worlds_aws_smoke PRIVATE
         ${CMAKE_SOURCE_DIR}/core/include
     )
-    target_link_libraries(core_fps_compat_smoke PRIVATE
+    target_link_libraries(core_public_api_worlds_aws_smoke PRIVATE
         server_core
     )
-    add_test(NAME CoreFpsCompatSmoke COMMAND core_fps_compat_smoke)
-    set_tests_properties(CoreFpsCompatSmoke PROPERTIES LABELS "contract;compat")
+    add_test(NAME CorePublicApiWorldsAwsSmoke COMMAND core_public_api_worlds_aws_smoke)
+    set_tests_properties(CorePublicApiWorldsAwsSmoke PROPERTIES LABELS "contract;public-api;worlds;provider")
 
     if (TARGET test_plugin_runtime_v1 AND TARGET test_plugin_runtime_v2)
         add_executable(core_public_api_extensibility_smoke

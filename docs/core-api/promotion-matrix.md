@@ -29,5 +29,5 @@
 - Realtime public capability work should promote a narrower transport/runtime contract above the current internal session/RUDP internals rather than exposing these implementation headers directly.
   - current promoted runtime slice: `server/core/realtime/runtime.hpp`
   - current promoted transport-policy slice: `server/core/realtime/direct_delivery.hpp`
-  - `server/core/fps/**` remains only as a 2.x compatibility wrapper layer
+  - `server/core/realtime/**` is the only public realtime naming; old fps wrapper paths are removed in 3.0
 - Compatibility wrappers and chat-specific extensibility contracts remain the intentionally public non-stable seams.

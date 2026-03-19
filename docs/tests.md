@@ -33,7 +33,7 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
   - `core_public_api_stable_header_scenarios`
   - `core_public_api_extensibility_smoke`
   - `core_public_api_realtime_capability_smoke`
-  - `core_fps_compat_smoke`
+  - `core_public_api_worlds_aws_smoke`
 - public `server_core` package-first 검증:
   - `ctest --test-dir build-windows -C Debug -R "CoreInstalledPackageConsumer|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure`
   - `CoreInstalledPackageConsumer`는 `server_core_installed_consumer`와 `server_core_extensibility_consumer` 둘 다 실행한다
@@ -155,6 +155,9 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
   - optional live `kind` metrics-budget proof:
     - `python tests/python/verify_worlds_kubernetes_kind_metrics_budget.py`
     - proves the current migration and transfer continuity stories also emit the expected gateway/server metrics without unexpected fallback growth
+  - provider-path proof:
+    - `build-windows/tests/Release/core_public_api_worlds_aws_smoke.exe`
+    - proves one deterministic desired-topology -> Kubernetes pool binding -> AWS provider binding -> provider adapter status path through the public stable headers
   - preferred manual/release evidence runner:
     - `python tests/python/capture_worlds_kubernetes_kind_evidence.py --run-id <run_id>`
     - writes `build/k8s-kind-evidence/<run_id>/manifest.json` plus one log per proof

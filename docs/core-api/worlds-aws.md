@@ -128,6 +128,7 @@
 ## Public Proof
 
 - unit contract: `WorldsAwsContractTest.*`
+- dedicated provider-path smoke: `CorePublicApiWorldsAwsSmoke`
 - public-api smoke: `core_public_api_smoke`
 - stable-header scenarios: `core_public_api_stable_header_scenarios`
 - installed consumer: `CoreInstalledPackageConsumer`

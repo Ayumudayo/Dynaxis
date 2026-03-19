@@ -42,13 +42,11 @@
 - include 형식은 `#include "server/core/..."` 또는 `<server/core/...>`를 사용합니다.
 - 구현 경로(`core/src/**`)나 `Internal` 헤더를 포함하지 않습니다.
 - realtime public surface의 canonical path/namespace는 `server/core/realtime/**`와 `server::core::realtime`입니다.
-- 기존 `server/core/fps/**` include 경로는 2.x compatibility wrapper로만 유지되며 새 consumer의 기준 표면이 아닙니다.
 - discovery public surface의 canonical path/namespace는 `server/core/discovery/**`와 `server::core::discovery`입니다.
 - `server/core/state/**`는 underlying/internal ownership 경로로 남으며 새 consumer의 기준 표면이 아닙니다.
 - storage execution public surface의 canonical path/namespace는 `server/core/storage_execution/**`와 `server::core::storage_execution`입니다.
 - `server/core/storage/*`와 shared Redis client contract은 underlying/internal ownership 경로로 남으며 새 consumer의 기준 표면이 아닙니다.
 - world orchestration public surface의 canonical path/namespace는 `server/core/worlds/**`와 `server::core::worlds`입니다.
-- 기존 `server/core/mmorpg/**` include 경로는 compatibility wrapper로만 유지되며 새 consumer의 기준 표면이 아닙니다.
 - 내부 헤더 목록은 `docs/core-api-boundary.md`에서만 관리합니다.
 
 ## Package-First Proof Baseline
@@ -59,10 +57,10 @@
 - `core_public_api_stable_header_scenarios`
 - `core_public_api_extensibility_smoke`
 - `core_public_api_realtime_capability_smoke`
+- `CorePublicApiWorldsAwsSmoke`
 - `CoreInstalledPackageConsumer` (`server_core_installed_consumer` + `server_core_extensibility_consumer` run)
 - `CoreApiBoundaryFixtures`
 - `CoreApiStableGovernanceFixtures`
-  - `CoreFpsCompatSmoke` (2.x compatibility wrapper proof)
 - Linux parity proof:
   - `pwsh scripts/run_linux_installed_consumer.ps1`
 - boundary truth는 `docs/core-api-boundary.md`, version/matrix truth는 `core/include/server/core/api/version.hpp`와 `docs/core-api/compatibility-matrix.json`입니다.
