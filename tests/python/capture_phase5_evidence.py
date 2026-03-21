@@ -111,7 +111,16 @@ def invoke_deploy(
         command.append("-Detached")
     if build:
         command.append("-Build")
-    run_command(command, label=f"deploy:{action}", log_path=log_path, extra_env={"SESSION_CONTINUITY_ENABLED": "1"})
+    extra_env = {
+        "SESSION_CONTINUITY_ENABLED": "1",
+    }
+    if build:
+        # The hardening workflow prebuilds `dynaxis-base:latest` locally. Keep
+        # follow-up compose rebuilds on the classic builder path so Compose can
+        # consume that local image instead of trying to pull it from a registry.
+        extra_env["DOCKER_BUILDKIT"] = "0"
+        extra_env["COMPOSE_DOCKER_CLI_BUILD"] = "0"
+    run_command(command, label=f"deploy:{action}", log_path=log_path, extra_env=extra_env)
 
 
 def wait_http_ready(port: int, timeout_sec: float) -> None:
