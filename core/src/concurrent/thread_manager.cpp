@@ -16,9 +16,9 @@ ThreadManager::~ThreadManager() {
     Stop();
 }
 
-// ThreadManager는 JobQueue를 소비하는 고정 스레드 풀입니다.
-// 각 워커 스레드는 JobQueue::Pop()이 nullptr를 반환할 때까지 반복 실행됩니다.
-// 이를 통해 스레드 생성/삭제 오버헤드를 줄이고 안정적인 작업 처리를 보장합니다.
+// ThreadManager는 JobQueue를 소비하는 고정 스레드 풀이다.
+// 각 워커 스레드는 `JobQueue::Pop()`이 nullptr를 반환할 때까지 반복 실행된다.
+// "작업마다 새 스레드 생성" 방식을 피해야 생성/파괴 오버헤드와 종료 순서 혼란을 줄일 수 있다.
 void ThreadManager::Start(int num_threads) {
     if (num_threads <= 0) {
         return;
@@ -41,7 +41,7 @@ void ThreadManager::Stop() {
         return;
     }
 
-    job_queue_.Stop(); // Pop()에서 대기 중인 워커들을 모두 깨워 종료 신호를 전달합니다.
+    job_queue_.Stop(); // `Pop()`에서 대기 중인 워커들을 모두 깨워 종료 신호를 전달한다.
 
     for (auto& t : threads_) {
         if (t.joinable()) {
@@ -51,7 +51,8 @@ void ThreadManager::Stop() {
     threads_.clear();
 }
 
-// 각 워커 스레드는 JobQueue::Pop()이 nullptr를 반환할 때까지 반복 실행됩니다.
+// 각 워커 스레드는 `JobQueue::Pop()`이 nullptr를 반환할 때까지 반복 실행된다.
+// 종료 신호를 별도 채널로 두지 않고 queue stop에 수렴시키면, 생산자/소비자 종료 규약을 한곳에 모을 수 있다.
 void ThreadManager::WorkerLoop() {
     while (!stopped_.load(std::memory_order_acquire)) {
         Job job = job_queue_.Pop();

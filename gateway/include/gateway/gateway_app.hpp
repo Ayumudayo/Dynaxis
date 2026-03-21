@@ -40,17 +40,19 @@ namespace gateway {
 class GatewayConnection;
 
 /**
- * @brief Gateway 애플리케이션의 메인 오케스트레이터입니다.
+ * @brief gateway 프로세스의 엣지 유입(edge ingress), 백엔드(backend) 선택, direct-transport 게이트를 조율하는 메인 오케스트레이터입니다.
  *
- * TCP 리스너로 클라이언트 연결을 수락하고,
- * Redis Instance Registry를 바탕으로 backend(`server_app`)를 선택해 TCP 브리지를 구성합니다.
+ * 이 타입은 TCP 리스너로 클라이언트 연결을 수락하고, Redis Instance Registry를 바탕으로
+ * 백엔드(`server_app`)를 선택해 TCP 브리지를 구성합니다. 동시에 연결 타임아웃(connect timeout),
+ * 재시도 예산(retry budget), circuit breaker, UDP bind abuse guard 같은 보호 장치를 한곳에 모아,
+ * 엣지 트래픽 문제와 백엔드 비즈니스 로직을 분리합니다.
  */
 class GatewayApp {
 public:
     /**
-     * @brief Gateway 세션이 backend로 payload를 전달하기 위한 전송 인터페이스입니다.
+     * @brief Gateway 세션이 백엔드로 payload를 전달하기 위한 전송 인터페이스입니다.
      *
-     * TCP/UDP ingress 경로는 이 인터페이스만 사용해 backend forward를 수행하고,
+     * TCP/UDP 유입 경로는 이 인터페이스만 사용해 백엔드 전달을 수행하고,
      * 실제 전송 구현(TCP bridge, 향후 UDP/RUDP direct path)은 구현체로 분리합니다.
      */
     class ITransportSession {
@@ -71,13 +73,13 @@ public:
         kRejectCircuitOpen,
     };
 
-    /** @brief backend 선택 결과입니다. */
+    /** @brief 백엔드 선택 결과입니다. sticky 적중 여부를 함께 들고 다녀 후속 메트릭/정책 판단에 재사용합니다. */
     struct SelectedBackend {
         server::core::discovery::InstanceRecord record;
         bool sticky_hit{false};
     };
 
-    /** @brief resume alias와 함께 보관하는 최소 locator 힌트입니다. */
+    /** @brief 정확한 sticky binding이 사라졌을 때 resume 대상을 좁히기 위한 최소 locator 힌트입니다. */
     struct ResumeLocatorHint {
         std::string backend_instance_id;
         std::string world_id;
@@ -87,14 +89,16 @@ public:
         std::string shard;
     };
 
-    /** @brief TCP 응답으로 전달되는 UDP bind ticket 정보입니다. */
+    /** @brief TCP 응답으로 전달되는 UDP bind ticket 정보입니다. direct path를 임의 endpoint에 열어 주지 않기 위한 최소 증표입니다. */
     using UdpBindTicket = server::core::realtime::DirectBindTicket;
 
     /**
-     * @brief backend 서버와의 TCP 연결을 관리하는 내부 클래스입니다.
+     * @brief 선택된 backend 서버와의 TCP 연결을 관리하는 내부 클래스입니다.
      *
-     * `GatewayConnection`(클라이언트)과 game server 사이에서
-     * payload를 양방향 브리지합니다.
+     * 이 클래스는 `GatewayConnection`(클라이언트 측)과 game server 사이에서 payload를
+     * 양방향 브리지합니다. connect timeout, bounded send queue, retry/backoff를 직접
+     * 들고 있는 이유는, edge 쪽에서 느린 backend를 먼저 차단하지 않으면 gateway 전체가
+     * 같이 무거워질 수 있기 때문입니다.
      */
     class BackendConnection : public ITransportSession,
                               public std::enable_shared_from_this<BackendConnection> {
@@ -242,10 +246,13 @@ public:
     }
 
     /**
-     * @brief backend 연결을 생성하고 등록합니다.
+     * @brief backend 연결을 생성하고 세션 상태에 등록합니다.
      * @param client_id 클라이언트 식별자
      * @param connection 연결 weak 포인터
      * @return 생성된 backend 연결
+     *
+     * 생성과 등록을 한 단계로 묶는 이유는, edge 세션 상태와 backend 브리지 핸들을 따로
+     * 관리하기 시작하면 close/retry/cleanup 순서가 쉽게 엇갈리기 때문입니다.
      */
     BackendConnectionPtr create_backend_connection(const std::string& client_id,
                                              std::weak_ptr<GatewayConnection> connection);
@@ -257,9 +264,12 @@ public:
     void close_backend_connection(const std::string& session_id);
     
     /**
-     * @brief Redis Registry에서 최적 backend를 선택합니다.
+     * @brief Redis Registry에서 현재 가장 적절한 backend를 선택합니다.
      * @param client_id sticky 조회에 사용할 클라이언트 식별자
      * @return 선택된 backend 정보, 후보가 없으면 std::nullopt
+     *
+     * 현재 선택 규칙은 "유효한 sticky가 있으면 재사용하고, 없으면 least-connections로 고른다"는
+     * 형태입니다. 이 규칙을 한 함수에 모아 두면 edge 라우팅 정책을 중앙에서 바꾸기 쉽습니다.
      */
     std::optional<SelectedBackend> select_best_server(const std::string& client_id = "");
     void register_resume_routing_key(const std::string& routing_key,
@@ -275,6 +285,9 @@ public:
      * @brief 세션용 UDP bind ticket을 발급하고 TCP 응답 프레임을 생성합니다.
      * @param session_id gateway 내부 세션 ID
      * @return 생성된 `MSG_UDP_BIND_RES` 프레임, 발급 불가 시 std::nullopt
+     *
+     * bind ticket을 TCP 응답으로 내려보내는 이유는, direct path를 열기 전에 이미 인증된
+     * 세션과 UDP endpoint를 연결해야 하기 때문입니다.
      */
     std::optional<std::vector<std::uint8_t>> make_udp_bind_ticket_frame(const std::string& session_id);
     bool try_send_direct_client_frame(std::string_view session_id,
@@ -339,7 +352,7 @@ public:
      void start_infrastructure_probe();
      void stop_infrastructure_probe();
 
-    /** @brief gateway 세션별 TCP/UDP 바인딩 상태를 보관하는 내부 상태입니다. */
+    /** @brief gateway 세션별 TCP/UDP/RUDP 바인딩 상태를 보관하는 내부 상태입니다. */
     struct SessionState {
         TransportSessionPtr session;              ///< backend 전송 세션 핸들
         std::string client_id;                     ///< sticky 조회용 클라이언트 ID

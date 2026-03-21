@@ -11,7 +11,13 @@ using DirectEgressRoute = server::core::realtime::DirectDeliveryRoute;
 using DirectEgressReason = server::core::realtime::DirectDeliveryReason;
 using DirectEgressDecision = server::core::realtime::DirectDeliveryDecision;
 
-/** @brief Direct UDP/RUDP egress eligibility inputs for a backend payload. */
+/**
+ * @brief backend payload가 direct UDP/RUDP egress 대상인지 판단할 때 쓰는 입력값입니다.
+ *
+ * gateway는 모든 outbound payload를 direct 경로로 보내지 않습니다. 이 문맥 구조체는
+ * 메시지 종류와 현재 세션의 UDP/RUDP 상태를 한곳에 모아, "지금 direct path를 써도
+ * 되는가"를 일관된 규칙으로 평가하게 합니다.
+ */
 struct DirectEgressContext {
     std::uint16_t msg_id{0};
     bool udp_bound{false};

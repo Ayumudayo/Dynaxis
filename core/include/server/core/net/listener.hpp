@@ -15,7 +15,10 @@ namespace server::core::net {
  * @brief TCP 리스너의 공통 수락 루프를 제공하는 베이스 클래스입니다.
  *
  * `connection_factory`를 주입받아 어떤 `Connection` 파생 객체를 만들지 외부에서 결정합니다.
- * 덕분에 gateway/server가 동일 수락 골격을 공유하면서도 서로 다른 연결 타입을 사용할 수 있습니다.
+ * 덕분에 gateway/server가 동일한 수락 골격을 공유하면서도 서로 다른 연결 타입을 사용할 수 있습니다.
+ *
+ * 중요한 점은 이 타입이 accept loop까지만 소유한다는 것입니다. 연결 이후의 packet/session
+ * 의미까지 리스너가 알게 하면, 공용 transport 계층이 앱별 도메인 의미에 오염됩니다.
  */
 class Listener : public std::enable_shared_from_this<Listener> {
 public:
@@ -51,7 +54,7 @@ public:
     boost::asio::ip::tcp::endpoint local_endpoint() const;
 
 protected:
-    /** @brief 연결 수락 성공 시 호출되는 확장 포인트입니다. */
+    /** @brief 연결 수락 성공 시 호출되는 확장 포인트입니다. 수락 이후의 앱별 초기화는 여기서 이어집니다. */
     virtual void on_accept(std::shared_ptr<Connection> connection);
     /** @brief 수락/소켓 계층 오류 발생 시 호출되는 확장 포인트입니다. */
     virtual void on_error(const boost::system::error_code& ec);

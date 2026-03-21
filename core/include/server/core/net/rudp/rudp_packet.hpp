@@ -10,12 +10,12 @@
 
 namespace server::core::net::rudp {
 
-/** @brief RUDP 패킷 매직 값("RU")입니다. */
+/** @brief RUDP 패킷 매직 값("RU")입니다. 빠른 프로토콜 식별에 사용합니다. */
 inline constexpr std::uint16_t kRudpMagic = 0x5255;
 /** @brief RUDP 헤더 직렬화 길이(byte)입니다. */
 inline constexpr std::size_t kRudpHeaderBytes = 34;
 
-/** @brief RUDP 제어 패킷 타입입니다. */
+/** @brief RUDP 제어 패킷 타입입니다. HELLO/ACK/DATA/CLOSE 같은 상태 전이 종류를 구분합니다. */
 enum class PacketType : std::uint8_t {
     kHello = 1,
     kHelloAck = 2,
@@ -24,13 +24,13 @@ enum class PacketType : std::uint8_t {
     kClose = 5,
 };
 
-/** @brief RUDP flags 비트 정의입니다. */
+/** @brief RUDP flags 비트 정의입니다. ACK 전용 전송과 재전송 여부를 구분합니다. */
 enum PacketFlags : std::uint8_t {
     kFlagAckOnly = 1 << 0,
     kFlagRetransmit = 1 << 1,
 };
 
-/** @brief RUDP outer header입니다. */
+/** @brief RUDP outer header입니다. inner payload 앞에 붙는 공용 wire header입니다. */
 struct RudpHeader {
     std::uint16_t magic{kRudpMagic};
     std::uint8_t version{1};
@@ -46,7 +46,7 @@ struct RudpHeader {
     std::uint16_t payload_length{0};
 };
 
-/** @brief RUDP decode 결과입니다. */
+/** @brief RUDP decode 결과입니다. 헤더와 payload span을 함께 반환합니다. */
 struct DecodeResult {
     bool ok{false};
     RudpHeader header{};
@@ -70,7 +70,7 @@ inline void encode_header(const RudpHeader& header, std::uint8_t* out) {
     server::core::protocol::write_be16(header.payload_length, out + 32);
 }
 
-/** @brief wire bytes를 RUDP 헤더/페이로드로 역직렬화합니다. */
+/** @brief wire bytes를 RUDP 헤더와 payload로 역직렬화합니다. */
 inline DecodeResult decode_packet(std::span<const std::uint8_t> datagram) {
     DecodeResult result{};
     if (datagram.size() < kRudpHeaderBytes) {
@@ -103,7 +103,7 @@ inline DecodeResult decode_packet(std::span<const std::uint8_t> datagram) {
     return result;
 }
 
-/** @brief 헤더+payload를 단일 datagram으로 만듭니다. */
+/** @brief 헤더와 payload를 단일 datagram으로 만듭니다. */
 inline std::vector<std::uint8_t> encode_packet(const RudpHeader& header, std::span<const std::uint8_t> payload) {
     std::vector<std::uint8_t> out(kRudpHeaderBytes + payload.size());
     RudpHeader mutable_header = header;
@@ -115,7 +115,7 @@ inline std::vector<std::uint8_t> encode_packet(const RudpHeader& header, std::sp
     return out;
 }
 
-/** @brief datagram이 RUDP magic을 가지는지 빠르게 검사합니다. */
+/** @brief datagram이 RUDP magic을 가지는지 빠르게 검사합니다. fast-path 분기에서 decode 비용을 줄일 때 사용합니다. */
 inline bool looks_like_rudp(std::span<const std::uint8_t> datagram) {
     return datagram.size() >= 2 && server::core::protocol::read_be16(datagram.data()) == kRudpMagic;
 }

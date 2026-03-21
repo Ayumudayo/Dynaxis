@@ -7,13 +7,13 @@
 
 namespace server::core::worlds {
 
-/** @brief world owner handoff 판단에 필요한 target candidate readiness 한 건입니다. */
+/** @brief world owner handoff 판단에 필요한 target 후보 readiness 한 건입니다. */
 struct ObservedWorldTransferInstance {
     std::string instance_id;
     bool ready{false};
 };
 
-/** @brief world owner transfer를 계산하기 위한 observed drain/owner snapshot입니다. */
+/** @brief world owner transfer를 계산하기 위한 observed drain/owner 스냅샷입니다. */
 struct ObservedWorldTransferState {
     std::string world_id;
     std::string owner_instance_id;
@@ -61,7 +61,13 @@ struct WorldTransferSummary {
     std::uint32_t ready_instances{0};
 };
 
-/** @brief world owner handoff contract의 현재 phase입니다. */
+/**
+ * @brief world owner handoff 계약의 현재 phase입니다.
+ *
+ * 이 상태를 별도 구조체로 두는 이유는 "drain이 선언되었다"와 "실제로 owner handoff가
+ * 끝났다"를 분리해서 보이기 위해서입니다. 운영자는 target 존재, readiness, owner 일치 여부를
+ * 한 번에 읽어야 안전하게 handoff를 진행할 수 있습니다.
+ */
 struct WorldTransferStatus {
     std::string world_id;
     std::string owner_instance_id;

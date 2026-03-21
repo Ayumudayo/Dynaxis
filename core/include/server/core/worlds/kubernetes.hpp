@@ -41,7 +41,7 @@ inline std::optional<KubernetesWorkloadKind> parse_kubernetes_workload_kind(
     return std::nullopt;
 }
 
-/** @brief desired topology pool 한 건을 Kubernetes namespace/workload에 연결한 binding입니다. */
+/** @brief desired topology pool 한 건을 Kubernetes namespace/workload에 연결한 바인딩입니다. */
 struct KubernetesPoolBinding {
     std::string world_id;
     std::string shard;
@@ -53,7 +53,7 @@ struct KubernetesPoolBinding {
     std::vector<std::string> placement_tags;
 };
 
-/** @brief Kubernetes workload와 runtime side의 현재 관측 카운터입니다. */
+/** @brief Kubernetes workload와 runtime 측의 현재 관측 카운터입니다. */
 struct KubernetesPoolObservation {
     std::uint32_t current_spec_replicas{0};
     std::uint32_t ready_replicas{0};
@@ -143,7 +143,12 @@ inline constexpr std::string_view kubernetes_pool_next_action_name(
     return "none";
 }
 
-/** @brief Kubernetes-first controller가 현재 pool을 어떤 단계로 보고 있는지 요약합니다. */
+/**
+ * @brief Kubernetes-first controller가 현재 pool을 어떤 단계로 보고 있는지 요약합니다.
+ *
+ * 이 요약은 단순 replica 수만 보는 것이 아니라, runtime assignment와 drain orchestration까지
+ * 함께 포함합니다. 그래야 "pod는 떴지만 실제 world handoff는 끝나지 않은 상태"를 따로 표현할 수 있습니다.
+ */
 struct KubernetesPoolOrchestrationSummary {
     bool action_present{false};
     bool assignment_present{false};
@@ -161,7 +166,12 @@ struct KubernetesPoolOrchestrationSummary {
     WorldDrainOrchestrationPhase drain_orchestration_phase{WorldDrainOrchestrationPhase::kIdle};
 };
 
-/** @brief topology actuation을 Kubernetes workload lifecycle vocabulary로 해석한 결과입니다. */
+/**
+ * @brief topology actuation을 Kubernetes workload lifecycle vocabulary로 해석한 결과입니다.
+ *
+ * core가 직접 Kubernetes API를 호출하지 않더라도, control-plane은 "지금 이 pool에서 다음에
+ * 무엇을 해야 하는가"를 Kubernetes 언어로 읽을 수 있어야 합니다. 이 구조체가 그 번역 결과를 담습니다.
+ */
 struct KubernetesPoolOrchestrationStatus {
     std::string world_id;
     std::string shard;

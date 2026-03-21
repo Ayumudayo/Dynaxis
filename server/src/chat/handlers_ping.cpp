@@ -26,7 +26,8 @@ void ChatService::on_ping(ChatService::NetSession& s, std::span<const std::uint8
         if (uid.empty()) return;
         touch_user_presence(uid);
     } catch (...) {
-        // 네트워크 hiccup 등으로 실패해도 치명적이지 않으므로 조용히 무시한다.
+        // ping 경로의 presence 갱신 실패는 치명적이지 않으므로 조용히 무시한다.
+        // keepalive 하나 실패 때문에 세션 전체를 끊기보다, 다음 tick/핑에서 다시 회복할 기회를 주는 편이 낫다.
     }
 }
 

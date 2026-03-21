@@ -47,7 +47,8 @@ struct WorkerConfig {
     bool dlq_on_error = true;
     bool ack_on_error = true;
 
-    // Pending reclaim (PEL) settings
+    // 미처리 재회수(PEL reclaim) 설정
+    // 워커가 죽거나 처리 중 멈췄던 메시지를 언제 다시 가져올지 정하는 안전장치다.
     bool reclaim_enabled = true;
     long long reclaim_interval_ms = 1000;
     long long reclaim_min_idle_ms = 5000;
@@ -62,7 +63,8 @@ struct WorkerConfig {
 
     static WorkerConfig Load() {
         WorkerConfig cfg;
-        // .env 파일 로드 (기존 환경변수 덮어쓰기)
+        // 설정은 현재 프로세스 환경 변수에서만 읽는다.
+        // 여기서 별도 `.env`를 다시 해석하지 않는 이유는 배포 환경이 이미 결정한 값을 도구가 임의로 덮어쓰지 않게 하기 위해서다.
 
         if (const char* v = std::getenv("DB_URI")) cfg.db_uri = v;
         if (const char* v = std::getenv("REDIS_URI")) cfg.redis_uri = v;
@@ -162,21 +164,25 @@ std::size_t EstimateEntryBytes(const server::core::storage::redis::IRedisClient:
 } // namespace
 
 // -----------------------------------------------------------------------------
-// Write-Back Worker
+// Write-Behind 워커
 // -----------------------------------------------------------------------------
 /**
- * @brief Write-Behind 패턴을 구현한 워커 클래스
- * 
- * Redis Stream에 쌓인 이벤트를 비동기적으로 읽어서 PostgreSQL DB에 저장합니다.
- * 이 패턴을 사용하면 메인 서버가 DB 쓰기 부하를 직접 감당하지 않아도 되므로
- * 응답 속도가 빨라지고, 트래픽 폭주 시에도 DB를 보호할 수 있습니다.
- * 
+ * @brief write-behind 패턴을 실행하는 독립 워커입니다.
+ *
+ * 이 프로세스는 메인 서버가 직접 DB 쓰기 지연을 감당하지 않도록, Redis Stream에 적재된 이벤트를 뒤에서 읽어
+ * PostgreSQL에 반영합니다. 목적은 단순한 비동기화가 아니라 "실시간 응답 경로"와 "느린 영속화 경로"를 분리해
+ * 서로의 장애를 바로 전염시키지 않게 하는 것입니다.
+ *
+ * 왜 별도 워커인가:
+ * - 서버 요청 경로에서 DB를 바로 기다리면 꼬리 지연시간(tail latency)이 급격히 늘고, 트래픽 급증 시 DB가 병목이 된다.
+ * - 반대로 영속화를 완전히 버리면 감사, 재처리, 운영 분석에 필요한 사실이 사라진다.
+ * - 그래서 스트림을 사이에 둬 적어도 한 번(at-least-once) 적재 경로를 따로 두고, 실패는 DLQ/재시도로 분리해 다룬다.
+ *
  * 주요 흐름:
- * 1. Redis Stream (`session_events`)에서 Consumer Group을 통해 메시지를 읽습니다.
- * 2. 읽은 메시지를 내부 버퍼에 모읍니다 (Batching).
- * 3. 일정 개수(`batch_max_events`)가 모이거나 일정 시간(`batch_delay_ms`)이 지나면 DB에 저장합니다.
- * 4. 저장 성공 시 Redis에 ACK를 보내 메시지 처리를 완료합니다.
- * 5. 실패 시 DLQ(Dead Letter Queue)로 보내거나 재시도합니다.
+ * 1. Redis Stream(`session_events`)에서 consumer group으로 이벤트를 읽는다.
+ * 2. 이벤트를 내부 버퍼에 모아 배치 단위로 DB에 반영한다.
+ * 3. commit 성공 후에만 ACK 하여 적어도 한 번은 처리되게 유지한다.
+ * 4. 영구적 오류는 DLQ로 옮겨 무한 재시도를 피하고, 일시 장애는 재연결/재시도로 흡수한다.
  */
 class WbWorker {
 public:
@@ -188,7 +194,8 @@ public:
         , config_(std::move(config)) {}
 
     int Run() {
-        // Readiness requires both Redis and DB to function.
+        // 이 워커의 ready는 Redis와 DB가 둘 다 살아 있어야만 true가 된다.
+        // 둘 중 하나라도 빠지면 "이벤트를 읽기만 하거나 쓰기만 하는 반쪽 상태"가 되므로 정상 처리라고 볼 수 없다.
         engine_.declare_dependency("redis");
         engine_.declare_dependency("db");
         engine_.set_dependency_ok("redis", false);
@@ -212,7 +219,7 @@ public:
             );
         }
 
-        // Redis 연결
+        // Redis는 입력 큐 자체이므로 시작 시점에 반드시 붙어 있어야 한다.
         server::core::storage::redis::Options ropts{};
         redis_ = wb_tools::make_redis_client(config_.redis_uri, ropts);
         if (!redis_ || !redis_->health_check()) {
@@ -223,25 +230,22 @@ public:
         NoteRedisAvailability(true, "startup_health_check");
         engine_.set_service(redis_);
 
-        // Consumer Group 생성 (이미 존재하면 무시됨)
-        // Consumer Group은 여러 워커가 메시지를 중복 없이 나눠서 처리하게 해줍니다.
+        // consumer group은 여러 워커가 같은 스트림을 나눠 처리할 때 중복 소비를 줄이는 기본 경계다.
+        // 이미 존재하는 경우를 성공으로 보는 이유는, 재기동이나 scale-out이 매번 새 그룹을 만들면 안 되기 때문이다.
         (void)redis_->xgroup_create_mkstream(config_.stream_key, config_.group);
         info("WB worker consuming stream=" + config_.stream_key + 
              ", group=" + config_.group + ", consumer=" + config_.consumer);
 
-        // DB 연결 (초기 연결 시도)
+        // DB는 시작 시점에 붙는 것이 이상적이지만, 초기 실패만으로 즉시 종료하지는 않는다.
+        // 재연결 루프를 갖춘 프로세스이므로, 일시 DB 장애는 런타임 복구 대상으로 다루는 편이 운영상 더 낫다.
         if (!EnsureDbConnection()) {
             std::cerr << "WB worker: Initial DB connection failed" << std::endl;
-            // 초기 연결 실패 시 종료할지, 재시도할지 정책 결정 필요.
-            // 여기서는 재시도 루프를 돌기 위해 일단 진행하거나, 
-            // 안전하게 종료할 수 있음. 현재 요구사항은 "재연결"이므로
-            // Loop() 내에서 처리하도록 함.
         }
 
         engine_.start_admin_http(config_.metrics_port, [this]() { return RenderMetrics(); });
         engine_.mark_running();
 
-        // 메인 루프 시작
+        // 메인 루프는 "DB가 준비되지 않으면 읽지 않는다"보다 "읽은 뒤 확인 응답(ACK)을 섣불리 하지 않는다"를 더 강하게 보장해야 한다.
         Loop();
         engine_.run_shutdown();
         engine_.mark_stopped();
@@ -379,7 +383,8 @@ private:
         std::size_t buf_bytes = 0;
 
         while (!app_host_.stop_requested()) {
-            // DB 연결 확인 (끊어졌으면 재연결 시도)
+            // DB가 끊겨 있으면 ready를 내리고 재연결 백오프로 들어간다.
+            // 이때 스트림 소비를 계속 밀어붙이면 ACK/commit 경계가 흐려져 pending만 쌓이고 복구가 더 어려워진다.
             if (!EnsureDbConnection()) {
                 app_host_.set_ready(false);
                 SleepDbReconnectBackoff();
@@ -389,7 +394,8 @@ private:
             ResetDbReconnectBackoff();
             app_host_.set_ready(true);
 
-            // 0. Pending reclaim (PEL)
+            // 0. 미처리 재회수(PEL reclaim)
+            // 이전 워커가 잡고 죽은 메시지나 오래 걸린 메시지를 다시 가져와 정체를 풀어 주는 단계다.
             {
                 const auto now = std::chrono::steady_clock::now();
                 if (config_.reclaim_enabled &&
@@ -401,24 +407,28 @@ private:
                 }
             }
 
-            // 1. Redis에서 메시지 읽기 (Blocking)
+            // 1. Redis에서 메시지 읽기 (blocking)
+            // 짧은 block timeout을 두어 빈 루프 바쁜 대기(busy-spin)를 피하면서도 종료 신호와 재연결 판단에 빨리 반응한다.
             std::vector<server::core::storage::redis::IRedisClient::StreamEntry> entries;
             if (!redis_->xreadgroup(config_.stream_key, config_.group, config_.consumer, 
                                   500, config_.batch_max_events, entries)) {
                 NoteRedisAvailability(false, "xreadgroup");
-                // 장애 시 잠시 대기한 뒤 재시도한다.
+                // Redis read 실패는 일시 장애일 수 있으므로 짧게 쉬고 다시 본다.
+                // 곧바로 tight loop로 돌면 장애 시 로그 폭주와 CPU 낭비가 커진다.
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 continue; 
             }
             NoteRedisAvailability(true, "xreadgroup");
 
             // 2. 버퍼링
+            // 이벤트를 한 건씩 바로 commit하면 안전해 보여도 처리량이 급격히 떨어지므로, 배치 단위와 지연시간 상한을 같이 둔다.
             if (!entries.empty()) {
                 for (auto& e : entries) {
                     buf_bytes += EstimateEntryBytes(e);
                     buf.emplace_back(std::move(e));
 
-                    // 배치 크기나 용량 초과 시 즉시 플러시
+                    // 배치 크기나 총 바이트 상한을 넘으면 즉시 flush한다.
+                    // 큰 payload가 몰릴 때 건수만 보면 메모리가 예상보다 빨리 불어날 수 있다.
                     if (buf.size() >= config_.batch_max_events || buf_bytes >= config_.batch_max_bytes) {
                         Flush(buf);
                         buf_bytes = 0;
@@ -427,7 +437,8 @@ private:
                 }
             }
 
-            // 3. 시간 기반 플러시 (데이터가 적어도 일정 시간 지나면 저장)
+            // 3. 시간 기반 플러시
+            // 트래픽이 낮을 때도 버퍼가 너무 오래 머물지 않게 해, write-behind가 무기한 지연 큐로 변질되지 않게 한다.
             auto now = std::chrono::steady_clock::now();
             if (!buf.empty() && 
                 std::chrono::duration_cast<std::chrono::milliseconds>(now - last_flush).count() >= config_.batch_delay_ms) {
@@ -436,7 +447,8 @@ private:
                 last_flush = now;
             }
 
-            // 4. Pending 상태 모니터링 (1초마다)
+            // 4. pending 상태 모니터링
+            // 적체량(backlog)을 계속 관찰해야 "워커가 느린가", "ACK가 막혔는가", "PEL reclaim이 밀리는가"를 운영에서 구분할 수 있다.
             if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_pending_log).count() >= 1000) {
                 long long pending = 0;
                 if (redis_->xpending(config_.stream_key, config_.group, pending)) {
@@ -503,14 +515,12 @@ private:
         }
     }
 
-    // 버퍼에 쌓인 이벤트를 DB에 저장하고 Redis에 ACK 처리
+    // 버퍼에 쌓인 이벤트를 DB에 저장하고 Redis에 ACK 처리한다.
     //
-    // 동작 방식:
-    // 1) 배치 단위로 하나의 트랜잭션을 열고, 이벤트 단위 실패는 savepoint(subtransaction)로 격리한다.
-    //    - 개별 트랜잭션(1 event = 1 transaction)보다 훨씬 빠르면서도,
-    //      특정 이벤트의 포맷 오류가 전체 배치를 망치지 않도록 한다.
-    // 2) 트랜잭션 commit 성공 후에만 ACK 한다. (At-least-once)
-    // 3) 영구적 오류는 DLQ로 이동한 뒤 ACK(옵션)하여 무한 재시도를 방지한다.
+    // 핵심 규칙:
+    // 1) 배치 단위 트랜잭션으로 처리량을 확보하되, 이벤트 단위 실패는 savepoint로 격리해 전체 배치를 살린다.
+    // 2) commit 성공 후에만 ACK 해 적어도 한 번(at-least-once) 적재 의미를 지킨다.
+    // 3) 영구적 오류는 DLQ로 분리하고, ack_on_error 정책은 데이터 유실 가능성을 운영자가 명시적으로 선택한 경우에만 따른다.
     void Flush(std::vector<server::core::storage::redis::IRedisClient::StreamEntry>& buf) {
         if (buf.empty()) return;
 
@@ -560,6 +570,7 @@ private:
                         bool acked = false;
 
                         // 영구적 오류는 DLQ로 이동한다.
+                        // 그대로 pending에 남겨 두면 같은 독성 이벤트가 배치를 계속 막아 전체 처리량을 떨어뜨릴 수 있다.
                         if (config_.dlq_on_error && !config_.dlq_stream.empty()) {
                             if (SendToDlq(e, ex.what())) {
                                 (void)Ack(e.id);
@@ -621,7 +632,7 @@ private:
             auto current_max = max_ref.load(std::memory_order_relaxed);
             while (current_max < ms_u &&
                    !max_ref.compare_exchange_weak(current_max, ms_u, std::memory_order_relaxed)) {
-                // retry
+                // 경쟁 갱신이 있을 수 있으므로 CAS를 재시도한다.
             }
         }
         
@@ -644,7 +655,7 @@ private:
         std::string trace_id;
         std::string correlation_id;
 
-        // JSON Payload 생성 (nlohmann/json 사용)
+        // 원본 field를 그대로 JSON payload로 보존해 두면, 나중에 DLQ 재처리나 감사 시 원문 복원이 쉬워진다.
         json j = json::object();
         for (const auto& f : e.fields) {
             if (f.first == "type") type = f.second;
@@ -658,7 +669,8 @@ private:
             j[f.first] = f.second;
         }
 
-        // UUID 검증 및 정규화
+        // UUID 필드는 유효한 값만 DB에 넣는다.
+        // 스트림 원문이 더럽더라도 적재 단계에서 SQL 타입 오류로 전체 배치를 터뜨리지 않게 하려는 방어선이다.
         auto normalize_uuid = [](const std::optional<std::string>& opt) -> std::string {
             if (!opt || opt->empty()) return "";
             if (!IsUuid(*opt)) return "";
@@ -677,7 +689,7 @@ private:
             server::core::log::debug("span_start component=wb_worker span=db_insert");
         }
 
-        // DB Insert
+        // DB insert는 prepared statement로 고정해 파싱 비용과 SQL 주입 면을 함께 줄인다.
         const std::string payload = j.dump();
         tx.exec_prepared("wb_insert_session_event",
                          e.id, type, ts_v, uid_v, sid_v, rid_v, payload);
@@ -696,7 +708,8 @@ private:
             }
             fields.emplace_back("error", error_msg);
             
-            // DLQ 스트림에 추가 (최대 길이 제한 없음)
+            // DLQ는 조사 대상이므로 기본적으로 최대 길이를 강제하지 않는다.
+            // 자동 trimming을 걸면 장애 순간의 원인 표본이 가장 먼저 사라질 수 있다.
             (void)redis_->xadd(config_.dlq_stream, fields, nullptr, std::nullopt, true);
             return true;
         } catch (...) {
@@ -747,7 +760,7 @@ private:
     std::string RenderMetrics() const {
         std::ostringstream stream;
 
-        // Build metadata (git hash/describe + build time)
+        // build metadata를 같이 내보내면 어느 워커 바이너리가 backlog를 처리 중인지 메트릭만으로도 바로 식별할 수 있다.
         server::core::metrics::append_build_info(stream);
         server::core::metrics::append_runtime_core_metrics(stream);
         server::core::metrics::append_prometheus_metrics(stream);

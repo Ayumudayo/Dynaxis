@@ -36,6 +36,12 @@
 - `runtime_metrics` snapshot은 프로세스 전역 카운터와 히스토그램 버킷을 안정적인 읽기 계약으로 제공합니다.
 - canonical embeddability consumer는 인스턴스 ownership 관측에 `EngineRuntime::snapshot()`을 우선 사용하고, `runtime_metrics`는 process-wide operational telemetry로 취급합니다.
 
+## Consumer Guidance
+- 인스턴스 단위 lifecycle, readiness, context service ownership을 읽고 싶다면 `EngineRuntime::snapshot()`을 사용합니다.
+- 프로세스 전체의 hot-path telemetry, queue depth, dispatch latency, HTTP reject, RUDP fallback 같은 운영 카운터를 읽고 싶다면 `runtime_metrics`를 사용합니다.
+- `runtime_metrics`는 process-wide aggregation이므로, multi-runtime embedding 환경에서 per-runtime ownership source처럼 해석하면 안 됩니다.
+- `metrics::metrics` registry는 서비스별 추가 series를 노출하는 exporter plane이고, `runtime_metrics`는 core가 고정적으로 소유하는 substrate counter plane입니다.
+
 ## 운영 규칙
 - 메트릭 콜백은 가볍고 논블로킹으로 유지합니다.
 - public bootstrap은 `server/core/**` 헤더만으로 조립 가능해야 하며, 앱별 route/listener/worker 세부 구현은 runtime composition 위에 남깁니다.

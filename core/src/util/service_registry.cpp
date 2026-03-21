@@ -13,7 +13,9 @@
 namespace server::core::util::services {
 
 namespace {
-// DLL이나 테스트 바이너리가 분리된 주소 공간에서 동일 레지스트리를 재사용하기 위한 환경 변수 키
+// DLL이나 테스트 바이너리가 분리된 모듈 경계에서도 동일 레지스트리를 재사용하기 위한 환경 변수 키.
+// compatibility bridge가 필요한 이유는, 레거시 전역 lookup을 바로 없앨 수 없는 동안에도
+// runtime instance별 소유권 정리를 분리하기 위해서다.
 constexpr const char* kRegistryEnvVar = "SERVER_CORE_SERVICE_REGISTRY";
 
 std::string pointer_to_string(const Registry* reg) {
@@ -44,7 +46,8 @@ Registry& Registry::instance() {
     }
 
     // 환경 변수로 레지스트리 주소를 공유하면 모듈 경계를 넘어 같은 인스턴스를 재사용할 수 있다.
-    // 이는 DLL이나 Shared Object로 분리된 플러그인들이 메인 프로세스의 서비스를 참조해야 할 때 유용하다.
+    // 이는 DLL이나 Shared Object로 분리된 플러그인이 메인 프로세스 서비스를 참조해야 할 때 필요하다.
+    // 그렇지 않으면 모듈마다 "비슷하지만 다른" 전역 registry가 생겨 service alias가 끊길 수 있다.
     auto pointer_str = pointer_to_string(&singleton);
 #if defined(_WIN32)
     _putenv_s(kRegistryEnvVar, pointer_str.c_str());
@@ -55,8 +58,9 @@ Registry& Registry::instance() {
 }
 
 void Registry::set_any(std::string key, std::any value, OwnerToken owner) {
-    // Registry는 경량 DI 용도로 사용되므로 std::any로 원시 포인터도 안전하게 저장한다.
-    // owner token을 함께 보관해 runtime별 compatibility bridge 정리를 분리한다.
+    // Registry는 경량 DI 용도로 사용되므로 std::any로 원시 포인터도 함께 저장한다.
+    // owner token을 같이 들고 있어야, 한 runtime teardown이 다른 runtime의 compatibility bridge를
+    // 지워 버리는 문제를 피할 수 있다.
     std::lock_guard<std::mutex> lock(mutex_);
     auto& entries = services_[key];
     entries.erase(

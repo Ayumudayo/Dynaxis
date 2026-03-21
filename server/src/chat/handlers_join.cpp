@@ -20,13 +20,13 @@ namespace corelog = server::core::log;
  *
  * 비밀번호 검증/멤버십 기록/presence 갱신/입장 브로드캐스트를
  * 단일 작업 단위로 처리해 상태 불일치를 최소화합니다.
+ * join은 보기보다 쓰기 단계가 많아서, 중간에 순서가 틀어지면
+ * "방에는 들어왔는데 소유자/비밀번호/활성 목록은 이전 값" 같은 반쪽 상태가 쉽게 생깁니다.
  */
 namespace server::app::chat {
 
-// -----------------------------------------------------------------------------
-// 방 입장 (Join) 핸들러
-// -----------------------------------------------------------------------------
-// 사용자가 특정 방에 입장을 요청할 때 호출됩니다.
+// join은 한 사용자의 위치를 한 방에서 다른 방으로 옮기는 authoritative 전이다.
+// 비밀번호, 멤버십, recent-history 기준점, presence, fanout이 같은 순서를 따라야 반쪽 상태가 남지 않는다.
 void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8_t> payload) {
     std::string room;
     std::string sp;
@@ -34,7 +34,7 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
         s.send_error(proto::errc::INVALID_PAYLOAD, "bad join payload");
         return;
     }
-    // payload is now advanced past room
+    // room 이름을 읽고 나면 span은 자동으로 다음 필드 위치로 이동한다.
     if (!payload.empty()) {
         proto::read_lp_utf8(payload, sp);
     }
@@ -54,7 +54,8 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
         if (room_to_join.empty()) room_to_join = "lobby";
         corelog::info(std::string("JOIN_ROOM: ") + room_to_join);
 
-        // 1. Redis에서 비밀번호 미리 조회 (Lock 없이 수행)
+        // 1. Redis에서 비밀번호를 먼저 읽는다.
+        // 느린 원격 조회를 state mutex 안에서 수행하면 전체 방 상태 갱신이 막히므로 락 밖에서 처리한다.
         std::string redis_password_value;
         bool redis_password_found = false;
         if (redis_) {
@@ -98,7 +99,8 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
                 }
             }
             
-            // 비밀번호 검증 로직
+            // 비밀번호 검증은 Redis -> 로컬 캐시 순으로 확인한다.
+            // 분산 상태를 우선 존중하되, Redis 일시 실패 시 로컬 캐시로 완전히 빈 방처럼 오판하지 않게 한다.
             std::string expected_password;
             
             // Redis 조회 결과 반영
@@ -147,7 +149,7 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
                 should_set_redis_password = true;
             }
 
-            // 기존에 참여 중인 방이 있으면 그 방에서 먼저 제거한다.
+            // 기존 방에서 먼저 제거하고 새 방에 추가해야 한 세션이 두 방의 active member로 동시에 남지 않는다.
             auto itold = state_.cur_room.find(session_sp.get());
             if (itold != state_.cur_room.end()) { previous_room = itold->second; }
             if (itold != state_.cur_room.end() && itold->second != room_to_join) {
@@ -155,8 +157,8 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
                 if (itroom != state_.rooms.end()) {
                     const std::string old_room = itold->second;
                     itroom->second.erase(session_sp);
-                    // 방에 남아 있는 세션이 없다면(로비 제외) 비밀번호도 함께 삭제한다.
-                    // 빈 방의 상태를 정리하여 메모리 누수를 방지합니다.
+                    // 방에 남아 있는 세션이 없다면(로비 제외) 방 메타데이터도 함께 정리한다.
+                    // 빈 방 흔적을 남겨 두면 같은 이름으로 재생성할 때 이전 소유자/비밀번호가 섞일 수 있다.
                     bool is_empty = true;
                     for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) {
                         if (wit->expired()) wit = itroom->second.erase(wit); 
@@ -190,7 +192,7 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
                 }
             }
             
-            // 새 방에 세션 추가
+            // 새 방 등록은 기존 방 정리 뒤에 수행해 room membership이 한 시점 기준으로 보이게 한다.
             state_.cur_room[session_sp.get()] = room_to_join;
             state_.rooms[room_to_join].insert(session_sp);
 
@@ -210,7 +212,8 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
                 }
             }
             
-            // 입장 알림 브로드캐스트 메시지를 구성한다.
+            // 입장 알림 본문은 lock 안에서 구성하되, 실제 전송은 lock 밖에서 수행한다.
+            // 전송 중 네트워크 backpressure가 생겨도 공용 상태 락을 오래 잡지 않기 위해서다.
             if (auto it_uuid = state_.user_uuid.find(session_sp.get()); it_uuid != state_.user_uuid.end()) { user_uuid = it_uuid->second; }
             if (auto it_logical = state_.logical_session_id.find(session_sp.get()); it_logical != state_.logical_session_id.end()) {
                 logical_session_id = it_logical->second;
@@ -268,7 +271,8 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
         // 로컬 세션들에게 입장 알림 전송
         for (auto& t : targets) t->async_send(game_proto::MSG_CHAT_BROADCAST, body, 0);
 
-        // DB upsert (멤버십 기록)
+        // DB 멤버십은 upsert로 반영한다.
+        // join은 재시도나 중복 호출이 있을 수 있으므로, 중복 row보다 "최신 상태 하나"가 유지되는 편이 복구와 감사에 유리하다.
         if (db_pool_) {
             try {
                 std::string uid;
@@ -282,7 +286,8 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
                     if (!rid.empty()) {
                         joined_room_id = rid;
                         auto uow = db_pool_->make_repository_unit_of_work();
-                        // 멤버십 테이블에 입장 기록 (upsert)
+                        // 멤버십 테이블에는 입장 기록을 upsert한다.
+                        // join이 반복돼도 중복 row보다 최신 상태가 더 중요하므로 upsert가 맞다.
                         uow->memberships().upsert_join(uid, rid, "member");
                         // 방 입장 시점의 마지막 메시지까지 읽음으로 표시한다.
                         auto last_id = uow->messages().get_last_id(rid);
@@ -295,14 +300,15 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
             } catch (...) {}
         }
 
-        // Redis Presence 및 User List 갱신 (DB와 독립적으로 수행)
+        // Redis presence와 room 사용자 목록은 DB와 독립적으로 갱신한다.
+        // DB commit과 한 트랜잭션으로 묶을 수는 없지만, 적어도 같은 join 작업 안에서 순서를 고정해 수렴을 빠르게 만든다.
         if (redis_) {
             try {
-                // 1. 이전 방에서 제거 (방 이동 시)
+                // 1. 이전 방에서 제거(방 이동 시)
                 if (!previous_room.empty() && previous_room != room_to_join) {
                     redis_->srem("room:users:" + previous_room, sender);
                     
-                    // 이전 방이 비었는지 확인하고 활성 목록에서 제거 (Room List Sync)
+                    // 이전 방이 비었는지 확인하고 활성 목록에서 제거한다.
                     if (previous_room != "lobby") {
                         std::size_t remaining = 1;
                         if (redis_->scard("room:users:" + previous_room, remaining) && remaining == 0) {
@@ -331,12 +337,12 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
                 // 2. 새 방에 추가
                 redis_->sadd("room:users:" + room_to_join, sender);
 
-                // 2.1 활성 방 목록에 추가 (Room List Sync)
+                // 2.1 활성 방 목록에 추가한다.
                 if (room_to_join != "lobby") {
                     redis_->sadd("rooms:active", room_to_join);
                 }
 
-                // 3. Presence 갱신 (logged-in user only)
+                // 3. presence 갱신(로그인 사용자만)
                 if (!user_uuid.empty() && !joined_room_id.empty()) {
                     redis_->sadd(make_presence_key("presence:room:", joined_room_id), user_uuid);
                 }
@@ -349,7 +355,7 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
             corelog::warn("DEBUG: Redis not available in on_join");
         }
         
-        // Write-behind 이벤트 발행
+        // join도 나중에 감사나 DLQ 재처리로 따라가야 하므로 stream에 남긴다.
         std::optional<std::string> uid_opt;
         if (!user_uuid.empty()) {
             uid_opt = user_uuid;

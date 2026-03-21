@@ -5,6 +5,8 @@
 운영 환경에서는 보통 **외부 TCP(L4) 로드밸런서(예: HAProxy)** 뒤에 여러 `gateway_app` 인스턴스를 두고 수평 확장합니다.
 `gateway_app`은 Redis Instance Registry를 조회해 backend(`server_app`)를 선택하고, 1:1 TCP 브리지를 구성합니다(Sticky + Least Connections).
 
+이 모듈이 따로 필요한 이유는, backend 선택과 연결 보호 장치를 `server_app` 안으로 밀어 넣지 않기 위해서다. gateway가 없다면 재접속 사용자를 어느 backend로 돌려보낼지, connect timeout과 send queue 폭주를 어디서 끊을지, direct UDP/RUDP 같은 transport 실험을 어느 계층에서 통제할지를 server가 모두 떠안아야 한다. 현재 구조는 이런 edge 문제를 gateway에서 먼저 흡수하게 해 준다.
+
 ## 구성
 ```
 gateway/
@@ -24,6 +26,8 @@ gateway/
 - 브리지 경로(client -> backend)는 raw-byte enqueue 경로를 사용해 불필요한 임시 `std::vector<std::uint8_t>` 생성을 줄였습니다.
 - 인증은 `auth::IAuthenticator` 를 구현해 확장할 수 있습니다 (`ALLOW_ANONYMOUS`, `AUTH_PROVIDER`, `AUTH_ENDPOINT`).
 - Redis SessionDirectory(`gateway/session/<client_id>`)로 sticky routing을 수행하고, Redis Instance Registry의 `active_sessions`를 기준으로 least-connections 방식으로 backend를 선택합니다.
+- ingress rate limit, active session 상한, circuit breaker, retry budget을 통해 과부하와 downstream 장애를 앞단에서 감쇠합니다.
+- exact backend sticky binding이 사라진 경우를 대비해 resume locator hint로 continuity fallback 범위를 좁힙니다.
 
 ### 왜 Sticky + Least Connections를 함께 쓰는가
 - **Sticky만 사용**하면 특정 backend로 세션이 고착되어 장기적으로 부하가 한쪽으로 쏠릴 수 있습니다.

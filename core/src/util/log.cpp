@@ -66,23 +66,24 @@ std::size_t parse_buffer_capacity_from_env() {
     return kDefaultCapacity;
 }
 
-// 로그 레벨을 저장하는 원자적 변수 (기본값: INFO)
+// 현재 로그 레벨을 저장하는 원자적 변수.
+// fast path에서 락 없이 필터링할 수 있어야 request 경로가 로그 설정 조회 때문에 막히지 않는다.
 std::atomic<level> g_level{parse_level_from_env()};
 
-// 최근 로그를 저장하는 버퍼 (디버깅/모니터링 용도)
+// 최근 로그를 저장하는 버퍼.
+// recent buffer는 `/logs`와 현장 디버깅에서 "방금 무슨 일이 있었는가"를 빠르게 확인하는 용도다.
 std::deque<std::string> g_buffer;
 std::size_t g_buffer_capacity = parse_buffer_capacity_from_env();
 std::mutex g_buffer_mu; // g_buffer 보호용 뮤텍스
 
-// 비동기 로깅을 위한 구조체
-// 이 클래스는 백그라운드 스레드에서 로그 메시지를 처리하여
-// 메인 스레드의 블로킹을 최소화합니다.
-// 즉, 로그를 남기느라 서버 성능이 저하되는 것을 방지합니다.
+// 비동기 로깅 파이프라인.
+// 메인 스레드는 큐 삽입만 하고, 실제 stderr 출력은 백그라운드 스레드가 수행한다.
+// 그렇지 않으면 로그 flush 지연이 곧바로 request path tail latency로 번질 수 있다.
 class AsyncLogger {
 public:
-    // 로그 메시지를 큐에 넣고 워커 스레드를 깨웁니다.
-    // 이 함수는 메인 로직 스레드에서 호출되므로 최대한 빨리 리턴해야 합니다.
-    // 값 전달을 받아 호출자가 rvalue를 넘기면 큐 삽입 시 move 경로를 그대로 활용합니다.
+    // 로그 메시지를 큐에 넣고 워커 스레드를 깨운다.
+    // 이 함수는 메인 로직 스레드에서 호출되므로 최대한 빨리 복귀해야 한다.
+    // 값 전달을 받아 호출자가 rvalue를 넘기면 큐 삽입 시 move 경로를 그대로 활용한다.
     void push(std::string msg) {
         {
             std::unique_lock<std::mutex> lock(mutex_);
@@ -95,6 +96,8 @@ public:
                         return;
                     }
                 } else if (queue_.size() >= capacity_) {
+                    // overflow 정책을 명시적으로 두는 이유는, 로그 폭주 시 어떤 식으로 degrade할지
+                    // 운영자가 선택할 수 있어야 하기 때문이다. 무제한 큐는 결국 더 큰 장애를 만든다.
                     if (overflow_policy_ == OverflowPolicy::kDropOldest) {
                         queue_.pop();
                     } else {
@@ -149,44 +152,45 @@ private:
         return OverflowPolicy::kDropNewest;
     }
 
-    // 생성자는 private으로 선언하여 싱글톤 패턴을 강제합니다.
+    // 생성자를 private으로 두어 단일 비동기 로깅 파이프라인만 유지한다.
     AsyncLogger()
         : capacity_(parse_queue_capacity())
         , overflow_policy_(parse_overflow_policy())
         , stop_(false) {
         server::core::runtime_metrics::register_log_async_queue_capacity(capacity_);
-        // 백그라운드 워커 스레드를 시작합니다.
+        // 백그라운드 워커 스레드를 시작한다.
         worker_ = std::thread([this] { worker_loop(); });
     }
 
-    // 소멸자에서 워커 스레드가 안전하게 종료되도록 대기합니다.
+    // 소멸자에서 워커 스레드가 안전하게 종료되도록 대기한다.
     ~AsyncLogger() {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             stop_ = true; // 스레드 종료 플래그 설정
         }
-        cv_.notify_one(); // 대기 중인 스레드를 깨웁니다.
+        cv_.notify_one(); // 대기 중인 스레드를 깨운다.
         cv_space_.notify_all();
         if (worker_.joinable()) {
-            worker_.join(); // 스레드가 종료될 때까지 기다립니다.
+            worker_.join(); // 스레드가 종료될 때까지 기다린다.
         }
     }
 
-    // 워커 스레드에서 실행될 메인 루프입니다.
+    // 워커 스레드의 메인 루프.
+    // 실제 I/O는 여기서만 일어나므로, 생산자 스레드는 stderr 속도에 직접 묶이지 않는다.
     void worker_loop() {
         while (true) {
             std::string msg;
             {
                 std::unique_lock<std::mutex> lock(mutex_);
-                // 큐가 비어있거나 종료 플래그가 설정될 때까지 대기합니다.
+                // 큐가 비어있거나 종료 플래그가 설정될 때까지 대기한다.
                 cv_.wait(lock, [this] { return stop_ || !queue_.empty(); });
 
-                // 종료 플래그가 설정되었고 큐가 비어있으면 스레드를 종료합니다.
+                // 종료 플래그가 설정되었고 큐가 비어있으면 스레드를 종료한다.
                 if (stop_ && queue_.empty()) {
                     return;
                 }
 
-                // 큐에 메시지가 있으면 가져옵니다.
+                // 큐에 메시지가 있으면 가져온다.
                 if (!queue_.empty()) {
                     msg = std::move(queue_.front());
                     queue_.pop();
@@ -195,7 +199,7 @@ private:
                 }
             }
 
-            // 실제 출력은 락을 푼 상태에서 수행하여 생산자 스레드의 대기를 최소화합니다.
+            // 실제 출력은 락을 푼 상태에서 수행해 생산자 스레드의 대기를 최소화한다.
             if (!msg.empty()) {
                 const auto started_at = std::chrono::steady_clock::now();
                 std::cerr << msg << std::endl; // 표준 에러 스트림으로 출력
@@ -206,7 +210,7 @@ private:
         }
     }
 
-    std::mutex mutex_; // 큐 접근을 위한 뮤텍스
+    std::mutex mutex_; // 큐 접근용 뮤텍스
     std::condition_variable cv_; // 큐 상태 변경을 알리는 조건 변수
     std::condition_variable cv_space_;
     std::queue<std::string> queue_; // 로그 메시지를 저장하는 큐
@@ -215,12 +219,12 @@ private:
     std::thread worker_; // 로그 처리를 담당하는 백그라운드 스레드
     bool stop_; // 스레드 종료를 위한 플래그
 
-    // AsyncLogger 인스턴스를 얻기 위한 friend 함수 선언
+    // `get_logger()`만 이 인스턴스를 소유하도록 friend로 연다.
     friend AsyncLogger& get_logger();
 };
 
-// 정적 로컬 변수를 사용하여 싱글톤 인스턴스를 생성합니다.
-// C++11부터는 스레드 안전성이 보장됩니다.
+// 정적 로컬 변수 기반 싱글톤 생성.
+// C++11 이후 정적 지역 변수 초기화는 스레드 안전하므로 별도 초기화 락이 필요 없다.
 AsyncLogger& get_logger() {
     static AsyncLogger logger;
     return logger;

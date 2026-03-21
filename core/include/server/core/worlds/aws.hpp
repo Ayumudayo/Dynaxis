@@ -93,14 +93,14 @@ inline std::optional<AwsLoadBalancerTargetKind> parse_aws_load_balancer_target_k
     return std::nullopt;
 }
 
-/** @brief one world pool이 배치될 AWS region / AZ / subnet target입니다. */
+/** @brief world pool 하나가 배치될 AWS region / AZ / subnet 대상입니다. */
 struct AwsPlacementTarget {
     std::string region;
     std::vector<std::string> availability_zones;
     std::vector<std::string> subnet_ids;
 };
 
-/** @brief one world pool의 AWS/EKS-side canonical identity naming입니다. */
+/** @brief world pool 하나의 AWS/EKS 측 기준 식별 이름 묶음입니다. */
 struct AwsPoolIdentity {
     std::string cluster_name;
     std::string namespace_name;
@@ -109,7 +109,7 @@ struct AwsPoolIdentity {
     std::string iam_role_name;
 };
 
-/** @brief one world pool이 요구하는 AWS load balancer attachment naming/shape입니다. */
+/** @brief world pool 하나가 기대하는 AWS load balancer attachment naming/shape입니다. */
 struct AwsLoadBalancerAttachment {
     std::string kubernetes_service_name;
     std::string load_balancer_name;
@@ -121,7 +121,7 @@ struct AwsLoadBalancerAttachment {
     bool preserve_client_ip{true};
 };
 
-/** @brief one world pool이 기대하는 managed Redis/Postgres naming convention bundle입니다. */
+/** @brief world pool 하나가 기대하는 managed Redis/Postgres 이름 규칙 묶음입니다. */
 struct AwsManagedDependencyConventions {
     std::string redis_replication_group_id;
     std::string redis_subnet_group_name;
@@ -130,7 +130,12 @@ struct AwsManagedDependencyConventions {
     std::string postgres_secret_name;
 };
 
-/** @brief provider adapter가 generic pool metadata를 해석할 때 쓰는 AWS-side default policy입니다. */
+/**
+ * @brief provider adapter가 generic pool metadata를 해석할 때 쓰는 AWS 측 기본 정책입니다.
+ *
+ * core는 AWS SDK 호출을 직접 품지 않고, "이 pool을 AWS vocabulary로 어떻게 읽을 것인가"만
+ * 계약으로 둡니다. 이 기본 정책은 그 번역의 출발점을 제공합니다.
+ */
 struct AwsAdapterDefaults {
     std::string cluster_name;
     AwsPlacementTarget placement;
@@ -143,7 +148,7 @@ struct AwsAdapterDefaults {
     std::string postgres_prefix{"dynaxis-pg"};
 };
 
-/** @brief one Kubernetes-first pool binding을 AWS-first identity/placement/dependency contract로 확장한 결과입니다. */
+/** @brief Kubernetes-first pool binding 하나를 AWS-first identity/placement/dependency 계약으로 확장한 결과입니다. */
 struct AwsPoolBinding {
     std::string world_id;
     std::string shard;
@@ -155,14 +160,14 @@ struct AwsPoolBinding {
     AwsManagedDependencyConventions managed_dependencies;
 };
 
-/** @brief provider adapter가 현재 관측한 load balancer attachment health facts입니다. */
+/** @brief provider adapter가 현재 관측한 load balancer attachment health 사실들입니다. */
 struct AwsLoadBalancerObservation {
     bool load_balancer_attached{false};
     bool target_group_attached{false};
     bool targets_healthy{false};
 };
 
-/** @brief provider adapter가 현재 관측한 managed Redis/Postgres readiness facts입니다. */
+/** @brief provider adapter가 현재 관측한 managed Redis/Postgres readiness 사실들입니다. */
 struct AwsManagedDependencyObservation {
     bool redis_ready{false};
     bool postgres_ready{false};
@@ -223,7 +228,7 @@ inline constexpr std::string_view aws_pool_adapter_next_action_name(
     return "none";
 }
 
-/** @brief AWS adapter status evaluation의 summarized readiness counters입니다. */
+/** @brief AWS adapter status evaluation의 요약 readiness 카운터입니다. */
 struct AwsPoolAdapterStatusSummary {
     bool action_present{false};
     bool load_balancer_ready{false};
@@ -233,7 +238,12 @@ struct AwsPoolAdapterStatusSummary {
     std::uint32_t required_runtime_assignments{0};
 };
 
-/** @brief one leased pool action을 AWS-first provider vocabulary로 평가한 결과입니다. */
+/**
+ * @brief leased pool action 하나를 AWS-first provider vocabulary로 평가한 결과입니다.
+ *
+ * 여기서 중요한 것은 "AWS 구현 코드"가 아니라 "generic topology action을 AWS 운영자가
+ * 이해할 수 있는 상태와 next action으로 어떻게 번역할 것인가"입니다.
+ */
 struct AwsPoolAdapterStatus {
     std::string world_id;
     std::string shard;

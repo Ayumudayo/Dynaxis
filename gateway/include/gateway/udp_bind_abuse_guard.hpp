@@ -12,6 +12,8 @@ namespace gateway {
  *
  * bind ticket 검증을 노린 반복 남용 시도를 줄이기 위해
  * 실패 윈도우와 차단 지속 시간을 함께 관리합니다.
+ * direct path를 열어 둔 상태에서는 "한 번 실패"보다 "반복 실패 패턴"이 더 중요하므로,
+ * 별도 guard 객체로 누적 실패 의미를 분리합니다.
  */
 class UdpBindAbuseGuard {
 public:

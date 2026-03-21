@@ -23,6 +23,10 @@
  *
  * 메트릭/상태 노출 트래픽을 앱 데이터 경로와 분리해,
  * 운영 진단 요청이 핵심 세션 처리 성능을 방해하지 않도록 설계되었습니다.
+ * 이 파일은 웹 프레임워크를 들여오지 않고도 `/metrics`, `/healthz`, `/readyz`를
+ * 일정한 동작으로 제공하기 위한 최소 HTTP 표면입니다.
+ * 단순해 보이지만 크기 제한, timeout, 인증, allowlist를 같이 묶지 않으면
+ * 운영용 엔드포인트가 오히려 가장 싼 공격면이 되기 쉽습니다.
  */
 namespace server::core::metrics {
 
@@ -90,7 +94,11 @@ struct HttpHardeningConfig {
     std::unordered_set<std::string> ip_allowlist;
 };
 
+// 관측 포트는 인터넷-facing API가 아니더라도 임의 입력과 비정상 클라이언트를 그대로 받는다.
+// 보호 장치를 한 구조체로 모아 읽어야 연결 수, 본문 크기, 인증 정책이 서로 다른 기본값으로 갈라지지 않는다.
 HttpHardeningConfig hardening_config() {
+    // 하드닝 값을 환경 변수로 읽는 이유는 서비스별 운영 제약이 다르기 때문입니다.
+    // 코드를 다시 배포하지 않고도 관리망/사설망/개발 환경에 맞는 제한을 조정할 수 있습니다.
     HttpHardeningConfig c;
     c.max_connections = read_env_size("METRICS_HTTP_MAX_CONNECTIONS", 64, 1, 65535);
     c.max_body_bytes = read_env_size("METRICS_HTTP_MAX_BODY_BYTES", kMaxHttpBodyBytesDefault, 1, 1024 * 1024);
@@ -107,6 +115,8 @@ std::atomic<std::size_t>& active_connections() {
 }
 
 void update_active_connection_metric(std::size_t active) {
+    // 현재 연결 수를 별도 런타임 메트릭으로 밀어 두면
+    // 메트릭 서버 자체가 병목인지, 앱 본체가 병목인지를 분리해서 볼 수 있습니다.
     server::core::runtime_metrics::set_http_active_connections(active);
 }
 
@@ -130,6 +140,8 @@ std::optional<std::size_t> parse_content_length(std::string_view raw) {
 }
 
 bool request_has_valid_token(const MetricsHttpServer::HttpRequest& request, std::string_view expected_token) {
+    // 토큰이 비어 있으면 로컬 개발 기본값으로 열어 둔다.
+    // 운영에서는 allowlist 또는 bearer/x-metrics-token 중 적어도 하나를 같이 두는 편이 안전하다.
     if (expected_token.empty()) {
         return true;
     }
@@ -173,6 +185,9 @@ TimedReadResult read_headers_with_timeout(tcp::socket& socket,
     constexpr std::size_t kChunkBytes = 1024;
 
     while (true) {
+        // 헤더 경계가 보일 때까지만 조금씩 읽습니다.
+        // 한 번에 크게 읽으면 느린 클라이언트가 메모리와 스레드 시간을 불필요하게 점유합니다.
+        // 끝 구분자와 총량 상한을 동시에 봐야 느린 전송(slowloris)과 무한 헤더 누적을 함께 방어할 수 있다.
         if (streambuf_contains(request_buf, "\r\n\r\n")) {
             return TimedReadResult::kOk;
         }
@@ -226,6 +241,8 @@ TimedReadResult read_body_with_timeout(tcp::socket& socket,
     constexpr std::size_t kChunkBytes = 2048;
 
     while (remaining > 0) {
+        // body도 헤더와 같은 이유로 bounded read를 유지합니다.
+        // metrics 경로는 큰 업로드를 기대하지 않으므로, 작고 예측 가능한 비용이 더 중요합니다.
         const auto elapsed_ms = static_cast<std::size_t>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - started_at)
@@ -270,6 +287,8 @@ void close_socket_gracefully(const std::shared_ptr<tcp::socket>& sock) {
         return;
     }
 
+    // 운영 엔드포인트는 실패 응답 후에도 FD를 깔끔히 회수해야 합니다.
+    // 그렇지 않으면 제한을 잘 걸어 두고도 소켓 정리가 늦어 connection cap이 금방 찹니다.
     try {
         sock->shutdown(tcp::socket::shutdown_both);
     } catch (...) {
@@ -325,6 +344,8 @@ BuiltInRoute classify_builtin_route(std::string_view target) {
         {"/ready", BuiltInRoute::kReady},
     }};
 
+    // 허용 경로를 화이트리스트 방식으로 고정하면,
+    // route callback을 붙이더라도 기본 운영 엔드포인트 의미가 흔들리지 않습니다.
     for (const auto& entry : kRouteEntries) {
         if (entry.target == target) {
             return entry.route;
@@ -363,6 +384,7 @@ void MetricsHttpServer::start() {
     do_accept();
     thread_ = std::make_unique<std::thread>([this]() {
         try {
+            // 전용 스레드에서만 관측 HTTP를 돌려 앱 메인 IO와 경합을 최소화합니다.
             io_context_->run();
         } catch (const std::exception& e) {
             corelog::error(std::string("MetricsHttpServer exception: ") + e.what());
@@ -374,6 +396,7 @@ void MetricsHttpServer::stop() {
     if (stopped_.exchange(true)) {
         return;
     }
+    // stop은 idempotent해야 종료 훅 체인에서 여러 번 호출돼도 안전합니다.
     if (io_context_) {
         io_context_->stop();
     }
@@ -390,6 +413,8 @@ void MetricsHttpServer::do_accept() {
             const std::size_t active_now = active_connections().fetch_add(1, std::memory_order_relaxed) + 1;
             update_active_connection_metric(active_now);
             if (active_now > cfg.max_connections) {
+                // 관측 경로가 폭주하더라도 무제한 accept로 메모리를 잡아먹지 않게 즉시 거절합니다.
+                // 앱 본체 보호가 우선이므로, metrics 요청 일부를 버리는 편이 낫습니다.
                 server::core::runtime_metrics::record_http_connection_limit_reject();
                 const std::string body = "Service Unavailable\r\n";
                 const std::string hdr = "HTTP/1.1 503 Service Unavailable\r\n"
@@ -421,6 +446,7 @@ void MetricsHttpServer::do_accept() {
                     asio::streambuf request_buf(kMaxHttpHeaderBytes);
                     const auto header_read_result = read_headers_with_timeout(*sock, request_buf, cfg.header_timeout_ms);
                     if (header_read_result == TimedReadResult::kTimeout) {
+                        // 느린 헤더 전송은 가장 흔한 자원 고갈 패턴이라 조용히 정리합니다.
                         server::core::runtime_metrics::record_http_header_timeout();
                         close_socket_gracefully(sock);
                         return;
@@ -438,6 +464,7 @@ void MetricsHttpServer::do_accept() {
                         return;
                     }
                     if (header_read_result != TimedReadResult::kOk) {
+                        // 파싱 불가 요청은 상세 정보를 더 읽지 않고 빨리 닫아 비용을 제한합니다.
                         server::core::runtime_metrics::record_http_bad_request();
                         close_socket_gracefully(sock);
                         return;
@@ -537,6 +564,8 @@ void MetricsHttpServer::do_accept() {
                         const std::string name = to_lower_ascii(trim_ascii(std::string_view(header_line).substr(0, colon)));
                         const std::string value = trim_ascii(std::string_view(header_line).substr(colon + 1));
                         if (!name.empty()) {
+                            // 마지막 값을 채택하는 단순 정책으로 두어 파서 복잡성을 낮춥니다.
+                            // metrics 표면은 RFC 완전성보다 예측 가능한 제한 동작이 더 중요합니다.
                             request.headers[name] = value;
                         }
                     }
@@ -573,6 +602,8 @@ void MetricsHttpServer::do_accept() {
                     }
 
                     if (content_length > 0) {
+                        // 남은 body를 정확히 필요한 만큼만 읽어, keepalive를 지원하지 않아도
+                        // oversized payload 때문에 추가 메모리를 잡아먹지 않게 합니다.
                         request.body.reserve(content_length);
                         std::string buffered((std::istreambuf_iterator<char>(request_stream)), std::istreambuf_iterator<char>());
                         if (buffered.size() > content_length) {
@@ -606,6 +637,7 @@ void MetricsHttpServer::do_accept() {
                     }
 
                     if (!cfg.ip_allowlist.empty() && cfg.ip_allowlist.count(request.source_ip) == 0) {
+                        // allowlist는 제일 싼 차단 조건이라 토큰 검증보다 먼저 적용합니다.
                         server::core::runtime_metrics::record_http_auth_reject();
                         const std::string body = "Forbidden\r\n";
                         const std::string hdr = "HTTP/1.1 403 Forbidden\r\n"
@@ -619,6 +651,7 @@ void MetricsHttpServer::do_accept() {
                     }
 
                     if (!request_has_valid_token(request, cfg.auth_token)) {
+                        // allowlist 뒤에 토큰을 두면 내부망과 외부망 정책을 조합하기 쉽습니다.
                         server::core::runtime_metrics::record_http_auth_reject();
                         const std::string body = "Unauthorized\r\n";
                         const std::string hdr = "HTTP/1.1 401 Unauthorized\r\n"
@@ -644,6 +677,8 @@ void MetricsHttpServer::do_accept() {
                     std::string extra_headers;
 
                     if (built_in_target && !is_get && !is_head) {
+                        // 기본 운영 엔드포인트는 읽기 전용으로 고정합니다.
+                        // 쓰기 메서드를 허용하면 프락시/캐시/보안 규칙 해석이 불필요하게 복잡해집니다.
                         server::core::runtime_metrics::record_http_bad_request();
                         status = "405 Method Not Allowed";
                         content_type = "text/plain; charset=utf-8";
@@ -665,6 +700,8 @@ void MetricsHttpServer::do_accept() {
                             if (callback_) {
                                 body = callback_();
                             } else {
+                                // 콜백 누락을 500으로 돌리면 설정 실수와 런타임 오류를 구분하기 어려워진다.
+                                // 빈 본문을 노출하면 서버는 살아 있지만 메트릭 소스가 비어 있음을 명확히 보여 준다.
                                 body = "# No callback registered\n";
                             }
                             break;
@@ -693,6 +730,7 @@ void MetricsHttpServer::do_accept() {
                         case BuiltInRoute::kNone: {
                             bool handled_custom = false;
                             if (route_callback_) {
+                                // custom route는 기본 운영 표면과 충돌하지 않는 경우에만 실행됩니다.
                                 if (auto custom = route_callback_(request)) {
                                     handled_custom = true;
                                     status = custom->status.empty() ? "200 OK" : std::move(custom->status);
@@ -717,6 +755,7 @@ void MetricsHttpServer::do_accept() {
                     std::vector<asio::const_buffer> bufs;
                     bufs.emplace_back(asio::buffer(hdr));
                     if (!body.empty() && !is_head) {
+                        // HEAD는 본문 계산은 공유하되 전송만 생략해, GET과 의미 차이가 벌어지지 않게 합니다.
                         bufs.emplace_back(asio::buffer(body));
                     }
                     asio::write(*sock, bufs);

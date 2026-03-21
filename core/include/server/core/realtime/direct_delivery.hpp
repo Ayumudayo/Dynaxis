@@ -4,14 +4,14 @@
 
 namespace server::core::realtime {
 
-/** @brief Direct UDP/RUDP delivery route selected for a replication payload. */
+/** @brief replication payload에 대해 선택된 direct UDP/RUDP 전송 경로입니다. */
 enum class DirectDeliveryRoute : std::uint8_t {
     kTcpFallback = 0,
     kUdp,
     kRudp,
 };
 
-/** @brief Direct delivery decision reason, including fallback and recovery semantics. */
+/** @brief direct delivery 판단 이유입니다. fallback과 handshake 대기 같은 회복 의미도 함께 담습니다. */
 enum class DirectDeliveryReason : std::uint8_t {
     kMessageNotEligible = 0,
     kNotUdpBound,
@@ -21,7 +21,12 @@ enum class DirectDeliveryReason : std::uint8_t {
     kRudpHandshakePendingUdp,
 };
 
-/** @brief Generic direct-delivery policy inputs independent of app-local opcode enums. */
+/**
+ * @brief app-local opcode enum과 독립적인 direct-delivery 정책 입력입니다.
+ *
+ * direct path 판단을 별도 구조체로 두는 이유는, gateway/server가 같은 판단 규칙을 공유하되
+ * 각자 가진 메시지 열거형이나 wire 해석 세부에 직접 결합하지 않게 하기 위해서입니다.
+ */
 struct DirectDeliveryContext {
     bool direct_path_enabled_for_message{false};
     bool udp_bound{false};
@@ -30,7 +35,7 @@ struct DirectDeliveryContext {
     bool rudp_established{false};
 };
 
-/** @brief Explicit direct delivery decision result. */
+/** @brief 명시적인 direct delivery 판단 결과입니다. */
 struct DirectDeliveryDecision {
     DirectDeliveryRoute route{DirectDeliveryRoute::kTcpFallback};
     DirectDeliveryReason reason{DirectDeliveryReason::kMessageNotEligible};

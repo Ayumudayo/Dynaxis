@@ -30,17 +30,27 @@ using PacketHeader = server::core::protocol::PacketHeader;
 /**
  * @brief 클라이언트 1개 TCP 연결의 수명주기와 패킷 송수신을 담당합니다.
  *
- * 왜 필요한가?
- * - 읽기/쓰기/heartbeat/timeout을 세션 단위로 캡슐화해 연결 격리를 보장합니다.
+ * `Connection`이 바이트 스트림과 역압력(backpressure) 같은 공용 전송(transport) 골격을 담당한다면,
+ * `Session`은 "이 연결이 패킷과 세션 상태를 가진다"는 앱 표면(app-facing) 의미를 추가하는 계층입니다.
+ * 이 둘을 분리하지 않으면 gateway 같은 소비자가 transport 재사용을 위해 필요 이상으로
+ * 패킷, 인증, heartbeat 의미까지 함께 끌고 와야 합니다.
+ *
+ * 왜 세션 계층이 필요한가:
+ * - 읽기, 쓰기, heartbeat, timeout을 세션 단위로 캡슐화해 연결 격리를 보장합니다.
  * - 장애가 특정 세션에서 발생해도 다른 세션과 서버 전체 이벤트 루프는 계속 동작합니다.
+ * - 세션 상태(`SessionStatus`)를 transport 옆에 붙여 둬, opcode 정책 검사가 현재 연결 문맥과 같은 곳에서 이뤄지게 합니다.
  */
 class Session : public std::enable_shared_from_this<Session> {
 public:
     /**
      * @brief 세션 객체를 생성합니다.
+     *
+      * 생성 시점에 dispatcher, 버퍼 관리자(buffer manager), 옵션, 런타임 상태를 모두 받는 이유는
+     * 읽기 루프가 시작된 뒤에 필요한 협력 객체를 뒤늦게 찾지 않게 하기 위해서입니다.
+     *
      * @param socket 수락된 TCP 소켓
      * @param dispatcher opcode 라우팅 디스패처
-     * @param buffer_manager 송수신 버퍼 풀 관리자
+      * @param buffer_manager 송수신 버퍼 풀 관리자
      * @param options 세션 제어 옵션
      * @param state 연결 수/세션 ID를 추적하는 런타임 상태
      */
@@ -50,9 +60,9 @@ public:
             std::shared_ptr<const SessionOptions> options,
             std::shared_ptr<net::ConnectionRuntimeState> state);
 
-    /** @brief 세션 읽기/타이머 루프를 시작합니다. */
+    /** @brief 세션 읽기/타이머 루프를 시작합니다. 소켓 수락 직후 한 번만 호출되는 진입점입니다. */
     void start();
-    /** @brief 세션을 종료하고 소켓/타이머를 정리합니다. */
+    /** @brief 세션을 종료하고 소켓/타이머를 정리합니다. 종료 경로를 한곳에 모아 중복 close 경쟁을 줄입니다. */
     void stop();
 
     /**
@@ -85,7 +95,7 @@ public:
     /**
      * @brief msg_id + payload를 패킷으로 직렬화해 전송 큐에 추가합니다.
      * @param msg_id 메시지 ID(opcode)
-     * @param payload 패킷 payload
+     * @param payload 패킷 본문(payload)
      * @param flags 프로토콜 플래그
      */
     void async_send(std::uint16_t msg_id, const std::vector<std::uint8_t>& payload, std::uint16_t flags = 0);

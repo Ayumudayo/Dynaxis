@@ -46,9 +46,9 @@ void TaskScheduler::schedule(Task task, Clock::duration delay) {
         post(std::move(task));
         return;
     }
-    // 지연 작업은 우선순위 큐(top = 가장 빠른 due)로 관리됩니다.
-    // poll() 호출 시점에 시간이 된 작업들을 ready 큐로 옮깁니다.
-    // 이렇게 함으로써 별도의 타이머 스레드 없이도 지연 실행을 지원합니다.
+    // 지연 작업은 우선순위 큐(top = 가장 빠른 due)로 관리한다.
+    // `poll()` 호출 시점에 시간이 된 작업만 ready 큐로 옮겨, 별도 타이머 스레드 없이도
+    // 호출자에게 tick 제어권을 남긴 채 지연 실행을 지원한다.
     std::lock_guard<std::mutex> lock(mutex_);
     delayed_.push(DelayedTask{Clock::now() + delay, std::move(task)});
 }
@@ -59,11 +59,12 @@ void TaskScheduler::schedule_every(Task task, Clock::duration interval) {
         return;
     }
 
-    // 재귀적으로 자신을 스케줄링하여 주기적인 실행을 구현합니다.
+    // 자기 자신을 다시 스케줄링해 주기 작업을 구현한다.
+    // 별도 반복 스레드를 만들지 않기 때문에 shutdown 시점도 같은 scheduler 규약으로 수렴한다.
     schedule([this, interval, task = std::move(task)]() mutable {
         if (is_shutdown()) return;
         task();
-        // 주기 작업은 자기 자신을 다시 enqueue하여 close/shutdown까지 반복합니다.
+        // 주기 작업은 자기 자신을 다시 enqueue하여 close/shutdown까지 반복한다.
         schedule_every(task, interval);
     }, interval);
 }

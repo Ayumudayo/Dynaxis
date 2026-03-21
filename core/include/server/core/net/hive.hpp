@@ -13,6 +13,7 @@ namespace server::core::net {
  * 왜 필요한가?
  * - 여러 모듈이 동일 `io_context`를 공유할 때 run/stop 책임을 한곳에 모아
  *   중복 정지나 조기 종료 같은 수명주기 오류를 줄입니다.
+ * - work guard를 함께 소유해, 아직 남은 비동기 작업이 있는데도 `run()`이 조기에 끝나는 실수를 줄입니다.
  */
 class Hive : public std::enable_shared_from_this<Hive> {
 public:
@@ -31,7 +32,7 @@ public:
      */
     io_context& context();
 
-    /** @brief 이벤트 루프를 실행합니다. */
+    /** @brief 이벤트 루프를 실행합니다. 공유 `io_context`의 실제 실행 지점입니다. */
     void run();
     /** @brief 이벤트 루프 정지를 요청합니다. */
     void stop();

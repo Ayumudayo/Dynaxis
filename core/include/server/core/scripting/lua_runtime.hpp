@@ -15,7 +15,13 @@
 
 namespace server::core::scripting {
 
-/** @brief Hook invocation metadata exposed to Lua functions and host callbacks. */
+/**
+ * @brief Lua 함수와 host callback에 노출되는 hook 호출 문맥입니다.
+ *
+ * 스크립트는 이 구조체를 통해 session/user/room/text/command 같은 현재 호출 배경을
+ * 읽습니다. 호출 문맥을 명시 구조체로 유지하는 이유는, 암묵적 전역 상태 대신
+ * 어떤 정보가 스크립트 경계로 넘어가는지 계약으로 보이게 하기 위해서입니다.
+ */
 struct LuaHookContext {
     std::uint32_t session_id{0};
     std::string user;
@@ -38,7 +44,13 @@ enum class LuaHookDecision {
     kDeny,
 };
 
-/** @brief Lua runtime facade used by server-side scripting hooks. */
+/**
+ * @brief 서버 측 scripting hook이 사용하는 Lua runtime facade입니다.
+ *
+ * 이 타입은 스크립트 load/reload/call과 host API 등록을 한곳에 모으되, 실제 도메인 의미는
+ * 앱 계층에 남겨 두는 메커니즘 경계입니다. 즉 reusable한 것은 runtime 자체이고,
+ * chat moderation이나 room 제어 같은 의미는 이 타입 밖에서 결정합니다.
+ */
 class LuaRuntime {
 public:
     enum class ScriptFailureKind {
@@ -48,7 +60,7 @@ public:
         kOther,
     };
 
-    /** @brief Runtime policy and limit configuration. */
+    /** @brief runtime 정책과 실행 제한값입니다. */
     struct Config {
         std::uint64_t instruction_limit{100'000};
         std::size_t memory_limit_bytes{1 * 1024 * 1024};
@@ -61,22 +73,22 @@ public:
         };
     };
 
-    /** @brief Result of a single script load operation. */
+    /** @brief 단일 스크립트 load 결과입니다. */
     struct LoadResult {
         bool ok{false};
         std::string error;
     };
 
-    /** @brief Result of a single-environment hook call. */
+    /** @brief 단일 environment hook 호출 결과입니다. */
     struct CallResult {
         bool ok{false};
         bool executed{false};
         std::string error;
     };
 
-    /** @brief Result of a multi-environment hook call. */
+    /** @brief 여러 environment를 순회하는 hook 호출 결과입니다. */
     struct CallAllResult {
-        /** @brief Per-script execution status within a call_all dispatch. */
+        /** @brief `call_all` dispatch 안에서의 스크립트별 실행 상태입니다. */
         struct ScriptCallResult {
             std::string env_name;
             bool failed{false};
@@ -92,13 +104,13 @@ public:
         std::vector<ScriptCallResult> script_results;
     };
 
-    /** @brief Script registration entry used by reload operations. */
+    /** @brief reload 작업이 사용하는 스크립트 등록 엔트리입니다. */
     struct ScriptEntry {
         std::filesystem::path path;
         std::string env_name;
     };
 
-    /** @brief Host API value exchanged between Lua and C++ binding callbacks. */
+    /** @brief Lua와 C++ host callback 사이에서 주고받는 값 표현입니다. */
     struct HostValue {
         using StringList = std::vector<std::string>;
         using Storage = std::variant<std::monostate, bool, std::int64_t, std::string, StringList>;
@@ -117,20 +129,20 @@ public:
         }
     };
 
-    /** @brief Per-host-call metadata with runtime/script annotations. */
+    /** @brief host callback 1회 호출에 대한 runtime/script 주석 문맥입니다. */
     struct HostCallContext {
         std::string hook_name;
         std::string script_name;
         LuaHookContext hook;
     };
 
-    /** @brief Host callback return payload or error. */
+    /** @brief host callback의 반환값 또는 오류입니다. */
     struct HostCallResult {
         HostValue value{};
         std::string error;
     };
 
-    /** @brief Result of replacing active runtime scripts. */
+    /** @brief 현재 활성 스크립트 집합을 교체한 결과입니다. */
     struct ReloadResult {
         std::size_t loaded{0};
         std::size_t failed{0};
@@ -140,7 +152,7 @@ public:
     using HostArgs = std::vector<HostValue>;
     using HostCallback = std::function<HostCallResult(const HostArgs&, const HostCallContext&)>;
 
-    /** @brief Point-in-time runtime counters and gauges. */
+    /** @brief 특정 시점의 runtime counter/gauge 스냅샷입니다. */
     struct MetricsSnapshot {
         std::size_t loaded_scripts{0};
         std::size_t registered_host_api{0};

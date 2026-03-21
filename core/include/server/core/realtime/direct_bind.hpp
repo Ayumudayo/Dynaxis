@@ -11,7 +11,7 @@
 
 namespace server::core::realtime {
 
-/** @brief Direct UDP bind request payload contract. */
+/** @brief direct UDP bind 요청 payload 계약입니다. TCP에서 인증된 세션을 UDP endpoint와 연결할 때 사용합니다. */
 struct DirectBindRequest {
     std::string session_id;
     std::uint64_t nonce{0};
@@ -19,7 +19,7 @@ struct DirectBindRequest {
     std::string token;
 };
 
-/** @brief Direct UDP bind ticket contract. */
+/** @brief direct UDP bind ticket 계약입니다. 세션, nonce, 만료 시각을 함께 담아 임의 endpoint 재사용을 줄입니다. */
 struct DirectBindTicket {
     std::string session_id;
     std::uint64_t nonce{0};
@@ -27,7 +27,7 @@ struct DirectBindTicket {
     std::string token;
 };
 
-/** @brief Direct UDP bind response payload contract. */
+/** @brief direct UDP bind 응답 payload 계약입니다. */
 struct DirectBindResponse {
     std::uint16_t code{0};
     DirectBindTicket ticket;

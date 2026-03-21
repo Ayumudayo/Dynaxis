@@ -14,6 +14,8 @@
  *
  * 공통 프로세스 제어 규칙을 구현 레벨에서 일관되게 유지해,
  * server/gateway/tools 간 운영 동작 편차를 줄입니다.
+ * 이 계층이 없으면 서비스마다 "ready의 의미", "종료 순서", "의존성 선언 누락 처리"가
+ * 조금씩 달라지고, 운영자는 같은 `/readyz`라도 프로세스마다 다른 의미로 해석해야 합니다.
  */
 namespace server::core::app {
 
@@ -26,6 +28,8 @@ constexpr std::uint8_t to_phase_code(AppHost::LifecyclePhase phase) noexcept {
 }
 
 AppHost::LifecyclePhase from_phase_code(std::uint8_t phase) noexcept {
+    // 메트릭과 HTTP 본문은 숫자 코드로 노출되므로,
+    // 역변환 규칙도 한곳에 고정해 phase 의미가 표면마다 달라지지 않게 합니다.
     switch (phase) {
     case to_phase_code(AppHost::LifecyclePhase::kInit):
         return AppHost::LifecyclePhase::kInit;
@@ -84,6 +88,8 @@ AppHost::~AppHost() {
 }
 
 bool AppHost::request_stop() noexcept {
+    // "처음 한 번만 stop 전이"를 보장해야 shutdown 훅이 중복 실행되지 않습니다.
+    // SIGINT 연타나 여러 모듈의 stop 요청이 겹쳐도 상태 전이는 단일화합니다.
     const bool first = !stop_requested_.exchange(true, std::memory_order_acq_rel);
     if (first) {
         set_lifecycle_phase(LifecyclePhase::kStopping);
@@ -98,6 +104,8 @@ bool AppHost::stop_requested() const noexcept {
 }
 
 void AppHost::set_lifecycle_phase(LifecyclePhase phase) noexcept {
+    // phase 기록은 가볍게 유지해 hot path에서도 호출할 수 있게 합니다.
+    // 무거운 동기화를 넣으면 상태 보고 자체가 병목이 됩니다.
     lifecycle_phase_.store(to_phase_code(phase), std::memory_order_relaxed);
 }
 
@@ -222,8 +230,9 @@ std::string AppHost::readiness_body(bool ok) const {
     std::ostringstream oss;
     oss << "not ready";
 
-    // ready 실패 이유를 한 줄로 축약해 반환한다.
-    // K8s probe, 운영 대시보드, 사람이 직접 curl 하는 상황 모두에서 즉시 원인을 파악하도록 설계했다.
+    // ready 실패 이유를 한 줄 요약으로 남긴다.
+    // kube probe, 운영 대시보드, 사람이 직접 curl 하는 경로가 모두 같은 문장을 보게 해
+    // "무엇이 막고 있는가"를 즉시 공유하도록 만든다.
     std::vector<std::string> reasons;
     if (stop_requested()) {
         reasons.emplace_back("stopping");
@@ -279,6 +288,7 @@ std::string AppHost::dependency_metrics_text() const {
     }
 
     // 전체 집계 지표를 함께 노출해 알람 규칙을 단순화한다.
+    // 개별 dependency 라벨만 보면 "어떤 경보를 대표 조건으로 삼을지"가 서비스마다 달라지기 쉽습니다.
     out << "# TYPE runtime_dependencies_ok gauge\n";
     out << "runtime_dependencies_ok " << (dependencies_ok() ? 1 : 0) << "\n";
     return out.str();
@@ -308,19 +318,21 @@ void AppHost::start_admin_http(unsigned short port,
         return;
     }
 
-    // health/readiness 콜백은 의도적으로 "가볍고 빠르게" 유지한다.
-    // metrics HTTP 스레드에서 무거운 작업(DB 조회 등)을 하면 관측 자체가 병목이 되기 때문이다.
+    // health/readiness 콜백은 의도적으로 가볍고 빠르게 유지한다.
+    // 관측 경로가 DB 조회 같은 무거운 작업을 품기 시작하면, 장애를 보려는 요청 자체가 또 다른 장애 원인이 된다.
+    // probe 엔드포인트가 느리면 실제 장애보다 probe 타임아웃이 먼저 터져 원인 분류가 더 어려워진다.
     admin_http_ = std::make_unique<server::core::metrics::MetricsHttpServer>(
         port,
         std::move(metrics_callback),
         [this]() {
-            // healthz: 프로세스 생존성과 종료 상태만 확인한다.
-            // "의존성 준비 여부"까지 넣으면 장애 분류가 혼동될 수 있어 분리한다.
+            // healthz는 프로세스가 살아 있는지만 본다.
+            // 의존성 준비 여부까지 섞으면 liveness와 readiness를 분리한 의미가 사라져 재시작 정책이 흔들릴 수 있다.
             return healthy() && !stop_requested();
         },
         [this]() {
-            // readyz: 트래픽 수신 가능 상태를 나타낸다.
-            // 기본 ready 플래그 + 필수 의존성 + health/stop 조건을 함께 본다.
+            // readyz는 실제로 트래픽을 받아도 되는지를 말한다.
+            // 시작 완료 플래그, 필수 의존성, 종료 신호를 함께 보는 이유는
+            // "프로세스는 살았지만 아직 받으면 안 되는 상태"를 따로 표현하기 위해서다.
             return ready() && healthy() && !stop_requested();
         },
         std::move(logs_callback),
@@ -341,6 +353,8 @@ void AppHost::stop_admin_http() {
     if (!admin_http_) {
         return;
     }
+    // 종료 경로에서 예외를 밖으로 새지 않게 해야,
+    // admin HTTP 정리 실패가 전체 프로세스 종료를 방해하지 않습니다.
     admin_http_->stop();
     admin_http_.reset();
 }
@@ -356,6 +370,7 @@ void AppHost::add_shutdown_step(std::string name, std::function<void()> step) {
         shutdown_ = std::make_unique<ShutdownRegistry>();
     }
 
+    // shutdown step 등록을 중앙화해 각 서비스가 서로 다른 종료 순서 규칙을 만들지 않게 합니다.
     std::lock_guard<std::mutex> lock(shutdown_->mutex);
     shutdown_->steps.emplace_back(std::move(name), std::move(step));
 }
@@ -374,8 +389,8 @@ void AppHost::run_shutdown_steps() noexcept {
         steps.swap(shutdown_->steps);
     }
 
-    // 등록 역순(LIFO) 실행: 나중에 붙은 상위 레이어를 먼저 내리고,
-    // 마지막에 하위 공용 자원을 정리하는 패턴을 자연스럽게 만든다.
+    // 등록 역순(LIFO) 실행: 나중에 붙은 상위 레이어를 먼저 내리고 마지막에 하위 공용 자원을 정리한다.
+    // FIFO로 실행하면 listener보다 먼저 io/runtime 공용 자원이 내려가면서 정리 순서가 꼬일 수 있다.
     for (auto it = steps.rbegin(); it != steps.rend(); ++it) {
         const auto& name = it->first;
         try {
@@ -395,8 +410,8 @@ void AppHost::install_asio_termination_signals(boost::asio::io_context& io,
     }
 
     // 프로세스 전역 폴링 플래그 핸들러도 함께 설치한다.
-    // Asio 이벤트 루프 밖에서 도는 루프(예: 별도 워커 스레드)가 있어도
-    // 동일한 종료 신호를 관찰해 일관된 종료 경로를 탈 수 있게 한다.
+    // Asio 밖에서 도는 루프가 있어도 같은 종료 신호를 보게 해야, 어떤 바이너리든 종료 경로가 둘로 갈라지지 않는다.
+    // 그렇지 않으면 일부 모듈은 SIGINT를 보고, 일부 모듈은 모른 채 계속 돌 수 있다.
     install_termination_signal_handlers();
 
     signals_ = std::make_unique<boost::asio::signal_set>(io);

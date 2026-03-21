@@ -1,43 +1,57 @@
-# Extensibility Conflict Policy
+# 확장성 충돌 정책
 
-이 문서는 동일 hook 영역에서 플러그인/스크립트 충돌을 줄이기 위한 운영 정책을 정의한다.
+이 문서는 같은 hook 영역에서 여러 플러그인과 스크립트가 서로 충돌하지 않도록 하기 위한 운영 정책을 정의한다. 확장성 기능은 "추가만 하면 된다"는 착각이 가장 위험하다. 같은 시점에 비슷한 목적의 artifact를 여러 개 배포하면, 코드상으로는 모두 정상이어도 실제 실행 순서와 최종 결정은 운영자가 기대한 것과 달라질 수 있다.
+
+이 정책의 목적은 창의적인 확장을 막는 것이 아니라, 어떤 조합을 허용하고 어떤 조합을 배포 전에 끊어야 하는지 기준을 고정하는 데 있다. 기준이 없으면 precheck가 있어도 무엇을 막아야 하는지 판단할 수 없다.
 
 ## 1) 용어
 
-- `hook_scope`: 적용 대상 hook (`on_login`, `on_join`, `on_admin_command` 등)
-- `stage`: 실행 단계 (`pre_validate`, `mutate`, `authorize`, `side_effect`, `observe`)
-- `priority`: 같은 stage 내 실행 순서(작을수록 먼저 실행)
-- `exclusive_group`: 같은 그룹 내 동시 배포를 금지할 식별자
+- `hook_scope`: 적용 대상 hook이다. 예: `on_login`, `on_join`, `on_admin_command`
+- `stage`: 실행 단계다. 예: `pre_validate`, `mutate`, `authorize`, `side_effect`, `observe`
+- `priority`: 같은 stage 안에서의 실행 순서다. 값이 작을수록 먼저 실행한다.
+- `exclusive_group`: 같은 그룹 안에서는 동시에 배포하지 않도록 막을 식별자다.
+
+이 네 개를 따로 두는 이유는 충돌 원인을 분해하기 위해서다. 적용 위치, 실행 시점, 순서, 상호 배제 대상이 한데 뭉치면 운영자는 "무엇이 겹쳤는지"를 설명할 수 없고, 제어면도 일관된 차단 규칙을 만들기 어렵다.
 
 ## 2) 기본 규칙
 
-1. 실행 순서: `priority` 오름차순
-2. 터미널 결정 우선순위: `block/deny > handled > modify > pass`
-3. `observe` stage는 상태 변경 결정을 금지하고 `pass`만 허용
-4. 같은 `(hook_scope, stage, exclusive_group)` 조합은 배포 전 precheck 차단 대상(운영 규약)
+1. 실행 순서는 `priority` 오름차순으로 정한다.
+2. 터미널 결정 우선순위는 `block/deny > handled > modify > pass`다.
+3. `observe` stage는 상태 변경 결정을 금지하고 `pass`만 허용한다.
+4. 같은 `(hook_scope, stage, exclusive_group)` 조합은 배포 전 precheck 차단 대상으로 본다.
+
+이 규칙이 필요한 이유는 실행 순서와 최종 결정이 애매하면, 같은 artifact 집합이라도 배포 순서에 따라 다른 결과가 나올 수 있기 때문이다. 운영에서는 "가끔 다르게 동작한다"가 가장 비싼 버그다. 따라서 우선순위와 종료 의미를 먼저 고정해야 한다.
 
 ## 3) 권장 stage 배치
 
-- `pre_validate`: 입력 형식/제약 검사
-- `mutate`: 텍스트/파라미터 정규화
-- `authorize`: 접근 허용/거부
-- `side_effect`: 알림/후속 작업 트리거
-- `observe`: 로깅/계측 전용
+- `pre_validate`: 입력 형식과 제약 조건 검사
+- `mutate`: 텍스트나 파라미터 정규화
+- `authorize`: 허용 또는 거부 결정
+- `side_effect`: 알림과 후속 작업 트리거
+- `observe`: 로깅과 계측 전용
+
+stage를 나누는 이유는 책임을 섞지 않기 위해서다. 예를 들어 관측용 hook이 거부까지 하게 두면, 운영자는 로그를 붙인 것인지 정책을 바꾼 것인지 구분할 수 없다. 반대로 `authorize`가 알림까지 떠안으면 실패했을 때 "허가 판단"과 "부가 작업"을 따로 되돌리기 어려워진다.
 
 ## 4) 실무 가이드
 
-- deny 권한이 필요한 정책은 `authorize`에만 둔다.
+- 거부 권한이 필요한 정책은 `authorize`에만 둔다.
 - 텍스트 치환은 `mutate`에서만 수행한다.
-- 운영 공지/감사는 `observe` 또는 `side_effect`로 분리한다.
-- 동일 목적 기능을 여러 artifact로 쪼갤 때 `exclusive_group`을 고정해 충돌 가능성을 낮춘다.
+- 운영 공지와 감사 기록은 `observe` 또는 `side_effect`로 분리한다.
+- 같은 목적의 기능을 여러 artifact로 나눌 때는 `exclusive_group`을 고정해 충돌 가능성을 낮춘다.
 
-## 5) precheck 실패 예시
+이렇게 분리해 두면 유지보수도 쉬워진다. 신규 인원이 artifact를 읽을 때 "이 파일은 무엇을 바꾸는가"를 stage만 보고 바로 추정할 수 있기 때문이다. 반대로 stage 경계가 흐리면 파일 이름과 코드 본문을 다 읽어도 의도를 파악하기 어렵다.
 
-- 동일 `hook_scope=on_join`, `stage=authorize`, `exclusive_group=vip_gate` artifact 2개 동시 배포
-- `observe` stage artifact가 `deny` 결정을 반환
-- `mutate` stage가 `priority` 없이 다중 배포되어 실행 순서가 불명확
+## 5) precheck가 막아야 하는 대표 사례
 
-## 6) 현재 상태
+- 같은 `hook_scope=on_join`, `stage=authorize`, `exclusive_group=vip_gate` 조합의 artifact 두 개를 동시에 배포하려는 경우
+- `observe` stage artifact가 `deny` 결정을 반환하는 경우
+- `mutate` stage artifact가 여러 개 배포되는데 실행 순서를 설명할 `priority`가 불명확한 경우
+
+이 사례들은 단순한 형식 오류가 아니라 실제 운영 사고로 이어지기 쉬운 패턴이다. 제어면은 사용자가 무슨 의도로 올렸는지 추측하는 대신, 위험 조합을 보수적으로 차단해야 한다.
+
+## 6) 현재 적용 상태
 
 - 현재 저장소는 본 문서 규칙을 운영 규약으로 사용한다.
-- 관리 콘솔 precheck/API 강제 차단은 구현 완료 상태이며, `/api/v1/ext/precheck`와 `/api/v1/ext/deployments`에서 충돌 정책을 강제한다.
+- 관리 콘솔의 precheck/API 차단도 구현되어 있으며, `/api/v1/ext/precheck`와 `/api/v1/ext/deployments`가 이 정책을 강제한다.
+
+정책 문서와 실제 차단 로직이 따로 놀면 가장 먼저 무너지는 것이 운영 신뢰다. 그래서 이 문서는 이상적인 미래 규칙이 아니라, 현재 구현과 맞물려 있는 현재 시점의 계약으로 읽어야 한다.

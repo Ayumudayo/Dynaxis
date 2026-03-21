@@ -121,11 +121,11 @@ Lua cold-hook 작성 기준:
 | `GATEWAY_INGRESS_MAX_ACTIVE_SESSIONS` | `50000` | gateway의 동시 backend 세션 상한 |
 | `ALLOW_ANONYMOUS` | `1` | `0`이면 토큰 없는/anonymous 로그인 거부 |
 
-#### 2.3.1 UDP ingress (현재)
+#### 2.3.1 UDP 인그레스(현재)
 
 | 변수 | 기본값 | 설명 |
 | --- | --- | --- |
-| `GATEWAY_UDP_LISTEN` | (unset) | 설정 시 gateway UDP ingress listener 활성화 (`host:port`) |
+| `GATEWAY_UDP_LISTEN` | (unset) | 설정 시 gateway UDP 인그레스 리스너 활성화 (`host:port`) |
 | `GATEWAY_UDP_BIND_SECRET` | (unset) | UDP bind ticket 검증 비밀키 |
 | `GATEWAY_UDP_BIND_TTL_MS` | `5000` | bind ticket TTL(ms) |
 | `GATEWAY_UDP_BIND_FAIL_WINDOW_MS` | `10000` | bind 실패 누적 윈도우(ms) |
@@ -134,9 +134,9 @@ Lua cold-hook 작성 기준:
 | `GATEWAY_UDP_BIND_RETRY_BACKOFF_MS` | `200` | 세션별 bind 실패 재시도 backoff 시작값(ms) |
 | `GATEWAY_UDP_BIND_RETRY_BACKOFF_MAX_MS` | `2000` | 세션별 bind 실패 재시도 backoff 상한(ms) |
 | `GATEWAY_UDP_BIND_RETRY_MAX_ATTEMPTS` | `6` | 세션별 bind 재시도 backoff 지수 증가 상한 attempt |
-| `GATEWAY_UDP_OPCODE_ALLOWLIST` | (unset) | UDP ingress 허용 opcode CSV. 미설정/빈 값이면 최소 고정 allowlist(`MSG_UDP_BIND_REQ`)만 허용. FPS 입력 proof에서는 `MSG_FPS_INPUT (0x0206)`를 추가한다 |
+| `GATEWAY_UDP_OPCODE_ALLOWLIST` | (unset) | UDP 인그레스 허용 opcode CSV. 미설정/빈 값이면 최소 고정 allowlist(`MSG_UDP_BIND_REQ`)만 허용. FPS 입력 검증에서는 `MSG_FPS_INPUT (0x0206)`를 추가한다 |
 
-#### 2.3.2 Core RUDP (기본 OFF)
+#### 2.3.2 코어 RUDP(기본 OFF)
 
 아래 키는 gateway RUDP 어댑터 및 core RUDP 엔진 튜닝값이다. 런타임 기본값은 OFF이며,
 `GATEWAY_RUDP_ENABLE=1` + `GATEWAY_RUDP_CANARY_PERCENT>0` + `GATEWAY_RUDP_OPCODE_ALLOWLIST`가 함께 설정되어야 실제 세션 경로에 적용된다.
@@ -145,7 +145,7 @@ Lua cold-hook 작성 기준:
 | --- | --- | --- |
 | `GATEWAY_RUDP_ENABLE` | `0` | gateway의 RUDP handshake/data path 활성화 게이트 |
 | `GATEWAY_RUDP_CANARY_PERCENT` | `0` | 신규 세션 중 RUDP canary 비율(0~100) |
-| `GATEWAY_RUDP_OPCODE_ALLOWLIST` | (empty) | RUDP 허용 opcode 목록(콤마 구분, 기본 비활성). FPS 입력 proof에서는 `MSG_FPS_INPUT (0x0206)`를 추가한다 |
+| `GATEWAY_RUDP_OPCODE_ALLOWLIST` | (empty) | RUDP 허용 opcode 목록(콤마 구분, 기본 비활성). FPS 입력 검증에서는 `MSG_FPS_INPUT (0x0206)`를 추가한다 |
 | `GATEWAY_RUDP_HANDSHAKE_TIMEOUT_MS` | `1500` | RUDP HELLO/ACK 완료 타임아웃(ms) |
 | `GATEWAY_RUDP_IDLE_TIMEOUT_MS` | `10000` | 유휴 상태 timeout(ms) |
 | `GATEWAY_RUDP_ACK_DELAY_MS` | `10` | delayed ACK 기본 지연(ms) |
@@ -160,7 +160,7 @@ HAProxy는 본 리포의 실행 파일이 아니며, 설정 파일(`haproxy.cfg`
 Docker 스택 검증용 설정은 `docker/stack/haproxy/haproxy.cfg` 를 참고한다. (컨테이너 내부 경로: `/usr/local/etc/haproxy/haproxy.cfg`)
 운영/구체 예시는 `docs/ops/gateway-and-lb.md` 를 참고한다.
 
-운영(Prod) 권장 TLS baseline:
+운영 권장 TLS 기준선:
 
 | 항목 | 권장값 | 설명 |
 | --- | --- | --- |

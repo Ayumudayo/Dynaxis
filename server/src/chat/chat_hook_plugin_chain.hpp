@@ -16,28 +16,32 @@
 namespace server::app::chat {
 
 /**
- * @brief 여러 chat hook 플러그인을 체인으로 구성해 순차 적용합니다.
+ * @brief 여러 chat hook 플러그인을 체인으로 구성해 순차 적용하는 app-local 확장 seam입니다.
+ *
+ * 이 타입은 플러그인을 단순히 "여러 개 로드하는 편의 클래스"가 아니라, 기본 채팅 경로 앞뒤에 정책 훅을 안전하게 끼워 넣는
+ * 조정층입니다. 확장 기능을 여기저기서 직접 `dlopen`하거나 개별 훅 순서를 제각각 정하면 reload, 오류 격리, 차단 결정이
+ * 서로 다른 규칙을 따라가게 됩니다.
  */
 class ChatHookPluginChain {
 public:
-    /** @brief 플러그인 체인 구성값입니다. */
+    /** @brief 플러그인 체인 구성값입니다. 로드 모드와 fallback 정책을 한곳에서 묶어 두어 운영 중 의미가 흔들리지 않게 합니다. */
     struct Config {
-        /** @brief 명시 플러그인 경로 목록(입력 순서 유지, 정렬 없음). */
+        /** @brief 명시 플러그인 경로 목록입니다. 입력 순서를 그대로 써야 "먼저 누가 개입하는가"가 예측 가능합니다. */
         std::vector<std::filesystem::path> plugin_paths;
 
-        /** @brief plugin_paths가 비어 있을 때 사용할 디렉터리 모드 경로입니다. */
+        /** @brief `plugin_paths`가 비어 있을 때 사용할 디렉터리 모드 경로입니다. */
         std::optional<std::filesystem::path> plugins_dir;
 
-        /** @brief plugins_dir가 비어 있거나 로드 가능한 모듈이 없을 때 사용할 fallback 디렉터리입니다. */
+        /** @brief 기본 디렉터리가 비었거나 로드 실패일 때 사용할 fallback 디렉터리입니다. 운영 중 완전 비활성보다 제한적 대체가 나을 때 씁니다. */
         std::optional<std::filesystem::path> fallback_plugins_dir;
 
-        /** @brief 모든 플러그인이 공유하는 cache-copy 디렉터리입니다. */
+        /** @brief 모든 플러그인이 공유하는 cache-copy 디렉터리입니다. 원본 파일이 바뀌는 도중 반쯤 복사된 모듈을 읽지 않게 합니다. */
         std::filesystem::path cache_dir;
 
-        /** @brief 단일 플러그인 모드 lock/sentinel 경로(옵션)입니다. */
+        /** @brief 단일 플러그인 모드 lock/sentinel 경로(옵션)입니다. 배포 중 교체 시점을 app과 협의할 때 씁니다. */
         std::optional<std::filesystem::path> single_lock_path;
 
-        /** @brief hook 호출 경고 예산(마이크로초, 0이면 비활성)입니다. */
+        /** @brief hook 호출 경고 예산(마이크로초, 0이면 비활성)입니다. 느린 플러그인이 핫패스를 잠식하기 전에 드러내기 위한 경고선입니다. */
         std::uint64_t hook_warn_budget_us{0};
     };
 
@@ -62,7 +66,7 @@ public:
         std::string deny_reason;
     };
 
-    /** @brief 단일 플러그인 메트릭 스냅샷입니다. */
+    /** @brief 단일 플러그인 메트릭 스냅샷입니다. 로드 성공 여부와 hook별 지연을 함께 봐야 병목과 배포 실패를 구분할 수 있습니다. */
     struct PluginMetricsSnapshot {
         struct HookMetricSnapshot {
             std::string hook_name;
@@ -83,7 +87,7 @@ public:
         std::vector<HookMetricSnapshot> hook_metrics;
     };
 
-    /** @brief 체인 상태 메트릭 스냅샷입니다. */
+    /** @brief 체인 상태 메트릭 스냅샷입니다. 체인 전체가 구성됐는지와 각 플러그인 세부 상태를 같이 담습니다. */
     struct MetricsSnapshot {
         bool configured{false};
         std::string mode; // none|dir|paths|single
@@ -98,6 +102,8 @@ public:
 
     /**
      * @brief 구성에 맞는 플러그인 목록을 재스캔하고 변경 모듈을 hot-reload합니다.
+     *
+     * reload를 요청 처리 중 임의로 하지 않고 poll 경계에 모아 두면, 같은 요청 안에서 플러그인 집합이 반쯤 바뀌는 상황을 피할 수 있습니다.
      */
     void poll_reload();
 

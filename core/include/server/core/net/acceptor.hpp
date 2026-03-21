@@ -22,6 +22,7 @@ struct ConnectionRuntimeState;
  * 왜 별도 클래스로 두는가?
  * - 연결 수락/재시도 정책을 세션 처리 로직과 분리하면,
  *   장애 상황(accept 실패, 포트 이슈)에서 복구 로직을 독립적으로 관리하기 쉽습니다.
+ * - 최대 연결 상한, accept retry backoff 같은 문지기 정책을 session 내부에 섞지 않게 됩니다.
  */
 class Acceptor : public std::enable_shared_from_this<Acceptor> {
 public:

@@ -12,7 +12,7 @@ using Label = std::pair<std::string, std::string>;
 /** @brief 메트릭 호출 시 전달하는 라벨 목록 타입입니다. */
 using Labels = std::initializer_list<Label>;
 
-/** @brief 단조 증가 카운터 메트릭 인터페이스입니다. */
+/** @brief 단조 증가 카운터 메트릭 인터페이스입니다. 공용 registry backend가 어떤 구현이든 이 계약만 유지하면 됩니다. */
 class Counter {
 public:
     virtual ~Counter() = default;
@@ -24,7 +24,7 @@ public:
     virtual void inc(double value = 1.0, Labels labels = {}) = 0;
 };
 
-/** @brief 증감 가능한 게이지 메트릭 인터페이스입니다. */
+/** @brief 증감 가능한 게이지 메트릭 인터페이스입니다. 현재 상태나 수량을 직접 노출할 때 사용합니다. */
 class Gauge {
 public:
     virtual ~Gauge() = default;
@@ -36,7 +36,7 @@ public:
     virtual void dec(double value = 1.0, Labels labels = {}) = 0;
 };
 
-/** @brief 분포 관측용 히스토그램 메트릭 인터페이스입니다. */
+/** @brief 분포 관측용 히스토그램 메트릭 인터페이스입니다. 지연시간(latency)이나 크기 분포처럼 bucket 기반 관측에 사용합니다. */
 class Histogram {
 public:
     virtual ~Histogram() = default;
@@ -52,6 +52,7 @@ public:
  * 계약:
  * - 동일 name 요청은 동일 객체 레퍼런스를 반환합니다.
  * - 내부 registry 백엔드에 즉시 반영되며 호출은 예외 없이 동작합니다.
+ * 이름 조회를 공용 진입점으로 강제해야 서비스마다 별도 static 메트릭을 만드는 drift를 줄일 수 있습니다.
  */
 Counter& get_counter(const std::string& name);
 
@@ -81,6 +82,7 @@ Histogram& get_histogram(const std::string& name);
  * @brief 등록된 공용 metrics backend 값을 Prometheus text 형식으로 출력합니다.
  *
  * 출력은 `# TYPE` + 샘플 라인으로 구성되며, Counter/Gauge/Histogram 모두 포함됩니다.
+ * 앱이 직접 텍스트를 조립하지 않고 이 helper를 쓰게 해야, 서비스마다 수집(scrape) 형식이 흔들리지 않습니다.
  */
 void append_prometheus_metrics(std::ostream& out);
 
@@ -93,6 +95,8 @@ void append_runtime_core_metrics(std::ostream& out);
 
 /**
  * @brief 테스트용으로 공용 metrics backend 내부 상태를 초기화합니다.
+ *
+ * 테스트 간 누적 상태가 섞이면 관측 결과가 flaky해지므로, registry를 명시적으로 비우는 진입점이 필요합니다.
  */
 void reset_for_tests();
 

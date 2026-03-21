@@ -1,225 +1,131 @@
-# 서버 애플리케이션
+# 서버 애플리케이션(server_app)
 
-`server_app`은 Dynaxis 프로젝트의 메인 채팅 서버 애플리케이션입니다.
-`core` 라이브러리를 기반으로 구축되었으며, 클라이언트 연결 관리, 채팅 로직 처리, 데이터 저장(DB/Redis), 그리고 인스턴스 레지스트리 등록 등의 역할을 수행합니다.
+`server_app`은 Dynaxis의 메인 채팅/런타임 서버다. 클라이언트와 직접 붙는 경우도 있지만, 표준 배치에서는 `gateway_app` 뒤에서 backend 역할을 맡는다.
 
-## 아키텍처
+이 모듈이 중요한 이유는 단순 채팅 처리만 하는 서버가 아니기 때문이다. 현재 구현은 다음을 함께 소유한다.
 
-서버는 크게 **Bootstrap**, **Router**, **Service** 계층으로 구성됩니다.
+- 로그인과 채팅 비즈니스 로직
+- 세션 연속성(session continuity)
+- world residency와 runtime assignment consumer
+- FPS fixed-step substrate의 실제 앱 소비자
+- Redis / Postgres / write-behind와의 실제 통합
 
-1.  **Bootstrap (`src/app/bootstrap.cpp`)**:
-    - 서버 초기화의 진입점입니다.
-    - 환경 변수 파싱.
-    - `io_context`, `JobQueue`, `ThreadManager` 등 코어 컴포넌트 초기화.
-    - DB/Redis 연결 풀 생성.
-    - `core::net::SessionListener`를 시작하여 클라이언트 연결을 수락하고 `core::net::Session`으로 전달.
+즉 `core`가 공용 플랫폼이라면, `server_app`은 그 플랫폼 위에서 실제 제품 동작을 만들어 내는 대표 앱이다.
 
-2.  **Router (`src/app/router.cpp`)**:
-    - `Dispatcher`에 Opcode별 핸들러를 등록합니다.
-    - 예: `MSG_LOGIN` -> `ChatService::on_login`
+## 현재 구조
 
-3.  **ChatService (`src/chat/`)**:
-    - 핵심 비즈니스 로직을 담당합니다.
-    - **State Management**: 현재 접속한 유저, 활성화된 방, 인증 상태 등을 메모리(`State` 구조체)에서 관리합니다.
-    - **Storage Interaction**:
-        - **Redis**: 실시간 메시지 캐싱, Pub/Sub(분산 채팅), Presence(접속 현황), Write-behind(이벤트 스트림).
-        - **PostgreSQL**: 영구적인 데이터 저장(유저 정보, 채팅 기록 등). Write-behind 워커에 의해 비동기적으로 저장될 수도 있습니다.
+서버는 크게 네 층으로 나뉜다.
+
+1. `src/app/`
+   - bootstrap, config, router, metrics server
+2. `src/chat/`
+   - 핵심 채팅 비즈니스 로직
+3. `src/state/`
+   - 분산 상태/레지스트리 adapter
+4. `src/storage/`
+   - Redis/Postgres concrete adapter
+
+이렇게 나누는 이유는 공용 contract와 앱 통합 로직을 섞지 않기 위해서다. 예를 들어 DB/Redis adapter는 core contract를 소비하지만, 구체적인 연결 전략과 repository wiring은 여전히 `server/`가 소유한다.
+
+## 부트스트랩과 요청 처리
+
+- 부트스트랩 진입점: `src/app/bootstrap.cpp`
+- opcode 라우팅 등록: `src/app/router.cpp`
+- 핵심 비즈니스 로직: `src/chat/`
+
+현재 런타임은 다음 흐름으로 움직인다.
+
+1. bootstrap이 `EngineRuntime`, `Hive`, worker queue, storage/state adapter를 조립한다.
+2. packet session ingress는 internal `core::Session`을 통해 들어온다.
+3. `Dispatcher`가 opcode별 handler로 분기한다.
+4. `ChatService`가 메모리 상태, Redis, DB/write-behind를 중재한다.
+5. metrics/admin surface는 별도 HTTP 경로로 노출된다.
+
+이 흐름이 좋은 이유는 네트워크 수락, 실행 위치 결정, 비즈니스 처리, 영속화를 한 함수 안에 몰아넣지 않기 때문이다. 그렇지 않으면 장애 원인을 계층별로 분리하기 어렵고, 성능 문제와 도메인 문제를 같은 레벨에서 고치게 된다.
 
 ## 주요 기능
 
-- **Opcode 라우팅**: 패킷의 Opcode에 따라 적절한 핸들러로 분기합니다.
-- **Snapshot + Redis Cache**: 방 입장 시 최근 메시지를 Redis(LIST/LRU)에서 우선 조회하여 빠르게 로딩하고, 부족하면 DB에서 가져옵니다.
-- **Refresh Fanout Dedup**: join/leave 처리에서 `lobby` 대상 중복 `broadcast_refresh`를 제거해 불필요한 fanout 신호를 줄입니다.
-- **RoomUsers Lock Scope 개선**: `send_room_users`는 lock 구간에서 권한/멤버십만 확인하고, Redis 조회(`SMEMBERS`)는 lock 밖에서 수행해 경쟁 구간을 줄입니다.
-- **Chat Hot-path 로그 노이즈 절감**: `CHAT_SEND` 본문 로그를 제거하고, pub/sub publish 카운트 로그는 샘플링(1024건마다) + `debug` 레벨로 축소합니다. whisper 상태 로그도 `debug`로 내려 운영 로그 볼륨을 낮춥니다.
-- **Write-behind**: `WRITE_BEHIND_ENABLED=1` 설정 시, 중요한 이벤트(채팅 등)를 Redis Streams에 먼저 기록하고, 별도의 워커(`wb_worker`)가 이를 DB에 반영하여 쓰기 성능을 최적화합니다.
-- **Instance Registry**: 서버 시작 시 자신의 주소(Host/Port)를 Redis에 등록하고 주기적으로 Heartbeat를 갱신합니다. 로드 밸런서(`gateway`)는 이를 통해 활성 서버 목록을 파악합니다.
-- **Metrics**: `/metrics` 엔드포인트(HTTP)를 통해 Prometheus 호환 지표를 노출합니다.
+- Opcode 라우팅
+  - 패킷을 handler로 연결하되, 실제 처리 위치는 `OpcodePolicy`가 결정한다
+- Snapshot + Redis cache
+  - 방 입장 시 최근 상태를 빠르게 복원한다
+- Refresh fanout 정리
+  - 불필요한 fanout 신호를 줄여 noisy refresh path를 완화한다
+- RoomUsers lock scope 축소
+  - lock 경쟁을 줄여 hot path 지연을 낮춘다
+- Write-behind
+  - 즉시 DB에 쓰지 않고 Redis Streams를 거쳐 비동기 영속화한다
+- Instance Registry
+  - Gateway가 backend를 찾을 수 있도록 자신의 identity와 heartbeat를 등록한다
+- Metrics
+  - `/metrics`에서 Prometheus 호환 지표를 노출한다
 
-## 빌드 및 실행
+각 기능이 이런 형태를 갖는 이유도 중요하다.
+
+- 캐시를 쓰지 않으면 방 입장 시 DB round-trip 때문에 응답이 느려진다.
+- write-behind가 없으면 DB 지연이 바로 사용자 체감 지연으로 번진다.
+- registry가 없으면 gateway는 어느 backend가 살아 있고 얼마나 바쁜지 판단하기 어렵다.
+- 지표가 없으면 로그인 지연, fanout 병목, drain timeout 같은 운영 문제를 재현 없이 찾기 어렵다.
+
+## 빌드와 실행
 
 ### 빌드
-프로젝트 루트에서 빌드 스크립트를 사용하여 빌드합니다. (내부적으로 CMake Presets 사용)
 
 ```powershell
-# 디버그(Debug) 빌드
 pwsh scripts/build.ps1 -Config Debug -Target server_app
-
-# 릴리스(Release) 빌드 (RelWithDebInfo)
 pwsh scripts/build.ps1 -Config RelWithDebInfo -Target server_app
 ```
 
-### 실행 (권장: Linux/Docker)
-서버 스택 런타임은 Linux(예: Docker)로 통일하는 것을 권장한다.
+### 권장 실행
+
+표준 런타임은 Linux/Docker 스택이다.
 
 ```powershell
-scripts/deploy_docker.ps1 -Action up -Detached -Build
+pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build
 ```
 
-### (옵션) Windows 단일 프로세스 실행
-Windows에서 빌드된 실행 파일은 `build-windows/server/Debug/server_app.exe` 경로에 생성된다.
+### Windows 단일 실행(옵션)
 
 ```powershell
 .\build-windows\server\Debug\server_app.exe 5000
 ```
 
-## 환경 변수 설정
+Windows 단일 실행이 가능한 이유는 개발/디버깅 편의 때문이다. 하지만 운영 문제를 재현하거나 표준 네트워크 경로를 검증할 때는 Docker 스택을 우선하는 편이 더 안전하다.
 
-서버는 OS 환경 변수를 통해 동작을 제어할 수 있습니다.
-로컬에서는 `.env.example`를 복사해 `.env`를 만든 뒤, 실행 스크립트/쉘에서 로드해 사용할 수 있습니다.
+## 설정 메모
 
-| 변수명 | 설명 | 기본값/예시 |
-| --- | --- | --- |
-| `PORT` | 서버가 수신 대기할 포트 | `5000` |
-| `DB_URI` | PostgreSQL 연결 문자열 (필수) | `postgresql://user:pass@localhost:5432/dynaxis` |
-| `REDIS_URI` | Redis 연결 문자열 (선택) | `tcp://127.0.0.1:6379` |
-| `WRITE_BEHIND_ENABLED` | Write-behind 패턴 사용 여부 (`1`: 사용, `0`: 미사용) | `1` |
-| `USE_REDIS_PUBSUB` | Redis Pub/Sub을 이용한 분산 채팅 활성화 여부 | `0` |
-| `SERVER_ADVERTISE_HOST` | 레지스트리에 등록할 호스트 주소 (게이트웨이가 접근 가능한 주소) | `127.0.0.1` |
-| `SERVER_ADVERTISE_PORT` | 레지스트리에 등록할 포트(옵션) | `5000` |
-| `SERVER_ROLE` | 서버 역할 메타데이터(제어면 selector에서 role 기준 필터링) | `server` |
-| `SERVER_REGION` | 서버 지역 메타데이터(예: `ap-northeast`) | `global` |
-| `SERVER_SHARD` | 서버 샤드 메타데이터(예: `shard-01`) | `default` |
-| `SERVER_TAGS` | 서버 태그 목록(CSV, 예: `canary,vip`) | (unset) |
-| `SERVER_REGISTRY_PREFIX` | Instance Registry 키 접두사 | `gateway/instances/` |
-| `SERVER_REGISTRY_TTL` | Instance Registry TTL(초) | `30` |
-| `METRICS_PORT` | 메트릭 수집을 위한 HTTP 포트 | `9090` |
-| `ADMIN_COMMAND_SIGNING_SECRET` | admin fanout command 검증용 HMAC 서명 키(미설정 시 admin command 거부) | (unset) |
-| `ADMIN_COMMAND_TTL_MS` | admin fanout command payload TTL(ms) | `60000` |
-| `ADMIN_COMMAND_FUTURE_SKEW_MS` | admin fanout command 미래 시각 허용치(ms) | `5000` |
-| `SERVER_DRAIN_TIMEOUT_MS` | SIGTERM 이후 기존 연결 drain 대기 최대 시간(ms) | `15000` |
-| `SERVER_DRAIN_POLL_MS` | drain 진행률(남은 연결 수) 폴링 주기(ms) | `100` |
-| `CHAT_HOOK_PLUGINS_DIR` | (실험, 권장) 플러그인 디렉터리(모든 `.so/.dll`을 파일명 순으로 로드) | `/app/plugins` |
-| `CHAT_HOOK_FALLBACK_PLUGINS_DIR` | (실험) `CHAT_HOOK_PLUGINS_DIR`가 비어있거나 읽기 실패일 때 사용할 fallback 플러그인 디렉터리 | `/app/plugins_builtin` |
-| `CHAT_HOOK_PLUGIN_PATHS` | (실험) 플러그인 경로 목록(순서 고정, 구분자 `;` 또는 `,`) | `/app/plugins/10_chat_hook_sample.so;/app/plugins/20_chat_hook_tag.so` |
-| `CHAT_HOOK_PLUGIN_PATH` | (실험, 레거시) 단일 플러그인(.so/.dll) 경로 | `/app/plugins/10_chat_hook_sample.so` |
-| `CHAT_HOOK_ENABLED` | (실험) 플러그인 런타임 활성화 (`1`: 활성화, `0`: 비활성화) | `0` |
-| `CHAT_HOOK_CACHE_DIR` | 플러그인 캐시 디렉터리(원본을 cache-copy 후 로드) | `/tmp/chat_hook_cache` |
-| `CHAT_HOOK_LOCK_PATH` | (옵션) lock/sentinel 파일 경로(존재 시 reload 스킵, 단일 플러그인 모드에만 적용) | `<plugin_stem>_LOCK` |
-| `CHAT_HOOK_RELOAD_INTERVAL_MS` | reload 폴링 주기(ms) | `500` |
-| `CHAT_HOOK_WARN_BUDGET_US` | (실험) 플러그인 hook 호출 경고 예산(마이크로초). 0이면 비활성 | `0` |
-| `LUA_ENABLED` | (실험) Lua 스크립팅 활성화 (`1`: 활성화, `0`: 비활성화) | `0` |
-| `LUA_SCRIPTS_DIR` | (실험) Lua 스크립트 디렉터리 | `/app/scripts` |
-| `LUA_FALLBACK_SCRIPTS_DIR` | (실험) `LUA_SCRIPTS_DIR`가 비어 있거나 읽기 실패일 때 사용할 fallback 스크립트 디렉터리 | `/app/scripts_builtin` |
-| `LUA_LOCK_PATH` | (실험) Lua 리로드 lock/sentinel 파일 경로(존재 시 watcher poll/reload 스킵) | (unset) |
-| `LUA_RELOAD_INTERVAL_MS` | (실험) Lua 스크립트 리로드 폴링 주기(ms) | `1000` |
-| `LUA_INSTRUCTION_LIMIT` | (실험) Lua 호출 1회당 instruction 제한 | `100000` |
-| `LUA_MEMORY_LIMIT_BYTES` | (실험) Lua 런타임 메모리 상한(바이트) | `1048576` |
-| `LUA_AUTO_DISABLE_THRESHOLD` | (실험) 연속 오류 시 자동 비활성화 임계치 | `3` |
-| `LUA_HOOK_WARN_BUDGET_US` | (실험) Lua cold hook 호출 경고 예산(마이크로초). 0이면 비활성 | `0` |
-| `LOG_BUFFER_CAPACITY` | 메모리 내 로그 버퍼 크기 | `256` |
-| `CHAT_JOB_QUEUE_MAX` | 서버 로직 작업 큐 최대 길이(트래픽 스파이크 시 백프레셔/메모리 보호) | `8192` |
-| `CHAT_DB_JOB_QUEUE_MAX` | DB 작업 큐 최대 길이(DB 지연 시 백프레셔/메모리 보호) | `4096` |
-| `RUNTIME_TRACING_ENABLED` | 경량 tracing context + span 로그 활성화 (`1`/`0`) | `0` |
-| `RUNTIME_TRACING_SAMPLE_PERCENT` | tracing 샘플링 비율(0~100) | `100` |
+자세한 환경 변수 설명은 `docs/configuration.md`를 기준으로 본다. 여기서는 운영적으로 특히 중요한 항목만 다시 적는다.
 
-## 종료(Graceful drain) 절차
+- `DB_URI`
+  - DB가 느리거나 죽어 있으면 로그인/영속화 품질에 직접 영향이 간다
+- `REDIS_URI`
+  - continuity, fanout, registry, write-behind가 모두 얽혀 있어 사실상 핵심 의존성이다
+- `SERVER_ADVERTISE_HOST`, `SERVER_ADVERTISE_PORT`
+  - gateway가 실제로 접속할 주소이므로 잘못 잡히면 registry는 살아 있어도 backend 연결이 실패한다
+- `SERVER_REGISTRY_PREFIX`, `SERVER_REGISTRY_TTL`
+  - gateway와 같은 prefix를 써야 registry가 맞물린다
+- `WRITE_BEHIND_ENABLED`
+  - 켜면 응답성과 영속화가 분리되지만, worker/stream 운영이 함께 필요하다
+- `METRICS_PORT`
+  - 운영 가시성 확보에 필수다
 
-`server_app`은 종료 신호(SIGINT/SIGTERM) 수신 시 아래 순서로 종료한다.
+## 종료(Graceful Drain)
 
-1. readiness를 즉시 `false`로 내린다.
-2. acceptor를 중지해 신규 연결을 차단한다.
-3. 기존 연결을 drain 하면서 `SERVER_DRAIN_TIMEOUT_MS`까지 대기한다.
-4. timeout을 초과하면 남은 연결 수를 `chat_shutdown_drain_forced_close_total`에 누적하고, 이후 `io_context` 종료로 강제 정리한다.
+`server_app`은 종료 신호를 받으면 다음 순서로 내려간다.
 
-운영 중 drain 관측은 `/metrics`의 `chat_shutdown_drain_remaining_connections`, `chat_shutdown_drain_elapsed_ms`, `chat_shutdown_drain_timeout_total`을 함께 확인한다.
+1. readiness를 즉시 `false`로 내린다
+2. 새 연결을 막는다
+3. 기존 연결을 drain한다
+4. timeout을 넘으면 남은 연결을 강제 정리한다
 
-## 채팅 훅(Chat Hook) 플러그인 (실험)
+이 순서가 필요한 이유는, 종료 중에도 새 연결을 계속 받으면 drain이 끝나지 않기 때문이다. 반대로 readiness를 너무 늦게 내리면 상위 ingress가 아직 정상 backend라고 오해해 트래픽을 계속 보낼 수 있다.
 
-`server_app`은 hot-reload 가능한 플러그인 훅을 다음 경로에 붙일 수 있습니다.
+## 관련 문서
 
-- `on_chat_send` (`MSG_CHAT_SEND`)
-- `on_login`
-- `on_join`
-- `on_leave`
-- `on_session_event`
-- `on_admin_command`
-
-- ABI: `server/include/server/chat/chat_hook_plugin_abi.hpp` (`ChatHookApiV2` + `ChatHookApiV1` 하위 호환)
-- 엔트리포인트 탐색: `chat_hook_api_v2()` 우선, 미존재 시 `chat_hook_api_v1()` 자동 폴백
-- 멀티 플러그인: 파일명 순서(예: `10_*.so`, `20_*.so`)로 순차 적용; 텍스트 변경(`v1:kReplaceText`, `v2:kModify`) 결과는 다음 플러그인에 반영됨
-- deny 계열 결정(`kBlock`/`kDeny`)은 기본 경로를 중단하고 `MSG_ERR(FORBIDDEN)`로 전달됨
-- Docker 샘플 플러그인(fallback 경로):
-  - `/app/plugins_builtin/10_chat_hook_sample.so`
-  - `/app/plugins_builtin/20_chat_hook_tag.so`
-  - `/app/plugins_builtin/staging/10_chat_hook_sample_v2.so` (swap 용)
-- Docker 스택 기본 설정: `docker/stack/docker-compose.yml`에서 `CHAT_HOOK_ENABLED=0`(기본 비활성), `CHAT_HOOK_PLUGINS_DIR=/app/plugins`, `CHAT_HOOK_FALLBACK_PLUGINS_DIR=/app/plugins_builtin`
-- `/app/plugins`에 로드 가능한 모듈이 있으면 1차 디렉터리(`/app/plugins`)를 우선 사용하고, 비어 있으면 fallback(`/app/plugins_builtin`)을 사용한다.
-
-핫 리로드 예시:
-
-```bash
-# 잠금 파일(lock/sentinel, 선택)
-docker exec dynaxis-stack-server-1-1 touch /app/plugins_builtin/10_chat_hook_sample_LOCK
-
-# 바이너리 교체(swap)
-docker exec dynaxis-stack-server-1-1 cp /app/plugins_builtin/staging/10_chat_hook_sample_v2.so /app/plugins_builtin/10_chat_hook_sample.so
-
-# 잠금 해제(unlock)
-docker exec dynaxis-stack-server-1-1 rm -f /app/plugins_builtin/10_chat_hook_sample_LOCK
-```
-
-## Lua cold-hook authoring model (실험)
-
-Phase 16 backlog 기준으로 Lua 스크립트의 기본 작성 모델은 function-style hook + `ctx`다.
-공식 빌드/런타임 이미지는 Lua capability를 항상 포함하고, 실제 활성화는 `LUA_ENABLED=1`에서만 일어난다.
-
-권장 형태:
-
-```lua
-function on_login(ctx)
-  if not ctx or not ctx.session_id then
-    return { decision = "pass" }
-  end
-
-  local name = server.get_user_name(ctx.session_id)
-  if name and name ~= "" then
-    server.send_notice(ctx.session_id, "welcome back, " .. name)
-  end
-
-  return { decision = "pass" }
-end
-```
-
-핵심 규약:
-
-- 기본 형태: `function on_<hook>(ctx) ... end`
-- 입력: `ctx.session_id`, `ctx.user`, `ctx.room`, `ctx.command`, `ctx.args` 등 hook별 스냅샷 필드
-- 호스트 API: `server.get_*`, `server.send_notice`, `server.broadcast_*`, `server.log_*`, `server.hook_name`, `server.script_name`
-- 적용 경로: native 훅 체인 결과가 `kPass`일 때만 Lua cold hook 호출
-- native 훅이 `kBlock/kDeny`를 반환하면 Lua는 호출되지 않는다
-
-호환성 fallback/testing aid:
-
-- return-table 형식(예): `return { hook = "on_login", decision = "pass", notice = "welcome" }`
-- directive 형식(예): `-- hook=on_login decision=deny reason=login denied by lua scaffold`
-- limit 시뮬레이션: `-- hook=on_admin_command limit=instruction|memory`
-- 위 형식들은 샘플 bring-up, auto-disable, limit-path 테스트를 위한 보조 수단으로 유지한다.
-
-샘플 경로:
-
-- `server/scripts/*.lua`는 런타임 이미지의 builtin fallback(`/app/scripts_builtin`) 소스다.
-- `docker/stack/scripts/*.lua`는 compose mount(`/app/scripts`) 샘플이다.
-- 겹치는 샘플 이름은 builtin과 stack 동작이 어긋나지 않도록 같은 내용으로 유지한다.
-
-기본 샘플:
-
-- `server/scripts/on_login_welcome.lua`
-- `server/scripts/on_join_policy.lua`
-- `server/scripts/admin_commands.lua`
-
-## 디렉터리 구조
-
-```
-server/
-├─ include/server/
-│  ├─ app/      # Bootstrap, Router
-│  ├─ chat/     # ChatService 및 핸들러 선언
-│  ├─ state/    # Instance Registry 관련
-│  └─ storage/  # DB/Redis 어댑터
-└─ src/
-   ├─ app/      # main.cpp, bootstrap.cpp 구현
-   ├─ chat/     # 비즈니스 로직 구현 (핸들러 포함)
-   ├─ state/    # 레지스트리 백엔드 구현
-   └─ storage/  # 저장소 구현체
-```
+- `docs/configuration.md`
+- `docs/tests.md`
+- `docs/core-design.md`
+- `docs/core-architecture-rationale.md`
+- `docs/db/write-behind.md`
+- `docs/ops/session-continuity-contract.md`
+- `docs/ops/mmorpg-world-residency-contract.md`

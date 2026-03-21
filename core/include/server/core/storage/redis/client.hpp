@@ -10,14 +10,23 @@
 
 namespace server::core::storage::redis {
 
-/** @brief Shared Redis client creation options. */
+/**
+ * @brief gateway/server/tools가 공통으로 쓰는 Redis 클라이언트 생성 옵션입니다.
+ *
+ * 이 옵션이 너무 구체적인 adapter 세부를 드러내지 않도록 유지하는 이유는, public
+ * seam이 특정 Redis 라이브러리 설정 표면과 강하게 결합되지 않게 하기 위해서입니다.
+ */
 struct Options {
     std::size_t pool_max{10};
     bool use_streams{false};
 };
 
 /**
- * @brief Shared Redis client abstraction used by gateway/server/tools.
+ * @brief gateway/server/tools가 공통으로 의존하는 축소 Redis 클라이언트 추상화입니다.
+ *
+ * 핵심 의도는 "모든 Redis 기능"을 공개하는 것이 아니라, 현재 저장소가 공유해야 하는
+ * 최소 연산만 계약으로 고정하는 데 있습니다. 이렇게 해야 app-specific key schema나
+ * 구체 라이브러리 결합을 public surface로 굳히지 않을 수 있습니다.
  */
 class IRedisClient {
 public:

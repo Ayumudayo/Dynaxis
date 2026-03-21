@@ -2,7 +2,7 @@
 
 목표는 “무슨 문제가 발생했는지 5분 안에 파악”이다. Dynaxis는 기본적으로 Prometheus 텍스트 포맷 `/metrics`를 제공하고, `docker/stack`의 `observability` 프로필로 Prometheus/Grafana를 함께 올릴 수 있다.
 
-## 1. 빠른 시작 (Docker Stack + 관측성)
+## 1. 빠른 시작 (Docker 스택 + 관측성)
 
 ```powershell
 pwsh scripts/run_full_stack_observability.ps1
@@ -10,7 +10,7 @@ pwsh scripts/run_full_stack_observability.ps1
 
 기본 접속(호스트):
 - 게임 트래픽(HAProxy): `127.0.0.1:6000`
-- HAProxy 통계(stats) + 메트릭(metrics): `http://127.0.0.1:8404/` (`/metrics` 포함)
+- HAProxy 통계와 메트릭: `http://127.0.0.1:8404/` (`/metrics` 포함)
 - gateway 메트릭: `http://127.0.0.1:36001/metrics`, `http://127.0.0.1:36002/metrics`
 - server 메트릭: `http://127.0.0.1:39091/metrics`, `http://127.0.0.1:39092/metrics`
 - wb_worker 메트릭: `http://127.0.0.1:39093/metrics`
@@ -25,21 +25,21 @@ pwsh scripts/run_full_stack_observability.ps1
 ## 2. 검증 루틴 (10분)
 
 1) 스택 기동 확인
-- Prometheus Targets: `http://127.0.0.1:39090/targets`
-- 기대 job(잡): `chat_server`, `gateway`, `write_behind`, `admin_app`, `haproxy`, `redis`, `postgres`
+- Prometheus targets: `http://127.0.0.1:39090/targets`
+- 기대 잡(job): `chat_server`, `gateway`, `write_behind`, `admin_app`, `haproxy`, `redis`, `postgres`
 
 ```powershell
 # (옵션) 빠른 기본 점검
 pwsh scripts/check_observability.ps1
 
-# (옵션) 서비스별 /metrics payload 스모크 점검
+# (옵션) 서비스별 /metrics 본문(payload) 스모크 점검
 pwsh scripts/smoke_metrics.ps1
 ```
 
 2) 트래픽 주입
 - 채팅 트래픽(권장): `client_gui`로 로그인/룸 입장/채팅 몇 회 수행
-- write-behind 왕복 검증(roundtrip, 도구 기반): `pwsh scripts/smoke_wb.ps1` (Streams -> DB 검증)
-- soak + 성능 회귀 게이트(로그인 RTT/처리량 + bounded queue): `python tests/python/verify_soak_perf_gate.py`
+- write-behind 왕복 검증(도구 기반): `pwsh scripts/smoke_wb.ps1` (Streams -> DB 검증)
+- 장시간 부하와 성능 회귀 게이트(로그인 RTT/처리량 + bounded queue): `python tests/python/verify_soak_perf_gate.py`
 
 3) Grafana 대시보드 유효성 확인
 - `server-metrics.json`: 활성 세션, 디스패치(dispatch) 지연(p50/p95/p99), 작업 큐 깊이가 움직이는지
@@ -51,7 +51,7 @@ pwsh scripts/smoke_metrics.ps1
 ## 3. 메트릭 목록 (현재)
 
 ### 공통(core)
-- 빌드(Build): `runtime_build_info{git_hash=...,git_describe=...,build_time_utc=...} 1`
+- 빌드 정보: `runtime_build_info{git_hash=...,git_describe=...,build_time_utc=...} 1`
 - 런타임 핵심(core runtime):
   - `core_runtime_accept_total` (counter)
   - `core_runtime_session_started_total` (counter)
@@ -91,8 +91,8 @@ pwsh scripts/smoke_metrics.ps1
 - 디스패치: `chat_dispatch_total`, `chat_dispatch_unknown_total`, `chat_dispatch_exception_total`
 - 예외 분류: `chat_exception_recoverable_total`, `chat_exception_fatal_total`, `chat_exception_ignored_total`
 - 디스패치 지연:
-  - 게이지(Gauges): `chat_dispatch_last_latency_ms`, `chat_dispatch_max_latency_ms`, `chat_dispatch_latency_avg_ms`
-  - 히스토그램(Histogram): `chat_dispatch_latency_ms_bucket`, `chat_dispatch_latency_ms_sum`, `chat_dispatch_latency_ms_count`
+- 게이지: `chat_dispatch_last_latency_ms`, `chat_dispatch_max_latency_ms`, `chat_dispatch_latency_avg_ms`
+- 히스토그램: `chat_dispatch_latency_ms_bucket`, `chat_dispatch_latency_ms_sum`, `chat_dispatch_latency_ms_count`
 - 큐/DB: `chat_job_queue_depth`, `chat_db_job_queue_depth`, `chat_db_job_processed_total`, `chat_db_job_failed_total`
 - 로거/HTTP 제어면:
   - `chat_log_async_queue_depth`, `chat_log_async_queue_capacity` (gauges)
@@ -102,7 +102,7 @@ pwsh scripts/smoke_metrics.ps1
   - `chat_http_header_timeout_total`, `chat_http_body_timeout_total`, `chat_http_header_oversize_total`, `chat_http_body_oversize_total`, `chat_http_bad_request_total` (counters)
   - `chat_runtime_setting_reload_attempt_total`, `chat_runtime_setting_reload_success_total`, `chat_runtime_setting_reload_failure_total`, `chat_runtime_setting_reload_latency_sum_ns` (counters)
   - `chat_runtime_setting_reload_latency_max_ms` (gauge)
-- 팬아웃/구독(Fanout/Subscribe): `chat_subscribe_total`, `chat_self_echo_drop_total`, `chat_subscribe_last_lag_ms`
+- 팬아웃/구독: `chat_subscribe_total`, `chat_self_echo_drop_total`, `chat_subscribe_last_lag_ms`
 - admin command 무결성:
   - `chat_admin_command_verify_ok_total`, `chat_admin_command_verify_fail_total` (counters)
   - `chat_admin_command_verify_replay_total`, `chat_admin_command_verify_signature_mismatch_total` (counters)
@@ -121,7 +121,7 @@ pwsh scripts/smoke_metrics.ps1
 ### 게이트웨이 앱(gateway_app)
 - `gateway_sessions_active` (gauge)
 - `gateway_connections_total` (counter)
-- 백엔드(Backend) 신뢰성:
+- 백엔드 신뢰성:
   - `gateway_backend_resolve_fail_total` (counter)
   - `gateway_backend_connect_fail_total` (counter)
   - `gateway_backend_connect_timeout_total` (counter)
@@ -130,12 +130,12 @@ pwsh scripts/smoke_metrics.ps1
   - `gateway_backend_circuit_open_total`, `gateway_backend_circuit_reject_total` (counters)
   - `gateway_backend_connect_retry_total`, `gateway_backend_retry_budget_exhausted_total` (counters)
   - `gateway_backend_circuit_open` (gauge)
-- 백엔드(Backend) 가드레일 설정:
+- 백엔드 가드레일 설정:
   - `gateway_backend_connect_timeout_ms` (gauge)
   - `gateway_backend_send_queue_max_bytes` (gauge)
   - `gateway_backend_circuit_fail_threshold`, `gateway_backend_circuit_open_ms` (gauges)
   - `gateway_backend_connect_retry_budget_per_min`, `gateway_backend_connect_retry_backoff_ms`, `gateway_backend_connect_retry_backoff_max_ms` (gauges)
-- ingress load shedding:
+- ingress 부하 차단:
   - `gateway_ingress_reject_not_ready_total`, `gateway_ingress_reject_rate_limit_total`, `gateway_ingress_reject_session_limit_total`, `gateway_ingress_reject_circuit_open_total` (counters)
   - `gateway_ingress_tokens_per_sec`, `gateway_ingress_burst_tokens`, `gateway_ingress_max_active_sessions`, `gateway_ingress_tokens_available` (gauges)
 - UDP 수신/바인드(ingress/bind) 가드레일:
@@ -166,7 +166,7 @@ pwsh scripts/smoke_metrics.ps1
 - 배치/지연: `wb_flush_batch_size_last` (gauge), `wb_flush_commit_ms_last` (gauge)
 
 ### 관리자 앱(admin_app)
-- 빌드(Build): `runtime_build_info{...} 1`
+- 빌드 정보: `runtime_build_info{...} 1`
 - API 트래픽: `admin_http_requests_total`, `admin_http_errors_total`, `admin_http_server_errors_total` (counters)
 - 인증 트래픽: `admin_http_unauthorized_total`, `admin_http_forbidden_total` (counters)
 - API 종류별: `admin_overview_requests_total`, `admin_instances_requests_total`, `admin_session_lookup_requests_total`, `admin_worker_requests_total` (counters)
@@ -193,13 +193,13 @@ max_over_time(wb_pending[5m])
 ## 5. 문제 해결
 
 - p95/p99가 NaN: 최근 rate window에 샘플이 없으면 정상적으로 NaN이 나올 수 있다. (트래픽 주입 후 재확인)
-- 데이터 없음(No data): `/metrics` 엔드포인트(호스트 포트 매핑)와 Prometheus Targets를 먼저 확인한다.
+- 데이터 없음: `/metrics` 엔드포인트(호스트 포트 매핑)와 Prometheus targets를 먼저 확인한다.
 - redis/postgres exporter down: `docker/stack/docker-compose.yml`의 `observability` profile이 올라왔는지 확인한다.
 - chat 상세 로그가 기대보다 적음: 최신 서버 경로에서는 고빈도 로그(`CHAT_SEND` 본문, whisper 상태, publish 카운트)가 노이즈 절감을 위해 `debug` 또는 샘플링으로 조정되어 기본 `info`에서 보이지 않을 수 있다.
 
-## 6. 경보 규칙 (Gateway UDP/RUDP + Resilience)
+## 6. 경보 규칙 (Gateway UDP/RUDP + 복원력)
 
-- Prometheus rule 파일(file): `docker/observability/prometheus/alerts.yml`
+- Prometheus 규칙 파일: `docker/observability/prometheus/alerts.yml`
 - 기본 경보:
   - `GatewayBackendCircuitOpen`: backend circuit open 지속
   - `GatewayIngressRateLimited`: ingress rate-limit reject 급증
@@ -217,7 +217,7 @@ max_over_time(wb_pending[5m])
   - `ChatErrorBudgetBurnRateFast`: chat frame 오류율이 단기 윈도우에서 budget 소진 속도로 상승(치명)
   - `ChatErrorBudgetBurnRateSlow`: chat frame 오류율이 장기 윈도우에서 budget 소진 속도로 지속(경고)
 
-### 6.2 SLO burn-rate 기준
+### 6.2 SLO 소진 속도(burn-rate) 기준
 
 - 핵심 SLI는 `chat_frame_error_total / chat_frame_total` 오류율을 사용한다.
 - 단기 burn-rate 경보:
@@ -226,13 +226,13 @@ max_over_time(wb_pending[5m])
 - 장기 burn-rate 경보:
   - rule: `ChatErrorBudgetBurnRateSlow`
   - 기준: 12h 오류율 > 0.3%가 6h 지속
-- 운영 정책: burn-rate 경보 지속 시 신규 기능 rollout을 일시 중지하고, 최근 배포/의존성 포화/백프레셔 설정을 우선 점검한다.
+- 운영 정책: burn-rate 경보가 지속되면 신규 기능 rollout을 일시 중지하고, 최근 배포와 의존성 포화, 백프레셔 설정을 우선 점검한다.
 
-### 6.3 Plugin/Script 경보 규칙
+### 6.3 플러그인/스크립트 경보 규칙
 
 플러그인/스크립팅 운영 시 최소 아래 규칙을 함께 본다.
 
-Grafana 기본 대시보드(`chat-server-runtime`)의 `Extensibility` row에는 다음 패널을 포함한다.
+Grafana 기본 대시보드(`chat-server-runtime`)의 `Extensibility` 행에는 다음 패널을 포함한다.
 
 - `Plugin Reload Success Rate`
 - `Plugin Hook Calls (/s)`
@@ -293,9 +293,9 @@ clamp_min(sum(rate(chat_frame_total[5m])), 1)
 > 0.01
 ```
 
-### 6.4 RUDP 관측 계약 (기본 OFF)
+### 6.4 RUDP 관측 계약 (기본 비활성)
 
-RUDP adapter/core 엔진은 구현되어 있지만 기본 경로는 TCP다. 기본값에서는 `GATEWAY_RUDP_ENABLE=0` 또는 canary/allowlist 미설정으로 인해 RUDP 지표가 0에 머물 수 있다.
+RUDP adapter/core 엔진은 구현되어 있지만 기본 경로는 TCP다. 기본값에서는 `GATEWAY_RUDP_ENABLE=0` 또는 canary/allowlist 미설정 때문에 RUDP 지표가 0에 머물 수 있다.
 
 게이트 조건:
 
@@ -351,7 +351,7 @@ pwsh scripts/check_prometheus_rules.ps1
 
 위 스크립트는 `promtool check rules` + `promtool test rules`를 실행해, 테스트 입력(metric fixture)으로 TLS 만료 경보와 RUDP rollout 경보 발화를 재현한다.
 
-## 7. 트레이싱/상관키 (config-gated)
+## 7. 트레이싱/상관키 (설정 게이트)
 
 경량 tracing context는 환경 변수로 켜고 끌 수 있다.
 
