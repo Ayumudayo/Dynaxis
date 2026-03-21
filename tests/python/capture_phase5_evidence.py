@@ -34,6 +34,8 @@ DIRECT_GATEWAY_PORTS = (36100, 36101)
 STACK_NETWORK = "dynaxis-stack_dynaxis-stack"
 STACK_HAPROXY_HOST = "haproxy"
 STACK_GATEWAY_HOST = "gateway-1"
+LINUX_CONTAINER_REPO_ROOT = "/workspace"
+LINUX_LOADGEN_BUILD_DIR = "build-linux-loadgen"
 
 
 def default_run_id() -> str:
@@ -179,21 +181,26 @@ def ensure_loadgen_built(log_path: Path) -> Path:
 
 
 def ensure_linux_loadgen_built(log_path: Path) -> Path:
-    loadgen_path = REPO_ROOT / "build-linux" / "stack_loadgen"
+    loadgen_path = REPO_ROOT / LINUX_LOADGEN_BUILD_DIR / "stack_loadgen"
     run_command(
         [
             "docker",
             "run",
             "--rm",
             "-v",
-            f"{REPO_ROOT}:/workspace",
+            f"{REPO_ROOT}:{LINUX_CONTAINER_REPO_ROOT}",
             "-w",
-            "/workspace",
+            LINUX_CONTAINER_REPO_ROOT,
             "dynaxis-base:latest",
             "bash",
             "-lc",
-            "cmake --preset linux-release -DBUILD_SERVER_TESTS=OFF -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=OFF >/tmp/loadgen-configure.log && "
-            "cmake --build build-linux --target stack_loadgen >/tmp/loadgen-build.log",
+            # Use a dedicated loadgen build tree so Phase 5 evidence capture does
+            # not inherit an earlier `build-linux` cache that was configured from
+            # a different container mount path.
+            f"rm -rf {LINUX_LOADGEN_BUILD_DIR} && "
+            f"cmake --preset linux-release -B {LINUX_LOADGEN_BUILD_DIR} "
+            "-DBUILD_SERVER_TESTS=OFF -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=OFF >/tmp/loadgen-configure.log && "
+            f"cmake --build {LINUX_LOADGEN_BUILD_DIR} --target stack_loadgen >/tmp/loadgen-build.log",
         ],
         label="build:stack_loadgen_linux",
         log_path=log_path,
@@ -292,13 +299,13 @@ def run_container_loadgen_capture(
     command.extend(
         [
         "-v",
-        f"{REPO_ROOT}:/workspace",
+        f"{REPO_ROOT}:{LINUX_CONTAINER_REPO_ROOT}",
         "-w",
-        "/workspace",
+        LINUX_CONTAINER_REPO_ROOT,
         "dynaxis-base:latest",
         "bash",
         "-lc",
-        f"./build-linux/stack_loadgen --host {host} --port {port}"
+        f"./{LINUX_LOADGEN_BUILD_DIR}/stack_loadgen --host {host} --port {port}"
         + (f" --udp-port {udp_port}" if udp_port is not None else "")
         + f" --scenario {scenario_rel} --report {report_rel}",
         ]
