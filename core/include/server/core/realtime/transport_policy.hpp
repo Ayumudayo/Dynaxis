@@ -70,7 +70,7 @@ inline std::uint64_t fnv1a64(std::string_view session_id, std::uint64_t nonce) {
 
 } // namespace detail
 
-/** @brief CSV allowlist를 opcode 집합으로 파싱합니다. */
+/** @brief CSV allowlist를 opcode 집합으로 파싱합니다. 설정 문자열과 런타임 정책을 분리하기 위한 helper입니다. */
 inline std::unordered_set<std::uint16_t> parse_direct_opcode_allowlist(std::string_view csv) {
     std::unordered_set<std::uint16_t> out;
 
@@ -96,7 +96,13 @@ inline std::unordered_set<std::uint16_t> parse_direct_opcode_allowlist(std::stri
     return out;
 }
 
-/** @brief direct UDP/RUDP gameplay transport rollout policy입니다. */
+/**
+ * @brief direct UDP/RUDP gameplay transport rollout 정책입니다.
+ *
+ * 이 정책은 "어떤 세션을 canary로 고를 것인가"와 "어떤 opcode를 direct path에 태울 것인가"를
+ * 함께 다룹니다. rollout과 allowlist를 분리하지 않으면, 실험 중인 transport가 어느새
+ * 전체 프로토콜 계약을 바꾸는 식으로 번질 수 있습니다.
+ */
 struct DirectTransportRolloutPolicy {
     bool enabled{false};
     std::uint32_t canary_percent{0};
@@ -117,13 +123,13 @@ struct DirectTransportRolloutPolicy {
     }
 };
 
-/** @brief Direct bind ticket 발급 시 선택되는 attach 모드입니다. */
+/** @brief direct bind ticket 발급 시 선택되는 attach 모드입니다. */
 enum class DirectAttachMode : std::uint8_t {
     kUdpOnly = 0,
     kRudpCanary,
 };
 
-/** @brief Attach decision reason입니다. */
+/** @brief attach 결정 이유입니다. rollout 비활성, allowlist 부재, canary 선택 여부를 드러냅니다. */
 enum class DirectAttachReason : std::uint8_t {
     kRolloutDisabled = 0,
     kAllowlistEmpty,
@@ -131,7 +137,7 @@ enum class DirectAttachReason : std::uint8_t {
     kCanarySelected,
 };
 
-/** @brief Direct bind attach decision입니다. */
+/** @brief direct bind attach 판단 결과입니다. */
 struct DirectAttachDecision {
     DirectAttachMode mode{DirectAttachMode::kUdpOnly};
     DirectAttachReason reason{DirectAttachReason::kRolloutDisabled};

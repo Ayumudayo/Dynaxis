@@ -11,7 +11,13 @@
 
 namespace server::core::worlds {
 
-/** @brief source world drain 이후 target world resume에 필요한 opaque migration envelope입니다. */
+/**
+ * @brief source world drain 이후 target world resume에 필요한 opaque migration envelope입니다.
+ *
+ * envelope를 opaque하게 유지하는 이유는, core가 app-specific handoff payload 의미까지
+ * 알지 않게 하기 위해서입니다. core는 target world/owner와 resume readiness만 판단하고,
+ * payload 자체의 도메인 해석은 앱 계층에 남깁니다.
+ */
 struct WorldMigrationEnvelope {
     std::string target_world_id;
     std::string target_owner_instance_id;
@@ -27,7 +33,7 @@ struct ObservedWorldMigrationInstance {
     bool ready{false};
 };
 
-/** @brief migration target world의 owner 및 instance readiness 관측값입니다. */
+/** @brief migration target world의 owner와 instance readiness 관측값입니다. */
 struct ObservedWorldMigrationWorld {
     std::string world_id;
     std::string current_owner_instance_id;

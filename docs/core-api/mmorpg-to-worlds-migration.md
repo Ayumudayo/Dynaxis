@@ -1,4 +1,4 @@
-# MMORPG To Worlds Migration
+# MMORPG에서 Worlds로 마이그레이션
 
 ## 요약
 - 변경 내용: canonical stable public surface가 `server/core/mmorpg/**`에서 `server/core/worlds/**`로 이동했습니다.

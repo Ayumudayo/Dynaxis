@@ -12,7 +12,7 @@
 
 namespace server::core::net::rudp {
 
-/** @brief datagram 처리 결과입니다. */
+/** @brief datagram 처리 결과입니다. 파싱, handshake, egress, fallback 여부를 함께 담습니다. */
 struct ProcessResult {
     bool parsed{false};
     bool consumed{false};
@@ -24,7 +24,12 @@ struct ProcessResult {
     std::uint64_t retransmit_count{0};
 };
 
-/** @brief Core 재사용 가능한 RUDP 엔진입니다. */
+/**
+ * @brief core에서 재사용 가능한 RUDP 엔진입니다.
+ *
+ * 이 엔진은 datagram 상태 전이, 재전송, ACK, fallback 판단을 담당하되, 실제 소켓 송수신과
+ * 세션 의미는 소유하지 않습니다. 즉 transport 메커니즘은 여기 있고, 앱 의미는 바깥에 남깁니다.
+ */
 class RudpEngine {
 public:
     explicit RudpEngine(RudpConfig config = {});

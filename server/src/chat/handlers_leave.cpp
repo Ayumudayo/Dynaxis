@@ -20,13 +20,13 @@ namespace corelog = server::core::log;
  *
  * 룸 멤버십 정리와 presence/DB 상태 갱신을 함께 수행해,
  * 연결 종료 직후에도 룸 목록과 사용자 표시가 빠르게 수렴하도록 합니다.
+ * leave를 단순 방 제거로만 취급하면 로비 복귀, 활성 방 정리, 방 종료(close) 여부가
+ * 각기 다른 타이밍에 처리되어 refresh와 운영 지표가 서로 다른 세계를 보게 됩니다.
  */
 namespace server::app::chat {
 
-// -----------------------------------------------------------------------------
-// 방 퇴장 (Leave) 핸들러
-// -----------------------------------------------------------------------------
-// 사용자가 현재 방에서 나갈 때 호출됩니다.
+// leave는 "현재 방에서 제거"가 아니라 "다음 기본 상태로 되돌리는 전환"이다.
+// 로비 복귀, presence 정리, 브로드캐스트, write-behind 기록까지 한 묶음으로 처리해야 상태가 빨리 수렴한다.
 void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint8_t> payload) {
     auto session_sp = s.shared_from_this();
     std::string room;
@@ -35,6 +35,7 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
     }
 
     // DB, Redis, fanout 처리까지 필요하므로 job_queue에서 비동기로 처리한다.
+    // 즉시 I/O 스레드에서 처리하면 느린 저장소나 Redis 정리가 전체 leave burst를 막을 수 있다.
     if (!job_queue_.TryPush([this, session_sp, room]() {
         const std::string session_id_str = get_or_create_session_uuid(*session_sp);
         std::string user_uuid;
@@ -66,7 +67,8 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
             }
             room_to_leave = itcr->second;
             
-            // 방에서 세션 제거
+            // 방에서 먼저 제거한 뒤 남은 참여자와 후속 owner/eject 처리를 계산한다.
+            // 순서가 뒤바뀌면 떠나는 사용자가 여전히 대상 목록에 남아 자기 자신에게 퇴장 알림을 받게 될 수 있다.
             auto itroom = state_.rooms.find(room_to_leave);
             if (itroom != state_.rooms.end()) {
                 auto it2 = state_.user.find(session_sp.get());
@@ -136,7 +138,8 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
                 }
                 targets = std::move(filtered_targets);
             }
-            // 사용자를 로비로 이동시킴
+            // leave 후 기본 위치를 로비로 고정해 "현재 방 없음" 상태를 길게 남기지 않는다.
+            // 이 규칙이 있어야 refresh/continuity가 일관된 fallback room을 사용할 수 있다.
             state_.cur_room[session_sp.get()] = std::string("lobby");
             state_.rooms["lobby"].insert(session_sp);
         }
@@ -144,8 +147,8 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
             persist_continuity_room(logical_session_id, next_room, logical_session_expires_unix_ms);
         }
 
-        // 방 퇴장 브로드캐스트 메시지를 구성한다.
-        // 해당 방 참여자에게 퇴장 알림을 먼저 팬아웃한다.
+        // 퇴장 알림은 방 참여자에게 먼저 fan-out한다.
+        // 로비 복귀 알림보다 먼저 보내야 같은 사용자가 두 방에 동시에 있는 것처럼 보이지 않는다.
         if (!room_to_leave.empty()) {
             server::wire::v1::ChatBroadcast pb;
             pb.set_room(room_to_leave);
@@ -164,6 +167,7 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
         }
 
         // Redis presence SET에서도 사용자를 제거해 TTL 기반 알림과 일치시킨다.
+        // 메모리 상태만 갱신하고 presence를 남겨 두면 다른 런타임은 사용자가 아직 그 방에 있다고 본다.
         if (redis_ && !room_to_leave.empty()) {
             try {
                 std::string uid;
@@ -186,7 +190,7 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
                     redis_->srem("room:users:" + room_to_leave, sender_name);
                 }
                 
-                // 방이 비었는지 확인하고 활성 목록에서 제거 (Room List Sync)
+                // 방이 비었는지 확인하고 활성 목록에서 제거한다.
                 if (room_to_leave != "lobby") {
                     std::size_t remaining = 1;
                     (void)redis_->scard("room:users:" + room_to_leave, remaining);
@@ -197,16 +201,16 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
                         redis_->srem("rooms:active", room_to_leave);
                         redis_->del("room:password:" + room_to_leave);
                         
-                        // 방이 완전히 비었으므로 방을 비활성화(Close) 처리 (Room Rotation)
-                        // 이렇게 하면 다음에 같은 이름으로 방을 만들어도 새로운 UUID가 발급되어
-                        // 이전 채팅 내역이 보이지 않게 됩니다. (Privacy + Audit Log Preservation)
+                        // 방이 완전히 비었으므로 방을 비활성화(close) 처리한다.
+                        // 이렇게 해야 다음에 같은 이름의 방을 만들더라도 새 UUID를 발급받아,
+                        // 이전 채팅 내역이 섞이지 않는다. 이는 privacy와 audit 보존 모두에 중요하다.
                         if (db_pool_ && !room_uuid.empty()) {
                             try {
                                 auto uow = db_pool_->make_repository_unit_of_work();
                                 uow->rooms().close(room_uuid);
                                 uow->commit();
 
-                                // 로컬 캐시에서도 제거하여 다음번 방 생성 시 새로운 UUID를 발급받도록 함
+                                // 로컬 캐시에서도 제거해 다음 방 생성 시 새로운 UUID를 발급받도록 한다.
                                 {
                                     std::lock_guard<std::mutex> lk(state_.mu);
                                     state_.room_ids.erase(room_to_leave);
@@ -225,8 +229,7 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
             } catch (...) {}
         }
 
-        // 로비 입장 알림 메시지를 전송한다.
-        // 로비에 입장했다는 알림을 전체 로비 인원에게 재전송한다.
+        // 로비 입장 알림은 "leave 이후 기본 위치가 어디인가"를 주변 세션에 빠르게 수렴시키는 신호다.
         std::vector<std::shared_ptr<Session>> t2;
         std::vector<std::uint8_t> body2;
         {
@@ -268,13 +271,13 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
         body2.assign(bytes2.begin(), bytes2.end());
         for (auto& t : t2) t->async_send(game_proto::MSG_CHAT_BROADCAST, body2, 0);
 
-        // 로비와 해당 방에 있는 다른 유저들에게 새로고침 알림 전송
+        // 로비와 해당 방에 있는 다른 유저들에게 새로고침 알림을 전송한다.
         broadcast_refresh("lobby");
         if (!room_to_leave.empty() && room_to_leave != "lobby") {
             broadcast_refresh(room_to_leave);
         }
 
-        // Write-behind 이벤트 발행
+        // leave 이벤트도 DLQ/재처리 경로에서 따라갈 수 있어야 하므로 메타데이터를 stream에 남긴다.
         if (!room_to_leave.empty()) {
             std::optional<std::string> uid_opt;
             if (!user_uuid.empty()) {

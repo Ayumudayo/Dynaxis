@@ -16,6 +16,8 @@
  *
  * Counter/Gauge/Histogram 호출 값을 프로세스 내 registry에 축적하고,
  * Prometheus text 형식으로 직렬화해 `/metrics` 응답에 합성할 수 있도록 제공합니다.
+ * 이 backend를 공용으로 두는 이유는, 서비스마다 메트릭 문자열을 직접 만들기 시작하면
+ * 형식과 라벨 규칙이 금방 흔들리기 때문입니다.
  */
 namespace server::core::metrics {
 

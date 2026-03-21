@@ -48,8 +48,9 @@
 /**
  * @brief GatewayApp/BackendConnection의 라우팅·브리지 구현입니다.
  *
- * sticky + least-connections 정책으로 backend를 선택하고,
- * connect timeout/송신 큐 상한으로 장애 전파를 제한합니다.
+ * 이 구현은 엣지(edge)가 단순 프록시가 아니라 "어떤 백엔드(backend)에 붙일지, 언제 실패를 잘라낼지"를 결정하는 정책 계층임을 보여 줍니다.
+ * 고정 라우팅(sticky)과 최소 연결 수(least-connections)를 같이 쓰는 이유는 재접속 지역성은 살리되, 이미 과열된 인스턴스에 신규 연결이 몰리는 것을 막기 위해서입니다.
+ * 여기에 연결 타임아웃(connect timeout), 재시도 예산(retry budget), 송신 큐 상한을 함께 두어 백엔드 장애가 엣지 전체 마비로 번지지 않게 합니다.
  */
 namespace gateway {
 
@@ -458,9 +459,9 @@ std::string udp_frame_summary(std::span<const std::uint8_t> frame) {
 
 } // namespace
 
-// --- BackendConnection Implementation ---
-
-// Re-implementing GatewayApp::BackendConnection methods directly
+// `GatewayApp::BackendConnection` 구현부.
+// 엣지 보호 장치(connect timeout, retry budget, bounded send queue)를 bridge 클래스에 직접 둔다.
+// 이 보호 규칙이 상위 라우팅 코드에 흩어지면, 어떤 종료가 "선택 실패"이고 어떤 종료가 "브리지 중 장애"인지 분류하기 어려워진다.
 
 GatewayApp::BackendConnection::BackendConnection(GatewayApp& app,
                                             std::string session_id,
@@ -569,8 +570,8 @@ void GatewayApp::BackendConnection::do_connect(const std::string& host, std::uin
                     (void)retry_timer_.cancel();
                     app_.record_backend_connect_success_event();
 
-                    // Backend TCP 연결이 성공했으므로 sticky binding을 갱신한다.
-                    // connect 성공 후에만 바인딩해야, 연결 실패로 인한 zombie mapping을 피할 수 있다.
+                    // 백엔드 TCP 연결이 성공했으므로 고정 라우팅(sticky binding)을 갱신한다.
+                    // connect 성공 후에만 바인딩해야, 연결 실패 백엔드를 오래 가리키는 zombie mapping을 피할 수 있다.
                     app_.on_backend_connected(client_id_, backend_instance_id_, sticky_hit_);
                     do_read();
                 });
@@ -692,6 +693,7 @@ void GatewayApp::BackendConnection::send(const std::uint8_t* data, std::size_t l
 
     auto buffer = std::make_shared<std::vector<std::uint8_t>>(data, data + length);
     // 브리지 read 버퍼를 바로 큐에 복사해 caller의 중간 임시 payload vector를 줄인다.
+    // 핫패스에서 불필요한 중간 버퍼가 늘어나면 대량 세션에서 메모리 압박과 복사 비용이 같이 커진다.
     bool overflow = false;
 
     {
@@ -848,7 +850,8 @@ GatewayApp::GatewayApp()
     engine_.set_service(hive_);
     engine_.set_service(authenticator_);
 
-    // Redis is required for backend discovery and sticky routing.
+    // Redis는 백엔드 탐색(discovery)과 고정 라우팅(sticky routing)에 필수다.
+    // 이 의존성을 readiness에 반영해야, 엣지가 백엔드를 찾지 못하는 상태를 "정상 준비"로 오해하지 않는다.
     engine_.declare_dependency("redis", server::core::app::AppHost::DependencyRequirement::kRequired);
     engine_.set_ready(false);
 
@@ -863,7 +866,8 @@ GatewayApp::GatewayApp()
     engine_.start_admin_http(metrics_port_, [this]() {
         std::ostringstream stream;
 
-        // Build metadata (git hash/describe + build time)
+        // build metadata(git hash/describe + build time)를 함께 노출해,
+        // 운영자가 현재 어떤 바이너리가 떠 있는지 메트릭만으로도 확인할 수 있게 한다.
         server::core::metrics::append_build_info(stream);
         server::core::metrics::append_runtime_core_metrics(stream);
         server::core::metrics::append_prometheus_metrics(stream);
@@ -1362,8 +1366,8 @@ GatewayApp::BackendConnectionPtr GatewayApp::create_backend_connection(const std
         return nullptr;
     }
 
-    // 고유 세션 ID 생성
-    // 더 나은 생성기를 사용할 수 있지만, 현재는 원자적 카운터로 충분합니다.
+    // 세션 ID는 gateway 로컬 상관관계 키 역할만 하면 된다.
+    // 전역 유일성보다 "가볍고 충돌 없이 현재 프로세스 안에서 추적 가능함"이 더 중요하므로 원자 카운터로 충분하다.
     static std::atomic<std::uint64_t> counter{0};
     std::string session_id = gateway_id_ + "-" + boot_id_ + "-" + std::to_string(++counter);
 
@@ -1775,6 +1779,7 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
     };
 
     // 1) 세션 스티키니스: 기존 바인딩이 유효하면 우선 사용한다.
+    // 재접속 사용자가 매번 다른 백엔드로 튀면 warm cache, continuity, 사용자 체감 지연이 모두 나빠질 수 있다.
     if (session_directory_ && !client_id.empty() && client_id != "anonymous") {
         if (auto backend_id = session_directory_->find_backend(client_id)) {
             auto it = std::find_if(instances.begin(), instances.end(), [&](const auto& rec) {
@@ -1793,6 +1798,7 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
                 }
             }
             // 바인딩된 인스턴스가 사라졌거나 비활성화되었으므로 바인딩을 해제한다.
+            // 해제를 미루면 이미 죽은 백엔드를 계속 우선 후보로 시도해 엣지가 실패를 반복하게 된다.
             session_directory_->release_backend(client_id, *backend_id);
         }
     }
@@ -1807,7 +1813,9 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
         }
     }
 
-    // 2) 신규 선택: registry active_sessions + gateway 로컬 optimistic load 기반.
+    // 2) 신규 선택:
+    // registry의 active_sessions와 gateway 로컬 optimistic load를 함께 본다.
+    // registry만 보면 heartbeat 지연이 있을 수 있고, 로컬 부하만 보면 전체 백엔드 분포를 놓치기 쉽다.
     std::unordered_map<std::string, std::size_t> local_backend_load;
     {
         std::lock_guard<std::mutex> lock(session_mutex_);
@@ -2015,8 +2023,10 @@ void GatewayApp::on_backend_connected(const std::string& client_id,
         return;
     }
 
-    // Post-connect binding: only commit sticky mapping after the backend TCP connection succeeds.
-    // ensure_backend() creates the mapping if absent (SETNX) and refreshes TTL if already bound.
+    // post-connect binding:
+    // 백엔드 TCP 연결이 실제로 성공한 뒤에만 고정 라우팅(sticky mapping)을 확정한다.
+    // 그렇지 않으면 연결 실패 백엔드를 가리키는 zombie mapping이 남을 수 있다.
+    // `ensure_backend()`는 매핑이 없으면 생성(SETNX)하고, 이미 있으면 TTL만 갱신한다.
     auto bound = session_directory_->ensure_backend(client_id, backend_instance_id);
     if (sticky_hit && bound && *bound != backend_instance_id) {
         server::core::log::warn(
@@ -2411,7 +2421,7 @@ void GatewayApp::configure_infrastructure() {
               session_directory_ = std::make_unique<SessionDirectory>(
                   redis_client_,
                   session_directory_prefix_,
-                  std::chrono::seconds(600) // 10 minutes session stickiness
+                  std::chrono::seconds(600) // 세션 stickiness 10분 유지
               );
 
              server::core::log::info("GatewayApp Redis client initialised");

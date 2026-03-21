@@ -11,14 +11,19 @@
 
 namespace server::core::worlds {
 
-/** @brief drain 대상 world에서 관측한 instance 상태 한 건입니다. */
+/** @brief drain 대상 world에서 관측한 instance 상태 한 건입니다. ready와 active session 분포를 함께 봅니다. */
 struct ObservedWorldDrainInstance {
     std::string instance_id;
     bool ready{false};
     std::uint32_t active_sessions{0};
 };
 
-/** @brief world drain 판단에 필요한 owner/replacement/instance 관측 스냅샷입니다. */
+/**
+ * @brief world drain 판단에 필요한 owner, replacement, instance 관측 스냅샷입니다.
+ *
+ * drain은 단순히 `draining=true` 플래그만으로 판단할 수 없습니다. replacement target 존재 여부,
+ * readiness, active session 분포를 함께 봐야 "정말 retire 쪽으로 움직일 수 있는가"를 알 수 있습니다.
+ */
 struct ObservedWorldDrainState {
     std::string world_id;
     std::string owner_instance_id;
@@ -65,7 +70,12 @@ struct WorldDrainSummary {
     std::uint32_t replacement_active_sessions{0};
 };
 
-/** @brief 단일 world drain policy의 phase와 요약 상태입니다. */
+/**
+ * @brief 단일 world drain policy의 phase와 요약 상태입니다.
+ *
+ * 이 상태는 "drain이 선언되었는가"와 "실제로 세션이 빠지고 있는가"를 구분해 보여 줍니다.
+ * 운영자는 replacement target 문제와 drain 진행 문제를 따로 봐야 하므로 phase를 분리합니다.
+ */
 struct WorldDrainStatus {
     std::string world_id;
     std::string owner_instance_id;
@@ -140,7 +150,13 @@ struct WorldDrainOrchestrationSummary {
     bool clear_allowed{false};
 };
 
-/** @brief drain policy를 언제 clear할 수 있는지 표현하는 orchestration 상태입니다. */
+/**
+ * @brief drain policy를 언제 clear할 수 있는지 표현하는 orchestration 상태입니다.
+ *
+ * drain은 "세션이 0이 되었다"로 끝나지 않을 수 있습니다. same-world owner transfer나
+ * cross-world migration readiness까지 확인한 뒤에만 policy를 안전하게 clear할 수 있으므로,
+ * 별도 orchestration 상태로 closure 조건을 드러냅니다.
+ */
 struct WorldDrainOrchestrationStatus {
     std::string world_id;
     WorldDrainPhase drain_phase{WorldDrainPhase::kIdle};

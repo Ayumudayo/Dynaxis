@@ -7,7 +7,7 @@
 
 namespace server::core::net::rudp {
 
-/** @brief 재전송 큐 엔트리입니다. */
+/** @brief 재전송 큐 엔트리입니다. 최초 전송 시각과 재전송 횟수를 함께 보관합니다. */
 struct PendingPacket {
     std::uint32_t packet_number{0};
     std::uint64_t first_sent_unix_ms{0};
@@ -16,7 +16,13 @@ struct PendingPacket {
     std::vector<std::uint8_t> encoded_frame;
 };
 
-/** @brief ACK 대기 패킷 큐와 재전송 타이머를 관리합니다. */
+/**
+ * @brief ACK 대기 패킷 큐와 재전송 타이머를 관리합니다.
+ *
+ * 이 계층을 별도 큐로 두는 이유는, "전송은 됐지만 아직 확인되지 않은 패킷"의 수명주기를
+ * 소켓/엔진 본체와 분리해 관리하기 위해서입니다. 그래야 inflight 상한과 timeout 재전송을
+ * 한곳에서 계산할 수 있습니다.
+ */
 class RetransmissionQueue {
 public:
     RetransmissionQueue() = default;
@@ -32,7 +38,7 @@ public:
      */
     void push(std::uint32_t packet_number, std::uint64_t sent_unix_ms, std::vector<std::uint8_t> encoded_frame);
 
-    /** @brief `ack_largest + ack_mask(64)`로 ACK 처리합니다. */
+    /** @brief `ack_largest + ack_mask(64)` 조합으로 ACK 처리합니다. */
     void mark_acked(std::uint32_t ack_largest, std::uint64_t ack_mask);
 
     /**

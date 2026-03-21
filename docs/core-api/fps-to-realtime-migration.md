@@ -1,4 +1,4 @@
-# FPS To Realtime Migration
+# FPS에서 Realtime으로 마이그레이션
 
 ## 요약
 - 변경 내용: canonical stable public surface가 `server/core/fps/**`에서 `server/core/realtime/**`로 이동했습니다.

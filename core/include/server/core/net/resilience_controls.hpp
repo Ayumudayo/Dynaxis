@@ -6,7 +6,12 @@
 
 namespace server::core::net {
 
-/** @brief 고정 burst와 refill rate를 갖는 thread-safe 토큰 버킷입니다. */
+/**
+ * @brief 고정 burst와 refill rate를 갖는 thread-safe 토큰 버킷입니다.
+ *
+ * ingress를 즉시 전부 받아들이지 않고, 허용 가능한 속도로 감쇠(load shedding)하기 위한
+ * 가장 단순한 보호 장치입니다.
+ */
 class TokenBucket {
 public:
     TokenBucket() = default;
@@ -62,7 +67,12 @@ private:
     std::uint64_t last_refill_ms_{0};
 };
 
-/** @brief 고정 시간 창 단위 재시도 예산을 제어합니다. */
+/**
+ * @brief 고정 시간 창 단위 재시도 예산을 제어합니다.
+ *
+ * 장애 구간에서 무제한 재시도를 허용하면 recovery보다 retry storm가 더 커질 수 있으므로,
+ * 일정 창 안의 재시도 횟수를 명시적으로 묶습니다.
+ */
 class RetryBudget {
 public:
     RetryBudget() = default;
@@ -124,7 +134,11 @@ private:
     std::uint32_t used_in_window_{0};
 };
 
-/** @brief 연속 실패 임계치 기반의 단순 circuit breaker입니다. */
+/**
+ * @brief 연속 실패 임계치 기반의 단순 circuit breaker입니다.
+ *
+ * "실패가 난다"와 "지금은 더 시도하는 것 자체가 해롭다"를 구분해, 빠른 거절로 시스템을 보호합니다.
+ */
 class CircuitBreaker {
 public:
     CircuitBreaker() = default;

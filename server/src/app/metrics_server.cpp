@@ -18,17 +18,21 @@
 #include <string_view>
 
 /**
- * @brief server_app `/metrics`, `/healthz`, `/readyz` 렌더링 구현입니다.
+ * @brief `server_app`의 `/metrics`, `/healthz`, `/readyz` 렌더링 구현입니다.
  *
  * 런타임 카운터를 Prometheus 텍스트로 변환하고,
- * readiness/health 상태를 AppHost와 동기화해 오케스트레이터 판정을 일관화합니다.
+ * 준비 상태(readiness)와 health 상태를 AppHost와 동기화해 오케스트레이터 판정을 일관화합니다.
+ * 이 파일이 별도로 존재해야 메트릭 이름, probe 의미, 서비스별 추가 계수기를
+ * 한곳에서 관리할 수 있습니다. 각 기능 모듈이 자기 메트릭을 제각각 문자열로 출력하면
+ * 대시보드와 알람 규칙이 서비스 개편 때마다 쉽게 깨집니다.
  */
 namespace server::app {
 
 namespace corelog = server::core::log;
 namespace services = server::core::util::services;
 
-// 전역 메트릭 변수 (bootstrap.cpp에서 정의됨, extern으로 참조)
+// 부트스트랩 경로에서 누적한 카운터를 그대로 읽어 와야,
+// 실행 순서/종료 drain 같은 cross-cutting 사건을 메트릭 렌더링 단계에서도 일관되게 보여 줄 수 있다.
 extern std::atomic<std::uint64_t> g_subscribe_total;
 extern std::atomic<std::uint64_t> g_self_echo_drop_total;
 extern std::atomic<long long>     g_subscribe_last_lag_ms;
@@ -67,6 +71,8 @@ constexpr std::array<std::uint64_t, 12> kPluginHookDurationBucketUpperBoundsNs{{
 }};
 
 bool health_ok() {
+    // health는 프로세스가 살아 있고 종료 중이 아닌가만 본다.
+    // dependency readiness까지 섞으면 "죽어 가는 프로세스"와 "외부 의존성이 늦는 프로세스"가 한 값에 섞여 해석이 어려워진다.
     if (auto host = services::get<server::core::app::AppHost>()) {
         return host->healthy() && !host->stop_requested();
     }
@@ -74,6 +80,9 @@ bool health_ok() {
 }
 
 bool ready_ok() {
+    // ready는 실제 트래픽 수용 가능 여부를 뜻하므로 host readiness를 우선 사용한다.
+    // AppHost가 아직 없을 때만 최소 폴백(fallback)으로 ChatService 존재 여부를 본다.
+    // fallback을 완전히 제거하면 부트스트랩 초기 관측이 너무 일찍 깨지고, 반대로 fallback만 쓰면 ready 의미가 지나치게 느슨해진다.
     if (auto host = services::get<server::core::app::AppHost>()) {
         return host->ready() && host->healthy() && !host->stop_requested();
     }
@@ -97,7 +106,9 @@ std::string render_metrics_impl() {
     auto snap = server::core::runtime_metrics::snapshot();
     std::ostringstream stream;
 
-    // Build metadata (git hash/describe + build time)
+    // 빌드 메타데이터(git hash/describe + build time)를 같이 내보내야
+    // 같은 메트릭 이름을 보더라도 어느 바이너리에서 나온 값인지 현장에서 바로 구분할 수 있다.
+    // 이 표식이 없으면 롤링 배포 중 "이상한 수치가 어느 버전에서 나온 것인가"를 추적하기가 급격히 어려워진다.
     server::core::metrics::append_build_info(stream);
     server::core::metrics::append_runtime_core_metrics(stream);
     server::core::metrics::append_prometheus_metrics(stream);
@@ -260,7 +271,8 @@ std::string render_metrics_impl() {
     append_gauge("chat_dispatch_latency_avg_ms", avg_ms);
     append_counter("chat_dispatch_latency_count", snap.dispatch_latency_count);
 
-    // Dispatch latency histogram (for p95/p99 etc.)
+    // dispatch 지연을 histogram으로 남겨야 p95/p99처럼 tail latency를 안정적으로 계산할 수 있다.
+    // last/max 평균만 보면 짧은 spike와 지속적 악화를 구분하기 어렵다.
     stream << "# TYPE chat_dispatch_latency_ms histogram\n";
     std::uint64_t bucket_cumulative = 0;
     for (std::size_t i = 0; i < snap.dispatch_latency_bucket_counts.size(); ++i) {
@@ -325,8 +337,9 @@ std::string render_metrics_impl() {
             stream << "chat_dispatch_opcode_total{opcode=\"0x" << label.str() << "\"} " << count << "\n";
         }
 
-        // Same counter, but with stable, human-readable opcode names.
-        // Keep the original metric intact to avoid breaking existing dashboards.
+        // 같은 카운터를 사람이 읽기 쉬운 opcode 이름으로도 함께 노출한다.
+        // 기존 숫자 라벨 메트릭은 유지해 두어야 이미 배포된 대시보드와 알람이 깨지지 않는다.
+        // 즉, readability 개선은 compatibility를 깨지 않는 범위에서만 추가된다.
         stream << "# TYPE chat_dispatch_opcode_named_total counter\n";
         for (const auto& [opcode, count] : snap.opcode_counts) {
             std::string_view name = server::protocol::opcode_name(opcode);
@@ -343,7 +356,8 @@ std::string render_metrics_impl() {
         }
     }
 
-    // Chat hook plugins (hot-reloadable shared libraries)
+    // 채팅 훅 플러그인 상태를 별도 묶음으로 노출한다.
+    // reload/순서/에러를 분리해 봐야 "플러그인이 느린가"와 "플러그인이 로드조차 안 됐는가"를 구분할 수 있다.
     {
         const auto escape_label_value = [](std::string_view s) {
             std::string out;
@@ -485,7 +499,8 @@ std::string render_metrics_impl() {
         }
     }
 
-    // Lua cold hook auto-disable metrics
+    // Lua cold hook auto-disable 메트릭을 분리해, 스크립트가 단순 비활성인지
+    // 연속 실패로 차단된 것인지를 운영에서 바로 확인할 수 있게 한다.
     {
         const auto escape_label_value = [](std::string_view s) {
             std::string out;

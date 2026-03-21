@@ -14,9 +14,11 @@ class LuaRuntime;
 namespace server::app::scripting {
 
 /**
- * @brief Server-facing host interface used by Lua binding registration.
+ * @brief Lua 바인딩 등록이 호출하는 server 측 host 인터페이스입니다.
  *
- * Implementations must keep all action methods non-blocking from the caller's perspective.
+ * 이 인터페이스는 Lua 스크립트가 직접 `ChatService` 구현 세부를 보지 않게 하는
+ * 좁은 위임 경계입니다. 구현체는 호출자 관점에서 non-blocking에 가깝게 유지하는
+ * 편이 좋습니다. 그렇지 않으면 스크립트 훅이 곧바로 request path 지연으로 이어질 수 있습니다.
  */
 class ChatLuaHost {
 public:

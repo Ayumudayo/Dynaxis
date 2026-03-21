@@ -24,19 +24,13 @@ namespace corelog = server::core::log;
  *
  * 사용자 식별/중복 검증/기본 로비 입장/감사 이벤트를 한 경로로 묶어,
  * 인증 직후 세션 상태와 영속 상태가 동일하게 맞춰지도록 보장합니다.
+ * 로그인 직후 규칙이 여러 함수에 흩어지면 "접속은 됐는데 유저 역참조는 아직 이전 사용자 상태인"
+ * 어중간한 순간이 생기기 쉬워 이 파일은 그 정착 순서를 명시적으로 유지합니다.
  */
 namespace server::app::chat {
 
-// -----------------------------------------------------------------------------
-// 로그인 처리 핸들러
-// -----------------------------------------------------------------------------
-// 사용자의 로그인 요청을 처리합니다.
-// 1. 페이로드 파싱 (닉네임, 토큰)
-// 2. 세션 UUID 생성 및 할당
-// 3. 닉네임 중복 검사 및 게스트 처리
-// 4. DB에 사용자 정보(게스트 포함) 등록 및 로그인 기록
-// 5. 로비(Lobby) 입장 처리
-// 6. Write-behind 이벤트 발행 (로그인 감사 로그)
+// 로그인은 "인증 성공"보다 "서버가 이 세션을 누구로 간주할 것인가"를 확정하는 단계다.
+// 세션 UUID, 사용자 역참조, 로비/continuity 상태, 감사 로그가 여기서 같은 순서로 정착돼야 이후 핸들러가 같은 세계를 본다.
 
 void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
     auto sp = std::span<const std::uint8_t>(payload.data(), payload.size());
@@ -51,6 +45,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
     std::uint16_t client_proto_minor = proto::kProtocolVersionMinor;
     if (!sp.empty()) {
         // LOGIN_REQ 뒤에 선택적으로 client protocol version(major/minor)을 붙인다.
+        // handshake를 완전히 별도 메시지로 찢지 않은 만큼, 여기서라도 버전 불일치를 초기에 잘라야 뒤 경로가 오해하지 않는다.
         if (sp.size() < 4) {
             s.send_error(proto::errc::INVALID_PAYLOAD, "bad login payload");
             return;
@@ -69,9 +64,9 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
     }
 
     auto session_sp = s.shared_from_this();
-    // 로그인은 DB/Redis 작업과 write-behind 이벤트가 함께 수행되므로 job_queue로 넘긴다.
-    // I/O 바운드 작업이 많으므로 비동기 처리가 필수적입니다.
-    // 메인 I/O 스레드가 블로킹되면 전체 서버의 반응성이 떨어지기 때문입니다.
+    // 로그인은 DB/Redis 작업과 write-behind 이벤트가 함께 수행되므로 `job_queue`로 넘긴다.
+    // 메인 I/O 스레드에서 이 작업을 직접 수행하면, 느린 저장소가 전체 로그인 latency를 바로 끌어올릴 수 있다.
+    // 더 나쁘게는 accept/read 루프까지 막아 신규 연결 자체가 지연될 수 있다.
     if (!job_queue_.TryPush([this, session_sp, user, token]() {
         const std::string session_id_str = get_or_create_session_uuid(*session_sp);
         std::string tracked_user_uuid;
@@ -97,7 +92,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             return;
         }
 
-        // 게스트 모드 판별: 닉네임이 없거나 "guest"인 경우
+        // 게스트 여부를 초기에 확정해 이후 저장소/제재/presence 경로가 같은 기준을 보게 한다.
         const std::string requested_user =
             continuity_resume.has_value() ? continuity_resume->effective_user : user;
         bool guest_mode = continuity_resume.has_value() ? false : (user.empty() || user == "guest");
@@ -164,7 +159,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         {
             std::lock_guard<std::mutex> lk(state_.mu);
             // 동일 세션이 이전에 사용했던 이름/guest 상태를 정리하고 새 사용자 맵을 구성한다.
-            // 재로그인 시 이전 정보를 정리합니다.
+            // 이 정리를 빼먹으면 같은 세션이 by_user에 두 이름으로 남아 귓속말/중복 로그인 판정이 흔들린다.
             if (auto itold = state_.user.find(session_sp.get()); itold != state_.user.end()) {
                 auto itset = state_.by_user.find(itold->second);
                 if (itset != state_.by_user.end()) {
@@ -196,6 +191,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             }
             state_.cur_world[session_sp.get()] = current_world;
             // 기본적으로 로비에 입장시키고, continuity resume이면 마지막 방을 복원한다.
+            // fallback room을 먼저 정하지 않으면 로그인 직후 "현재 방 없음" 상태가 길게 남아 refresh와 제재 경로가 흔들린다.
             std::string room = current_room.empty() ? std::string("lobby") : current_room;
             current_room = room;
             state_.cur_room[session_sp.get()] = room;
@@ -225,6 +221,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                         }
                         
                         // 2. 기존 사용자가 없다면 새로 생성을 시도합니다.
+                        // find 후 create는 완전한 원자 연산은 아니므로, 아래 재조회 경로가 함께 필요합니다.
                         if (uid.empty()) {
                             auto uow_create = db_pool_->make_repository_unit_of_work();
                             try {
@@ -234,6 +231,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                             } catch (...) {
                                 // 3. 생성에 실패했다면(동시성 문제로 그 사이 누군가 만들었을 수 있음),
                                 // 다시 한 번 검색해서 ID를 가져옵니다.
+                                // 이 보정이 없으면 같은 닉네임에 대해 요청 타이밍에 따라 로그인 성공/실패가 흔들립니다.
                                 auto uow_retry = db_pool_->make_repository_unit_of_work();
                                 auto existing = uow_retry->users().find_by_name_ci(new_user, 1);
                                 if (!existing.empty()) {
@@ -255,9 +253,8 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 // write-behind 이벤트용 user_uuid를 저장한다.
                 if (!uid.empty()) { tracked_user_uuid = uid; }
                 
-                // 게스트라면 닉네임을 UUID 앞 8자로 정규화한다.
-                // 고유한 닉네임을 보장하기 위함입니다.
-                // Guest name normalization removed to ensure DB consistency.
+                // 게스트 이름 강제 정규화는 제거했다.
+                // DB에 기록된 이름과 실제 세션 이름이 어긋나면 감사/재현/운영 문의 대응에서 혼란이 더 커졌기 때문이다.
 
                 // users 테이블에 마지막 로그인 IP와 시각을 기록한다.
                 {
@@ -330,7 +327,8 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         session_sp->set_session_status(server::core::protocol::SessionStatus::kAuthenticated);
         session_sp->async_send(game_proto::MSG_LOGIN_RES, res, 0);
         
-        // presence:user:{uid} 키의 TTL을 주기적으로 갱신해 온라인 리스트를 유지한다.
+        // presence:user:{uid} 키의 TTL을 갱신해 온라인 리스트를 유지한다.
+        // 로그인 직후 이 값을 놓치면 사용자는 실제로 붙어 있는데도 다른 런타임에서는 offline처럼 보일 수 있다.
         if (redis_) {
             try {
                 std::string uid;
@@ -356,12 +354,12 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 redis_->sadd("room:users:" + current_room, new_user);
                 
                 // 초기 입장 방에 있는 다른 유저들에게 갱신 알림 전송
+                // 로그인 직후 refresh를 보내 두어야 분산 환경에서도 사용자 목록이 빨리 수렴한다.
                 broadcast_refresh(current_room);
             } catch (...) {}
         }
 
-        // Write-behind 이벤트 발행
-        // 로그인 이벤트를 스트림에 기록하여 추후 분석이나 알림 등에 활용합니다.
+        // 로그인 이벤트를 stream에 남겨 추후 감사, 분석, 재처리 파이프라인과 동기화한다.
         std::optional<std::string> uid_opt;
         if (!tracked_user_uuid.empty()) {
             uid_opt = tracked_user_uuid;

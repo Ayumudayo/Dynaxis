@@ -13,11 +13,10 @@
 namespace server::core::metrics {
 
 /**
- * @brief Prometheus/운영 상태 노출용 경량 HTTP 서버입니다.
+ * @brief Prometheus 메트릭과 운영 상태를 노출하는 경량 HTTP 서버입니다.
  *
- * 왜 별도 서버가 필요한가?
- * - 게임/채팅 트래픽 포트와 운영 관측 포트를 분리하면,
- *   문제 분석 중에도 데이터 경로에 영향을 최소화할 수 있습니다.
+ * 이 서버를 별도 운영 plane으로 두는 이유는, 데이터 트래픽 포트와 관측 포트를 분리해
+ * 문제 분석 중에도 본체 session I/O에 영향을 최소화하기 위해서입니다.
  */
 class MetricsHttpServer {
 public:
@@ -45,7 +44,7 @@ public:
     using StatusBodyCallback = std::function<std::string(bool ok)>;
     /** @brief 최근 로그 텍스트를 제공하는 콜백 타입입니다. */
     using LogsCallback = std::function<std::string()>;
-    /** @brief 사용자 정의 라우팅 응답 콜백 타입입니다. */
+    /** @brief 사용자 정의 라우트 응답 콜백 타입입니다. */
     using RouteCallback = std::function<std::optional<RouteResponse>(const HttpRequest& request)>;
 
     /**
@@ -58,6 +57,9 @@ public:
      * @param health_body_callback `/healthz` 본문 콜백
      * @param ready_body_callback `/readyz` 본문 콜백
      * @param route_callback 기본 라우트 외 사용자 정의 라우트 콜백
+     *
+     * health/ready/logs를 callback으로 분리한 이유는, 각 앱이 자기 runtime 상태를
+     * 같은 HTTP 골격 위에 얹되, 상태 계산 자체는 앱 문맥에서 결정하게 하기 위해서입니다.
      */
     MetricsHttpServer(unsigned short port,
                       MetricsCallback metrics_callback,

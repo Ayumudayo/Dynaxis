@@ -153,6 +153,8 @@ def escape_md(s: str) -> str:
 
 
 def render_spec_md(spec_path: Path, title: str) -> str:
+    # 한 spec을 Markdown 표 한 묶음으로 렌더링한다.
+    # 생성 결과가 사람이 읽는 문서이므로, 헤더/표 구조를 고정해 diff와 리뷰가 쉬워야 한다.
     repo_root = Path(__file__).resolve().parent.parent
     spec = load_spec(spec_path)
     ns = str(spec.get("namespace", "")).strip()
@@ -223,9 +225,9 @@ def render_spec_md(spec_path: Path, title: str) -> str:
 
 
 def main(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(description="Generate opcode docs (and validate uniqueness).")
-    ap.add_argument("--out", default="docs/protocol/opcodes.md", help="Output markdown path")
-    ap.add_argument("--check", action="store_true", help="Fail if output differs")
+    ap = argparse.ArgumentParser(description="opcode 문서를 생성하고 ID 중복을 검증합니다.")
+    ap.add_argument("--out", default="docs/protocol/opcodes.md", help="출력 Markdown 경로")
+    ap.add_argument("--check", action="store_true", help="생성 결과가 다르면 실패합니다")
     args = ap.parse_args(argv)
 
     repo_root = Path(__file__).resolve().parent.parent
@@ -233,7 +235,8 @@ def main(argv: List[str]) -> int:
     game_spec = repo_root / "server/protocol/game_opcodes.json"
     out_path = repo_root / args.out
 
-    # Cross-file uniqueness (shared 16-bit msg_id space).
+    # 시스템 opcode와 게임 opcode는 같은 16-bit 공간을 공유하므로,
+    # 파일이 다르더라도 중복을 여기서 한 번에 잡아야 런타임 충돌을 예방할 수 있다.
     all_ids: Dict[int, Tuple[str, str]] = {}
     for spec_path in (sys_spec, game_spec):
         spec = load_spec(spec_path)
@@ -254,8 +257,8 @@ def main(argv: List[str]) -> int:
     text.append("기준 원본: `core/protocol/system_opcodes.json`, `server/protocol/game_opcodes.json`.")
     text.append("`tools/gen_opcode_docs.py`로 생성됩니다. 직접 수정하지 마세요.")
     text.append("")
-    text.append(render_spec_md(sys_spec, "시스템(Core)"))
-    text.append(render_spec_md(game_spec, "게임(Server)"))
+    text.append(render_spec_md(sys_spec, "시스템 코어"))
+    text.append(render_spec_md(game_spec, "게임 서버"))
     out = "\n".join(text).rstrip() + "\n"
 
     if args.check:

@@ -5,7 +5,7 @@
             "name": "system",
             "id_min": "0x0001",
             "id_max": "0x000F",
-            "desc": "코어/시스템 프레임"
+            "desc": "연결 유지, 버전 교환, 공통 오류 응답"
         }
     ],
     "opcodes": [

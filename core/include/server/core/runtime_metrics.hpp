@@ -9,12 +9,12 @@
 
 namespace server::core::runtime_metrics {
 
-/** @brief dispatch processing_place 계열 메트릭 배열 길이입니다. */
+/** @brief dispatch `processing_place` 분류 개수입니다. 배열 크기와 라벨 수를 같은 상수로 묶어 드리프트를 막습니다. */
 inline constexpr std::size_t kDispatchProcessingPlaceCount = 3;
-/** @brief RUDP fallback reason 라벨 개수입니다. */
+/** @brief RUDP fallback reason 라벨 개수입니다. 이유 enum과 메트릭 직렬화 테이블이 같은 크기를 보게 합니다. */
 inline constexpr std::size_t kRudpFallbackReasonCount = 6;
 
-/** @brief RUDP RTT 히스토그램 버킷 상한(ms)입니다. */
+/** @brief RUDP RTT 히스토그램 버킷 상한(ms)입니다. 지나치게 촘촘하면 비용이 늘고, 너무 성기면 tail 해석력이 떨어지므로 운영 구간만 남깁니다. */
 inline constexpr std::array<std::uint64_t, 11> kRudpRttBucketUpperBoundsMs = {
     1,
     2,
@@ -29,7 +29,7 @@ inline constexpr std::array<std::uint64_t, 11> kRudpRttBucketUpperBoundsMs = {
     2000,
 };
 
-/** @brief RUDP fallback 원인 분류입니다. */
+/** @brief RUDP가 기본 경로를 포기한 이유 분류입니다. 단순 실패 총합보다 "왜 포기했는가"를 남겨야 튜닝 방향이 보입니다. */
 enum class RudpFallbackReason : std::uint8_t {
     kHandshakeTimeout = 0,
     kIdleTimeout,
@@ -64,10 +64,11 @@ inline constexpr std::array<std::uint64_t, 15> kDispatchLatencyBucketUpperBounds
 };
 
 /**
- * @brief 런타임 누적 카운터를 스냅샷으로 캡처한 구조체입니다.
+ * @brief 런타임 누적 카운터를 읽기 전용 스냅샷으로 캡처한 구조체입니다.
  *
- * 메트릭 노출 시 락 점유 시간을 줄이기 위해,
- * 내부 원자 카운터를 이 구조체로 복사해 직렬화 계층으로 전달합니다.
+ * 메트릭 노출 시 원자 카운터를 하나씩 직접 직렬화하면, 렌더링 코드가 내부 저장 형식에 과도하게 결합됩니다.
+ * 스냅샷 값 객체를 한 번 만든 뒤 직렬화 계층으로 넘기면 락/원자 접근 시간을 줄이면서도
+ * "어떤 시점의 값 묶음"을 비교적 일관되게 다룰 수 있습니다.
  */
 struct Snapshot {
     std::uint64_t accept_total{0};

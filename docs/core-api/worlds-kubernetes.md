@@ -1,43 +1,43 @@
-# World Kubernetes API Guide
+# 월드 Kubernetes API 가이드
 
-## Stability
+## 안정성
 
-| Header | Stability |
+| 헤더 | 안정성 |
 |---|---|
 | `server/core/worlds/kubernetes.hpp` | `[Stable]` |
 
-## Canonical Naming
+## 기준 이름
 
-- canonical include path: `server/core/worlds/kubernetes.hpp`
-- canonical namespace: `server::core::worlds`
+- 기준 include 경로: `server/core/worlds/kubernetes.hpp`
+- 기준 네임스페이스: `server::core::worlds`
 
-## Scope
+## 범위
 
-- This surface connects the existing desired-topology / actuation / runtime-assignment / drain-orchestration layers to Kubernetes-first workload lifecycle vocabulary.
-- It is intentionally read-only and contract-first:
-  - workload binding
-  - runtime observation counters
-  - replica patch / readiness wait / runtime assignment / drain / owner-transfer / migration / retirement phase evaluation
-- It does not embed `kubectl`, watch loops, CRDs, Helm charts, cloud-provider APIs, or manifest persistence.
+- desired-topology / actuation / runtime-assignment / drain-orchestration 계층을 Kubernetes workload lifecycle vocabulary로 해석한다
+- workload binding, runtime observation counter, replica patch / readiness wait / runtime assignment / drain / owner-transfer / migration / retirement phase evaluation을 다룬다
+- 의도적으로 read-only, contract-first 계층으로 유지한다
 
-## Public Contract
+포함하지 않는 것:
+
+- `kubectl` 호출
+- watch loop
+- CRD / Helm chart
+- cloud-provider API
+- manifest persistence
+
+즉 이 계층은 “Kubernetes에서 무엇을 해야 하는가”를 직접 실행하는 코드가 아니라, “현재 상태를 Kubernetes 관점에서 어떻게 읽어야 하는가”를 정규화하는 계약이다.
+
+## 공개 계약
 
 - `KubernetesWorkloadKind`
   - `deployment`
   - `statefulset`
 - `KubernetesPoolBinding`
-  - `world_id`
-  - `shard`
-  - `namespace_name`
-  - `workload_name`
-  - `workload_kind`
-  - `target_replicas`
-  - `capacity_class`
-  - `placement_tags[]`
+  - world pool 하나를 namespace/workload에 연결한 binding
 - `make_kubernetes_pool_binding()`
-  - derives a canonical namespace/workload binding from one `DesiredTopologyPool`
+  - `DesiredTopologyPool` 하나에서 canonical binding을 만든다
 - `make_kubernetes_pool_workload_name()`
-  - derives a sanitized workload name from `world_id + shard`
+  - `world_id + shard` 기반 sanitized workload 이름을 만든다
 - `KubernetesPoolObservation`
   - `current_spec_replicas`
   - `ready_replicas`
@@ -46,7 +46,7 @@
   - `assigned_runtime_instances`
   - `idle_ready_runtime_instances`
 - `count_topology_actuation_runtime_assignments()`
-  - counts runtime assignments for one `world_id + shard + action`
+  - 특정 `world_id + shard + action`에 대한 runtime assignment 수를 센다
 - `KubernetesPoolOrchestrationPhase`
   - `idle`
   - `scale_workload`
@@ -70,41 +70,33 @@
   - `wait_for_migration`
   - `patch_workload_retirement`
 - `evaluate_kubernetes_pool_orchestration()`
-  - combines one binding, current workload/runtime observation, one optional adapter lease action, and one optional `WorldDrainOrchestrationStatus`
-  - returns the current Kubernetes-first orchestration phase and next action for that pool
+  - binding, 현재 workload/runtime 관측값, optional adapter lease action, optional `WorldDrainOrchestrationStatus`를 합쳐 Kubernetes-first orchestration phase와 next action을 계산한다
 
-## Semantics
+## 의미 규약
 
 - `scale_out_pool`
-  - below target replicas -> `scale_workload`
-  - target replicas reached but pods not ready -> `await_ready_replicas`
-  - pods ready but runtime assignment incomplete -> `await_runtime_assignment`
-  - workload and assignment aligned -> `complete`
+  - target replica보다 spec replica가 적으면 `scale_workload`
+  - spec replica는 맞지만 pod readiness가 부족하면 `await_ready_replicas`
+  - pod는 준비됐지만 runtime assignment가 부족하면 `await_runtime_assignment`
+  - 모두 만족하면 `complete`
 - `restore_pool_readiness`
-  - below target replicas -> `scale_workload`
-  - target replicas reached but zero ready pods -> `await_ready_replicas`
-  - any ready pods restored -> `complete`
+  - replica 수는 맞는데 준비된 pod가 없거나 부족한 경우 readiness 회복 경로로 본다
 - `scale_in_pool`
-  - `WorldDrainOrchestrationStatus` drives replacement/drain/transfer/migration phases first
-  - once drain orchestration reaches `ready_to_clear`, the contract falls through to `retire_workload`
-  - when current workload replicas already match the target and no retirement is in flight -> `complete`
+  - world drain / transfer / migration 상태를 함께 봐서 바로 retire 가능한지, 아직 replacement target/drain/owner transfer/migration을 기다려야 하는지 판단한다
 - `observe_undeclared_pool`
-  - remains non-mutating and maps to `idle`
+  - read-only 관찰 상태로 남긴다
 
-## Non-Goals
+이렇게 phase를 세분화하는 이유는 “Kubernetes 쪽에서 해야 할 일”과 “runtime/world lifecycle 쪽에서 아직 안 끝난 일”을 구분하기 위해서다. 그렇지 않으면 scale-in 같은 단순 표현 뒤에 여러 종류의 미완료 상태가 숨어 버린다.
 
-- no manifest rendering format
-- no Kubernetes API client
-- no CRD/controller runtime
-- no pod scheduling or service/LB attachment semantics
-- no provider-specific metadata
+## 비목표
 
-Provider-specific LB / region / managed dependency mapping moved to:
-- `docs/core-api/worlds-aws.md`
+- live cluster mutation loop 자체
+- concrete `kubectl` / API server protocol
+- cloud-specific load balancer / database orchestration
+- manifest 저장소 구현
 
-## Public Proof
+## 공개 검증
 
-- unit contract: `WorldsKubernetesContractTest.*`
 - public-api smoke: `core_public_api_smoke`
-- stable-header scenarios: `core_public_api_stable_header_scenarios`
-- installed consumer: `CoreInstalledPackageConsumer`
+- dedicated contract/unit proof: `tests/core/test_worlds_kubernetes.cpp`
+- installed consumer proof: `CoreInstalledPackageConsumer`

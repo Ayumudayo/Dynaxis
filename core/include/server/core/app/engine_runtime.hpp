@@ -17,10 +17,11 @@
 namespace server::core::app {
 
 /**
- * @brief `AppHost`와 instance-scoped `EngineContext`를 묶는 공용 런타임 래퍼입니다.
+ * @brief `AppHost`와 instance-scoped `EngineContext`를 함께 소유하는 공용 런타임 래퍼입니다.
  *
- * 앱별 bootstrap은 이 타입을 기준으로 lifecycle/dependency/shutdown/context를
- * 같은 방식으로 조립하고, 각 앱의 listeners/routes/workers는 별도로 유지합니다.
+ * 이 타입의 목적은 각 앱 bootstrap이 lifecycle, dependency, shutdown, context 조립을
+ * 같은 방식으로 수행하게 만드는 데 있습니다. 반대로 listeners, routes, workers 같은
+ * 앱별 의미는 바깥에 남겨 두어, 공용 runtime 규약과 제품 조합 로직을 분리합니다.
  */
 class EngineRuntime {
 public:
@@ -30,7 +31,7 @@ public:
     using LogsCallback = server::core::metrics::MetricsHttpServer::LogsCallback;
     using RouteCallback = server::core::metrics::MetricsHttpServer::RouteCallback;
 
-    /** @brief canonical consumer가 읽는 instance-scoped lifecycle/service ownership snapshot입니다. */
+    /** @brief canonical consumer가 읽는 instance-scoped lifecycle/service ownership 스냅샷입니다. */
     struct Snapshot {
         std::string name;
         LifecyclePhase lifecycle_phase{LifecyclePhase::kInit};
@@ -124,7 +125,7 @@ public:
     void clear_global_services() noexcept;
 
 private:
-    /** @brief runtime가 올린 compatibility bridge key 집합을 추적하는 shared state입니다. */
+    /** @brief runtime이 올린 compatibility bridge key 집합을 추적하는 공유 상태입니다. */
     struct BridgeState {
         mutable std::mutex mutex;
         std::unordered_set<std::string> keys;

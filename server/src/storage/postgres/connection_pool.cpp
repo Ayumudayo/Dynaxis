@@ -33,8 +33,8 @@ using server::storage::Message;
 using server::storage::Session;
 
 // users 테이블을 다루는 PostgreSQL 전용 Repository.
-// SQL 쿼리를 직접 작성하여 DB와 상호작용합니다.
-// ORM을 사용하지 않고 직접 SQL을 사용하는 이유는 명시적인 제어와 성능 최적화를 위해서입니다.
+// ORM 대신 명시적 SQL을 사용하는 이유는, 쿼리와 트랜잭션 경계가 운영에서 바로 보이게 하기 위해서다.
+// 저장소 계층이 얇아야 "어느 쿼리가 언제 실행되는가"를 추적하기 쉽다.
 class PgUserRepository final : public IUserRepository {
 public:
     explicit PgUserRepository(pqxx::work* w) : w_(w) {}
@@ -80,6 +80,7 @@ private:
 };
 
 // rooms 관련 CRUD/검색을 담당한다.
+// 방 생성/검색 규칙은 도메인 정책이지만, SQL shape는 여기서만 관리해 server 로직과 분리한다.
 class PgRoomRepository final : public IRoomRepository {
 public:
     explicit PgRoomRepository(pqxx::work* w) : w_(w) {}
@@ -134,6 +135,7 @@ private:
 };
 
 // messages 테이블 접근 레이어.
+// 최근 메시지 조회와 적재 쿼리를 한곳에 모아야 snapshot/refresh 경로의 DB 비용을 예측하기 쉽다.
 class PgMessageRepository final : public IMessageRepository {
 public:
     explicit PgMessageRepository(pqxx::work* w) : w_(w) {}
@@ -191,6 +193,7 @@ private:
 };
 
 // sessions 테이블을 다루는 Repository.
+// 토큰 기반 인증 세션을 DB에 남기는 이유와 revoke 경로가 이 계층에서 함께 보이도록 유지한다.
 class PgSessionRepository final : public ISessionRepository {
 public:
     explicit PgSessionRepository(pqxx::work* w) : w_(w) {}
@@ -225,6 +228,7 @@ private:
 };
 
 // memberships 테이블에서 last_seen 등 멤버 상태를 관리한다.
+// join/leave/read-position을 따로 흩뜨리지 않고 묶어 두면 room 상태 복구와 읽음 위치 동작을 함께 추적하기 쉽다.
 class PgMembershipRepository final : public IMembershipRepository {
 public:
     explicit PgMembershipRepository(pqxx::work* w) : w_(w) {}
@@ -267,9 +271,9 @@ private:
     pqxx::work* w_{};
 };
 
-// pqxx::work 하나에 모든 Repository를 묶어 transaction을 관리한다.
-// UnitOfWork 패턴을 구현하여, 여러 리포지토리의 변경사항이 하나의 트랜잭션으로 묶이도록 보장합니다.
-// commit()을 호출하기 전까지는 DB에 반영되지 않으며, 예외 발생 시 자동 롤백됩니다.
+// `pqxx::work` 하나에 모든 Repository를 묶어 transaction을 관리한다.
+// UnitOfWork 패턴을 구현해 여러 저장소 변경이 한 트랜잭션 경계로 움직이게 한다.
+// commit 전까지는 DB에 반영되지 않으므로, 도메인 로직이 중간 상태를 남기지 않게 하기 쉽다.
 class PgRepositoryUnitOfWork final : public IRepositoryUnitOfWork {
 public:
     explicit PgRepositoryUnitOfWork(std::shared_ptr<pqxx::connection> conn)
@@ -296,23 +300,25 @@ private:
 };
 
 // 간단한 연결 팩토리 구현: 요청마다 pqxx connection을 생성한다.
+// 현재 구현은 단순성을 우선해 per-request connection을 열고, 더 무거운 풀링은 외부(pgBouncer 등)나
+// 추후 내부 풀 구현으로 미룬다.
 class PgConnectionPool final : public IRepositoryConnectionPool {
 public:
     PgConnectionPool(std::string db_uri, PoolOptions opts)
         : db_uri_(std::move(db_uri)), opts_(opts) {}
 
     std::unique_ptr<IRepositoryUnitOfWork> make_repository_unit_of_work() override {
-        // 요청마다 새로운 pqxx::connection을 열어 트랜잭션 경계를 분리한다.
-        // 실제 운영 환경에서는 커넥션 풀링 라이브러리(예: pgBouncer)를 앞단에 두거나,
-        // 내부적으로 커넥션 객체를 재사용하는 풀을 구현해야 성능 오버헤드를 줄일 수 있습니다.
-        // 현재 구현은 단순함을 위해 매번 연결을 생성합니다.
+        // 요청마다 새로운 `pqxx::connection`을 열어 트랜잭션 경계를 분리한다.
+        // 실제 운영에서는 pgBouncer 같은 외부 풀링 또는 내부 재사용 풀이 더 효율적일 수 있지만,
+        // 현재 구현은 명시적 경계와 단순한 실패 모델을 우선한다.
         auto conn = std::make_shared<pqxx::connection>(db_uri_);
         if (!conn->is_open()) throw std::runtime_error("PQXX connection failed");
         return std::make_unique<PgRepositoryUnitOfWork>(std::move(conn));
     }
 
     bool health_check() override {
-        // 간단한 SELECT 1로 연결 가능 여부를 확인한다.
+        // 간단한 `SELECT 1`로 연결 가능 여부를 확인한다.
+        // health check는 "현재 접속이 가능한가"만 빠르게 판단해야 하므로, 무거운 도메인 쿼리를 쓰지 않는다.
         try {
             pqxx::connection c(db_uri_);
             if (!c.is_open()) return false;

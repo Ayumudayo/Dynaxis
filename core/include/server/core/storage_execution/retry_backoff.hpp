@@ -7,7 +7,7 @@
 
 namespace server::core::storage_execution {
 
-/** @brief generic storage execution retry 지연 계산 방식입니다. */
+/** @brief storage execution 재시도 지연을 계산하는 공용 방식입니다. */
 enum class RetryBackoffMode : std::uint8_t {
     kLinear = 0,
     kExponentialFullJitter = 1,
@@ -23,7 +23,9 @@ struct RetryBackoffPolicy {
 /**
  * @brief 재시도 횟수에 대한 backoff 상한(ms)을 계산합니다.
  *
- * `kLinear`는 exact delay를 반환하고, `kExponentialFullJitter`는 random sampling의 upper bound를 반환합니다.
+ * `kLinear`는 결정적인 지연값을 반환하고, `kExponentialFullJitter`는 난수 샘플링에 사용할
+ * 상한값을 반환합니다. 상한 계산과 실제 샘플링을 분리해 두면, 운영 문서와 테스트가
+ * "최대 얼마까지 기다릴 수 있는가"를 더 쉽게 공유할 수 있습니다.
  */
 inline constexpr std::uint64_t retry_backoff_upper_bound_ms(
     const RetryBackoffPolicy& policy,
@@ -57,7 +59,8 @@ inline constexpr std::uint64_t retry_backoff_upper_bound_ms(
 /**
  * @brief 정책과 시드 RNG를 바탕으로 실제 retry delay(ms)를 샘플링합니다.
  *
- * `kLinear`는 deterministic delay를 그대로 반환하고, `kExponentialFullJitter`는 `[0, upper_bound]` 범위에서 샘플링합니다.
+ * `kLinear`는 결정적인 지연값을 그대로 반환하고, `kExponentialFullJitter`는
+ * `[0, upper_bound]` 범위에서 샘플링합니다.
  */
 template <typename UniformRandomBitGenerator>
 std::uint64_t sample_retry_backoff_delay_ms(

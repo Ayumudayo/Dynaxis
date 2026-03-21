@@ -96,9 +96,12 @@ inline bool copy_to_cache(const std::filesystem::path& src,
 /**
  * @brief 단일 플러그인의 로드/리로드를 관리하는 범용 호스트입니다.
  *
- * `ApiTable`은 플러그인 ABI 함수 테이블 타입입니다.
- * 로더는 cache-copy + lock/sentinel + mtime 폴링 규칙을 기본 제공하고,
- * ABI 해석/검증/인스턴스 생성은 콜백으로 주입받습니다.
+ * `ApiTable`은 플러그인 ABI 함수 테이블 타입입니다. 이 호스트는 cache-copy,
+ * lock/sentinel, mtime polling 같은 "안전한 교체 메커니즘"을 공용으로 제공하고,
+ * ABI 해석/검증/인스턴스 생성 같은 domain-specific 의미는 콜백으로 주입받습니다.
+ *
+ * 이렇게 분리하는 이유는, reload 메커니즘 자체는 재사용 가능하지만 실제 ABI 의미는
+ * 앱마다 다를 수 있기 때문입니다.
  */
 template <typename ApiTable>
 class PluginHost {
@@ -108,7 +111,7 @@ public:
     using InstanceCreator = std::function<void*(const ApiTable* api, std::string& error)>;
     using InstanceDestroyer = std::function<void(const ApiTable* api, void* instance)>;
 
-    /** @brief 호스트 구성값입니다. */
+    /** @brief 호스트 구성값입니다. 파일 감시와 ABI 해석 정책을 함께 묶습니다. */
     struct Config {
         std::filesystem::path plugin_path;
         std::filesystem::path cache_dir;
@@ -121,7 +124,7 @@ public:
         InstanceDestroyer instance_destroyer;
     };
 
-    /** @brief 현재 로드된 플러그인 핸들입니다. */
+    /** @brief 현재 로드된 플러그인 핸들입니다. cache-copy된 라이브러리와 생성된 인스턴스를 함께 소유합니다. */
     struct LoadedPlugin {
         SharedLibrary lib;
         const ApiTable* api{nullptr};
@@ -143,7 +146,7 @@ public:
         }
     };
 
-    /** @brief 로드/리로드 상태 메트릭 스냅샷입니다. */
+    /** @brief 로드/리로드 상태 메트릭 스냅샷입니다. 운영에서 reload가 실제로 일어나고 있는지 확인할 때 사용합니다. */
     struct MetricsSnapshot {
         std::filesystem::path plugin_path;
         bool loaded{false};
@@ -177,6 +180,13 @@ public:
             cfg_.fallback_entrypoint_symbols.end());
     }
 
+    /**
+     * @brief 플러그인 파일 상태를 점검하고 필요하면 안전하게 reload를 시도합니다.
+     *
+     * 이 함수는 "mtime이 바뀌었다고 무조건 바로 교체"하지 않습니다. lock/sentinel,
+     * cache-copy, entrypoint 검증, API validator, instance 생성이 모두 통과해야만 현재
+     * 플러그인을 교체합니다. 그래야 반쯤 배포된 artifact를 읽는 실수를 줄일 수 있습니다.
+     */
     void poll_reload() {
         std::lock_guard<std::mutex> lock(reload_mu_);
         if (cfg_.plugin_path.empty()) {
@@ -306,10 +316,12 @@ public:
         reload_success_total_.fetch_add(1, std::memory_order_relaxed);
     }
 
+    /** @brief 현재 성공적으로 로드된 플러그인 핸들을 반환합니다. */
     std::shared_ptr<const LoadedPlugin> current() const {
         return current_.load(std::memory_order_acquire);
     }
 
+    /** @brief 현재 로드 상태와 reload 카운터를 스냅샷으로 반환합니다. */
     MetricsSnapshot metrics_snapshot() const {
         MetricsSnapshot snap{};
         snap.plugin_path = cfg_.plugin_path;

@@ -5,20 +5,24 @@
 namespace server::core::realtime {
 
 /**
- * @brief Tracks sequenced direct-UDP transport quality for one bound session.
+ * @brief 하나의 바인딩된 세션에 대한 sequenced direct-UDP transport 품질을 추적합니다.
+ *
+ * direct path는 "붙었다"만으로 충분하지 않습니다. duplicate, reorder, 추정 손실, jitter를
+ * 함께 봐야 실제 품질을 판단할 수 있습니다. 이 추적기를 별도 타입으로 둔 이유는, 품질
+ * 판단 로직을 gateway의 바인딩/세션 상태와 분리해 재사용 가능하게 만들기 위해서입니다.
  */
 class UdpSequencedMetrics {
 public:
-    /** @brief Per-packet classification result and quality deltas. */
+    /** @brief 패킷 1개 처리 결과와 파생 품질 변화량입니다. */
     struct UpdateResult {
-        bool accepted{false};                    ///< Accepted as forward progress.
-        bool duplicate{false};                   ///< Same sequence as the last accepted packet.
-        bool reordered{false};                   ///< Older than the last accepted packet.
-        std::uint64_t estimated_lost_packets{0}; ///< Missing packets inferred before this packet.
-        std::uint64_t jitter_ms{0};              ///< Inter-arrival jitter delta in milliseconds.
+        bool accepted{false};                    ///< 정상적인 전진 진행으로 받아들였는지 여부
+        bool duplicate{false};                   ///< 마지막으로 받아들인 packet과 같은 sequence인지 여부
+        bool reordered{false};                   ///< 마지막으로 받아들인 packet보다 더 오래된 sequence인지 여부
+        std::uint64_t estimated_lost_packets{0}; ///< 이번 packet 이전에 누락된 것으로 추정한 패킷 수
+        std::uint64_t jitter_ms{0};              ///< 도착 간격 변화량을 단순 jitter 추정치로 계산한 값(ms)
     };
 
-    /** @brief Resets the tracker, typically after a fresh bind/rebind. */
+    /** @brief 추적기를 초기화합니다. 보통 새 bind/rebind 직후 호출합니다. */
     void reset() {
         initialized_ = false;
         last_seq_ = 0;
@@ -27,10 +31,10 @@ public:
     }
 
     /**
-     * @brief Consumes one packet sample and updates quality statistics.
-     * @param seq Packet sequence number from the transport header.
-     * @param recv_unix_ms Packet receive timestamp in unix milliseconds.
-     * @return Packet classification result and derived quality deltas.
+     * @brief 패킷 샘플 1개를 소비하고 품질 통계를 갱신합니다.
+     * @param seq transport header에서 읽은 packet sequence number
+     * @param recv_unix_ms 패킷 수신 시각(unix ms)
+     * @return 패킷 분류 결과와 파생 품질 변화량
      */
     [[nodiscard]] UpdateResult on_packet(std::uint32_t seq, std::uint64_t recv_unix_ms) {
         UpdateResult result{};

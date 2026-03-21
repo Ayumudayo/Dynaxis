@@ -13,6 +13,8 @@
  *
  * 실행 인자/환경 변수 우선순위를 명확히 유지해,
  * 로컬 실행과 컨테이너 배포에서 동일한 설정 규칙을 보장합니다.
+ * 설정 해석이 여러 파일에 흩어지면 동일한 환경 변수를 서로 다른 기본값으로 읽는 사고가 나기 쉬우므로,
+ * app-local 설정 규칙은 여기서 한 번만 정리합니다.
  */
 namespace server::app {
 
@@ -56,18 +58,17 @@ std::vector<std::string> split_csv(std::string_view input) {
 
 } // namespace
 
-// 서버 설정을 로드하는 함수
-// 우선순위:
-// 1. 커맨드 라인 인자 (포트 등)
-// 2. 환경 변수 (Docker/K8s 환경에서 주로 사용)
+// 설정 로더는 "어떤 입력이 최종값을 이기는가"를 고정하는 곳이다.
+// 우선순위가 문서와 코드에서 다르면 로컬 실행과 컨테이너 배포가 같은 설정 문자열로도 다른 동작을 보일 수 있다.
 bool ServerConfig::load(int argc, char** argv) {
-    // 1. 기본 설정 로드 (커맨드 라인 인자)
+    // 1. 기본 설정 로드 (커맨드라인 인자)
     if (argc >= 2) {
         port = static_cast<unsigned short>(std::stoi(argv[1]));
     }
 
-    // 2. 환경 변수 로드 (Docker 또는 OS 환경 변수)
-    // .env 파일 로딩 로직은 제거됨. Docker Compose 또는 실행 환경에서 주입된 환경 변수를 사용함.
+    // 2. 환경 변수 로드
+    // `.env` 파일을 자체 파싱하지 않는 이유는 "실행 환경이 이미 결정한 값"을 다시 덮어쓰지 않기 위해서다.
+    // Docker/오케스트레이터/서비스 매니저가 주입한 값을 그대로 신뢰하는 편이 운영 재현성이 높다.
     if (const char* val = std::getenv("PORT"); val && *val) {
         port = static_cast<unsigned short>(std::stoi(val));
     }
@@ -87,6 +88,7 @@ bool ServerConfig::load(int argc, char** argv) {
     }
 
     // 3. 인스턴스 레지스트리 설정
+    // advertise 값과 heartbeat 규칙은 discovery의 외부 계약이므로, 기본 포트/리스닝 포트와 헷갈리지 않게 따로 읽는다.
     if (const char* val = std::getenv("SERVER_ADVERTISE_HOST"); val && *val) {
         advertise_host = val;
     }
@@ -140,6 +142,7 @@ bool ServerConfig::load(int argc, char** argv) {
     }
 
     // 4. DB 설정
+    // DB 풀 크기와 타임아웃은 기능 플래그가 아니라 안정성 예산이다. 잘못 읽으면 ready 후 첫 부하에서 바로 병목이 드러난다.
     if (const char* val = std::getenv("DB_URI"); val && *val) db_uri = val;
     if (const char* val = std::getenv("DB_POOL_MIN"); val && *val) db_pool_min = static_cast<std::size_t>(std::strtoul(val, nullptr, 10));
     if (const char* val = std::getenv("DB_POOL_MAX"); val && *val) db_pool_max = static_cast<std::size_t>(std::strtoul(val, nullptr, 10));
@@ -149,6 +152,7 @@ bool ServerConfig::load(int argc, char** argv) {
     if (const char* val = std::getenv("DB_WORKER_THREADS"); val && *val) db_worker_threads = static_cast<std::size_t>(std::strtoul(val, nullptr, 10));
 
     // 5. Redis 설정
+    // Redis 관련 값은 fanout, presence, continuity, write-behind에 동시에 걸치므로 한 블록에서 보는 편이 변경 영향도를 이해하기 쉽다.
     if (const char* val = std::getenv("REDIS_URI"); val && *val) redis_uri = val;
     if (const char* val = std::getenv("REDIS_POOL_MAX"); val && *val) redis_pool_max = static_cast<std::size_t>(std::strtoul(val, nullptr, 10));
     if (const char* val = std::getenv("REDIS_USE_STREAMS"); val && *val) redis_use_streams = (std::strcmp(val, "0") != 0);
@@ -185,7 +189,8 @@ bool ServerConfig::load(int argc, char** argv) {
         admin_command_future_skew_ms = parsed;
     }
 
-    // 6. Lua 스크립팅 설정 (Stream B scaffold)
+    // 6. Lua 스크립팅 설정
+    // reload 주기와 resource limit은 기능 옵션이면서 동시에 안전장치다. 이 값을 흩어 놓으면 운영자가 실패 원인을 추적하기 어렵다.
     if (const char* val = std::getenv("LUA_ENABLED"); val && *val) {
         lua_enabled = (std::strcmp(val, "0") != 0);
     }

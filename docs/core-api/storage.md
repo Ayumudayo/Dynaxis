@@ -9,6 +9,7 @@
 - shared Redis client contract, concrete Redis/Postgres adapter, chat repository DTO/UoW 계층은 계속 `[Internal]` 또는 app-owned로 남습니다.
 
 ## stable surface 범위
+- canonical `storage_execution/**` 헤더는 의도적으로 얇은 facade입니다. consumer는 이 경로를 public contract로 보고, underlying `storage/*` 헤더를 동등한 공개 API로 취급하면 안 됩니다.
 - `IUnitOfWork`
   - 도메인 저장소 accessor를 포함하지 않는 generic commit/rollback transaction 경계입니다.
 - `IConnectionPool` + `PoolOptions`

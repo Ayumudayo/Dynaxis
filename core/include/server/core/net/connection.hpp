@@ -15,19 +15,18 @@
 namespace server::core::net {
 
 /**
- * @brief TCP 연결을 관리하는 클래스입니다.
- * 
- * Connection 클래스는 클라이언트와의 1:1 TCP 연결을 추상화합니다.
- * Boost.Asio의 비동기 I/O 기능을 사용하여 데이터를 주고받습니다.
- * 
+ * @brief 공용 TCP transport substrate를 제공하는 연결 클래스입니다.
+ *
+ * `Connection`은 packet semantics를 모르는 generic transport 계층입니다. 이 분리가
+ * 중요한 이유는, gateway나 다른 consumer가 동일한 read/write/backpressure 골격을
+ * 재사용하되 현재 서버의 `Session` 의미까지 끌어안지 않게 하기 위해서입니다.
+ *
  * 주요 역할:
- * 1. 소켓(Socket) 관리: TCP 소켓의 생명주기를 관리합니다.
- * 2. 비동기 읽기/쓰기: 블로킹 없이 데이터를 송수신합니다.
- * 3. 버퍼링: 수신된 데이터를 버퍼에 저장하고, 송신할 데이터를 큐에 쌓아 순차적으로 보냅니다.
- * 
- * 사용법:
- * - 이 클래스는 상속받아 사용해야 합니다. (on_read, on_connect 등을 오버라이드)
- * - `std::enable_shared_from_this`를 상속받아 비동기 작업 중 객체가 파괴되지 않도록 보장합니다.
+ * 1. TCP 소켓 생명주기 관리
+ * 2. 비동기 읽기/쓰기 루프 유지
+ * 3. 송신 큐를 통한 직렬 전송과 bounded backpressure 제공
+ *
+ * 사용 시에는 보통 상속으로 `on_read`, `on_connect`, `on_error` 등을 오버라이드합니다.
  */
 class Connection : public std::enable_shared_from_this<Connection> {
 public:
@@ -35,33 +34,35 @@ public:
     static constexpr std::size_t k_default_send_queue_max = 256 * 1024;
 
     /**
-     * @brief 생성자
-     * @param hive I/O 컨텍스트를 관리하는 Hive 객체 (스레드 풀과 연결됨)
+     * @brief 연결 객체를 생성합니다.
+     * @param hive I/O 컨텍스트 수명주기를 관리하는 `Hive`
+     * @param send_queue_max_bytes 송신 큐 총 바이트 상한
      */
     explicit Connection(std::shared_ptr<Hive> hive,
                         std::size_t send_queue_max_bytes = k_default_send_queue_max);
     virtual ~Connection();
 
-    // 복사 방지: 연결 객체는 고유해야 하므로 복사를 금지합니다.
+    // 연결 객체는 소켓/큐 상태를 직접 소유하므로 복사를 금지합니다.
     Connection(const Connection&) = delete;
     Connection& operator=(const Connection&) = delete;
 
     /**
-     * @brief 내부 소켓 객체를 반환합니다.
-     * 주로 연결 수락(Accept) 시 소켓을 초기화하기 위해 사용됩니다.
-     * @return 내부 TCP 소켓 참조
+     * @brief 내부 TCP 소켓을 반환합니다.
+     * @return 연결이 소유한 TCP 소켓 참조
      */
     socket_type& socket();
 
     /**
-     * @brief 연결을 시작합니다.
-     * 소켓이 연결된 후 호출해야 하며, 비동기 읽기 작업을 시작합니다.
+     * @brief 연결을 시작하고 비동기 읽기 루프를 엽니다.
+     *
+     * 소켓이 이미 연결되었거나 accept를 통해 준비된 뒤 호출해야 합니다.
      */
     void start();
 
     /**
      * @brief 연결을 종료합니다.
-     * 소켓을 닫고 더 이상 입출력을 수행하지 않습니다.
+     *
+     * 이후 소켓/큐/콜백은 정리 경로로 들어가며 더 이상 입출력을 지속하지 않습니다.
      */
     void stop();
 
@@ -72,11 +73,12 @@ public:
     bool is_stopped() const;
 
     /**
-     * @brief 데이터를 비동기로 전송합니다.
-     * 
-     * 데이터는 즉시 전송되지 않을 수 있으며, 내부 쓰기 큐(write_queue_)에 저장된 후
-     * 순차적으로 전송됩니다. 이는 여러 스레드에서 동시에 전송을 요청해도 안전하게 처리하기 위함입니다.
-     * 
+     * @brief 데이터를 비동기 송신 큐에 넣습니다.
+     *
+     * 데이터는 즉시 쓰기되지 않을 수 있으며, 내부 쓰기 큐에 저장된 뒤 strand를 통해
+     * 순차적으로 전송됩니다. 이 구조 덕분에 여러 호출 지점이 동시에 전송을 요청해도
+     * 쓰기 순서와 큐 상한을 한곳에서 관리할 수 있습니다.
+     *
      * @param data 전송할 바이트 배열
      */
     void async_send(std::vector<std::uint8_t> data);

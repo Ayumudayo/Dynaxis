@@ -43,7 +43,7 @@ ctest --preset windows-test
 - `build-windows/gateway/Debug/gateway_app.exe` (전체 Windows 빌드 시)
 - `build-windows/Debug/wb_worker.exe` (전체 Windows 빌드 시)
 
-## Factory Package Install Smoke
+## 팩토리 패키지 설치 스모크
 
 `server_storage_pg_factory`와 `server_storage_redis_factory`는 install/export/package-consumer smoke를 지원한다.
 첫 단계의 package-first extraction surface이며, app-local helper target은 여전히 패키지 대상이 아니다.
@@ -72,7 +72,7 @@ cmake --build build-windows/factory-redis-consumer/build --config Debug
 
 자동화된 검증에서는 `FactoryPgInstalledPackageConsumer`, `FactoryRedisInstalledPackageConsumer` contract test가 같은 흐름을 실행한다.
 
-## Factory Package Publish Bundle
+## 팩토리 패키지 배포 번들
 
 first milestone publish automation은 `server_storage_pg_factory`와 `server_storage_redis_factory`를 별도 package manager publish가 아니라
 하나의 Release install-prefix bundle로 배포한다.
@@ -118,7 +118,7 @@ pwsh scripts/run_full_stack_observability.ps1
 pwsh scripts/deploy_docker.ps1 -Action down
 ```
 
-## 메모리/정의되지 않은 동작 검사 (Sanitizer: ASan/UBSan)
+## 메모리/정의되지 않은 동작 검사(ASan/UBSan)
 
 - CMake 옵션: `ENABLE_SANITIZERS=ON`
 - 프리셋: `linux-asan`

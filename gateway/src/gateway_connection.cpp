@@ -232,11 +232,11 @@ void GatewayConnection::on_connect() {
         server::core::log::warn(std::string("GatewayConnection remote endpoint unknown: ") + ex.what());
     }
 
-    // Handshake flow:
-    // - Wait for a full first frame (TCP fragmentation-safe).
-    // - Parse MSG_LOGIN_REQ to extract identity.
-    // - Authenticate (pluggable).
-    // - Select backend and begin transparent bridging.
+    // 핸드셰이크 흐름:
+    // - 첫 프레임이 완전히 올 때까지 기다린다(TCP 분할 수신에도 안전).
+    // - `MSG_LOGIN_REQ`를 파싱해 식별자를 추출한다.
+    // - 인증을 수행한다(플러그형).
+    // - backend를 선택하고 투명 브리지를 시작한다.
     phase_ = Phase::kWaitingForLogin;
     prebuffer_.clear();
     start_handshake_deadline();
@@ -277,7 +277,7 @@ void GatewayConnection::on_read(const std::uint8_t* data, std::size_t length) {
         return;
     }
 
-    // 호출자 측 임시 vector 생성을 피하고 BackendConnection 큐에서 1회 복사로 마무리한다.
+    // 호출자 쪽 임시 `vector` 생성을 피하고 `BackendConnection` 큐에서 1회 복사로 마무리한다.
     send_to_backend(data, length);
 }
 
@@ -450,7 +450,8 @@ bool GatewayConnection::try_finish_handshake() {
 
         (void)handshake_timer_.cancel();
 
-        // Forward the raw bytes exactly as received (transparent proxy).
+        // handshake를 통과한 첫 프레임은 받은 바이트 그대로 backend로 넘긴다.
+        // gateway가 이 시점에 payload를 다시 구성하기 시작하면 "투명 브리지" 성질이 흐려진다.
         send_to_backend(std::move(prebuffer_));
         phase_ = Phase::kBridging;
         return true;

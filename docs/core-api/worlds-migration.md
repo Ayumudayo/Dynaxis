@@ -1,19 +1,21 @@
-# World Migration API
+# 월드 마이그레이션(World Migration) API
 
-`server/core/worlds/migration.hpp`는 draining source world에서 target world owner로 넘어가는 migration envelope와 readiness/status evaluation contract를 정의한다.
+`server/core/worlds/migration.hpp`는 draining source world에서 target world owner로 넘어갈 때 필요한 migration envelope와 readiness/status evaluation 계약을 정의한다.
 
-## Canonical Naming
+## 기준 이름
 
-- canonical include path: `server/core/worlds/migration.hpp`
-- canonical namespace: `server::core::worlds`
+- 기준 include 경로: `server/core/worlds/migration.hpp`
+- 기준 네임스페이스: `server::core::worlds`
 
-## Scope
+## 범위
 
 - source world drain과 분리된 named migration envelope를 표현한다
-- target world / target owner / preserve-room intent와 app-defined payload reference를 운반한다
+- target world / target owner / preserve-room intent와 app-defined payload reference를 함께 운반한다
 - gameplay state payload 자체는 해석하지 않고 opaque reference로만 취급한다
 
-## Stable Types
+이렇게 분리하는 이유는 “마이그레이션 의도”와 “도메인 payload 해석”을 같은 계층에 두지 않기 위해서다. 둘을 섞으면 core contract가 특정 게임/채팅 payload 의미에 종속돼 재사용성이 크게 떨어진다.
+
+## 안정 타입
 
 - `WorldMigrationEnvelope`
   - `target_world_id`
@@ -33,12 +35,12 @@
   - `ready_to_resume`
 - `WorldMigrationSummary`
 - `WorldMigrationStatus`
-- helper:
+- helper
   - `evaluate_world_migration(...)`
   - `parse_world_migration_envelope(...)`
   - `serialize_world_migration_envelope(...)`
 
-## Evaluation Rule
+## 평가 규칙
 
 `evaluate_world_migration()`는 아래 우선순위로 phase를 정한다.
 
@@ -49,24 +51,25 @@
 5. source world가 아직 draining이 아니면 `awaiting_source_drain`
 6. 그 외에는 `ready_to_resume`
 
-## Current Runtime Mapping
+phase를 이렇게 나누는 이유는, 운영자가 “대상 월드가 아직 안 뜬 문제”, “대상 owner가 불안정한 문제”, “source drain이 아직 끝나지 않은 문제”를 서로 다른 원인으로 바로 구분할 수 있게 하기 위해서다.
 
-현재 contract는 두 곳에서 사용된다.
+## 현재 런타임 매핑
+
+현재 이 계약은 두 곳에서 주로 사용된다.
 
 - `admin_app`
   - `GET/PUT/DELETE /api/v1/worlds/{world_id}/migration`
   - `GET /api/v1/worlds`
   - `GET /api/v1/topology/observed`
 - `server_app` continuity resume
-  - source world가 draining이고 migration envelope target owner가 현재 backend와 맞으면 target world로 restore를 시도한다
+  - source world가 draining이고 migration envelope의 target owner가 현재 backend와 맞으면 target world로 restore를 시도한다
   - `preserve_room=true`이면 app-local room continuity도 함께 복원한다
   - `payload_kind="chat-room-v1"`이면 `payload_ref`를 app-local target room으로 해석해 generic preserve-room restore 대신 그 방으로 handoff한다
 
-## Non-Goals
+## 비목표
 
-- desired topology reconciliation
+- desired topology reconciliation 자체
 - same-world owner handoff
 - autoscaling
 - gameplay payload schema
 - combat/simulation state replication
-

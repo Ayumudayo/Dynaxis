@@ -5,7 +5,7 @@
 - `[Transitional]`: 현재는 공개되어 있으나 안정화 진행 중인 계약
 - `[Internal]`: 공개/샘플 사용 대상이 아닌 내부 전용 계약
 
-## Package-First Reading Path
+## 패키지 우선 읽기 순서
 
 - `docs/core-api/overview.md`
   - 현재 공개 surface와 안정성 분류를 먼저 확인합니다.
@@ -49,22 +49,22 @@
 - world orchestration public surface의 canonical path/namespace는 `server/core/worlds/**`와 `server::core::worlds`입니다.
 - 내부 헤더 목록은 `docs/core-api-boundary.md`에서만 관리합니다.
 
-## Package-First Proof Baseline
+## 패키지 우선 검증 기준선
 
 - Windows public package proof:
-- `core_public_api_smoke`
-- `core_public_api_headers_compile`
-- `core_public_api_stable_header_scenarios`
-- `core_public_api_extensibility_smoke`
-- `core_public_api_realtime_capability_smoke`
-- `CorePublicApiWorldsAwsSmoke`
-- `CoreInstalledPackageConsumer` (`server_core_installed_consumer` + `server_core_extensibility_consumer` run)
-- `CoreApiBoundaryFixtures`
-- `CoreApiStableGovernanceFixtures`
+  - `core_public_api_smoke`
+  - `core_public_api_headers_compile`
+  - `core_public_api_stable_header_scenarios`
+  - `core_public_api_extensibility_smoke`
+  - `core_public_api_realtime_capability_smoke`
+  - `CorePublicApiWorldsAwsSmoke`
+  - `CoreInstalledPackageConsumer` (`server_core_installed_consumer` + `server_core_extensibility_consumer` run)
+  - `CoreApiBoundaryFixtures`
+  - `CoreApiStableGovernanceFixtures`
 - Linux parity proof:
   - `pwsh scripts/run_linux_installed_consumer.ps1`
 - boundary truth는 `docs/core-api-boundary.md`, version/matrix truth는 `core/include/server/core/api/version.hpp`와 `docs/core-api/compatibility-matrix.json`입니다.
-- Phase 4 문서 세트는 docs, package validation, CI wording이 이 proof baseline을 같은 방식으로 설명하는 것을 목표로 합니다.
+- docs, package validation, CI wording은 이 proof baseline을 같은 방식으로 설명해야 합니다.
 
 ## 현재 사용 지침
 

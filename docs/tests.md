@@ -1,9 +1,9 @@
 # 테스트 가이드
 
-이 문서는 Dynaxis 저장소의 현재 검증 entrypoint다.
-세부 시나리오 카탈로그는 각 도구 문서가 source of truth를 가진다. 특히 loadgen transport proof shape는 `tools/loadgen/README.md`를 따른다.
+이 문서는 Dynaxis 저장소의 현재 검증 진입점이다.
+세부 시나리오 카탈로그는 각 도구 문서가 기준 문서를 가진다. 특히 loadgen transport proof 형태는 `tools/loadgen/README.md`를 따른다.
 
-`server_core` public package surface를 건드렸다면 이 문서를 `docs/core-api/overview.md`, `docs/core-api/quickstart.md`, `docs/core-api/compatibility-policy.md`, `docs/core-api/checklists.md`와 함께 읽는다. core API 문서는 public package story를 정의하고, 이 문서는 그 story를 repo-wide 검증 entrypoint에 연결한다.
+`server_core` public package surface를 건드렸다면 이 문서를 `docs/core-api/overview.md`, `docs/core-api/quickstart.md`, `docs/core-api/compatibility-policy.md`, `docs/core-api/checklists.md`와 함께 읽는다. core API 문서는 public package story를 정의하고, 이 문서는 그 story를 저장소 전체 검증 진입점에 연결한다.
 
 ## 기본 로컬 게이트
 
@@ -41,7 +41,7 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
 - additional package extraction 관련 검증:
   - `ctest --test-dir build-windows -C Debug -R "FactoryPgInstalledPackageConsumer|FactoryRedisInstalledPackageConsumer" --output-on-failure`
 
-## Stack / Integration Verification
+## 스택 / 통합 검증
 
 - Docker stack:
   - `pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build`
@@ -186,7 +186,7 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
     - `python tests/python/capture_worlds_kubernetes_kind_evidence.py --run-id <run_id> --capture-set metrics-only`
     - writes `build/k8s-kind-evidence/<run_id>/kind-metrics-budget/metrics-budget.json`
 
-## Load Generator
+## 부하 생성기(Load Generator)
 
 - canonical usage and scenario catalog:
   - `tools/loadgen/README.md`
@@ -196,7 +196,7 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
   - RUDP attach/fallback/OFF, direct ping, FPS input proof
 - direct UDP/RUDP proofs require direct gateway TCP+UDP ports, not HAProxy frontend routing
 
-## Main Merge Policy
+## main 병합 정책
 
 - `main` is PR-only and protected; direct pushes are not the intended path.
 - branch protection applies to admins and requires conversation resolution before merge.
@@ -204,7 +204,7 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
 - path-gated workflows stay non-required on purpose so unrelated PRs do not stall on checks that never dispatch.
 - when a PR touches the matching surface, reviewers are expected to wait for the relevant path-gated workflow to pass before merging.
 
-## CI Surfaces
+## CI 검증 표면
 
 - `.github/workflows/ci.yml`
   - always-on required gate

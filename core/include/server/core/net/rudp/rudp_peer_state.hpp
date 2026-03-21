@@ -18,7 +18,7 @@ enum class LifecycleState : std::uint8_t {
     kClosed,
 };
 
-/** @brief RUDP 엔진 설정값입니다. */
+/** @brief RUDP 엔진 설정값입니다. timeout, inflight 상한, MTU 같은 보호 장치를 함께 담습니다. */
 struct RudpConfig {
     std::uint32_t handshake_timeout_ms{1500};
     std::uint32_t idle_timeout_ms{10000};
@@ -30,7 +30,7 @@ struct RudpConfig {
     std::size_t mtu_payload_bytes{1200};
 };
 
-/** @brief RTT/RTO 추정 상태입니다. */
+/** @brief RTT/RTO 추정 상태입니다. 재전송 타이밍을 너무 공격적이거나 느리게 잡지 않도록 보정합니다. */
 struct RttEstimator {
     bool initialized{false};
     std::uint32_t srtt_ms{0};
@@ -58,7 +58,7 @@ struct RttEstimator {
     }
 };
 
-/** @brief 단일 피어의 RUDP 런타임 상태입니다. */
+/** @brief 단일 피어의 RUDP 런타임 상태입니다. handshake, ACK, fallback, RTT 상태를 함께 가집니다. */
 struct RudpPeerState {
     LifecycleState lifecycle{LifecycleState::kIdle};
     std::uint32_t connection_id{0};

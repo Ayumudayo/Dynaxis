@@ -20,16 +20,18 @@ class EngineRuntime;
 /**
  * @brief 서비스 프로세스 공통 런타임 제어를 모아 둔 경량 호스트입니다.
  *
- * 왜 필요한가?
- * - `server_app`, `gateway_app`, `wb_worker`는 역할은 다르지만
- *   "종료 신호 처리 / readiness / dependency 상태" 규칙은 동일해야 운영이 단순해집니다.
- * - 공통 계층이 없으면 각 바이너리가 shutdown/health 로직을 제각각 구현하게 되어,
- *   장애 시 동작 차이(예: 특정 프로세스만 ready를 늦게 내리는 문제)로 분석 비용이 커집니다.
+ * `server_app`, `gateway_app`, `wb_worker`는 역할이 다르지만 종료 신호 처리, 준비 상태(readiness),
+ * 의존성(dependency) 상태 같은 운영 규약은 가능한 한 같아야 합니다. 이 공통 계층이 없으면 각
+ * 바이너리가 종료(shutdown)/health 로직을 제각각 구현하게 되고, 장애 시 동작 차이 때문에
+ * 분석 비용이 커집니다.
  *
- * 책임 범위(의도적으로 작게 유지):
+ * 책임 범위는 의도적으로 작게 유지합니다.
  * - 프로세스 생명주기 플래그(stop/healthy/ready) 관리
- * - `METRICS_PORT` 기반 admin HTTP(`/metrics`, `/healthz`, `/readyz`) 기동
+ * - `METRICS_PORT` 기반 관리용 HTTP(admin HTTP)인 `/metrics`, `/healthz`, `/readyz` 기동
  * - SIGINT/SIGTERM 기반 graceful shutdown 훅 실행
+ *
+ * 반대로 listener, routes, workers, domain policy 같은 앱별 의미는 이 타입이 소유하지 않습니다.
+ * 그래야 공용 runtime 규약과 제품 조합 로직이 섞이지 않습니다.
  */
 class AppHost {
 public:
@@ -97,14 +99,14 @@ public:
     bool healthy() const noexcept;
 
     /**
-     * @brief 기본 readiness 플래그를 설정합니다.
+     * @brief 기본 준비 상태(readiness) 플래그를 설정합니다.
      * @param ready true면 기본 준비 완료, false면 미준비
      */
     void set_ready(bool ready) noexcept;
 
     /**
-     * @brief 현재 readiness 결과를 조회합니다.
-     * @return 기본 readiness와 의존성 상태를 모두 만족하면 true
+     * @brief 현재 준비 상태(readiness) 결과를 조회합니다.
+     * @return 기본 준비 상태와 의존성 상태를 모두 만족하면 true
      */
     bool ready() const noexcept;
 
@@ -161,7 +163,7 @@ public:
     std::string lifecycle_metrics_text() const;
 
     /**
-     * @brief admin HTTP 서버를 시작합니다.
+     * @brief 관리용 HTTP(admin HTTP) 서버를 시작합니다.
      * @param port 수신 포트
      * @param metrics_callback `/metrics` 본문 생성 콜백
      * @param logs_callback `/logs` 본문 생성 콜백
@@ -173,7 +175,7 @@ public:
                           server::core::metrics::MetricsHttpServer::RouteCallback route_callback = {});
 
     /**
-     * @brief admin HTTP 서버를 중지합니다.
+     * @brief 관리용 HTTP(admin HTTP) 서버를 중지합니다.
      */
     void stop_admin_http();
 

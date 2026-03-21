@@ -111,9 +111,9 @@ void Acceptor::do_accept() {
         return;
     }
     
-    // 비동기 accept 호출입니다.
-    // 클라이언트가 접속하면 람다 함수가 호출됩니다.
-    // 'self'를 캡처하여 비동기 작업 도중 Acceptor 객체가 파괴되지 않도록 수명을 연장합니다.
+    // 비동기 accept 호출.
+    // 클라이언트가 접속하면 람다가 호출된다.
+    // `self`를 캡처해 비동기 작업 도중 Acceptor 객체 수명이 끊기지 않게 한다.
     acceptor_.async_accept(
         [self = shared_from_this()](const error_code& ec, asio::ip::tcp::socket socket) {
             if (ec) {
@@ -122,7 +122,7 @@ void Acceptor::do_accept() {
                         return;
                     }
                     log::warn(std::string("accept failed: ") + ec.message());
-                    // 지속적인 accept 실패 시 hot loop를 피하기 위해 짧게 backoff합니다.
+                    // 지속적인 accept 실패 시 hot loop를 피하기 위해 짧게 backoff한다.
                     self->schedule_accept_retry();
                 }
                 return;
@@ -132,8 +132,8 @@ void Acceptor::do_accept() {
                 auto cur = self->state_->connection_count.load();
                 if (cur >= self->state_->max_connections) {
                     // 상태 공유 객체가 제공하는 상한을 넘으면 TCP 레벨에서 바로 끊어
-                    // 리소스(버퍼, 세션 객체) 할당을 최소화합니다.
-                    // 이는 DDoS 공격이나 과부하 상황에서 서버를 보호하는 기본적인 방어책입니다.
+                    // 리소스(버퍼, 세션 객체) 할당을 최소화한다.
+                    // 과부하 상황에서 "받아놓고 나중에 실패"보다 "입구에서 빠르게 거절"하는 편이 더 안전하다.
                     log::warn("max concurrent connections reached; closing new connection");
                     error_code ignored;
                     [[maybe_unused]] const auto shutdown_result = socket.shutdown(asio::ip::tcp::socket::shutdown_both, ignored);
@@ -145,9 +145,8 @@ void Acceptor::do_accept() {
 
             runtime_metrics::record_accept();
             try {
-                // Session은 공유 상태 및 Dispatcher 의존성이 많으므로 예외가 발생하면
-                // accept loop만 유지하고 연결을 폐기합니다.
-                // Session 객체는 클라이언트와의 1:1 통신을 담당합니다.
+                // `Session`은 공유 상태와 `Dispatcher` 의존성이 많다.
+                // 생성 중 예외가 나더라도 accept loop 자체는 유지해, 한 연결 실패가 전체 수락 정지로 번지지 않게 한다.
                 auto session = std::make_shared<Session>(std::move(socket), self->dispatcher_, self->buffer_manager_, self->options_, self->state_);
                 if (self->on_new_session_) self->on_new_session_(session);
                 session->start();
@@ -155,7 +154,7 @@ void Acceptor::do_accept() {
                 log::error(std::string("session creation threw: ") + ex.what());
             }
 
-            // 다음 연결을 계속 기다립니다.
+            // 다음 연결을 계속 기다린다. accept loop는 한 연결 처리 성공/실패와 분리되어 계속 돌아야 한다.
             self->do_accept();
         });
 }

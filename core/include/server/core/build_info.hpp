@@ -2,9 +2,9 @@
 
 #include <string_view>
 
-// 빌드 메타데이터는 CMake 단계에서 주입됩니다(`core/CMakeLists.txt` 참고).
+// 빌드 메타데이터는 CMake 단계에서 주입된다(`core/CMakeLists.txt` 참고).
 // 소스 아카이브처럼 git 정보가 없는 환경에서도 빌드가 깨지지 않도록
-// 안전한 fallback("unknown") 값을 함께 둡니다.
+// 안전한 fallback("unknown") 값을 함께 둔다.
 #ifndef BUILD_GIT_HASH
 #define BUILD_GIT_HASH "unknown"
 #endif
@@ -22,6 +22,8 @@ namespace server::core::build_info {
 /**
  * @brief 빌드에 사용된 git commit hash를 반환합니다.
  * @return commit hash 문자열(`unknown` 가능)
+ *
+ * 이 값은 로그와 메트릭에서 "지금 떠 있는 바이너리가 정확히 무엇인가"를 추적하는 기본 단서다.
  */
 inline constexpr std::string_view git_hash() noexcept { return BUILD_GIT_HASH; }
 

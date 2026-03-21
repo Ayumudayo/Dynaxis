@@ -25,7 +25,13 @@ using RewindQuery = server::core::realtime::RewindQuery;
 using RewindResult = server::core::realtime::RewindResult;
 using WorldRuntime = server::core::realtime::WorldRuntime;
 
-/** @brief Session-facing FPS entrypoint that decodes input and dispatches replication output. */
+/**
+ * @brief 세션 관점에서 FPS 입력을 받아 authoritative runtime으로 넘기고 복제 결과를 내보내는 진입점입니다.
+ *
+ * 이 타입이 필요한 이유는 wire payload 해석과 `server::core::realtime::WorldRuntime`
+ * 자체를 분리하기 위해서입니다. runtime은 엔진 중립적인 fixed-step 상태만 소유하고,
+ * 세션/opcode/payload 해석은 여전히 앱 계층이 맡습니다.
+ */
 class FpsService {
 public:
     using Session = server::core::Session;

@@ -1,328 +1,260 @@
-# Quantified Release Evidence Baseline
+# 정량 릴리스 증거 기준선
 
-This document defines the Phase 5 release-evidence baseline for the public `server_core` finish line.
-It exists to convert the current mixture of proof scripts, loadgen samples, and local measurement notes into one explicit release-blocker inventory.
+이 문서는 공개 `server_core` 마감선에서 요구하는 Phase 5 정량 증거 기준선을 정의한다.
+지금까지 흩어져 있던 proof 스크립트, loadgen 샘플, 로컬 측정 메모를 하나의 명시적 release blocker 목록으로 묶기 위해 존재한다.
 
-## Status
+## 상태
 
-- Phase 5 is now a finish-line blocker, not an optional backlog.
-- This document fixes the evidence inventory, preferred runner, artifact location, fixed threshold policy, and final acceptance checklist.
-- The numbers here are the current accepted release-blocker baseline for the public-engine finish line.
-- Thresholds may tighten after repeated reruns, but they must not become looser without an explicit recorded reason.
+- Phase 5는 이제 선택적 backlog가 아니라 실제 마감선 blocker다.
+- 이 문서는 증거 목록, 권장 실행기, 산출물 위치, 고정 임계치 정책, 최종 수락 체크리스트를 고정한다.
+- 여기 적힌 수치는 현재 공개 엔진 마감선에서 받아들인 release blocker 기준선이다.
+- 임계치는 반복 측정 후 더 엄격해질 수는 있지만, 기록된 명시적 이유 없이 완화되면 안 된다.
 
-## Artifact Convention
+## 산출물 규약
 
-- assertion-style matrix runs store logs under `build/phase5-evidence/<run_id>/`
-- loadgen JSON reports continue to live under `build/loadgen/`
-- each accepted run must record:
-  - the exact command
-  - the artifact path
-  - the verdict
-  - the committed document that owns interpretation of the result
-- preferred direct-path report runner for the first capture tranche:
+- assertion 스타일 matrix 실행 로그는 `build/phase5-evidence/<run_id>/` 아래에 저장한다.
+- loadgen JSON 보고서는 계속 `build/loadgen/` 아래에 둔다.
+- 승인된 각 실행은 반드시 아래 네 가지를 같이 남겨야 한다.
+  - 정확한 실행 명령
+  - 산출물 경로
+  - 판정 결과
+  - 그 결과를 해석하는 기준 문서
+- direct-path 첫 캡처 tranche의 권장 실행기:
   - `python tests/python/capture_phase5_evidence.py --run-id <run_id>`
-- preferred hardening rerun runner:
+- hardening 재실행 권장 실행기:
   - `python tests/python/capture_phase5_evidence.py --run-id <run_id> --include-budget-hardening`
-- preferred scheduled/manual Linux hardening runner:
+- 예약/수동 Linux hardening 권장 실행기:
   - `python tests/python/capture_phase5_evidence.py --run-id <run_id> --include-budget-hardening --execution-mode hostnet-container`
-- preferred focused stabilization runner:
+- 집중 안정화 권장 실행기:
   - `python tests/python/capture_phase5_evidence.py --run-id <run_id> --capture-set rudp-success-only`
 
-## Threshold Policy
+## 임계치 정책
 
-- correctness-only evidence uses a hard pass rule:
-  - runner exits `0`
-  - all named stages succeed
-- quantitative evidence starts from the current recorded sample as a planning baseline:
-  - latency guard: `current_sample_p95_ms * 1.25`
-  - throughput guard: `current_sample_throughput_rps * 0.80`
-  - error guard: `errors=0`
-  - transport attach guard where applicable: `attach_failures=0`
-- once reruns are stable enough, the item is promoted into an explicit fixed release threshold in the sections below.
+- correctness 전용 증거는 하드 패스 규칙을 쓴다.
+  - 실행기가 `0`으로 종료해야 한다.
+  - 명시된 모든 단계가 성공해야 한다.
+- 정량 증거는 현재 기록된 샘플을 계획 기준선으로 삼아 시작한다.
+  - 지연시간 guard: `current_sample_p95_ms * 1.25`
+  - 처리량 guard: `current_sample_throughput_rps * 0.80`
+  - 오류 guard: `errors=0`
+  - 적용되는 경우 transport attach guard: `attach_failures=0`
+- 재실행 결과가 충분히 안정적이면 아래 섹션의 명시적 고정 release threshold로 승격한다.
 
-## Release-Evidence Inventory
+## 릴리스 증거 목록
 
-| Evidence ID | What It Must Prove | Preferred Runner | Artifact Path | Committed Owner |
+| 증거 ID | 반드시 증명해야 하는 것 | 권장 실행기 | 산출물 경로 | 해석 기준 문서 |
 | --- | --- | --- | --- | --- |
-| `transport-impairment-matrix` | direct UDP/RUDP attach, OFF, rollout fallback, protocol fallback, restart, deterministic packet-quality impairment all stay correct | `python tests/python/verify_fps_rudp_transport_matrix.py --scenario phase2-acceptance --no-build *> build/phase5-evidence/<run_id>/fps/phase2-acceptance.log` | `build/phase5-evidence/<run_id>/fps/phase2-acceptance.log` | `docs/ops/realtime-runtime-contract.md` |
-| `mixed-transport-soak` | long mixed TCP + direct UDP/RUDP traffic remains clean under attach, fallback, and OFF policy modes | loadgen commands from `tools/loadgen/README.md` for `mixed_session_soak_long`, `mixed_direct_udp_soak_long`, `mixed_direct_rudp_soak_long`, plus fallback/OFF env variants | `build/loadgen/mixed_session_soak_long.json`, `build/loadgen/mixed_direct_udp_soak_long.host.json`, `build/loadgen/mixed_direct_rudp_soak_long.host.json`, `build/loadgen/mixed_direct_rudp_soak_long.fallback.host.json`, `build/loadgen/mixed_direct_rudp_soak_long.off.host.json` | this document |
-| `fps-direct-path-budget` | gameplay-frequency direct path keeps acceptable latency/throughput/error behavior on direct UDP and RUDP | loadgen commands from `tools/loadgen/README.md` for `mixed_direct_udp_ping_soak`, `mixed_direct_rudp_ping_soak`, `mixed_direct_udp_fps_soak`, `mixed_direct_rudp_fps_soak` | `build/loadgen/mixed_direct_udp_ping_soak.host.json`, `build/loadgen/mixed_direct_rudp_ping_soak.host.json`, `build/loadgen/mixed_direct_udp_fps_soak.host.json`, `build/loadgen/mixed_direct_rudp_fps_soak.host.json` | `docs/ops/realtime-runtime-contract.md` |
-| `mmorpg-handoff-rehearsal` | desired/observed topology, drain closure, owner transfer, migration handoff, and live runtime assignment remain reproducible in one supported matrix | `python tests/python/verify_mmorpg_runtime_matrix.py --scenario phase3-acceptance --no-build *> build/phase5-evidence/<run_id>/mmorpg/phase3-acceptance.log` | `build/phase5-evidence/<run_id>/mmorpg/phase3-acceptance.log` | `docs/ops/mmorpg-world-residency-contract.md` |
-| `continuity-restart-recovery` | gateway/server restart and continuity fallback behavior remain reproducible through one named recovery runner | `python tests/python/verify_continuity_recovery_matrix.py --scenario phase5-recovery-baseline --no-build *> build/phase5-evidence/<run_id>/continuity/phase5-recovery-baseline.log` | `build/phase5-evidence/<run_id>/continuity/phase5-recovery-baseline.log` | `docs/ops/session-continuity-contract.md` |
+| `transport-impairment-matrix` | direct UDP/RUDP attach, OFF, rollout fallback, protocol fallback, restart, 결정론적 packet-quality impairment가 모두 올바르게 동작함 | `python tests/python/verify_fps_rudp_transport_matrix.py --scenario phase2-acceptance --no-build *> build/phase5-evidence/<run_id>/fps/phase2-acceptance.log` | `build/phase5-evidence/<run_id>/fps/phase2-acceptance.log` | `docs/ops/realtime-runtime-contract.md` |
+| `mixed-transport-soak` | 긴 mixed TCP + direct UDP/RUDP 트래픽이 attach, fallback, OFF 정책 모드에서 깨끗하게 유지됨 | `tools/loadgen/README.md`의 `mixed_session_soak_long`, `mixed_direct_udp_soak_long`, `mixed_direct_rudp_soak_long` 및 fallback/OFF 변형 명령 | `build/loadgen/mixed_session_soak_long.json`, `build/loadgen/mixed_direct_udp_soak_long.host.json`, `build/loadgen/mixed_direct_rudp_soak_long.host.json`, `build/loadgen/mixed_direct_rudp_soak_long.fallback.host.json`, `build/loadgen/mixed_direct_rudp_soak_long.off.host.json` | 이 문서 |
+| `fps-direct-path-budget` | gameplay-frequency direct path가 direct UDP와 RUDP에서 허용 가능한 지연시간/처리량/오류 행동을 유지함 | `tools/loadgen/README.md`의 `mixed_direct_udp_ping_soak`, `mixed_direct_rudp_ping_soak`, `mixed_direct_udp_fps_soak`, `mixed_direct_rudp_fps_soak` | `build/loadgen/mixed_direct_udp_ping_soak.host.json`, `build/loadgen/mixed_direct_rudp_ping_soak.host.json`, `build/loadgen/mixed_direct_udp_fps_soak.host.json`, `build/loadgen/mixed_direct_rudp_fps_soak.host.json` | `docs/ops/realtime-runtime-contract.md` |
+| `mmorpg-handoff-rehearsal` | desired/observed topology, drain closure, owner transfer, migration handoff, live runtime assignment가 한 지원 행렬 안에서 재현 가능함 | `python tests/python/verify_mmorpg_runtime_matrix.py --scenario phase3-acceptance --no-build *> build/phase5-evidence/<run_id>/mmorpg/phase3-acceptance.log` | `build/phase5-evidence/<run_id>/mmorpg/phase3-acceptance.log` | `docs/ops/mmorpg-world-residency-contract.md` |
+| `continuity-restart-recovery` | gateway/server 재시작과 continuity fallback 동작이 하나의 이름 붙은 recovery runner로 재현 가능함 | `python tests/python/verify_continuity_recovery_matrix.py --scenario phase5-recovery-baseline --no-build *> build/phase5-evidence/<run_id>/continuity/phase5-recovery-baseline.log` | `build/phase5-evidence/<run_id>/continuity/phase5-recovery-baseline.log` | `docs/ops/session-continuity-contract.md` |
 
-## Provisional Baseline Slice
+## 잠정 기준선 구간
 
-### Transport Impairment Matrix
+### 전송 손상 행렬
 
-- gate type: correctness
-- required result:
-  - `phase2-acceptance` runner exits `0`
-  - named stages `rudp-attach`, `udp-only-off`, `rollout-fallback`, `protocol-fallback`, `udp-quality-impairment`, `rudp-restart` all pass
-- first captured run:
+- gate 유형: correctness
+- 요구 결과:
+  - `phase2-acceptance` 실행기가 `0`으로 종료해야 한다.
+  - 명시된 `rudp-attach`, `udp-only-off`, `rollout-fallback`, `protocol-fallback`, `udp-quality-impairment`, `rudp-restart` 단계가 모두 통과해야 한다.
+- 첫 캡처 실행:
   - `build/phase5-evidence/20260318-010307Z/fps/phase2-acceptance.log`
-- fixed release threshold:
-  - pass/fail only; the first captured run was sufficient to keep this as a hard correctness gate
-- current known limitation:
-  - fuller OS-level `netem` rehearsal is still missing and remains a follow-up evidence expansion, not part of this first baseline slice
+- 고정 release threshold:
+  - 수치 임계치가 아니라 pass/fail만 본다. 첫 캡처 실행만으로도 correctness gate로 유지하기에 충분했다.
+- 현재 알려진 한계:
+  - 더 넓은 OS-level `netem` rehearsal은 아직 없다. 이는 첫 기준선 구간이 아니라 후속 증거 확장 항목이다.
 
-### Long Mixed Soak
+### 긴 mixed soak
 
-- baseline samples already recorded in `tasks/validation/quantitative/todo.md`
-- hardening rerun:
+- 기준 샘플은 이미 `tasks/validation/quantitative/todo.md`에 기록돼 있다.
+- hardening 재실행:
   - `build/loadgen/mixed_session_soak_long.20260318-021023Z.json`
   - `build/loadgen/mixed_direct_udp_soak_long.20260318-021023Z.host.json`
   - `build/loadgen/mixed_direct_rudp_soak_long.20260318-021023Z.host.json`
   - `build/loadgen/mixed_direct_rudp_soak_long.20260318-021023Z.fallback.host.json`
   - `build/loadgen/mixed_direct_rudp_soak_long.20260318-021023Z.off.host.json`
   - `build/loadgen/mixed_direct_rudp_soak_long.20260317-173024Z.host.json`
-- fixed release thresholds:
+- 고정 release threshold:
   - `mixed_session_soak_long`: `p95_ms <= 16.50`, `throughput_rps >= 8.60`, `errors=0`
   - `mixed_direct_udp_soak_long`: `p95_ms <= 15.00`, `throughput_rps >= 8.00`, `errors=0`, `attach_failures=0`, `udp_bind_successes>0`
-  - `mixed_direct_rudp_soak_long` success path: `p95_ms <= 17.50`, `throughput_rps >= 8.00`, `errors=0`, `attach_failures=0`, `rudp_attach_successes>0`, `rudp_attach_fallbacks=0`
-  - `mixed_direct_rudp_soak_long` fallback/OFF policy: `p95_ms <= 15.70`, `throughput_rps >= 8.00`, `errors=0`, `attach_failures=0`, `rudp_attach_successes=0`, `rudp_attach_fallbacks>0`
+  - `mixed_direct_rudp_soak_long` 성공 경로: `p95_ms <= 17.50`, `throughput_rps >= 8.00`, `errors=0`, `attach_failures=0`, `rudp_attach_successes>0`, `rudp_attach_fallbacks=0`
+  - `mixed_direct_rudp_soak_long` fallback/OFF 정책: `p95_ms <= 15.70`, `throughput_rps >= 8.00`, `errors=0`, `attach_failures=0`, `rudp_attach_successes=0`, `rudp_attach_fallbacks>0`
 
-### FPS Direct-Path Latency / Throughput / Error Budget
+### FPS direct-path 지연시간 / 처리량 / 오류 예산
 
-- current recorded samples exist for direct ping workload:
-  - `mixed_direct_udp_ping_soak`: baseline `p95_ms=11.89`, `throughput_rps=8.19`
-  - `mixed_direct_rudp_ping_soak` success path: baseline `p95_ms=78.26`, `throughput_rps=7.93`
-  - `mixed_direct_rudp_ping_soak` fallback/OFF path: baseline `p95_ms=11.95`, `throughput_rps=7.43`
-- provisional planning guards:
+- 현재 direct ping workload의 기록 샘플:
+  - `mixed_direct_udp_ping_soak`: 기준선 `p95_ms=11.89`, `throughput_rps=8.19`
+  - `mixed_direct_rudp_ping_soak` 성공 경로: 기준선 `p95_ms=78.26`, `throughput_rps=7.93`
+  - `mixed_direct_rudp_ping_soak` fallback/OFF 경로: 기준선 `p95_ms=11.95`, `throughput_rps=7.43`
+- 잠정 계획 guard:
   - UDP direct ping soak: `p95_ms <= 14.87`, `throughput_rps >= 6.55`, `errors=0`, `attach_failures=0`
-  - RUDP direct ping soak success path: `p95_ms <= 97.83`, `throughput_rps >= 6.34`, `errors=0`, `attach_failures=0`
-  - RUDP direct ping soak fallback/OFF path: `p95_ms <= 14.94`, `throughput_rps >= 5.94`, `errors=0`, `attach_failures=0`
-- first captured FPS soak reports:
+  - RUDP direct ping soak 성공 경로: `p95_ms <= 97.83`, `throughput_rps >= 6.34`, `errors=0`, `attach_failures=0`
+  - RUDP direct ping soak fallback/OFF 경로: `p95_ms <= 14.94`, `throughput_rps >= 5.94`, `errors=0`, `attach_failures=0`
+- 첫 FPS soak 보고서:
   - `build/loadgen/mixed_direct_udp_fps_soak.20260318-010307Z.host.json`
-    - baseline `p95_ms=31.62`, `throughput_rps=8.04`, `errors=0`, `attach_failures=0`
-    - provisional guard `p95_ms <= 39.52`, `throughput_rps >= 6.43`
+    - 기준선 `p95_ms=31.62`, `throughput_rps=8.04`, `errors=0`, `attach_failures=0`
+    - 잠정 guard `p95_ms <= 39.52`, `throughput_rps >= 6.43`
   - `build/loadgen/mixed_direct_rudp_fps_soak.20260318-010307Z.host.json`
-    - baseline `p95_ms=31.60`, `throughput_rps=8.02`, `errors=0`, `attach_failures=0`
-    - provisional guard `p95_ms <= 39.50`, `throughput_rps >= 6.42`
-- hardening rerun:
+    - 기준선 `p95_ms=31.60`, `throughput_rps=8.02`, `errors=0`, `attach_failures=0`
+    - 잠정 guard `p95_ms <= 39.50`, `throughput_rps >= 6.42`
+- hardening 재실행:
   - `build/loadgen/mixed_direct_udp_fps_soak.20260318-021023Z.host.json`
   - `build/loadgen/mixed_direct_rudp_fps_soak.20260318-021023Z.host.json`
-- fixed release thresholds:
+- 고정 release threshold:
   - UDP direct FPS soak: `p95_ms <= 36.50`, `throughput_rps >= 6.80`, `errors=0`, `attach_failures=0`, `udp_bind_successes>0`
-  - RUDP direct FPS soak success path: `p95_ms <= 36.50`, `throughput_rps >= 6.80`, `errors=0`, `attach_failures=0`, `udp_bind_successes>0`, `rudp_attach_successes>0`, `rudp_attach_fallbacks=0`
+  - RUDP direct FPS soak 성공 경로: `p95_ms <= 36.50`, `throughput_rps >= 6.80`, `errors=0`, `attach_failures=0`, `udp_bind_successes>0`, `rudp_attach_successes>0`, `rudp_attach_fallbacks=0`
 
-### MMORPG Handoff Rehearsal
+### MMORPG handoff rehearsal
 
-- gate type: correctness
-- required result:
-  - `phase3-acceptance` runner exits `0`
-  - both topology-aware stages pass
-- first captured run:
+- gate 유형: correctness
+- 요구 결과:
+  - `phase3-acceptance` 실행기가 `0`으로 종료해야 한다.
+  - topology-aware 단계가 모두 통과해야 한다.
+- 첫 캡처 실행:
   - `build/phase5-evidence/20260318-010307Z/mmorpg/phase3-acceptance.log`
-- fixed release threshold:
-  - pass/fail only; the first captured run was sufficient to keep this as a hard correctness gate
-- interpretation owner:
+- 고정 release threshold:
+  - 수치가 아니라 pass/fail만 본다. 첫 실행만으로 correctness gate로 유지하기에 충분했다.
+- 해석 기준 문서:
   - `docs/ops/mmorpg-world-residency-contract.md`
 
-### Restart / Recovery With Continuity Preservation
+### continuity 보존 재시작 / 복구
 
-- gate type: correctness
-- required result:
-  - `phase5-recovery-baseline` runner exits `0`
-  - `gateway-restart`, `server-restart`, `locator-fallback`, `world-residency-fallback`, `world-owner-fallback` all pass in one repeatable sequence
-- first captured run:
+- gate 유형: correctness
+- 요구 결과:
+  - `phase5-recovery-baseline` 실행기가 `0`으로 종료해야 한다.
+  - `gateway-restart`, `server-restart`, `locator-fallback`, `world-residency-fallback`, `world-owner-fallback`이 모두 한 시퀀스 안에서 통과해야 한다.
+- 첫 캡처 실행:
   - `build/phase5-evidence/20260318-010307Z/continuity/phase5-recovery-baseline.log`
-- fixed release threshold:
-  - pass/fail only; the first captured run was sufficient to keep this as a hard correctness gate
-- interpretation owner:
+- 고정 release threshold:
+  - 수치가 아니라 pass/fail만 본다. 첫 실행만으로 correctness gate로 유지하기에 충분했다.
+- 해석 기준 문서:
   - `docs/ops/session-continuity-contract.md`
 
-## First Capture Result (`20260318-010307Z`)
+## 첫 캡처 결과 (`20260318-010307Z`)
 
-- assertion-style correctness logs:
+- assertion 스타일 correctness 로그:
   - `build/phase5-evidence/20260318-010307Z/fps/phase2-acceptance.log`
   - `build/phase5-evidence/20260318-010307Z/mmorpg/phase3-acceptance.log`
   - `build/phase5-evidence/20260318-010307Z/continuity/phase5-recovery-baseline.log`
-- direct-path loadgen reports:
+- direct-path loadgen 보고서:
   - `build/loadgen/mixed_direct_udp_fps_soak.20260318-010307Z.host.json`
   - `build/loadgen/mixed_direct_rudp_fps_soak.20260318-010307Z.host.json`
-- capture summary:
-  - all three correctness runners passed
-  - both FPS direct-path soak runs completed with `errors=0` and `attach_failures=0`
-  - quantitative budgets for FPS direct-path remain provisional and move to the next hardening tranche
+- 요약:
+  - 세 correctness runner가 모두 통과했다.
+  - 두 FPS direct-path soak 모두 `errors=0`, `attach_failures=0`으로 종료했다.
+  - FPS direct-path 정량 예산은 아직 잠정 상태이며 다음 hardening tranche로 넘어간다.
 
-## Hardening Capture Result (`20260318-021023Z`)
+## hardening 캡처 결과 (`20260318-021023Z`)
 
-- long mixed soak reports:
+- 긴 mixed soak 보고서:
   - `build/loadgen/mixed_session_soak_long.20260318-021023Z.json`
   - `build/loadgen/mixed_direct_udp_soak_long.20260318-021023Z.host.json`
   - `build/loadgen/mixed_direct_rudp_soak_long.20260318-021023Z.host.json`
   - `build/loadgen/mixed_direct_rudp_soak_long.20260318-021023Z.fallback.host.json`
   - `build/loadgen/mixed_direct_rudp_soak_long.20260318-021023Z.off.host.json`
-- FPS direct-path rerun reports:
+- FPS direct-path 재실행 보고서:
   - `build/loadgen/mixed_direct_udp_fps_soak.20260318-021023Z.host.json`
   - `build/loadgen/mixed_direct_rudp_fps_soak.20260318-021023Z.host.json`
-- outcome:
-  - `mixed_session_soak_long`, `mixed_direct_udp_soak_long`, `mixed_direct_rudp_soak_long` fallback/OFF, and both FPS direct-path soak success paths are now fixed thresholds
-  - `mixed_direct_rudp_soak_long` success path required one narrower follow-up rerun before its threshold could be fixed
+- 결과:
+  - `mixed_session_soak_long`, `mixed_direct_udp_soak_long`, `mixed_direct_rudp_soak_long` fallback/OFF, 그리고 두 FPS direct-path 성공 경로는 이제 고정 threshold가 되었다.
+  - `mixed_direct_rudp_soak_long` 성공 경로는 threshold를 고정하기 전에 추가 집중 재실행이 한 번 더 필요했다.
 
-## Focused Stabilization Capture Result (`20260317-173024Z`)
+## 집중 안정화 캡처 결과 (`20260317-173024Z`)
 
-- focused report:
+- 집중 보고서:
   - `build/phase5-evidence/20260317-173024Z/manifest.json`
   - `build/loadgen/mixed_direct_rudp_soak_long.20260317-173024Z.host.json`
-- outcome:
-  - `mixed_direct_rudp_soak_long` success path reran at `p95_ms=13.40`, `throughput_rps=8.92`, `errors=0`, `rudp_attach_successes=8`, `rudp_attach_fallbacks=0`
-  - the previously widened `p95_ms=16.96` sample is now treated as bounded suite-level variance rather than the new steady-state baseline
-  - the success path is therefore promoted to a fixed release threshold at `p95_ms <= 17.50`
+- 결과:
+  - `mixed_direct_rudp_soak_long` 성공 경로가 `p95_ms=13.40`, `throughput_rps=8.92`, `errors=0`, `rudp_attach_successes=8`, `rudp_attach_fallbacks=0`으로 재실행되었다.
+  - 이전에 넓어졌던 `p95_ms=16.96` 샘플은 새로운 정상 기준이 아니라 suite 수준 분산으로 본다.
+  - 따라서 성공 경로는 `p95_ms <= 17.50`의 고정 release threshold로 승격되었다.
 
-## Portable Container Diagnostic Result (`20260317-174844Z`)
+## 이식 가능한 컨테이너 진단 결과 (`20260317-174844Z`)
 
-- portable full-budget report:
+- 이식 가능한 전체 예산 보고서:
   - `build/phase5-evidence/20260317-174844Z/manifest.json`
-- outcome:
-  - same-network Linux container execution keeps the long mixed soak thresholds green:
+- 결과:
+  - 동일 네트워크 Linux 컨테이너 실행은 긴 mixed soak threshold를 계속 만족한다.
     - `mixed_session_soak_long`: `p95_ms=13.73`, `throughput_rps=9.58`
     - `mixed_direct_udp_soak_long`: `p95_ms=13.47`, `throughput_rps=8.95`
-    - `mixed_direct_rudp_soak_long` success path: `p95_ms=15.46`, `throughput_rps=8.93`
+    - `mixed_direct_rudp_soak_long` 성공 경로: `p95_ms=15.46`, `throughput_rps=8.93`
     - `mixed_direct_rudp_soak_long` fallback/OFF: `p95_ms=13.00` / `13.60`
-  - the same containerized path does not preserve the accepted FPS direct-path host baseline:
+  - 같은 컨테이너 경로는 받아들인 FPS direct-path host 기준선은 재현하지 못했다.
     - `mixed_direct_udp_fps_soak`: `p95_ms=43.21`, `throughput_rps=8.05`
     - `mixed_direct_rudp_fps_soak`: `p95_ms=43.24`, `throughput_rps=8.09`
-  - current accepted release thresholds therefore remain tied to the existing host-style capture baseline, and the portable container mode is retained as a diagnostic path rather than the new release automation default
+  - 그래서 현재 release threshold는 계속 host 스타일 캡처를 기준으로 유지하고, portable container 모드는 release 자동화가 아니라 진단 경로로 남긴다.
 
-## Hostnet Automation Baseline Result (`20260318-060310Z`)
+## hostnet 자동화 기준선 결과 (`20260318-060310Z`)
 
-- hostnet artifact set:
+- hostnet 산출물:
   - `build/phase5-evidence/20260318-060310Z/manifest.json`
-- outcome:
-  - `hostnet-container` reproduced the accepted FPS direct-path baseline closely enough for scheduled/manual Linux hardening artifact capture:
+- 결과:
+  - `hostnet-container`는 받아들인 FPS direct-path 기준선을 충분히 가깝게 재현해 예약/수동 Linux hardening 산출물 수집 경로로 승격되었다.
     - `mixed_direct_udp_fps_soak`: `p95_ms=31.97`, `throughput_rps=8.08`
     - `mixed_direct_rudp_fps_soak`: `p95_ms=32.32`, `throughput_rps=8.03`
-  - long mixed soak stayed within the accepted release bands:
+  - 긴 mixed soak도 허용된 release band 안에 남았다.
     - `mixed_session_soak_long`: `p95_ms=13.37`, `throughput_rps=9.61`
     - `mixed_direct_udp_soak_long`: `p95_ms=12.78`, `throughput_rps=8.97`
-    - `mixed_direct_rudp_soak_long` success path: `p95_ms=12.22`, `throughput_rps=8.91`
-    - `mixed_direct_rudp_soak_long` fallback path: `p95_ms=12.60`, `throughput_rps=8.91`
-  - one OFF-path sample widened to `p95_ms=16.47`, but an immediate focused hostnet retest returned `p95_ms=12.75`
-  - decision:
-    - `hostnet-container` is promoted as the scheduled/manual hardening artifact path in `ci-hardening`
-    - release interpretation still uses the accepted baseline bands above plus human review of the uploaded artifacts
+    - `mixed_direct_rudp_soak_long` 성공 경로: `p95_ms=12.22`, `throughput_rps=8.91`
+    - `mixed_direct_rudp_soak_long` fallback 경로: `p95_ms=12.60`, `throughput_rps=8.91`
+  - OFF-path 샘플 하나가 `p95_ms=16.47`로 넓어졌지만, 즉시 집중 재실행한 hostnet retest는 `p95_ms=12.75`로 돌아왔다.
+  - 결정:
+    - `hostnet-container`를 `ci-hardening`의 예약/수동 hardening 산출물 경로로 승격한다.
+    - release 해석은 여전히 위의 기준선 band와 업로드된 산출물에 대한 사람 검토를 함께 사용한다.
 
-## Hostnet OFF History Slice (`20260318-113911Z-off1..off3`)
+## hostnet OFF 이력 구간 (`20260318-113911Z-off1..off3`)
 
-- focused OFF-path reports:
+- 집중 OFF-path 보고서:
   - `build/phase5-evidence/20260318-113911Z-off1/manifest.json`
   - `build/phase5-evidence/20260318-113911Z-off2/manifest.json`
   - `build/phase5-evidence/20260318-113911Z-off3/manifest.json`
-- outcome:
-  - repeated focused hostnet OFF-path reruns stayed inside the accepted fallback/OFF band:
+- 결과:
+  - 반복 실행한 hostnet OFF-path는 계속 허용된 fallback/OFF band 안에 머물렀다.
     - `off1`: `p95_ms=11.9996`, `throughput_rps=8.9320`
     - `off2`: `p95_ms=13.3200`, `throughput_rps=8.8952`
     - `off3`: `p95_ms=12.1303`, `throughput_rps=8.9103`
-  - the earlier `p95_ms=16.4659` sample is therefore treated as isolated run-to-run variance rather than evidence that Linux hardening needs a separate second numeric band
-  - decision:
-    - do not fix a Linux-only hardening threshold band at this time
-    - continue using the accepted fallback/OFF release band and uploaded-artifact review for scheduled/manual hardening automation
+  - 앞서 보였던 `p95_ms=16.4659` 샘플은 Linux hardening 전용 두 번째 수치 band를 만들 근거가 아니라 고립된 실행 분산으로 해석한다.
+  - 결정:
+    - 지금은 Linux 전용 hardening threshold band를 따로 고정하지 않는다.
+    - 기존 fallback/OFF release band와 업로드 산출물 검토 방식을 계속 사용한다.
 
-## Automation Decision
+## 자동화 결정
 
-- path-gated stack automation:
+- 경로 기반 stack 자동화:
   - `phase2-acceptance`
   - `phase3-acceptance`
   - `phase5-recovery-baseline`
-- scheduled/manual hardening automation:
-  - `phase5-budget-evidence` artifact capture in `.github/workflows/ci-hardening.yml`
-  - runner: `python tests/python/capture_phase5_evidence.py --run-id <run_id> --include-budget-hardening --execution-mode hostnet-container`
-- release-only / manual interpretation for now:
-  - long mixed soak budget set
-  - FPS direct-path performance budget set
-- rationale:
-  - correctness runners are already cheap enough and binary-pass in `ci-stack`
-  - `--execution-mode container` remains useful for Linux same-network diagnostics, but it widens FPS direct-path `p95_ms` beyond the accepted host baseline
-  - `--execution-mode hostnet-container` is close enough to the accepted baseline to automate artifact capture, and current focused OFF-path history does not justify a second Linux-only threshold band
-  - `--capture-set rudp-success-only` is retained as a focused diagnostic rerun, not a new CI gate
+- 예약/수동 hardening 자동화:
+  - `.github/workflows/ci-hardening.yml`의 `phase5-budget-evidence` 산출물 수집
+  - 실행기: `python tests/python/capture_phase5_evidence.py --run-id <run_id> --include-budget-hardening --execution-mode hostnet-container`
+- 현재는 release 전용 / 수동 해석으로 남기는 것:
+  - 긴 mixed soak 예산 세트
+  - FPS direct-path 성능 예산 세트
+- 이유:
+  - correctness runner는 이미 충분히 싸고, `ci-stack`에서 이진 pass/fail gate로 돌릴 수 있다.
+  - `--execution-mode container`는 Linux 동일 네트워크 진단에는 여전히 유용하지만, FPS direct-path `p95_ms`를 받아들인 host 기준선보다 넓힌다.
+  - `--execution-mode hostnet-container`는 받아들인 기준선에 충분히 가깝고, 현재 OFF-path 이력도 Linux 전용 두 번째 threshold band를 정당화하지 않는다.
+  - `--capture-set rudp-success-only`는 집중 진단용 재실행 도구로 남기고, 새 CI gate로 만들지는 않는다.
 
-## Final Acceptance Checklist
+## 최종 수락 체크리스트
 
-- public package/API governance stays green:
+- 공개 package/API governance가 계속 green 상태여야 한다.
   - `python tools/check_core_api_contracts.py --check-boundary`
   - `python tools/check_core_api_contracts.py --check-boundary-fixtures`
   - `python tools/check_core_api_contracts.py --check-stable-governance-fixtures`
   - `ctest --test-dir build-windows -C Debug -R "CoreInstalledPackageConsumer|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure`
-- correctness matrices stay green under one named run:
+- correctness matrix가 하나의 이름 붙은 실행 안에서 계속 green이어야 한다.
   - `python tests/python/verify_fps_rudp_transport_matrix.py --scenario phase2-acceptance --no-build *> build/phase5-evidence/<run_id>/fps/phase2-acceptance.log`
   - `python tests/python/verify_mmorpg_runtime_matrix.py --scenario phase3-acceptance --no-build *> build/phase5-evidence/<run_id>/mmorpg/phase3-acceptance.log`
   - `python tests/python/verify_continuity_recovery_matrix.py --scenario phase5-recovery-baseline --no-build *> build/phase5-evidence/<run_id>/continuity/phase5-recovery-baseline.log`
-- quantitative budget capture stays within the fixed bands above:
+- 정량 예산 캡처가 위의 고정 band 안에 머물러야 한다.
   - `python tests/python/capture_phase5_evidence.py --run-id <run_id> --include-budget-hardening`
-- focused rerun tool when only the RUDP mixed success path needs reconfirmation:
+- RUDP mixed success path만 다시 확인하면 될 때는 집중 재실행 도구를 쓴다.
   - `python tests/python/capture_phase5_evidence.py --run-id <run_id> --capture-set rudp-success-only`
 
-## Post-Closure Follow-Up
+## 종료 후 후속 과제
 
-- expand from deterministic impairment proof to fuller OS-level `netem` or lossy-network rehearsal
-  - preferred manual runner: `python tests/python/verify_fps_netem_rehearsal.py --scenario fps-pair`
-  - current placement: manual ops-only path, not `ci-hardening`
-  - validated rehearsal:
-    - `build/phase5-evidence/20260318-121332Z/netem/manifest.json`
-    - UDP direct FPS under netem: `p95_ms=75.25`, `throughput_rps=7.94`, `errors=0`
-    - RUDP direct FPS under netem: `p95_ms=74.71`, `throughput_rps=7.99`, `errors=0`
-    - gateway metric deltas: `loss_delta=4`, `jitter_after_ms=37`
-- periodically review accumulated hostnet artifacts for new drift before changing any accepted threshold bands
-- accumulate Windows compile-cache evidence before making an adopt/no-go call on `sccache`
-  - preferred workflow: `.github/workflows/windows-sccache-poc.yml`
-  - artifact path: `build/windows-sccache-poc/windows-sccache-poc.json`
-  - measurement intent:
-    - compare same-run `without_sccache` vs `with_sccache` build pass timings
-    - keep pass #1 cold within the current run when `reset_sccache_before_measurement=true`
-    - record pass #2 `sccache` hit-rate from uploaded raw stats text
-  - first captured workflow artifact:
-    - run: `23245866965`
-    - downloaded artifact: `build/windows-sccache-poc-gh-run-23245866965/windows-sccache-poc-23245866965/windows-sccache-poc.json`
-    - baseline `without_sccache`:
-      - pass #1 `93.91s`
-      - pass #2 `94.78s`
-    - `with_sccache`:
-      - pass #1 `105.60s`
-      - pass #2 `80.45s`
-      - pass #2 hit rate `35.85%` (`19` hits / `34` misses)
-  - decision:
-    - no-go for immediate wider CI adoption
-    - keep `.github/workflows/windows-sccache-poc.yml` as an optional comparison path only
-    - rationale:
-      - cold pass regressed by `12.45%`
-      - warm pass improved by `15.12%`, but the hit rate stayed low enough that the gain does not yet justify wider rollout complexity
-- frame the current Conan cache strategy so a future binary-remote run has one stable comparison surface
-  - preferred workflow: `.github/workflows/conan2-poc.yml`
-  - artifact path: `build/conan-strategy-poc/windows-conan-current-cache.json`
-  - first captured baseline artifact:
-    - run: `23246958472`
-    - downloaded artifact: `build/conan-strategy-poc-gh-run-23246958472/conan-strategy-poc-windows-23246958472/windows-conan-current-cache.json`
-    - target/config: `core_public_api_smoke`, `Release`
-    - restore hit `true`, restore elapsed `15.51s`
-    - build elapsed `1.26s`
-    - ctest not executed
-    - save skipped because of exact cache hit
-  - decision:
-    - current-cache baseline is now framed
-    - no binary-remote rollout or adoption decision is made yet
-    - any future binary-remote experiment should reuse the same workflow surface, target/config shape, and artifact fields before comparing wall clock or miss-recovery behavior
-- collect additional `ci-prewarm` telemetry so current cache strategy stability is based on artifacts, not just step-summary text
-  - preferred workflow: `.github/workflows/ci-prewarm.yml`
-  - telemetry artifacts:
-    - `build/ci-prewarm/windows-conan-prewarm.json`
-    - `build/ci-prewarm/linux-base-image-prewarm.json`
-  - additional captured telemetry run:
-    - run: `23247349242`
-    - downloaded artifacts:
-      - `build/ci-prewarm-gh-run-23247349242/windows-conan-prewarm.json`
-      - `build/ci-prewarm-gh-run-23247349242/linux-base-image-prewarm.json`
-    - result:
-      - Windows Conan restore exact hit `true`, restore elapsed `16.35s`, save skipped because of exact hit
-      - Linux base-image build elapsed `24.58s`
-  - decision:
-    - current cache strategy still looks stable enough to keep using as-is
-    - keep binary-remote work framed-only for now instead of promoting it into an active rollout candidate
-
-## Related Docs
-
-- `docs/tests.md`
-- `docs/ops/realtime-runtime-contract.md`
-- `docs/ops/session-continuity-contract.md`
-- `docs/ops/mmorpg-world-residency-contract.md`
-- `tools/loadgen/README.md`
+- 결정론적 손상 proof에서 더 나아가, 더 넓은 OS-level `netem` 또는 lossy-network rehearsal로 확장
+  - 권장 수동 실행기: `python tests/python/verify_fps_netem_rehearsal.py --scenario fps-pair`
+  - 현재 위치: `ci-hardening`이 아니라 수동 ops 전용 경로

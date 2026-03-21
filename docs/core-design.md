@@ -1,103 +1,141 @@
 # 코어(Core) 설계 노트
 
-`server_core`는 Dynaxis 공용 런타임으로, 네트워크 I/O·동시성·저장소·운영 유틸리티를 묶은 C++20 라이브러리다. `gateway_app`, `server_app`이 이 모듈을 링크해 동일한 패턴(Hive, ServiceRegistry, metrics 등)을 재사용한다. (HAProxy는 외부 인프라 컴포넌트로, 본 리포의 core를 링크하지 않는다.)
+`server_core`는 Dynaxis의 공용 실행 플랫폼이다. 목적은 채팅 서버 구현을 통째로 옮기는 것이 아니라, 여러 바이너리가 공통으로 써야 하는 runtime 규약과 reusable contract를 한곳에 두는 것이다.
 
-## 1. 설계 목표
-- **모듈화**: 채팅 서버뿐 아니라 향후 서비스가 동일한 기반을 공유할 수 있도록 core/net·core/concurrent·core/storage 계층을 명확히 분리한다.
-- **확장성**: Hive 기반 I/O, DbWorkerPool, TaskScheduler가 멀티 인스턴스 환경에서 수평 확장을 지원하도록 설계한다.
-- **운영 표준화**: CrashHandler, ServiceRegistry, metrics exporter 등 운영 필수 기능을 기본 제공한다.
-- **테스트 용이성**: ServiceRegistry와 추상화 레이어 덕분에 gRPC/DB/Redis 컴포넌트를 쉽게 mock 할 수 있다.
+이 문서는 current-state 요약본이다.
 
-## 1.1 식별자(Identity) 계약
+- 왜 이런 구조가 되었는지는 `docs/core-architecture-rationale.md`
+- 공개 API 범위와 안정성 분류는 `docs/core-api-boundary.md`, `docs/core-api/overview.md`
 
-- 시스템 식별자는 UUID를 기준으로 한다:
-  - `user_id`
-  - `room_id`
-  - `session_id`
-- 이름(`user.name`, `room.name`)은 라벨이며, 프로토콜/키/저장소의 canonical 식별자가 아니다.
-- 프로토콜, Redis 키, 저장소 조인 경계에서는 이름 의존 대신 UUID를 우선 사용한다.
-- 룸/사용자/세션의 검색 편의는 이름 인덱스로 해결하고, 정합성은 UUID에 의존한다.
+## 1. core가 소유하는 것
 
-## 2. 주요 모듈
-### 2.1 네트워크(`core::net`)
-- `Hive`/`SessionListener`/`Session` 조합은 `server_app` 중심으로 사용한다.
-- `Hive`/`TransportListener`/`TransportConnection` 조합은 `gateway_app`의 클라이언트 수락/브리지 경로에서 사용한다.
-- Wire codec과 dispatcher는 opcode 라우팅을 표준화해 신규 메시지를 추가할 때 서비스 코드가 최소화된다.
-- Gateway와 Server가 같은 기반을 공유하므로, 연결 처리/백프레셔 정책을 한 곳에서 조정할 수 있다.
+- 프로세스 lifecycle, readiness, dependency 상태, admin HTTP 같은 공통 runtime host 규약
+- generic transport substrate와 packet dispatch policy
+- worker queue, 스케줄러, 메모리 풀 같은 bounded execution primitive
+- process-wide observability substrate(metrics, logging, trace, build info)
+- domain-neutral discovery / storage execution / realtime / world orchestration contract
+- service-neutral plugin / Lua mechanism layer
 
-#### Dispatcher `processing_place` 실행 정책
-- `kInline`: 현재 dispatch 호출 경로에서 핸들러를 즉시 실행한다.
-- `kWorker`: `JobQueue`에 작업을 enqueue한 뒤, 세션 직렬 실행 컨텍스트에서 핸들러를 실행한다.
-- `kRoomStrand`: 세션 직렬 실행 컨텍스트로 post하여 비동기 실행한다.
-- 미지원 `processing_place` 값은 `MSG_ERR(INTERNAL_ERROR)`로 거절한다.
-- 운영 관측은 아래 메트릭으로 노출한다.
-  - `chat_dispatch_processing_place_calls_total{place=...}`
-  - `chat_dispatch_processing_place_reject_total{place=...}`
-  - `chat_dispatch_processing_place_exception_total{place=...}`
+## 2. core가 소유하지 않는 것
 
-### 2.2 동시성(`core::concurrent`)
-- `TaskScheduler`는 health-check, presence cleanup, metrics flush 등 반복 작업을 예약한다.
-- `ThreadManager`, `JobQueue`는 백그라운드 워커와 DbWorkerPool을 안정적으로 관리한다.
-- 테스트: `core/tests/task_scheduler_tests.cpp`(추가 예정)에서 scheduling/취소 로직을 검증하도록 구조를 분리해 두었다.
+- 채팅 도메인 규칙과 room/message/user repository 계층
+- gateway sticky `SessionDirectory`
+- concrete Redis / Consul / Postgres adapter 전략
+- chat hook ABI, chat Lua bindings 같은 service-specific extensibility contract
+- 실행 파일별 composition root와 CLI/운영 문맥
+- Kubernetes / AWS / Docker SDK 직접 호출
 
-### 2.3 저장소(`core::storage`)
-- `core::storage`는 generic transaction 경계(`IUnitOfWork`), connection factory(`IConnectionPool`), shared Redis client contract(`core::storage::redis::IRedisClient`), `DbWorkerPool` 같은 비동기 실행 seam을 소유한다.
-- 채팅 도메인 repository DTO/인터페이스와 Postgres SQL 구현은 `server/storage/*`에 두어 core가 채팅 스키마에 직접 결합되지 않게 유지한다.
-- concrete Redis factory/redis-plus-plus adapter는 `server/storage/*`에 두고, Gateway/Server/worker는 shared client contract만 직접 본다.
-- DI(ServiceRegistry)와 결합해 mock 백엔드(예: InMemoryStateBackend)를 손쉽게 끼울 수 있다.
+핵심 기준은 단순하다.
 
-### 2.4 상태/유틸(`core::state`, `core::util`)
-- `core::state`는 `InstanceRecord`, selector helper, `IInstanceStateBackend`, `InMemoryStateBackend` 같은 shared discovery contract를 제공한다.
-- Redis 기반 instance registry adapter/factory의 canonical seam은 `core/state`로 이동했지만, 현재는 `Transitional/Internal` ownership으로 관리한다.
-- Consul 기반 instance registry adapter는 `server/state/*`에 남고, sticky `SessionDirectory` 구현은 `gateway/*`에 남는다.
-- `ServiceRegistry`는 각 모듈이 의존성을 동적으로 주입받을 수 있게 해, 테스트 시 mock을 바인딩하기 쉽다.
-- `CrashHandler`, `log` 모듈은 공통 로깅/덤프 정책을 제공하며, `/logs/` 디렉터리에 스택 정보를 남긴다.
+- 여러 consumer가 공통으로 의존해야 하는 규약이면 core
+- 특정 앱이나 배포 방식의 의미라면 core 밖
 
-### 2.5 확장성(`core::plugin`, `core::scripting`)
-- `core::plugin`과 `core::scripting`은 plugin/Lua extensibility를 위한 platform mechanism 계층이다.
-- `server/`는 chat hook ABI, plugin chain policy, Lua host bindings 같은 service-specific contract만 소유한다.
-- reusable mechanism layer는 이제 `Stable`로 관리하고, chat-specific ABI/binding은 `Transitional`로 분리해 관리한다.
+## 3. 레이어 지도
 
-### 2.6 설정/관측성
-- 과거에는 `.env` 로딩 유틸을 두었으나, 현재 `server_app`/`gateway_app`은 실행 환경에서 주입된 환경 변수를 사용한다.
-- `metrics` 서브시스템은 Counter/Gauge/Histogram registry 백엔드를 제공하며, `append_prometheus_metrics()`로 공용 메트릭을 `/metrics`에 합성할 수 있다.
-- `append_runtime_core_metrics()`는 서비스별 구현과 무관하게 build info와 함께 공통 런타임 핵심 카운터를 노출하도록 강제한다.
-- `AppHost`는 공통 lifecycle phase(`init -> bootstrapping -> running -> stopping -> stopped|failed`)를 관리하고,
-  `runtime_lifecycle_phase`, `runtime_lifecycle_phase_code` 메트릭으로 현재 단계를 노출한다.
+| 레이어 | 주요 경로 | core가 소유하는 이유 |
+|---|---|---|
+| Runtime Host | `core/app/*` | `server_app`, `gateway_app`, `tools`가 같은 lifecycle/readiness/shutdown 규약을 써야 하기 때문 |
+| Networking | `core/net/*`, `core/protocol/*` | generic transport substrate와 packet dispatch policy는 재사용 가능하지만, 앱별 세션 의미는 분리해야 하기 때문 |
+| Execution / Memory | `core/concurrent/*`, `core/memory/*` | queue/scheduler/pool의 bounded semantics를 공용 규약으로 유지해야 하기 때문 |
+| Observability | `core/metrics/*`, `core/runtime_metrics.hpp`, `core/util/log.hpp`, `core/trace/*` | 운영 표준화와 장애 분석 속도를 프로세스 공통 규약으로 강제해야 하기 때문 |
+| Discovery / Shared State | `core/discovery/*`, underlying `core/state/*` | shared instance record/selector/backend seam은 공용 개념이지만 concrete adapter는 아직 앱/배포 전략이기 때문 |
+| Storage Execution | `core/storage_execution/*`, underlying `core/storage/*` | generic transaction/worker/retry seam은 공용 계약이지만 domain repository와 concrete adapter는 app-owned여야 하기 때문 |
+| Extensibility | `core/plugin/*`, `core/scripting/*` | service-neutral mechanism은 공용 platform capability지만 도메인 ABI는 분리해야 하기 때문 |
+| Realtime / Worlds | `core/realtime/*`, `core/worlds/*` | engine-neutral capability와 control-plane vocabulary는 공용 계약으로 유지하되 provider/game rules는 바깥에 두기 위해 |
+| Utilities / Leaf Services | `core/security/*`, `core/compression/*`, `core/util/paths.hpp` | 여러 바이너리에서 반복 구현할 이유가 없는 공통 leaf capability이기 때문 |
 
-### 2.7 조합 헬퍼 타깃(Composition Helper Targets)
-- `server_app_backends`, `gateway_backends`, `admin_app_backends`, `wb_common_redis_factory`는 reusable engine module이 아니라 각 실행 파일의 composition helper로 취급한다.
-- 이 타깃들은 프로세스별 설정/수명주기/운영 맥락을 `server_storage_pg_factory`, `server_storage_redis_factory`, 그리고 core-owned Redis registry seam 같은 narrower factory seam에 연결하는 얇은 조합 레이어다.
-- 따라서 현재 단계에서는 `server_core`나 별도 중립 패키지로 승격하지 않고, 해당 실행 파일이 있는 `server/`, `gateway/`, `tools/` 트리 안에 둔다.
-- helper target은 아래 조건을 모두 만족할 때만 상위 패키지로 이동을 검토한다.
-  - 둘 이상의 실행 파일이 동일한 helper 구현을 그대로 공유한다.
-  - helper가 앱/툴 로컬 설정, CLI, 수명주기 의미를 더 이상 직접 해석하지 않는다.
-  - 연결 대상 backend seam이 installable package/factory contract로 먼저 안정화돼 있다.
-- 반대로 단일 실행 파일의 composition root를 감추는 목적이라면, 이름이 다소 일반적이어도 app-local helper로 남기는 편이 ownership 경계를 더 분명하게 유지한다.
+## 4. 가장 중요한 경계 결정
 
-## 3. 실행 흐름
-1. 실행 환경/인자에서 설정을 읽고 `ServiceRegistry`를 초기화한 뒤 generic DB connection/worker seam, Redis, Write-behind, TaskScheduler를 등록한다.
-2. `core::net::Session`은 wire decoder로 opcode를 구문 분석한 뒤 Dispatcher에 넘기고, Dispatcher는 ServiceRegistry에서 필요한 핸들러를 찾는다.
-3. 백그라운드 DB 작업은 `DbWorkerPool`이 generic `IUnitOfWork` 경계를 열어 Worker 스레드에서 실행하고, 도메인 repository 접근은 `server/storage/*` 계층이 담당한다.
-4. `TaskScheduler`는 health check, presence TTL 정리, metrics 플러시, registry heartbeat 작업을 주기적으로 수행한다.
-5. 프로세스 lifecycle은 `AppHost` phase 전이로 표준화되며, readiness/health와 분리되어 운영 상태 추적에 사용된다.
+### 4.1 `Connection`은 stable이고 `Session`은 internal이다
 
-## 4. 향후 확장 항목
-| 항목 | 상태 | 메모 |
-| --- | --- | --- |
-| Hive/Connection 재사용 | Gateway는 `core::net::TransportConnection`, Server는 `core::net::Session` 중심으로 사용 | 필요 시 공통 수명주기 규칙을 추출 가능 |
-| 인증 플러그인 | `auth::IAuthenticator` 인터페이스로 구현, 기본은 NoopAuthenticator | 외부 OAuth 연동 시 구현 교체 |
-| 스크립팅 훅 | Lua/plugin extensibility는 이미 `core::plugin` + `core::scripting` 기반 stable mechanism capability로 존재 | 추가 소비자(gateway/wb_worker) 확대와 service-specific ABI 안정화는 후속 검증 |
-| ECS/플러그인 | 채팅 외 모듈을 위한 Entity 시스템은 backlog에 남겨둠 | 필요 시 별도 설계/작업 메모로 후속 추적 |
-| 관측성 표준화 | `/metrics` + structured log를 기본 제공, OpenTelemetry 추가 검토 | server_app에 우선 적용 후 Gateway/LB로 확장 |
+- `Connection`
+  - generic TCP transport
+  - async read/write
+  - FIFO send queue
+  - bounded backpressure
+- `Session`
+  - fixed packet header
+  - heartbeat/read/write timeout
+  - `Dispatcher`
+  - `SessionOptions`
+  - `ConnectionRuntimeState`
 
-## 5. 테스트 전략
-- `core/tests/`에 TaskScheduler, DbWorkerPool 등 핵심 컴포넌트의 단위테스트를 추가해 CI에서 돌린다.
-- gRPC/TCP 엔드투엔드 테스트(`tests/integration/`)를 확장해 로그인→채팅→세션 종료까지 자동화한다.
-- PowerShell/Bash smoke 스크립트(`scripts/smoke_*.ps1`)로 Redis·Write-behind 경로를 CI에 포함한다.
+즉 `Connection`은 reusable substrate이고, `Session`은 현재 server packet-session implementation이다.
 
-## 6. 참고 문서
-- 저장소 개요: `README.md`
-- 운영 토폴로지/다이어그램: `docs/ops/gateway-and-lb.md`, `docs/ops/architecture-diagrams.md`
-- Gateway & HAProxy 운영: `docs/ops/gateway-and-lb.md`
-- Redis/Write-behind 전략: `docs/db/redis-strategy.md`, `docs/db/write-behind.md`
+canonical consumer 이름은 `Listener` / `Connection`이다. `SessionListener`, `TransportListener`, `TransportConnection` 같은 이름은 compatibility 또는 내부 편의 이름으로만 본다.
+
+### 4.2 `EngineContext`는 기준이고 `ServiceRegistry`는 compatibility bridge다
+
+- `EngineContext`
+  - instance-scoped typed registry
+  - 새 composition model의 기준
+- `ServiceRegistry`
+  - process-global bridge
+  - legacy / plugin / shared-library 경로 호환용
+
+이중 구조는 이상형이 아니라, multi-runtime 격리와 기존 global lookup 소비자를 동시에 만족시키기 위한 현실적 타협이다.
+
+### 4.3 public contract와 underlying implementation을 의도적으로 분리한다
+
+현재 대표 사례:
+
+- `server/core/discovery/**` -> canonical public path
+- `server/core/state/**` -> underlying/internal implementation path
+- `server/core/storage_execution/**` -> canonical public path
+- `server/core/storage/**` -> underlying/internal implementation path
+
+이 패턴의 목적은 "public 이름은 빨리 고정하고, 내부 구현 소유권은 계속 조정 가능하게 두는 것"이다.
+
+### 4.4 extensibility에서는 mechanism만 core가 소유한다
+
+stable:
+
+- `server/core/plugin/*`
+- `server/core/scripting/*`
+
+app-owned/transitional:
+
+- chat hook ABI
+- chat plugin chain policy
+- chat Lua bindings
+
+즉 core는 "확장 메커니즘"을 제공하고, 특정 서비스의 ABI 의미는 core 밖에 둔다.
+
+### 4.5 realtime/worlds surface는 구현보다 contract를 우선한다
+
+`core/realtime/**`와 `core/worlds/**`는 concrete orchestrator나 game rule이 아니라 다음을 public으로 제공한다.
+
+- authoritative fixed-step capability
+- bind / delivery / quality policy contract
+- desired-vs-observed topology vocabulary
+- drain / transfer / migration / provider adapter status evaluation
+
+이 표면은 대부분 data struct + pure evaluation helper 중심으로 유지된다.
+
+### 4.6 reusable-looking helper target도 composition root면 core 밖에 둔다
+
+`server_app_backends`, `gateway_backends`, `admin_app_backends`, `wb_common_redis_factory` 같은 타깃은 이름만 보면 재사용 가능한 module처럼 보이지만, 실제로는 실행 파일별 composition helper다. 이들은 app/tool-local 설정과 수명주기 문맥을 해석하므로 core contract가 아니라 app-local ownership이 맞다.
+
+## 5. 현재 조립 흐름
+
+1. 실행 파일이 `EngineBuilder` / `EngineRuntime` 기준으로 lifecycle, dependency, admin HTTP를 조립한다.
+2. 앱별 bootstrap이 listener, routes, worker, backend adapter 같은 app-local behavior를 붙인다.
+3. network ingress는 `Hive` / `Listener` / `Connection` 또는 internal `Session`을 통해 처리된다.
+4. handler execution은 `Dispatcher`와 `OpcodePolicy`가 `inline / worker / room_strand` policy로 분기한다.
+5. background work는 `JobQueue`, `ThreadManager`, `TaskScheduler`, `DbWorkerPool` 같은 bounded execution seam으로 흘러간다.
+6. observability는 `runtime_metrics`, `metrics`, `MetricsHttpServer`, async logger, trace context를 통해 공통 노출된다.
+
+## 6. 현재 문서 읽기 순서
+
+1. `docs/core-design.md`
+2. `docs/core-architecture-rationale.md`
+3. `docs/core-api/overview.md`
+4. `docs/core-api-boundary.md`
+5. 필요한 세부 영역 문서:
+   - `docs/core-api/net.md`
+   - `docs/core-api/metrics-and-lifecycle.md`
+   - `docs/core-api/storage.md`
+   - `docs/core-api/discovery.md`
+   - `docs/core-api/extensions.md`
+   - `docs/core-api/realtime.md`
+   - `docs/core-api/worlds-*.md`

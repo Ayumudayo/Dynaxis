@@ -15,13 +15,13 @@
  *
  * 네트워크 계층과 비즈니스 계층을 분리하기 위해,
  * 부트 시점에 디스패처 테이블을 한 번 구성하고 런타임엔 조회만 수행합니다.
+ * 등록 지점을 한 파일에 모아 두면 "어떤 메시지가 어떤 정책으로 어디에 연결되는가"를 한눈에 점검할 수 있습니다.
+ * 이 표가 여러 파일로 흩어지면 transport policy 누락이나 opcode 중복을 코드 리뷰에서 발견하기가 어려워집니다.
  */
 namespace server::app {
 
-// Gateway나 LoadBalancer가 새 Session을 넘겨주면 opcode → handler 매핑을 모두 등록한다.
-// 현재 서버는 ChatService 단일 모듈이 모든 메시지를 처리하므로 dispatcher 테이블만 채우면 된다.
-// ChatService가 대부분의 메시지를 처리하므로 dispatcher는 단순한 라우팅 테이블 역할을 한다.
-// 각 메시지 ID(opcode)에 대해 어떤 함수가 호출되어야 하는지 정의합니다.
+// 이 표는 "dispatcher가 알아야 하는 마지막 app-local 사실"만 담는다.
+// 세부 비즈니스 규칙까지 이 파일로 끌어오면 opcode 표가 곧 서비스 구현이 되어 버려 유지보수가 급격히 나빠진다.
 void register_routes(server::core::Dispatcher& dispatcher,
                      server::app::chat::ChatService& chat,
                      server::app::fps::FpsService& fps) {
@@ -55,11 +55,11 @@ void register_routes(server::core::Dispatcher& dispatcher,
         dispatcher.register_handler(msg_id, std::forward<decltype(handler)>(handler), policy);
     };
 
-    // keep-alive 핸들러: ping payload를 그대로 pong으로 반사한다.
+    // keep-alive는 가장 싼 왕복 확인 경로이므로 라우터 단계에서도 눈에 띄게 남겨 둔다.
     register_core(MSG_PING,
         [&chat](NetSession& s, std::span<const std::uint8_t> payload) { chat.on_ping(s, payload); });
 
-    // PONG 핸들러: 클라이언트의 응답을 수신하고 무시한다 (RTT 측정 등은 추후 구현)
+    // PONG은 현재 상태 변이를 만들지 않으므로 빈 핸들러로 두되, 등록 자체는 명시적으로 남겨 프로토콜 표를 완성한다.
     register_core(MSG_PONG,
         [](NetSession&, std::span<const std::uint8_t>) {});
 

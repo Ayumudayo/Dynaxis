@@ -62,8 +62,12 @@ namespace server::app {
  *
  * 프로세스 시작 시 의존성 상태를 단계적으로 올리고,
  * 종료 시에는 등록된 shutdown 단계를 역순으로 실행해 자원 해제 순서를 안정화합니다.
+ * 이 파일은 단순 초기화 나열이 아니라 "무엇을 언제 살아 있다고 간주하는가"를 정의하는 곳입니다.
+ * 부트스트랩 순서가 흔들리면 ready 판정, Redis fanout 구독, 관리자 제어면, 종료 drain 동작이
+ * 서로 다른 수명주기를 보게 되어 운영 중 재현하기 어려운 부팅/종료 버그가 생깁니다.
  */
-// 전역 메트릭 변수 (metrics_server.cpp에서 참조)
+// 전역 메트릭 변수는 부트스트랩 경로와 메트릭 렌더링 경로가 같은 카운터를 공유하도록 둔다.
+// 이를 각 모듈 로컬 static으로 흩어 두면 shutdown drain 같은 교차 단계 메트릭을 한곳에서 모으기 어렵다.
 std::atomic<std::uint64_t> g_subscribe_total{0};
 std::atomic<std::uint64_t> g_self_echo_drop_total{0};
 std::atomic<long long>     g_subscribe_last_lag_ms{0};
@@ -260,13 +264,9 @@ std::vector<std::filesystem::path> list_lua_scripts(const std::filesystem::path&
 
 } // namespace
 
-// 메인 서버 실행 함수
-// 1. 설정 로드
-// 2. 핵심 컴포넌트(스레드 풀, I/O 컨텍스트) 초기화
-// 3. 의존성 주입 (ServiceRegistry)
-// 4. DB/Redis 연결 설정
-// 5. 서버 인스턴스 등록 (Service Discovery)
-// 6. TCP 리스너 시작
+// 메인 서버 실행 함수는 "실행 순서" 자체가 계약이다.
+// 설정, 의존성, 외부 저장소, 리스너, readiness를 아무 순서로나 켜면
+// 포트는 열렸는데 아직 처리 워커가 없거나, ready는 열렸는데 fanout 구독은 늦는 식의 어색한 중간 상태가 생긴다.
 /**
  * @brief 서버 프로세스를 기동합니다.
  * @param argc 커맨드라인 인자 개수
@@ -275,6 +275,7 @@ std::vector<std::filesystem::path> list_lua_scripts(const std::filesystem::path&
  */
 int run_server(int argc, char** argv) {
     // 1. 핵심 컴포넌트 선언
+    // 선언만 먼저 하고 실제 ready는 나중에 올린다. 그래야 "객체는 생겼지만 아직 서비스 가능하지 않다"를 표현할 수 있다.
     core::concurrent::TaskScheduler scheduler;
     std::shared_ptr<asio::steady_timer> scheduler_timer;
     std::shared_ptr<asio::steady_timer> fps_tick_timer;
@@ -315,13 +316,15 @@ int run_server(int argc, char** argv) {
             static_cast<long long>(config.shutdown_drain_timeout_ms),
             std::memory_order_relaxed);
 
-        // Readiness: DB is required; Redis is required when configured.
+        // readiness는 "필수 의존성이 실제로 준비됐는가"를 뜻한다.
+        // DB는 항상 필수이고, Redis는 구성된 경우에만 필수로 선언해 환경별 의미를 고정한다.
         engine.declare_dependency("db");
         if (!config.redis_uri.empty()) {
             engine.declare_dependency("redis");
         }
 
-        // Base readiness will flip to true after listeners/threads are running.
+        // 기본 ready는 리스너와 워커가 실제로 올라온 뒤에만 true로 바뀐다.
+        // 의존성만 붙었다고 먼저 ready를 열면 연결은 받지만 처리 스레드가 아직 없는 상태가 생길 수 있다.
         engine.set_ready(false);
 
         if (config.log_buffer_capacity > 0) {
@@ -357,6 +360,7 @@ int run_server(int argc, char** argv) {
         }
 
         // 3. 코어 컴포넌트 초기화
+        // 작업 큐, 스레드 풀, 스케줄러를 먼저 세워 두어야 이후 저장소/리스너가 올리는 후속 작업을 안전하게 받을 수 있다.
         asio::io_context io;
         if (lua_runtime) {
             lua_reload_strand = std::make_shared<asio::strand<asio::io_context::executor_type>>(
@@ -375,7 +379,8 @@ int run_server(int argc, char** argv) {
         core::BufferManager buffer_manager(buffer_block_size, 1024);
         auto state = core_internal::make_connection_runtime_state();
 
-        // Legacy service-registry bridge for the current server runtime graph.
+        // 현재 서버 런타임 그래프에 대한 compatibility bridge를 유지한다.
+        // 기존 전역 lookup 사용처를 한 번에 없애기 전까지는, 이 다리가 있어야 새 runtime 소유권 모델과 공존할 수 있다.
         engine.bridge_alias(io);
         engine.bridge_alias(job_queue);
         engine.bridge_alias(workers);
@@ -610,6 +615,7 @@ int run_server(int argc, char** argv) {
         }
 
         // 4. DB 커넥션 풀 구성
+        // DB는 server_app에서 사실상 필수 의존성이므로, 이 단계가 애매하게 실패한 채 진행되면 ready 의미가 무너진다.
         std::shared_ptr<core::storage_execution::IConnectionPool> db_pool;
         std::shared_ptr<server::storage::IRepositoryConnectionPool> repository_pool;
         if (!config.db_uri.empty()) {
@@ -662,6 +668,7 @@ int run_server(int argc, char** argv) {
         }
 
         // 5. Redis 클라이언트 구성
+        // Redis는 배포 토폴로지에 따라 선택 의존성일 수 있지만, 켠 경우에는 fanout/continuity/readiness 의미에 직접 영향을 준다.
         std::shared_ptr<server::core::storage::redis::IRedisClient> redis;
         if (!config.redis_uri.empty()) {
             corelog::info("Detected REDIS_URI (redacted)");
@@ -793,6 +800,7 @@ int run_server(int argc, char** argv) {
         }
 
         // 6. 채팅 서비스 및 라우터 초기화
+        // 외부 의존성이 올라온 뒤에 서비스와 dispatcher를 묶어야, 핸들러가 시작부터 완성된 runtime seam을 본다.
         server::app::chat::ChatService chat(io, job_queue, repository_pool, redis);
         server::app::fps::FpsService fps(server::app::fps::RuntimeConfig{
             .tick_rate_hz = config.fps_tick_rate_hz,
@@ -838,6 +846,7 @@ int run_server(int argc, char** argv) {
         (*fps_tick)();
 
         // 7. TCP 리스너 시작
+        // 이 단계 이전에는 절대로 외부 연결을 받지 않는다. 포트를 너무 일찍 열면 ready=false인데도 클라이언트가 붙을 수 있다.
         auto acceptor = core_internal::make_session_listener_handle(
             io,
             config.port,
@@ -859,6 +868,7 @@ int run_server(int argc, char** argv) {
         corelog::info(std::to_string(num_worker_threads) + " worker threads started.");
 
         // 9. I/O 스레드 풀 시작
+        // accept보다 실행기를 늦게 올리면 큐에 쌓인 작업이 소비되지 않는 구간이 생기므로, ready를 열기 직전에 둘 다 보장한다.
         unsigned int num_io_threads = std::max(1u, std::thread::hardware_concurrency());
         std::vector<std::thread> io_threads;
         io_threads.reserve(num_io_threads);
@@ -872,7 +882,8 @@ int run_server(int argc, char** argv) {
         }
         corelog::info(std::to_string(num_io_threads) + " I/O threads started.");
 
-        // Readiness is computed from base readiness + dependency probes.
+        // ready는 기본 ready 플래그와 의존성 probe를 함께 본다.
+        // 둘 중 하나만 보면 "리스너는 켜졌지만 외부 저장소는 아직 죽어 있는" 상태를 정상으로 잘못 노출할 수 있다.
         engine.mark_running();
 
         if (registry_registered && registry_backend) {
@@ -963,8 +974,9 @@ int run_server(int argc, char** argv) {
                                      exact_channels,
                                      admin_command_verifier,
                                      local_instance_selector_context](const std::string& channel, const std::string& message) {
-                // 1. Self-Echo 방지
-                if (message.rfind("gw=", 0) == 0) {
+            // 1. self-echo 방지
+            // 자신이 방금 fanout한 메시지를 다시 처리하면 로컬 사용자가 중복 이벤트를 보게 된다.
+            if (message.rfind("gw=", 0) == 0) {
                     auto nl = message.find('\n');
                     std::string from;
                     if (nl != std::string::npos) {
@@ -978,9 +990,9 @@ int run_server(int argc, char** argv) {
                     }
 
                     // 2. 채널 분기 처리
-                    // channel: prefix + "fanout:room:<room>" OR prefix + "fanout:refresh:<room>" OR prefix + "fanout:whisper"
+                    // 채널 의미를 여기서 명시적으로 갈라 두어야 room fanout, refresh, admin 명령이 서로 다른 검증 규칙을 유지할 수 있다.
                     if (channel.rfind(refresh_prefix, 0) == 0) {
-                        // Refresh Notification
+                        // refresh 알림은 payload보다 "로컬 스냅샷을 다시 보라"는 트리거 의미가 크다.
                         std::string room = channel.substr(refresh_prefix.size());
                         chat.broadcast_refresh_local(room);
                         corelog::info("DEBUG: Received refresh notify for room: " + room + " from " + from);
@@ -988,7 +1000,7 @@ int run_server(int argc, char** argv) {
                     }
 
                     if (channel.rfind(room_prefix, 0) == 0) {
-                        // Chat Broadcast
+                        // room fanout은 이미 발신 측에서 room 결정이 끝난 payload를 재전송하는 단계다.
                         if (nl == std::string::npos) {
                             return; // 채팅은 payload 필수
                         }
@@ -1202,13 +1214,16 @@ int run_server(int argc, char** argv) {
             corelog::info(std::string("Subscribed Redis pattern: ") + pattern_all);
         }
 
-        // 11. Metrics/admin HTTP 시작
+        // 11. metrics/admin HTTP 시작
+        // 운영 면은 데이터 plane과 거의 같이 열어 두되, ready 판정은 AppHost가 따로 쥔다.
+        // 그래야 관측은 일찍 가능하면서도 실제 트래픽 수용 시점은 엄격하게 제어할 수 있다.
         engine.start_admin_http(
             config.metrics_port,
             []() { return render_metrics_text(); },
             []() { return render_logs_text(); });
 
-        // 12. 종료 시그널 대기
+        // 12. 종료 시그널 대기 및 shutdown 순서 등록
+        // drain -> accept 중지 -> 워커/타이머 정리 순서를 명시해 새 연결 유입과 기존 연결 정리를 섞지 않는다.
         engine.add_shutdown_step("stop workers", [&]() { workers.Stop(); });
         engine.add_shutdown_step("stop io_context", [&]() { io.stop(); });
         engine.add_shutdown_step("drain active sessions", [&]() {
@@ -1233,6 +1248,8 @@ int run_server(int argc, char** argv) {
                 }
 
                 if (elapsed >= static_cast<long long>(timeout_ms)) {
+                    // drain이 무한정 기다리면 orchestration 종료가 멈추므로,
+                    // timeout 이후에는 남은 연결 수를 기록하고 상위 레이어가 다음 종료 단계로 넘어가게 한다.
                     g_shutdown_drain_timeout_total.fetch_add(1, std::memory_order_relaxed);
                     g_shutdown_drain_forced_close_total.fetch_add(remaining, std::memory_order_relaxed);
                     corelog::warn(

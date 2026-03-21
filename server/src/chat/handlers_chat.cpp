@@ -33,9 +33,8 @@ namespace server::app::chat {
 // -----------------------------------------------------------------------------
 // 귓속말(Whisper) 처리 핸들러
 // -----------------------------------------------------------------------------
-// 특정 사용자에게 1:1 메시지를 전송합니다.
-// 대상 사용자가 현재 서버에 접속해 있다면 직접 전송하고,
-// 다른 서버에 있다면 Redis Pub/Sub 등을 통해 라우팅해야 할 수도 있습니다 (현재 구현은 로컬 세션 위주).
+// 귓속말은 단순 브로드캐스트보다 상태 조회가 많다.
+// 상대 사용자 위치, 차단 상태, 현재 세션 유효성을 함께 봐야 하므로 별도 경로로 다룬다.
 
 void ChatService::on_whisper(Session& s, std::span<const std::uint8_t> payload) {
     auto sp = std::span<const std::uint8_t>(payload.data(), payload.size());
@@ -47,9 +46,8 @@ void ChatService::on_whisper(Session& s, std::span<const std::uint8_t> payload) 
         return;
     }
     auto session_sp = s.shared_from_this();
-    // whisper 처리는 DB 조회/타 세션 접근이 필요하므로 job_queue에서 비동기로 처리한다.
-    // 동시성 문제를 피하기 위해 메인 로직은 JobQueue Worker 스레드에서 실행됩니다.
-    // 이렇게 하면 I/O 스레드는 즉시 다음 패킷을 받을 준비를 할 수 있습니다 (Non-blocking).
+    // whisper는 타 세션 조회와 저장소 접근이 섞이므로 job_queue로 넘긴다.
+    // I/O 스레드에서 직접 처리하면 느린 조회 하나가 다른 클라이언트의 패킷 수신까지 막을 수 있다.
     if (!job_queue_.TryPush([this, session_sp, target = std::move(target), text = std::move(text)]() {
         dispatch_whisper(session_sp, target, text);
     })) {
@@ -794,8 +792,8 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
             return;
         }
 
-        // Chat hook plugins (optional): custom commands / moderation / transforms.
-        // Runs after built-in slash commands, right before broadcasting.
+        // 플러그인은 내장 slash command 다음, 실제 fan-out 직전에 탄다.
+        // 그래야 기본 명령 체계는 유지하면서도 마지막 정책 게이트로 moderation/변환을 덧댈 수 있다.
         if (maybe_handle_chat_hook_plugin(*session_sp, current_room, sender, text)) {
             return;
         }
@@ -836,8 +834,8 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
         pb.set_ts_ms(static_cast<std::uint64_t>(now64));
         std::string bytes; pb.SerializeToString(&bytes);
 
-        // 영속화(선택): Postgres에 저장해 Redis recent cache가 비어도 복구되게 한다.
-        // DB 저장은 신뢰성을 위해 필수적입니다.
+        // 영속 저장소는 recent-history 캐시가 비거나 Redis가 재시작돼도 대화 이력을 복구하는 최후 근거다.
+        // 캐시만 믿으면 빠르지만, 장애 후에는 방 히스토리가 통째로 사라질 수 있다.
         std::string persisted_room_id;
         std::uint64_t persisted_msg_id = 0;
         if (db_pool_) {
@@ -860,8 +858,8 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
             }
         }
 
-        // Redis 캐시는 recent history 스펙을 만족하기 위해 DB id와 payload를 그대로 복제한다.
-        // 최근 메시지 목록을 빠르게 조회하기 위해 Redis List를 사용합니다.
+        // Redis recent-history는 DB가 정한 메시지 ID를 그대로 따라간다.
+        // 캐시가 별도 번호 체계를 쓰면 refresh가 캐시와 DB 결과를 합칠 때 중복 제거가 어려워진다.
         if (redis_ && !persisted_room_id.empty() && persisted_msg_id != 0) {
             server::wire::v1::StateSnapshot::SnapshotMessage snapshot_msg;
             snapshot_msg.set_id(persisted_msg_id);
@@ -906,8 +904,8 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
             } catch (...) {}
         }
 
-        // Redis Pub/Sub 팬아웃(옵션)을 수행한다.
-        // 다른 서버 인스턴스에 접속한 사용자들에게도 메시지를 전달하기 위함입니다.
+        // 분산 fan-out은 로컬 fan-out 이후에 수행한다.
+        // 로컬 사용자에게는 가장 짧은 경로로 먼저 보내고, 다른 서버 확산은 별도 레이어에 맡기는 편이 지연과 장애 분석에 유리하다.
         if (redis_ && pubsub_enabled()) {
             try {
                 static std::atomic<std::uint64_t> publish_total{0};

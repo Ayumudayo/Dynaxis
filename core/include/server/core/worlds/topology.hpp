@@ -11,7 +11,7 @@
 
 namespace server::core::worlds {
 
-/** @brief desired topology 문서에 기록되는 pool replica 목표 한 건입니다. */
+/** @brief 목표 토폴로지(desired topology) 문서에 기록되는 pool replica 목표 한 건입니다. */
 struct DesiredTopologyPool {
     std::string world_id;
     std::string shard;
@@ -20,7 +20,7 @@ struct DesiredTopologyPool {
     std::vector<std::string> placement_tags;
 };
 
-/** @brief control-plane이 저장하는 revisioned desired topology 문서입니다. */
+/** @brief 제어면(control plane)이 저장하는 revisioned 목표 토폴로지(desired topology) 문서입니다. */
 struct DesiredTopologyDocument {
     std::string topology_id;
     std::uint64_t revision{0};
@@ -28,7 +28,7 @@ struct DesiredTopologyDocument {
     std::vector<DesiredTopologyPool> pools;
 };
 
-/** @brief registry heartbeat에서 수집한 instance-level topology 관측값입니다. */
+/** @brief registry heartbeat에서 수집한 인스턴스 단위 관측 토폴로지(observed topology) 값입니다. */
 struct ObservedTopologyInstance {
     std::string instance_id;
     std::string role;
@@ -37,7 +37,7 @@ struct ObservedTopologyInstance {
     bool ready{false};
 };
 
-/** @brief world/shard pool 단위로 집계한 observed topology 상태입니다. */
+/** @brief world/shard pool 단위로 집계한 관측 토폴로지(observed topology) 상태입니다. */
 struct ObservedTopologyPool {
     std::string world_id;
     std::string shard;
@@ -72,7 +72,7 @@ inline constexpr std::string_view topology_pool_status_name(TopologyPoolStatus s
     return "undeclared_observed_pool";
 }
 
-/** @brief desired pool과 observed pool을 비교한 reconciliation 결과 한 건입니다. */
+/** @brief 목표 pool과 관측 pool을 비교한 조정(reconciliation) 결과 한 건입니다. */
 struct ReconciledTopologyPool {
     std::string world_id;
     std::string shard;
@@ -82,7 +82,7 @@ struct ReconciledTopologyPool {
     TopologyPoolStatus status{TopologyPoolStatus::kAligned};
 };
 
-/** @brief 전체 desired-vs-observed reconciliation의 집계 요약입니다. */
+/** @brief 전체 desired-vs-observed 조정(reconciliation)의 집계 요약입니다. */
 struct TopologyReconciliationSummary {
     bool desired_present{false};
     std::uint32_t desired_pools{0};
@@ -95,7 +95,7 @@ struct TopologyReconciliationSummary {
     std::uint32_t no_ready_pools{0};
 };
 
-/** @brief desired topology와 observed pools 비교의 전체 결과입니다. */
+/** @brief 목표 토폴로지(desired topology)와 관측 pool 비교의 전체 결과입니다. */
 struct TopologyReconciliation {
     TopologyReconciliationSummary summary;
     std::vector<ReconciledTopologyPool> pools;
@@ -140,7 +140,7 @@ inline std::optional<TopologyActuationActionKind> parse_topology_actuation_actio
     return std::nullopt;
 }
 
-/** @brief reconciliation에서 파생된 pool별 operator action 제안 한 건입니다. */
+/** @brief 조정(reconciliation) 결과에서 파생된 pool별 operator action 제안 한 건입니다. */
 struct TopologyActuationAction {
     std::string world_id;
     std::string shard;
@@ -153,7 +153,7 @@ struct TopologyActuationAction {
     bool actionable{false};
 };
 
-/** @brief read-only actuation plan에 포함된 action 종류별 집계입니다. */
+/** @brief 읽기 전용 실행 계획(actuation plan)에 포함된 action 종류별 집계입니다. */
 struct TopologyActuationPlanSummary {
     bool desired_present{false};
     std::uint32_t actions_total{0};
@@ -164,7 +164,7 @@ struct TopologyActuationPlanSummary {
     std::uint32_t observe_only_actions{0};
 };
 
-/** @brief desired/observed mismatch에서 계산한 read-only actuation plan입니다. */
+/** @brief desired/observed mismatch에서 계산한 읽기 전용 실행 계획(actuation plan)입니다. */
 struct TopologyActuationPlan {
     TopologyActuationPlanSummary summary;
     std::vector<TopologyActuationAction> actions;
@@ -178,7 +178,7 @@ struct TopologyActuationRequestAction {
     std::int32_t replica_delta{0};
 };
 
-/** @brief operator-approved topology actuation request 문서입니다. */
+/** @brief operator가 승인한 topology actuation request 문서입니다. */
 struct TopologyActuationRequestDocument {
     std::string request_id;
     std::uint64_t revision{0};
@@ -206,7 +206,7 @@ inline constexpr std::string_view topology_actuation_request_action_state_name(
     return "superseded";
 }
 
-/** @brief request action 한 건이 현재 plan에서 pending/satisfied/superseded인지 나타냅니다. */
+/** @brief request action 한 건이 현재 plan에서 pending/satisfied/superseded 중 무엇인지 나타냅니다. */
 struct TopologyActuationRequestActionStatus {
     std::string world_id;
     std::string shard;
@@ -218,7 +218,7 @@ struct TopologyActuationRequestActionStatus {
     std::int32_t current_replica_delta{0};
 };
 
-/** @brief actuation request가 현재 topology 기준으로 얼마나 살아있는지 집계합니다. */
+/** @brief actuation request가 현재 topology 기준으로 얼마나 아직 유효한지 집계합니다. */
 struct TopologyActuationRequestStatusSummary {
     bool request_present{false};
     bool desired_present{false};
@@ -231,7 +231,7 @@ struct TopologyActuationRequestStatusSummary {
     std::uint32_t superseded_actions{0};
 };
 
-/** @brief stored request와 current topology plan의 비교 결과입니다. */
+/** @brief 저장된 request와 현재 topology plan을 비교한 결과입니다. */
 struct TopologyActuationRequestStatus {
     TopologyActuationRequestStatusSummary summary;
     std::vector<TopologyActuationRequestActionStatus> actions;
@@ -278,7 +278,7 @@ inline std::optional<TopologyActuationExecutionActionState> parse_topology_actua
     return std::nullopt;
 }
 
-/** @brief execution에서 baseline observation과 action state를 함께 저장하는 항목입니다. */
+/** @brief execution에서 기준선 observation과 action 상태를 함께 저장하는 항목입니다. */
 struct TopologyActuationExecutionItem {
     TopologyActuationExecutionAction action;
     std::uint32_t observed_instances_before{0};
@@ -320,7 +320,7 @@ inline constexpr std::string_view topology_actuation_execution_status_state_name
     return "stale";
 }
 
-/** @brief request action 한 건에 대한 current execution 상태 해석 결과입니다. */
+/** @brief request action 한 건에 대한 현재 execution 상태 해석 결과입니다. */
 struct TopologyActuationExecutionActionStatus {
     std::string world_id;
     std::string shard;
@@ -331,7 +331,7 @@ struct TopologyActuationExecutionActionStatus {
     std::optional<TopologyActuationExecutionActionState> execution_state;
 };
 
-/** @brief execution 문서가 current request와 얼마나 일치하는지 집계합니다. */
+/** @brief execution 문서가 현재 request와 얼마나 일치하는지 집계합니다. */
 struct TopologyActuationExecutionStatusSummary {
     bool request_present{false};
     bool execution_present{false};
@@ -395,7 +395,7 @@ struct TopologyActuationRealizationActionStatus {
     std::uint32_t current_ready_instances{0};
 };
 
-/** @brief execution baseline과 current observation 비교 결과를 집계합니다. */
+/** @brief execution 기준선과 현재 observation 비교 결과를 집계합니다. */
 struct TopologyActuationRealizationStatusSummary {
     bool request_present{false};
     bool execution_present{false};
@@ -473,7 +473,7 @@ struct TopologyActuationAdapterStatusAction {
     std::optional<TopologyActuationRealizationState> realization_state;
 };
 
-/** @brief adapter-facing lease 상태를 action 종류별로 집계한 요약입니다. */
+/** @brief adapter 관점 lease 상태를 action 종류별로 집계한 요약입니다. */
 struct TopologyActuationAdapterStatusSummary {
     bool execution_present{false};
     bool lease_present{false};
@@ -495,7 +495,7 @@ struct TopologyActuationAdapterStatus {
     std::vector<TopologyActuationAdapterStatusAction> actions;
 };
 
-/** @brief live runtime instance를 특정 world/shard pool로 retarget하는 assignment 한 건입니다. */
+/** @brief live runtime instance를 특정 world/shard pool로 다시 배치하는 assignment 한 건입니다. */
 struct TopologyActuationRuntimeAssignmentItem {
     std::string instance_id;
     std::string world_id;

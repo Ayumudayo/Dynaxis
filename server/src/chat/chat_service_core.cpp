@@ -41,9 +41,9 @@ namespace corelog = server::core::log;
 namespace services = server::core::util::services;
 
 /**
- * @brief ChatService 코어 상태/설정/플러그인 초기화 구현입니다.
+ * @brief ChatService 코어 상태, 설정, 플러그인 초기화 구현입니다.
  *
- * DB/Redis/Write-behind/Presence/History 설정을 한곳에서 해석해,
+ * DB, Redis, write-behind, 프레즌스, 히스토리 설정을 한곳에서 해석해,
  * 핸들러 로직이 환경별 분기 없이 동일 인터페이스를 사용하도록 만듭니다.
  */
 namespace server::app::chat {
@@ -152,14 +152,16 @@ std::optional<std::string> extract_world_tag(std::string_view value) {
 
 } // namespace
 
-// ChatService 생성자: 주요 의존성을 주입받고 환경 변수로부터 설정을 로드합니다.
+// 생성자에서 환경별 설정과 선택 의존성을 모두 정리해 두면,
+// 이후 핸들러는 "무엇이 켜져 있는가"를 매번 다시 해석하지 않고 공용 상태만 보면 된다.
 ChatService::ChatService(boost::asio::io_context& io,
                          server::core::JobQueue& job_queue,
     std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool,
     std::shared_ptr<server::core::storage::redis::IRedisClient> redis)
     : io_(&io), job_queue_(job_queue), db_pool_(std::move(db_pool)), redis_(std::move(redis)) {
 
-    // 의존성이 주입되지 않은 경우 ServiceRegistry에서 가져옵니다.
+    // 명시 주입이 없으면 레지스트리 폴백(fallback)을 사용한다.
+    // 부트스트랩은 간단해지지만, 어떤 의존성이 빠졌는지 추적 가능한 seam은 유지한다.
     if (!db_pool_) {
         db_pool_ = services::get<server::storage::IRepositoryConnectionPool>();
     }
@@ -178,14 +180,14 @@ ChatService::ChatService(boost::asio::io_context& io,
                       + " registered=" + std::to_string(bindings.registered));
     }
 
-    // 게이트웨이 ID 설정 (분산 환경 식별용)
+    // 게이트웨이 ID는 분산 전파(fan-out) 루프를 식별하는 최소 표식이다.
+    // 이 값이 없으면 자기 자신이 보낸 메시지를 다시 받은 상황을 추적하기 어려워진다.
     if (const char* gw = std::getenv("GATEWAY_ID"); gw && *gw) {
         gateway_id_ = gw;
     }
 
-    // Write-behind 설정 로드
-    // WRITE_BEHIND_ENABLED=1 이면 채팅 이벤트를 Redis Streams에 먼저 기록하고,
-    // 별도의 워커가 이를 DB에 반영합니다.
+    // write-behind는 요청 지연시간과 영속화 내구성을 분리하는 선택지다.
+    // 서버 요청 경로가 DB 지연에 직접 매달리지 않게 하되, 스트림 누락 여부는 별도 worker가 감시한다.
     if (const char* flag = std::getenv("WRITE_BEHIND_ENABLED"); flag && *flag && std::string(flag) != "0") {
         write_behind_.enabled = true;
     }
@@ -205,7 +207,8 @@ ChatService::ChatService(boost::asio::io_context& io,
         }
     }
 
-    // Presence(접속 현황) TTL 설정
+    // 프레즌스 TTL은 "살아 있음"을 추정하는 운영 규칙이다.
+    // 너무 짧으면 정상 세션도 쉽게 offline으로 보이고, 너무 길면 끊긴 사용자가 오래 남는다.
     if (const char* ttl = std::getenv("PRESENCE_TTL_SEC"); ttl && *ttl) {
         unsigned long t = std::strtoul(ttl, nullptr, 10);
         if (t > 0 && t < 3600) {
@@ -748,10 +751,8 @@ std::string ChatService::get_or_create_session_uuid(Session& s) {
     return id;
 }
 
-// Write-behind 이벤트를 Redis Stream에 발행합니다.
-// 이 이벤트들은 별도의 워커 프로세스에 의해 DB에 비동기적으로 저장됩니다.
-// 즉, 채팅 서버는 DB 쓰기 지연을 기다리지 않고 즉시 응답할 수 있어 반응성이 향상됩니다.
-// (CQRS 패턴의 변형으로 볼 수 있습니다)
+// write-behind 이벤트는 "지금 응답해야 하는 요청"과 "나중에 재시도 가능한 영속화"를 분리하는 seam이다.
+// 별도 worker가 스트림을 읽어 적재하므로, 핫패스 응답을 느린 DB와 직접 묶지 않게 된다.
 void ChatService::emit_write_behind_event(const std::string& type,
                                            const std::string& session_id,
                                            const std::optional<std::string>& user_id,
@@ -789,9 +790,8 @@ void ChatService::emit_write_behind_event(const std::string& type,
             fields.emplace_back(std::move(kv));
         }
     }
-    // XADD 명령을 사용하여 스트림에 추가합니다.
-    // PUBLISH(Pub/Sub)와 달리 스트림은 데이터가 영구적으로 저장되며(설정에 따라),
-    // 컨슈머 그룹을 통해 안정적인 처리가 가능합니다. (At-least-once Delivery)
+    // XADD는 실시간 전파용 PUBLISH와 달리 재시도 가능한 적재 경로를 만든다.
+    // 영속 저장소가 잠시 느리거나 실패해도 worker가 다시 읽을 수 있어, 채팅 경로 꼬리 지연시간(tail latency)을 안정화한다.
     if (server::core::trace::current_sampled()) {
         corelog::debug("span_start component=server span=redis_xadd");
     }
@@ -1565,17 +1565,14 @@ void ChatService::send_room_users(Session& s, const std::string& target) {
     s.async_send(game_proto::MSG_ROOM_USERS, body, 0);
 }
 
-// 방 입장 시 현재 상태(방 목록, 유저 목록, 최근 메시지)를 스냅샷으로 전송합니다.
-// 클라이언트는 이 정보를 받아 UI를 초기화합니다.
-// 1. 활성 방 목록
-// 2. 현재 방의 참여자 목록
-// 3. 최근 대화 내역 (Redis 캐시 + DB Fallback)
-// 4. 마지막으로 읽은 메시지 ID (Read Receipt)
+// refresh/snapshot은 클라이언트가 UI를 다시 기준 상태(authoritative state)로 맞추는 복구 경로다.
+// 방 목록, 참여자 목록, 최근 메시지, 읽음 위치를 분리해서 보내면 중간 실패 시 UI가 서로 다른 시점의 상태를 섞어 보게 된다.
 void ChatService::send_snapshot(Session& s, const std::string& current) {
     std::vector<std::uint8_t> body;
     server::wire::v1::StateSnapshot pb; pb.set_current_room(current);
 
-    // 1. Redis 데이터 미리 조회 (Lock 없이 수행)
+    // 분산 캐시는 먼저 조회하되, 락을 잡은 채 네트워크 저장소를 기다리지는 않는다.
+    // 그렇지 않으면 한 사용자의 refresh가 전체 방 상태 락을 오래 붙잡아 다른 요청까지 지연시킬 수 있다.
     struct RoomInfo {
         std::string name;
         std::size_t count;
@@ -1731,7 +1728,8 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
         }
     }
 
-    // 최근 메시지를 Redis에서 우선 조회하고, 부족하면 DB에서 가져옵니다 (Fallback).
+    // 최근 메시지는 Redis를 우선 쓰고 부족한 만큼만 DB로 메운다.
+    // 이렇게 해야 평소에는 빠르고, 캐시가 비었거나 일부만 있을 때도 기능은 유지된다.
     std::string rid;
     {
         std::lock_guard<std::mutex> lk(state_.mu);

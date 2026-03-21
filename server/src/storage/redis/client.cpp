@@ -16,16 +16,15 @@
 /**
  * @brief Redis 클라이언트 어댑터(redis++/in-memory fallback) 구현입니다.
  *
- * 예외를 경계에서 흡수해 서버 본체로 장애 전파를 완화하고,
- * Pub/Sub·Streams·KV 연산을 공통 인터페이스로 제공해 상위 모듈 결합도를 낮춥니다.
+ * 이 계층의 목적은 "Redis를 편하게 쓰기"보다 "Redis 장애를 앱 전체 계약으로 번지지 않게 막기"에 가깝습니다.
+ * Pub/Sub, Streams, KV 연산을 공통 인터페이스 뒤에 감추고, 예외를 경계에서 흡수해 상위 모듈이 실패를
+ * `false/nullopt` 같은 제한된 형태로 다루게 합니다.
  */
 namespace server::storage::redis {
 
 #if defined(HAVE_REDIS_PLUS_PLUS)
-// redis++ 기반 실제 Redis 클라이언트 구현
-// redis-plus-plus 라이브러리를 사용하여 Redis 서버와 통신합니다.
-// 모든 메서드는 예외를 잡아서 false나 nullopt를 반환하도록 래핑되어 있어,
-// Redis 장애가 서버 전체의 크래시로 이어지지 않도록 방어적으로 구현되었습니다.
+// redis++ 기반 실제 Redis 클라이언트 구현.
+// 모든 메서드는 예외를 잡아 false나 nullopt로 바꾸므로, Redis 장애가 곧바로 서버 전체 크래시로 번지지 않는다.
 class RedisClientImpl final : public IRedisClient {
 public:
     explicit RedisClientImpl(const std::string& uri, Options opts) {
@@ -143,14 +142,14 @@ public:
         try { redis_->publish(channel, message); return true; } catch (const std::exception& e) { server::core::log::warn(std::string("Redis PUBLISH failed: ") + e.what()); return false; } catch (...) { server::core::log::warn("Redis PUBLISH failed: unknown"); return false; }
     }
 
-    // pattern에 대해 별도 쓰레드로 consume()을 돌리며 콜백을 호출한다.
-    // Pub/Sub은 블로킹 작업이므로 별도의 스레드에서 실행해야 메인 로직을 방해하지 않습니다.
-    // 네트워크 단절 시 자동으로 재접속 및 재구독을 시도하는 복구 로직이 포함되어 있습니다.
+    // pattern에 대해 별도 스레드로 `consume()`을 돌리며 콜백을 호출한다.
+    // Pub/Sub은 블로킹 작업이므로 메인 로직과 분리해야 하고, 네트워크 단절 시에는
+    // 자동 재구독을 시도해 fanout 경로가 완전히 죽어 버리지 않게 한다.
     bool start_psubscribe(const std::string& pattern,
                           std::function<void(const std::string& channel, const std::string& message)> on_message) override {
         try {
             if (sub_running_) return true;
-            // 콜백/패턴 저장(재연결 시 재사용)
+            // 콜백/패턴을 저장해, 재연결 시 같은 구독을 다시 열 수 있게 한다.
             sub_cb_ = std::move(on_message);
             sub_pattern_ = pattern;
 
@@ -161,9 +160,10 @@ public:
             });
             subscriber_->psubscribe(sub_pattern_);
             sub_running_ = true;
-            // consume() 실패 시 짧은 backoff 후 재시도한다.
+            // `consume()` 실패 시 짧은 backoff 뒤 재시도한다.
             sub_thread_ = std::thread([this]() {
-                // 예외 시 점증 백오프(최대 1초), 필요 시 재구독
+                // 예외 시 점증 backoff(최대 1초)를 적용하고, 필요하면 재구독한다.
+                // 즉시 무한 재시도하면 네트워크 장애 순간 로그와 CPU만 과열되고 실제 복구에는 도움이 되지 않는다.
                 int backoff_ms = 10;
                 while (sub_running_) {
                     try {
@@ -215,10 +215,13 @@ public:
         } catch (...) {}
     }
 
-    // Streams 구현 (redis-plus-plus 1.3.15 기준)
+    // Streams 구현(redis-plus-plus 1.3.15 기준).
+    // 여기서 중요한 점은 "Redis 예외를 그대로 밖으로 던지지 않는다"는 것이다.
+    // write-behind나 discovery 보조 기능의 일시 장애가 서버 전체 크래시로 번지지 않게 방어한다.
     bool xgroup_create_mkstream(const std::string& key, const std::string& group) override {
         try {
-            // '$'로 그룹 생성하며 mkstream=true. 이미 존재 시 ReplyError(BUSYGROUP) 무시.
+            // '$'로 그룹 생성하고 `mkstream=true`를 사용한다.
+            // 그룹이 이미 있으면 `BUSYGROUP`류 오류가 날 수 있으므로 idempotent 성공으로 취급한다.
             redis_->xgroup_create(key, group, "$", true);
             return true;
         } catch (const sw::redis::ReplyError& e) {
@@ -260,7 +263,8 @@ public:
                     std::size_t count,
                     std::vector<StreamEntry>& out) override {
         try {
-            // 결과 컨테이너: [[ key, [ [id, [field, val]...], ... ] ]]
+            // 결과 컨테이너 모양:
+            // [[ key, [ [id, [field, val]...], ... ] ]]
             using EntryFields = std::vector<std::pair<std::string, std::string>>;
             using IdAndFields = std::vector<std::pair<std::string, EntryFields>>;
             using StreamArr = std::vector<std::pair<std::string, IdAndFields>>;
@@ -277,7 +281,7 @@ public:
             out.clear();
             if (arr.empty()) return true; // 데이터 없음
 
-            // 단일 key만 읽으므로 첫 요소만 사용
+            // 현재 구현은 단일 key만 읽으므로 첫 요소만 사용한다.
             const auto& items = arr.front().second;
             out.reserve(items.size());
             for (const auto& id_fields : items) {
@@ -537,7 +541,7 @@ public:
                 }
             }
 
-            // Redis 7+ may return deleted IDs as a 3rd element.
+            // Redis 7+는 삭제된 ID 목록을 세 번째 요소로 추가 반환할 수 있다.
             if (reply->elements >= 3) {
                 auto* deleted_reply = reply->element[2];
                 if (deleted_reply && sw::redis::reply::is_array(*deleted_reply) && deleted_reply->element) {
@@ -572,10 +576,10 @@ private:
 };
 #endif
 
-// 항상 사용 가능한 안전한 폴백 Stub 구현
+// 항상 사용 가능한 안전한 폴백 Stub 구현.
 // redis++가 없는 빌드에서는 no-op Stub을 사용한다.
-// 이를 통해 Redis 라이브러리가 없는 환경에서도 컴파일 및 실행이 가능하며(기능은 동작 안 함),
-// 개발 초기 단계나 로컬 테스트 시 유용합니다.
+// 이렇게 두는 이유는 "기능은 제한되더라도 바이너리 전체가 아예 빌드되지 않는 상황"을 피하기 위해서다.
+// 단, 성공처럼 보여도 실제 Redis 동작은 하지 않으므로 운영 경로 대체재로 오해하면 안 된다.
 class RedisClientStub final : public IRedisClient {
 public:
     explicit RedisClientStub(std::string uri, Options opts)
@@ -631,7 +635,9 @@ private:
     Options opts_;
 };
 
-// redis++이 가능하면 실제 구현을, 아니면 Stub을 반환한다.
+// redis++가 가능하면 실제 구현을, 아니면 Stub을 반환한다.
+// 실제 구현 생성에 실패해도 즉시 fallback하는 이유는, 개발/시험 환경에서 Redis 의존성 부재가
+// 프로세스 전체 기동 실패로 번지지 않게 하기 위해서다. 다만 운영에서는 경고 로그로 즉시 드러나야 한다.
 std::shared_ptr<IRedisClient> make_redis_client_impl(const std::string& uri, const Options& opts) {
 #if defined(HAVE_REDIS_PLUS_PLUS)
     try {

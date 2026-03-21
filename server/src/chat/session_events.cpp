@@ -20,7 +20,7 @@ namespace server::app::chat {
 
 void ChatService::on_session_close(std::shared_ptr<Session> s) {
     // 세션 종료 시에는 Redis/DB 정리와 방 브로드캐스트가 필요하므로 worker 큐에서 처리한다.
-    // TCP 연결이 끊어지면 즉시 호출되며, 여기서 모든 정리 작업을 수행해야 좀비 세션이 남지 않습니다.
+    // TCP 연결이 끊긴 직후 모든 정리를 끝내야, 좀비 세션과 stale presence가 오래 남지 않는다.
     job_queue_.Push([this, s]() {
         const std::string session_id_str = get_or_create_session_uuid(*s);
         std::string user_uuid;
@@ -152,13 +152,13 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
                 // 화면 표시용 닉네임 목록에서 제거
                 redis_->srem("room:users:" + room_left, name);
                 
-                // 연결 끊김 전에 로비로 이동한다고 간주 (다른 사용자들에게 로비 표시)
-                // 실제로는 곧 완전히 끊어지지만, 정리 과정에서 일시적으로 lobby에 추가
+                // 연결 끊김 정리 중에는 잠깐 로비로 이동한 것으로 간주한다.
+                // 실제로는 곧 완전히 끊기지만, 정리 중 다른 사용자 화면이 급격히 흔들리지 않게 하는 타협이다.
                 if (room_left != "lobby") {
                     redis_->sadd("room:users:lobby", name);
                 }
-                
-                // 방이 비었는지 확인하고 활성 목록에서 제거 (Room List Sync)
+
+                // 방이 비었는지 확인하고 활성 목록에서 제거한다.
                 if (room_left != "lobby") {
                     std::size_t remaining = 1;
                     if (redis_->scard("room:users:" + room_left, remaining) && remaining == 0) {
@@ -179,7 +179,7 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
             std::vector<std::pair<std::string, std::string>> wb_fields;
             wb_fields.emplace_back("room", room_left);
             wb_fields.emplace_back("user_name", name);
-            // session_close 이벤트를 stream에 남겨 재처리/감사에 활용한다.
+            // `session_close` 이벤트를 stream에 남겨 재처리와 감사에 활용한다.
             emit_write_behind_event("session_close", session_id_str, uid_opt, room_id_opt, std::move(wb_fields));
             
             // 해당 방의 다른 유저들에게 갱신 알림
