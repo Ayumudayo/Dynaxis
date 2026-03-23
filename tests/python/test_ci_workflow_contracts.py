@@ -80,12 +80,12 @@ class CiWorkflowContractsTests(unittest.TestCase):
                 self.assertIn(".github/workflows/**", paths)
 
         self.assertEqual(
-            "Core API Governance and Consumer Tests (Windows)",
+            "Core API Governance and Consumer Validation (Windows)",
             self._job(workflow, "core-api-consumer-windows")["name"],
         )
         linux_job = self._job(workflow, "core-api-consumer-linux")
         self.assertEqual(
-            "Core API Governance and Consumer Tests (Linux)",
+            "Core API Governance and Consumer Validation (Linux)",
             linux_job["name"],
         )
         run_scripts = "\n".join(
@@ -182,7 +182,7 @@ class CiWorkflowContractsTests(unittest.TestCase):
         release = self._load_workflow("factory-package-publish.yml")
         self.assertEqual("Factory Package Release", release["name"])
         self.assertEqual(
-            "Factory Package Bundle Build (Windows)",
+            "Factory Package Build and Validation (Windows)",
             self._job(release, "publish-factory-packages-windows")["name"],
         )
 

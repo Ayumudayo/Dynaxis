@@ -217,7 +217,7 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
   - Windows build/test + opcode/doc checks를 묶는 기본 게이트다.
 - `Core API Checks` (`.github/workflows/ci-api-governance.yml`)
   - `core/**`, core API docs, contract fixture를 위한 path-gated validation lane이다.
-  - jobs: `Core API Governance and Consumer Tests (Windows)`, `Core API Governance and Consumer Tests (Linux)`
+  - jobs: `Core API Governance and Consumer Validation (Windows)`, `Core API Governance and Consumer Validation (Linux)`
 - `Stack Integration` (`.github/workflows/ci-stack.yml`)
   - stack/runtime/integration 표면을 위한 path-gated integration lane이다.
   - jobs: `Stack Runtime Integration (Linux)`, `Admin Read-Only Check (Linux)`, `Write-Behind Integration Check (Linux)`
@@ -256,6 +256,7 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
 
 - `Factory Package Release` (`.github/workflows/factory-package-publish.yml`)
   - workflow-dispatch-only release lane이며 PR required check나 merge-queue lane이 아니다.
+  - job: `Factory Package Build and Validation (Windows)`
   - Windows factory package bundle을 빌드하고 `CoreInstalledPackageConsumer|FactoryPgInstalledPackageConsumer|FactoryRedisInstalledPackageConsumer` 검증 후 artifact를 업로드한다.
   - release artifact 이름은 `dynaxis-factory-packages-windows-release`다.
 
