@@ -200,10 +200,10 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
 
 - `main` is PR-only and protected; direct pushes are not the intended path.
 - branch protection applies to admins and requires conversation resolution before merge.
-- stage 1 기준 required status check 문서는 계속 `windows-fast-tests`로 유지한다. stage 2에서 GitHub branch protection을 `Windows Build, Docs, and Tests`로 옮기는 후속 조정이 끝나기 전까지는 GitHub 설정과 문서를 함께 바꾸지 않는다.
+- `main` branch protection의 required status check는 `Windows Build, Docs, and Tests`다.
 - merge queue에서는 Baseline Checks와 path-gated integration lane만 계속 돈다. 즉 `Baseline Checks`, `Stack Integration`, `Extensibility Integration`은 merge queue 대상이고, `Core API Checks`, `Reliability Checks`, `Cache Prep`, `Conan Cache Strategy Probe`, `Compiler Cache Timing Probe`, `Factory Package Release`는 merge queue 대상이 아니다.
 - path-gated lane은 여전히 non-required로 두어, 매칭되지 않는 변경이 dispatch되지 않았다는 이유로 PR이 불필요하게 대기하지 않게 한다.
-- branch protection 이름 정리와 merge-queue lane 설정은 이번 패스에서 저장소 파일로 자동화하지 않는다. GitHub 설정에서 수동 후속 작업으로 맞춘다.
+- merge-queue lane 설정은 저장소 파일 밖의 GitHub 설정에서 관리한다.
 - PR이 해당 표면을 건드리면, 리뷰어는 매칭되는 path-gated lane이 통과할 때까지 머지하지 않는 현재 운영 규칙을 유지한다.
 
 ## CI 검증 레인
@@ -212,8 +212,7 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
 
 - `Baseline Checks` (`.github/workflows/ci.yml`)
   - 항상 도는 기본 검증 레인이다.
-  - stage 1의 required status check 이름은 계속 `windows-fast-tests`로 기록한다.
-  - stage 2에서 branch protection을 `Windows Build, Docs, and Tests`로 옮길 때 문서와 GitHub 설정을 함께 바꾼다.
+  - required status check 이름은 `Windows Build, Docs, and Tests`다.
   - Windows build/test + opcode/doc checks를 묶는 기본 게이트다.
 - `Core API Checks` (`.github/workflows/ci-api-governance.yml`)
   - `core/**`, core API docs, contract fixture를 위한 path-gated validation lane이다.

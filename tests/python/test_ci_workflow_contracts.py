@@ -55,15 +55,15 @@ class CiWorkflowContractsTests(unittest.TestCase):
                 workflow = self._load_workflow(filename)
                 self.assertEqual(expected_name, workflow["name"])
 
-    def test_baseline_checks_keep_stage1_required_context_and_add_markdown_validation(self):
+    def test_baseline_checks_expose_stage2_required_context_and_add_markdown_validation(self):
         workflow = self._load_workflow("ci.yml")
         job = self._job(workflow, "windows-fast-tests")
 
         self.assertEqual("Baseline Checks", workflow["name"])
         self.assertIn("merge_group", self._on(workflow))
         self.assertEqual(
-            "windows-fast-tests",
-            job.get("name", "windows-fast-tests"),
+            "Windows Build, Docs, and Tests",
+            job["name"],
         )
         self.assertIn("Validate Markdown Links", self._step_names(workflow, "windows-fast-tests"))
 
@@ -193,7 +193,7 @@ class CiWorkflowContractsTests(unittest.TestCase):
         self.assertIn("## Operational Support Lanes", text)
         self.assertIn("## Probe Lanes", text)
         self.assertIn("## Release Lanes", text)
-        self.assertIn("`windows-fast-tests`", text)
+        self.assertIn("`Windows Build, Docs, and Tests`", text)
         self.assertIn("merge queue", text)
         self.assertIn("`Stack Integration`", text)
         self.assertIn("`Extensibility Integration`", text)
@@ -202,11 +202,7 @@ class CiWorkflowContractsTests(unittest.TestCase):
         self.assertIn("`Write-Behind Integration Check (Linux)`", text)
         self.assertIn("`Compiler Cache Timing Probe`", text)
         self.assertNotIn("`Core API Checks`는 merge queue 대상", text)
-        lowered = text.lower()
-        self.assertTrue(
-            "manual follow-up" in lowered or "수동 후속" in text,
-            "docs/tests.md should mention that settings changes are a manual follow-up",
-        )
+        self.assertNotIn("`windows-fast-tests`", text)
 
 
 if __name__ == "__main__":
