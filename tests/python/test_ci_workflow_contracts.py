@@ -112,6 +112,12 @@ class CiWorkflowContractsTests(unittest.TestCase):
         job_names = self._job_names(workflow)
         self.assertIn("Admin Read-Only Check (Linux)", job_names)
         self.assertIn("Write-Behind Integration Check (Linux)", job_names)
+        admin_job_steps = self._job(workflow, "admin-read-only-check-linux")["steps"]
+        admin_build_step = next(
+            step for step in admin_job_steps if step.get("name") == "Build Admin Runtime Image"
+        )
+        self.assertIn("docker build", admin_build_step["run"])
+        self.assertIn("--target admin-runtime", admin_build_step["run"])
 
         smoke_script = self.repo_root / "scripts" / "smoke_wb.sh"
         self.assertTrue(smoke_script.is_file())

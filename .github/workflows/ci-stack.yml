@@ -297,16 +297,12 @@ jobs:
           docker image inspect dynaxis-base:latest > /dev/null
 
       - name: Build Admin Runtime Image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile
-          target: admin-runtime
-          tags: dynaxis-admin:local
-          load: true
-          cache-from: type=gha,scope=dynaxis-admin-${{ runner.os }}
-          cache-to: type=gha,mode=max,scope=dynaxis-admin-${{ runner.os }}
-          provenance: false
+        run: |
+          docker build \
+            --file Dockerfile \
+            --target admin-runtime \
+            --tag dynaxis-admin:local \
+            .
 
       - name: Verify Local Admin Image
         run: |
