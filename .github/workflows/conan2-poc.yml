@@ -1,4 +1,4 @@
-name: Conan2 PoC
+name: Conan Cache Strategy Probe
 
 on:
   workflow_dispatch:
@@ -28,6 +28,7 @@ env:
 
 jobs:
   windows-conan2-poc:
+    name: Conan Cache Strategy Probe (Windows)
     runs-on: windows-latest
     timeout-minutes: 60
     env:

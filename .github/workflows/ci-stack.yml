@@ -1,10 +1,11 @@
-name: CI Stack
+name: Stack Integration
 
 on:
   push:
     branches:
       - main
     paths:
+      - ".github/workflows/**"
       - "CMakeLists.txt"
       - "CMakePresets.json"
       - "Dockerfile"
@@ -17,13 +18,17 @@ on:
       - "docker/**"
       - "scripts/deploy_docker.ps1"
       - "scripts/docker_entrypoint.sh"
+      - "scripts/run_linux_installed_consumer.ps1"
+      - "scripts/smoke_wb.sh"
       - "tests/python/**"
+      - "tests/python/verify_admin_read_only.py"
       - "tests/CMakeLists.txt"
       - "tools/admin_app/**"
       - "tools/migrations/**"
       - "tools/wb_worker/**"
   pull_request:
     paths:
+      - ".github/workflows/**"
       - "CMakeLists.txt"
       - "CMakePresets.json"
       - "Dockerfile"
@@ -36,7 +41,10 @@ on:
       - "docker/**"
       - "scripts/deploy_docker.ps1"
       - "scripts/docker_entrypoint.sh"
+      - "scripts/run_linux_installed_consumer.ps1"
+      - "scripts/smoke_wb.sh"
       - "tests/python/**"
+      - "tests/python/verify_admin_read_only.py"
       - "tests/CMakeLists.txt"
       - "tools/admin_app/**"
       - "tools/migrations/**"
@@ -54,6 +62,7 @@ concurrency:
 
 jobs:
   linux-docker-stack:
+    name: Stack Runtime Integration (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -241,6 +250,116 @@ jobs:
       - name: Smoke Test (FPS Phase 2 Acceptance)
         run: |
           python3 tests/python/verify_fps_rudp_transport_matrix.py --scenario phase2-acceptance --no-build
+
+      - name: Dump Stack Logs (On Failure)
+        if: failure()
+        run: |
+          docker compose --project-name dynaxis-stack --project-directory docker/stack -f docker/stack/docker-compose.yml ps
+          docker compose --project-name dynaxis-stack --project-directory docker/stack -f docker/stack/docker-compose.yml logs --no-color --tail 200
+
+      - name: Stop Stack
+        if: always()
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/deploy_docker.ps1 -Action down
+
+  admin-read-only-check-linux:
+    name: Admin Read-Only Check (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker Info
+        run: |
+          docker version
+          docker compose version
+
+      - name: Build Base Image (dynaxis-base) with cache
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.base
+          tags: dynaxis-base:latest
+          load: true
+          cache-from: type=gha,scope=dynaxis-base-${{ runner.os }}
+          cache-to: type=gha,mode=max,scope=dynaxis-base-${{ runner.os }}
+          provenance: false
+
+      - name: Verify Local Base Image
+        run: |
+          docker image inspect dynaxis-base:latest > /dev/null
+
+      - name: Build Admin Runtime Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          target: admin-runtime
+          tags: dynaxis-admin:local
+          load: true
+          cache-from: type=gha,scope=dynaxis-admin-${{ runner.os }}
+          cache-to: type=gha,mode=max,scope=dynaxis-admin-${{ runner.os }}
+          provenance: false
+
+      - name: Verify Local Admin Image
+        run: |
+          docker image inspect dynaxis-admin:local > /dev/null
+
+      - name: Run Admin Read-Only Check
+        run: |
+          python3 tests/python/verify_admin_read_only.py
+
+  write-behind-integration-check-linux:
+    name: Write-Behind Integration Check (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker Info
+        run: |
+          docker version
+          docker compose version
+
+      - name: Build Base Image (dynaxis-base) with cache
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.base
+          tags: dynaxis-base:latest
+          load: true
+          cache-from: type=gha,scope=dynaxis-base-${{ runner.os }}
+          cache-to: type=gha,mode=max,scope=dynaxis-base-${{ runner.os }}
+          provenance: false
+
+      - name: Verify Local Base Image
+        run: |
+          docker image inspect dynaxis-base:latest > /dev/null
+
+      - name: Start Stack
+        shell: pwsh
+        env:
+          DOCKER_BUILDKIT: "0"
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/deploy_docker.ps1 -Action up -Detached -Build
+
+      - name: Run Write-Behind Integration Check
+        shell: bash
+        run: |
+          bash scripts/smoke_wb.sh
 
       - name: Dump Stack Logs (On Failure)
         if: failure()

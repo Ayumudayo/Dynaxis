@@ -200,43 +200,66 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
 
 - `main` is PR-only and protected; direct pushes are not the intended path.
 - branch protection applies to admins and requires conversation resolution before merge.
-- the only required status check is `windows-fast-tests` from `.github/workflows/ci.yml`.
-- path-gated workflows stay non-required on purpose so unrelated PRs do not stall on checks that never dispatch.
-- when a PR touches the matching surface, reviewers are expected to wait for the relevant path-gated workflow to pass before merging.
+- stage 1 기준 required status check 문서는 계속 `windows-fast-tests`로 유지한다. stage 2에서 GitHub branch protection을 `Windows Build, Docs, and Tests`로 옮기는 후속 조정이 끝나기 전까지는 GitHub 설정과 문서를 함께 바꾸지 않는다.
+- merge queue에서는 Baseline Checks와 path-gated integration lane만 계속 돈다. 즉 `Baseline Checks`, `Stack Integration`, `Extensibility Integration`은 merge queue 대상이고, `Core API Checks`, `Reliability Checks`, `Cache Prep`, `Conan Cache Strategy Probe`, `Compiler Cache Timing Probe`, `Factory Package Release`는 merge queue 대상이 아니다.
+- path-gated lane은 여전히 non-required로 두어, 매칭되지 않는 변경이 dispatch되지 않았다는 이유로 PR이 불필요하게 대기하지 않게 한다.
+- branch protection 이름 정리와 merge-queue lane 설정은 이번 패스에서 저장소 파일로 자동화하지 않는다. GitHub 설정에서 수동 후속 작업으로 맞춘다.
+- PR이 해당 표면을 건드리면, 리뷰어는 매칭되는 path-gated lane이 통과할 때까지 머지하지 않는 현재 운영 규칙을 유지한다.
 
-## CI 검증 표면
+## CI 검증 레인
 
-- `.github/workflows/ci.yml`
-  - always-on required gate
-  - `windows-fast-tests`: Windows build/test + opcode/doc checks
-- `.github/workflows/ci-api-governance.yml`
-  - path-gated optional gate for `core/**`, core API docs, and contract fixtures
-  - jobs: `core-api-consumer-windows`, `core-api-consumer-linux`
-- `.github/workflows/ci-stack.yml`
-  - path-gated optional gate for stack/runtime/integration surfaces
-  - job: `linux-docker-stack`
-  - includes `verify_mmorpg_runtime_matrix.py --scenario phase3-acceptance --no-build`, `verify_continuity_recovery_matrix.py --scenario phase5-recovery-baseline --no-build`, and `verify_fps_rudp_transport_matrix.py --scenario phase2-acceptance --no-build`
-- `.github/workflows/ci-extensibility.yml`
-  - path-gated optional gate for plugin/Lua/extensibility surfaces
-  - job: `linux-extensibility`
-- `.github/workflows/ci-hardening.yml`
-  - scheduled/manual hardening gate; not a PR-required check
-  - sanitizer/fuzz/perf hardening paths
-  - collects `phase5-budget-evidence` artifacts through `capture_phase5_evidence.py --include-budget-hardening --execution-mode hostnet-container`
-  - does not run OS-level `tc netem` rehearsal; that path stays manual/ops-only because it mutates live container qdisc state and is intentionally kept outside the accepted baseline gate
-- `.github/workflows/ci-prewarm.yml`
-  - scheduled/manual cache prewarm; not a merge gate
-  - uploads telemetry artifacts for Windows Conan cache restore/save and Linux base-image prewarm elapsed time
-  - current additional telemetry artifact set: `build/ci-prewarm-gh-run-23247349242/windows-conan-prewarm.json`, `build/ci-prewarm-gh-run-23247349242/linux-base-image-prewarm.json`
-- `.github/workflows/windows-sccache-poc.yml`
-  - workflow-dispatch-only compile-cache comparison path; not a merge gate
-  - records same-run `without_sccache` vs `with_sccache` pass1/pass2 timings plus sccache stats
-  - uploads `build/windows-sccache-poc/windows-sccache-poc.json` and raw `sccache-pass*.stats.txt` artifacts
-  - current first captured comparison artifact: `build/windows-sccache-poc-gh-run-23245866965/windows-sccache-poc-23245866965/windows-sccache-poc.json`
-- `.github/workflows/conan2-poc.yml`
-  - workflow-dispatch-only Conan current-cache strategy probe; not a merge gate
-  - uploads `build/conan-strategy-poc/windows-conan-current-cache.json`
-  - current framed baseline artifact: `build/conan-strategy-poc-gh-run-23246958472/conan-strategy-poc-windows-23246958472/windows-conan-current-cache.json`
+### Validation Lanes
+
+- `Baseline Checks` (`.github/workflows/ci.yml`)
+  - 항상 도는 기본 검증 레인이다.
+  - stage 1의 required status check 이름은 계속 `windows-fast-tests`로 기록한다.
+  - stage 2에서 branch protection을 `Windows Build, Docs, and Tests`로 옮길 때 문서와 GitHub 설정을 함께 바꾼다.
+  - Windows build/test + opcode/doc checks를 묶는 기본 게이트다.
+- `Core API Checks` (`.github/workflows/ci-api-governance.yml`)
+  - `core/**`, core API docs, contract fixture를 위한 path-gated validation lane이다.
+  - jobs: `Core API Governance and Consumer Tests (Windows)`, `Core API Governance and Consumer Tests (Linux)`
+- `Stack Integration` (`.github/workflows/ci-stack.yml`)
+  - stack/runtime/integration 표면을 위한 path-gated integration lane이다.
+  - jobs: `Stack Runtime Integration (Linux)`, `Admin Read-Only Check (Linux)`, `Write-Behind Integration Check (Linux)`
+  - `Stack Runtime Integration (Linux)`은 `verify_mmorpg_runtime_matrix.py --scenario phase3-acceptance --no-build`, `verify_continuity_recovery_matrix.py --scenario phase5-recovery-baseline --no-build`, `verify_fps_rudp_transport_matrix.py --scenario phase2-acceptance --no-build`를 포함한다.
+  - `Admin Read-Only Check (Linux)`은 `verify_admin_read_only.py`로 admin read-only 제약을 검증한다.
+  - `Write-Behind Integration Check (Linux)`은 `scripts/smoke_wb.sh`로 Redis Streams -> Postgres write-behind 적재 경로를 검증한다.
+- `Extensibility Integration` (`.github/workflows/ci-extensibility.yml`)
+  - plugin/Lua/extensibility 표면을 위한 path-gated integration lane이다.
+  - job: `Plugin and Lua Runtime Integration (Linux)`
+- `Reliability Checks` (`.github/workflows/ci-hardening.yml`)
+  - scheduled/manual hardening lane이며 PR required check나 merge-queue lane으로 취급하지 않는다.
+  - sanitizer/fuzz/perf hardening 경로를 돈다.
+  - `capture_phase5_evidence.py --include-budget-hardening --execution-mode hostnet-container`를 통해 `phase5-budget-evidence` artifact를 수집한다.
+  - OS-level `tc netem` rehearsal은 live container qdisc state를 바꾸므로 계속 manual ops 전용으로 남기고 baseline gate에는 넣지 않는다.
+
+### Operational Support Lanes
+
+- `Cache Prep` (`.github/workflows/ci-prewarm.yml`)
+  - scheduled/manual cache prewarm lane이며 merge gate가 아니다.
+  - Windows Conan cache restore/save와 Linux base-image prewarm elapsed time telemetry artifact를 업로드한다.
+  - 현재 추가 telemetry artifact 예시는 `build/ci-prewarm-gh-run-23247349242/windows-conan-prewarm.json`, `build/ci-prewarm-gh-run-23247349242/linux-base-image-prewarm.json`이다.
+
+### Probe Lanes
+
+- `Conan Cache Strategy Probe` (`.github/workflows/conan2-poc.yml`)
+  - workflow-dispatch-only Conan cache strategy probe이며 merge gate가 아니다.
+  - `build/conan-strategy-poc/windows-conan-current-cache.json`을 업로드한다.
+  - 현재 baseline artifact 예시는 `build/conan-strategy-poc-gh-run-23246958472/conan-strategy-poc-windows-23246958472/windows-conan-current-cache.json`이다.
+- `Compiler Cache Timing Probe` (`.github/workflows/windows-sccache-poc.yml`)
+  - workflow-dispatch-only compile cache timing probe이며 merge gate가 아니다.
+  - 같은 run에서 `without_sccache`와 `with_sccache`의 pass1/pass2 timing, sccache stats를 비교한다.
+  - `build/windows-sccache-poc/windows-sccache-poc.json`과 raw `sccache-pass*.stats.txt` artifact를 업로드한다.
+  - 현재 첫 비교 artifact 예시는 `build/windows-sccache-poc-gh-run-23245866965/windows-sccache-poc-23245866965/windows-sccache-poc.json`이다.
+
+### Release Lanes
+
+- `Factory Package Release` (`.github/workflows/factory-package-publish.yml`)
+  - workflow-dispatch-only release lane이며 PR required check나 merge-queue lane이 아니다.
+  - Windows factory package bundle을 빌드하고 `CoreInstalledPackageConsumer|FactoryPgInstalledPackageConsumer|FactoryRedisInstalledPackageConsumer` 검증 후 artifact를 업로드한다.
+  - release artifact 이름은 `dynaxis-factory-packages-windows-release`다.
+
+## Kubernetes worlds harness 체크
 - `KubernetesWorldsLocalDevManifestCheck`
   - local/ctest manifest proof for the topology-driven Kubernetes worlds harness
   - validates generated manifests and summary artifacts without requiring a live cluster
