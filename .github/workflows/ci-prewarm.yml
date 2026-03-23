@@ -1,4 +1,4 @@
-name: CI Prewarm
+name: Cache Prep
 
 on:
   schedule:
@@ -14,6 +14,7 @@ concurrency:
 
 jobs:
   windows-conan-prewarm:
+    name: Conan Cache Prep (Windows)
     runs-on: windows-latest
     timeout-minutes: 60
     env:
@@ -184,6 +185,7 @@ jobs:
             build/ci-prewarm/windows-conan-prewarm.json
 
   linux-base-image-prewarm:
+    name: Base Image Cache Prep (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

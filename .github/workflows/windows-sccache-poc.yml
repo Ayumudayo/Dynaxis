@@ -1,4 +1,4 @@
-name: Windows SCCache PoC
+name: Compiler Cache Timing Probe
 
 on:
   workflow_dispatch:
@@ -24,6 +24,7 @@ env:
 
 jobs:
   windows-sccache-poc:
+    name: Compiler Cache Timing Probe (Windows)
     runs-on: windows-latest
     timeout-minutes: 120
     env:
