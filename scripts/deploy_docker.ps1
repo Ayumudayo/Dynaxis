@@ -209,6 +209,64 @@ function Ensure-BaseImage {
     }
 }
 
+function Get-RuntimeImageBuildSpecs([string]$ProjectRoot) {
+    $dockerfilePath = Join-Path $ProjectRoot "Dockerfile"
+    return @(
+        @{
+            Name = "server-runtime"
+            Image = "dynaxis-server:local"
+            Target = "server-runtime"
+            Dockerfile = $dockerfilePath
+            Context = $ProjectRoot
+        },
+        @{
+            Name = "gateway-runtime"
+            Image = "dynaxis-gateway:local"
+            Target = "gateway-runtime"
+            Dockerfile = $dockerfilePath
+            Context = $ProjectRoot
+        },
+        @{
+            Name = "worker-runtime"
+            Image = "dynaxis-worker:local"
+            Target = "worker-runtime"
+            Dockerfile = $dockerfilePath
+            Context = $ProjectRoot
+        },
+        @{
+            Name = "admin-runtime"
+            Image = "dynaxis-admin:local"
+            Target = "admin-runtime"
+            Dockerfile = $dockerfilePath
+            Context = $ProjectRoot
+        },
+        @{
+            Name = "migrator-runtime"
+            Image = "dynaxis-migrator:local"
+            Target = "migrator-runtime"
+            Dockerfile = $dockerfilePath
+            Context = $ProjectRoot
+        }
+    )
+}
+
+function Build-RuntimeImages([string]$ProjectRoot,
+                             [switch]$NoCache) {
+    $specs = Get-RuntimeImageBuildSpecs -ProjectRoot $ProjectRoot
+    foreach ($spec in $specs) {
+        Write-Host "Building image '$($spec.Image)' (target '$($spec.Target)')..." -ForegroundColor Yellow
+        $buildArgs = @(
+            "build",
+            "-f", $spec.Dockerfile,
+            "--target", $spec.Target,
+            "-t", $spec.Image
+        )
+        if ($NoCache) { $buildArgs += "--no-cache" }
+        $buildArgs += $spec.Context
+        Invoke-DockerCommand -Args $buildArgs -FailureMessage "Failed to build image '$($spec.Image)'."
+    }
+}
+
 Test-Docker
 
 $target = Resolve-ComposeTarget
@@ -247,9 +305,7 @@ if ($Action -eq "build") {
     }
 
     Write-Host "Building Docker images..." -ForegroundColor Cyan
-    $ComposeArgs = $ComposeBaseArgs + @("build")
-    if ($NoCache) { $ComposeArgs += "--no-cache" }
-    Invoke-DockerCommand -Args $ComposeArgs -FailureMessage "Docker Compose build failed."
+    Build-RuntimeImages -ProjectRoot $ProjectRoot -NoCache:$NoCache
 }
 elseif ($Action -eq "up") {
     Test-ComposeConfiguration $ComposeBaseArgs
@@ -260,10 +316,13 @@ elseif ($Action -eq "up") {
         }
     }
 
+    if ($Build) {
+        Build-RuntimeImages -ProjectRoot $ProjectRoot -NoCache:$NoCache
+    }
+
     Write-Host "Starting services..." -ForegroundColor Cyan
     $DockerArgs = $ComposeBaseArgs + @("up")
     if ($Detached) { $DockerArgs += "-d" }
-    if ($Build) { $DockerArgs += "--build" }
     $DockerArgs += "--remove-orphans"
     Invoke-DockerCommand -Args $DockerArgs -FailureMessage "Docker Compose up failed."
 }
