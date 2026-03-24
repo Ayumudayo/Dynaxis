@@ -277,7 +277,10 @@ int run_server(int argc, char** argv) {
     // 1. 핵심 컴포넌트 선언
     // 선언만 먼저 하고 실제 ready는 나중에 올린다. 그래야 "객체는 생겼지만 아직 서비스 가능하지 않다"를 표현할 수 있다.
     core::concurrent::TaskScheduler scheduler;
+    const auto bootstrap_task_group = scheduler.create_cancel_group();
     std::shared_ptr<asio::steady_timer> scheduler_timer;
+    std::shared_ptr<std::function<void()>> scheduler_tick;
+    std::shared_ptr<core::concurrent::TaskScheduler::Clock::time_point> scheduler_last_poll_at;
     std::shared_ptr<asio::steady_timer> fps_tick_timer;
     std::shared_ptr<core::storage_execution::DbWorkerPool> db_workers;
     std::shared_ptr<core::scripting::LuaRuntime> lua_runtime;
@@ -288,6 +291,7 @@ int run_server(int argc, char** argv) {
     bool registry_registered = false;
     auto engine = server::core::app::EngineBuilder("server_app").build();
     auto& app_host = engine.host();
+    core::runtime_metrics::set_liveness_state(core::runtime_metrics::LivenessState::kBootstrapping);
 
     try {
 #if defined(_WIN32)
@@ -303,6 +307,7 @@ int run_server(int argc, char** argv) {
         ServerConfig config;
         if (!config.load(argc, argv)) {
             corelog::error("Failed to load configuration");
+            core::runtime_metrics::set_liveness_state(core::runtime_metrics::LivenessState::kFailed);
             engine.mark_failed();
             return 1;
         }
@@ -390,28 +395,110 @@ int run_server(int argc, char** argv) {
         core_internal::register_connection_runtime_state_service(state);
         engine.bridge_alias(scheduler);
         engine.bridge_alias(app_host);
+        engine.bridge_alias(engine);
         if (lua_reload_strand) {
             engine.bridge_service(lua_reload_strand);
         }
 
         // 스케줄러 타이머 설정
-        scheduler_timer = std::make_shared<asio::steady_timer>(io);
-        engine.bridge_service(scheduler_timer);
+        engine.register_module(
+            "scheduler-poll-loop",
+            [&](server::core::app::EngineRuntime&) {
+                scheduler_timer = std::make_shared<asio::steady_timer>(io);
+                engine.bridge_service(scheduler_timer);
+                scheduler_last_poll_at =
+                    std::make_shared<core::concurrent::TaskScheduler::Clock::time_point>(
+                        core::concurrent::TaskScheduler::Clock::now());
 
-        auto scheduler_tick = std::make_shared<std::function<void()>>();
-        std::weak_ptr<std::function<void()>> scheduler_tick_weak = scheduler_tick;
-        *scheduler_tick = [scheduler_timer, scheduler_tick_weak, scheduler_ptr = &scheduler]() {
-            scheduler_ptr->poll(32);
-            scheduler_timer->expires_after(std::chrono::milliseconds(50));
-            scheduler_timer->async_wait([scheduler_timer, scheduler_tick_weak, scheduler_ptr](const boost::system::error_code& ec) {
-                if (ec == asio::error::operation_aborted) return;
-                if (!ec) {
+                scheduler_tick = std::make_shared<std::function<void()>>();
+                std::weak_ptr<std::function<void()>> scheduler_tick_weak = scheduler_tick;
+                *scheduler_tick = [scheduler_timer, scheduler_tick_weak, scheduler_ptr = &scheduler, scheduler_last_poll_at]() {
+                    const auto now = core::concurrent::TaskScheduler::Clock::now();
+                    const auto gap = now - *scheduler_last_poll_at;
+                    if (gap >= std::chrono::milliseconds(250)) {
+                        core::runtime_metrics::record_watchdog_freeze_suspect(
+                            "scheduler-poll-loop",
+                            std::chrono::duration_cast<std::chrono::nanoseconds>(gap),
+                            std::chrono::milliseconds(250),
+                            "scheduler-loop-stalled");
+                    }
+                    *scheduler_last_poll_at = now;
                     scheduler_ptr->poll(32);
-                    if (auto locked = scheduler_tick_weak.lock()) (*locked)();
+                    scheduler_timer->expires_after(std::chrono::milliseconds(50));
+                    scheduler_timer->async_wait([scheduler_timer, scheduler_tick_weak, scheduler_ptr, scheduler_last_poll_at](const boost::system::error_code& ec) {
+                        if (ec == asio::error::operation_aborted) return;
+                        if (!ec) {
+                            const auto now = core::concurrent::TaskScheduler::Clock::now();
+                            const auto gap = now - *scheduler_last_poll_at;
+                            if (gap >= std::chrono::milliseconds(250)) {
+                                core::runtime_metrics::record_watchdog_freeze_suspect(
+                                    "scheduler-poll-loop",
+                                    std::chrono::duration_cast<std::chrono::nanoseconds>(gap),
+                                    std::chrono::milliseconds(250),
+                                    "scheduler-loop-stalled");
+                            }
+                            *scheduler_last_poll_at = now;
+                            scheduler_ptr->poll(32);
+                            if (auto locked = scheduler_tick_weak.lock()) (*locked)();
+                        }
+                    });
+                };
+                (*scheduler_tick)();
+            },
+            [&, bootstrap_task_group]() {
+                try {
+                    if (scheduler_timer) scheduler_timer->cancel();
+                } catch (...) {
+                    core::runtime_metrics::record_exception_ignored();
                 }
+                scheduler_tick.reset();
+                scheduler_last_poll_at.reset();
+                (void)scheduler.cancel(bootstrap_task_group);
+                scheduler.shutdown();
+            },
+            [&scheduler_tick, &scheduler_timer]() {
+                server::core::app::EngineRuntime::WatchdogStatus status;
+                status.healthy = static_cast<bool>(scheduler_timer) && static_cast<bool>(scheduler_tick);
+                status.detail = status.healthy ? "scheduler-loop-armed" : "scheduler-loop-missing";
+                return status;
             });
-        };
-        (*scheduler_tick)();
+        engine.start_modules();
+
+        const auto scheduler_runtime_active =
+            [&app_host](const core::concurrent::TaskScheduler::RepeatContext&) {
+                return !app_host.stop_requested();
+            };
+        {
+            core::concurrent::TaskScheduler::RepeatPolicy policy{};
+            policy.interval = std::chrono::seconds(1);
+            (void)scheduler.schedule_every_controlled(
+                [&engine](const core::concurrent::TaskScheduler::RepeatContext&) {
+                    const auto runtime_snapshot = engine.snapshot();
+                    auto liveness_state = core::runtime_metrics::LivenessState::kBootstrapping;
+                    if (runtime_snapshot.lifecycle_phase == server::core::app::EngineRuntime::LifecyclePhase::kFailed) {
+                        liveness_state = core::runtime_metrics::LivenessState::kFailed;
+                    } else if (runtime_snapshot.stop_requested) {
+                        liveness_state = core::runtime_metrics::LivenessState::kStopping;
+                    } else if (!runtime_snapshot.healthy || runtime_snapshot.unhealthy_watchdog_count > 0) {
+                        liveness_state = core::runtime_metrics::LivenessState::kDegraded;
+                    } else if (runtime_snapshot.ready) {
+                        liveness_state = core::runtime_metrics::LivenessState::kRunning;
+                    }
+                    core::runtime_metrics::set_liveness_state(liveness_state);
+
+                    for (const auto& module : engine.module_snapshot()) {
+                        const bool healthy = !module.has_watchdog || module.watchdog_healthy;
+                        core::runtime_metrics::record_watchdog_sample(
+                            module.name,
+                            healthy,
+                            module.watchdog_detail);
+                    }
+                    return core::concurrent::TaskScheduler::RepeatDecision::kContinue;
+                },
+                policy,
+                scheduler_runtime_active,
+                bootstrap_task_group);
+        }
 
         if (lua_runtime
             && (!config.lua_scripts_dir.empty() || !config.lua_fallback_scripts_dir.empty())) {
@@ -603,11 +690,16 @@ int run_server(int argc, char** argv) {
                 const std::uint64_t capped_interval =
                     config.lua_reload_interval_ms > max_interval ? max_interval : config.lua_reload_interval_ms;
 
-                scheduler.schedule_every(
-                    [poll_lua_scripts]() {
+                core::concurrent::TaskScheduler::RepeatPolicy policy{};
+                policy.interval = std::chrono::milliseconds{static_cast<long long>(capped_interval)};
+                (void)scheduler.schedule_every_controlled(
+                    [poll_lua_scripts](const core::concurrent::TaskScheduler::RepeatContext&) {
                         poll_lua_scripts();
+                        return core::concurrent::TaskScheduler::RepeatDecision::kContinue;
                     },
-                    std::chrono::milliseconds{static_cast<long long>(capped_interval)});
+                    policy,
+                    scheduler_runtime_active,
+                    bootstrap_task_group);
                 corelog::info(
                     "Lua script watcher started scripts_dir=" + active_scripts_dir->string()
                     + " interval_ms=" + std::to_string(config.lua_reload_interval_ms));
@@ -630,6 +722,7 @@ int run_server(int argc, char** argv) {
             db_pool = repository_pool;
             if (!core_internal::connection_pool_health_check(db_pool)) {
                 corelog::error("DB health check failed; please verify DB_URI.");
+                core::runtime_metrics::set_liveness_state(core::runtime_metrics::LivenessState::kFailed);
                 engine.mark_failed();
                 return 2;
             }
@@ -656,7 +749,10 @@ int run_server(int argc, char** argv) {
             corelog::info(std::string("DB worker pool started: ") + std::to_string(log_workers) + " threads.");
 
             // 주기적인 DB 헬스 체크
-            scheduler.schedule_every([job_queue_ptr, db_pool, &app_host]() {
+            core::concurrent::TaskScheduler::RepeatPolicy policy{};
+            policy.interval = std::chrono::seconds(60);
+            (void)scheduler.schedule_every_controlled([job_queue_ptr, db_pool, &app_host](
+                                                          const core::concurrent::TaskScheduler::RepeatContext&) {
                 job_queue_ptr->Push([db_pool, &app_host]() {
                     const bool ok = core_internal::connection_pool_health_check(db_pool);
                     if (!ok) {
@@ -664,7 +760,11 @@ int run_server(int argc, char** argv) {
                     }
                     app_host.set_dependency_ok("db", ok);
                 });
-            }, std::chrono::seconds(60));
+                return core::concurrent::TaskScheduler::RepeatDecision::kContinue;
+            },
+                                                      policy,
+                                                      scheduler_runtime_active,
+                                                      bootstrap_task_group);
         }
 
         // 5. Redis 클라이언트 구성
@@ -733,7 +833,10 @@ int run_server(int argc, char** argv) {
                 };
 
             // 주기적인 Redis 헬스 체크
-            scheduler.schedule_every([job_queue_ptr, redis, &app_host]() {
+            core::concurrent::TaskScheduler::RepeatPolicy policy{};
+            policy.interval = std::chrono::seconds(60);
+            (void)scheduler.schedule_every_controlled([job_queue_ptr, redis, &app_host](
+                                                          const core::concurrent::TaskScheduler::RepeatContext&) {
                 job_queue_ptr->Push([redis, &app_host]() {
                     try {
                         const bool ok = redis->health_check();
@@ -749,7 +852,11 @@ int run_server(int argc, char** argv) {
                         corelog::error("component=server_bootstrap error_code=REDIS_HEALTH_CHECK periodic Redis health check unknown exception");
                     }
                 });
-            }, std::chrono::seconds(60));
+                return core::concurrent::TaskScheduler::RepeatDecision::kContinue;
+            },
+                                                      policy,
+                                                      scheduler_runtime_active,
+                                                      bootstrap_task_group);
 
             // 인스턴스 레지스트리에 서버 등록
             try {
@@ -785,8 +892,11 @@ int run_server(int argc, char** argv) {
 
             // 레지스트리 하트비트 스케줄링
             if (registry_registered) {
-                auto interval = config.registry_heartbeat_interval;
-                scheduler.schedule_every([registry_backend, registry_record, state, &app_host, apply_runtime_assignment]() mutable {
+                core::concurrent::TaskScheduler::RepeatPolicy policy{};
+                policy.interval = config.registry_heartbeat_interval;
+                (void)scheduler.schedule_every_controlled(
+                    [registry_backend, registry_record, state, &app_host, apply_runtime_assignment](
+                        const core::concurrent::TaskScheduler::RepeatContext&) mutable {
                     registry_record.last_heartbeat_ms = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now().time_since_epoch()).count());
                     registry_record.active_sessions = core_internal::connection_count(state);
@@ -795,7 +905,11 @@ int run_server(int argc, char** argv) {
                     if (!registry_backend->upsert(registry_record)) {
                         corelog::warn("Server registry heartbeat upsert failed");
                     }
-                }, interval);
+                    return core::concurrent::TaskScheduler::RepeatDecision::kContinue;
+                },
+                    policy,
+                    scheduler_runtime_active,
+                    bootstrap_task_group);
             }
         }
 
@@ -885,6 +999,7 @@ int run_server(int argc, char** argv) {
         // ready는 기본 ready 플래그와 의존성 probe를 함께 본다.
         // 둘 중 하나만 보면 "리스너는 켜졌지만 외부 저장소는 아직 죽어 있는" 상태를 정상으로 잘못 노출할 수 있다.
         engine.mark_running();
+        core::runtime_metrics::set_liveness_state(core::runtime_metrics::LivenessState::kRunning);
 
         if (registry_registered && registry_backend) {
             registry_record.last_heartbeat_ms = static_cast<std::uint64_t>(
@@ -1265,14 +1380,6 @@ int run_server(int argc, char** argv) {
         engine.add_shutdown_step("stop db worker pool", [&]() {
             core_internal::stop_db_worker_pool(db_workers);
         });
-        engine.add_shutdown_step("cancel scheduler timer", [&]() {
-            try {
-                if (scheduler_timer) scheduler_timer->cancel();
-            } catch (...) {
-                core::runtime_metrics::record_exception_ignored();
-            }
-        });
-        engine.add_shutdown_step("shutdown scheduler", [&]() { scheduler.shutdown(); });
         engine.add_shutdown_step("reset lua runtime", [&]() {
             if (lua_runtime) {
                 lua_runtime->reset();
@@ -1294,6 +1401,7 @@ int run_server(int argc, char** argv) {
             t.join();
         }
 
+        core::runtime_metrics::set_liveness_state(core::runtime_metrics::LivenessState::kStopping);
         engine.run_shutdown();
         engine.mark_stopped();
 
@@ -1303,6 +1411,7 @@ int run_server(int argc, char** argv) {
 
     } catch (const std::exception& ex) {
         core::runtime_metrics::record_exception_fatal();
+        core::runtime_metrics::set_liveness_state(core::runtime_metrics::LivenessState::kFailed);
         corelog::error(std::string("component=server_bootstrap error_code=SERVER_FATAL server_app exception: ") + ex.what());
         engine.mark_failed();
         engine.clear_global_services();

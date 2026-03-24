@@ -10,6 +10,7 @@ add_library(server_core
     src/net/hive.cpp
     src/net/connection.cpp
     src/net/listener.cpp
+    src/net/transport_router.cpp
     src/net/rudp/ack_window.cpp
     src/net/rudp/retransmission_queue.cpp
     src/net/rudp/rudp_engine.cpp

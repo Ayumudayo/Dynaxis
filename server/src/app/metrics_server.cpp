@@ -2,6 +2,7 @@
 
 #include "server/chat/chat_service.hpp"
 #include "server/core/app/app_host.hpp"
+#include "server/core/app/engine_runtime.hpp"
 #include "server/core/metrics/build_info.hpp"
 #include "server/core/metrics/metrics.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
@@ -118,6 +119,23 @@ std::string render_metrics_impl() {
     };
     auto append_gauge = [&](const char* name, long double value) {
         stream << "# TYPE " << name << " gauge\n" << name << ' ' << std::fixed << std::setprecision(3) << value << '\n';
+        stream << std::defaultfloat << std::setprecision(6);
+    };
+    const auto escape_label_value = [](std::string_view value) {
+        std::string out;
+        out.reserve(value.size());
+        for (const char ch : value) {
+            switch (ch) {
+            case '\\': out += "\\\\"; break;
+            case '"': out += "\\\""; break;
+            case '\n': out += "\\n"; break;
+            default: out.push_back(ch); break;
+            }
+        }
+        return out;
+    };
+    auto append_labeled_gauge = [&](const char* name, std::string_view labels, long double value) {
+        stream << name << '{' << labels << "} " << std::fixed << std::setprecision(3) << value << '\n';
         stream << std::defaultfloat << std::setprecision(6);
     };
 
@@ -328,6 +346,21 @@ std::string render_metrics_impl() {
     append_gauge(
         "chat_runtime_setting_reload_latency_max_ms",
         static_cast<long double>(snap.runtime_setting_reload_latency_max_ns) / 1'000'000.0L);
+    append_gauge("chat_runtime_watchdog_total", static_cast<long double>(snap.watchdog_total));
+    append_gauge("chat_runtime_watchdog_unhealthy_total", static_cast<long double>(snap.watchdog_unhealthy_total));
+    append_counter("chat_runtime_watchdog_transition_total", snap.watchdog_transition_total);
+    append_counter("chat_runtime_watchdog_freeze_suspect_total", snap.watchdog_freeze_suspect_total);
+    append_counter("chat_runtime_detailed_telemetry_activation_total", snap.detailed_telemetry_activation_total);
+    append_gauge("chat_runtime_detailed_telemetry_active", snap.detailed_telemetry_active ? 1.0L : 0.0L);
+    append_gauge(
+        "chat_runtime_detailed_telemetry_capture_budget_remaining",
+        static_cast<long double>(snap.detailed_telemetry_capture_budget_remaining));
+    append_counter(
+        "chat_runtime_detailed_telemetry_captured_exception_total",
+        snap.detailed_telemetry_captured_exception_total);
+    append_gauge(
+        "chat_runtime_detailed_telemetry_captured_dispatch_latency_max_ms",
+        static_cast<long double>(snap.detailed_telemetry_captured_dispatch_latency_max_ns) / 1'000'000.0L);
 
     if (!snap.opcode_counts.empty()) {
         stream << "# TYPE chat_dispatch_opcode_total counter\n";
@@ -573,6 +606,45 @@ std::string render_metrics_impl() {
     if (const auto host = services::get<server::core::app::AppHost>()) {
         stream << host->dependency_metrics_text();
         stream << host->lifecycle_metrics_text();
+    }
+    if (const auto runtime = services::get<server::core::app::EngineRuntime>()) {
+        const auto runtime_snapshot = runtime->snapshot();
+        append_gauge(
+            "chat_runtime_context_service_count",
+            static_cast<long double>(runtime_snapshot.context_service_count));
+        append_gauge(
+            "chat_runtime_compatibility_bridge_count",
+            static_cast<long double>(runtime_snapshot.compatibility_bridge_count));
+        append_gauge(
+            "chat_runtime_registered_module_count",
+            static_cast<long double>(runtime_snapshot.registered_module_count));
+        append_gauge(
+            "chat_runtime_started_module_count",
+            static_cast<long double>(runtime_snapshot.started_module_count));
+        append_gauge(
+            "chat_runtime_module_watchdog_count",
+            static_cast<long double>(runtime_snapshot.watchdog_count));
+        append_gauge(
+            "chat_runtime_module_unhealthy_watchdog_count",
+            static_cast<long double>(runtime_snapshot.unhealthy_watchdog_count));
+
+        const auto modules = runtime->module_snapshot();
+        if (!modules.empty()) {
+            stream << "# TYPE chat_runtime_module_started gauge\n";
+            stream << "# TYPE chat_runtime_module_watchdog_healthy gauge\n";
+            for (const auto& module : modules) {
+                const std::string labels =
+                    std::string("module=\"") + escape_label_value(module.name) + "\"";
+                append_labeled_gauge(
+                    "chat_runtime_module_started",
+                    labels,
+                    module.started ? 1.0L : 0.0L);
+                append_labeled_gauge(
+                    "chat_runtime_module_watchdog_healthy",
+                    labels,
+                    (!module.has_watchdog || module.watchdog_healthy) ? 1.0L : 0.0L);
+            }
+        }
     }
 
     stream << std::setfill(' ') << std::dec << std::nouppercase;

@@ -29,6 +29,17 @@ int main() {
     server::core::concurrent::TaskScheduler scheduler;
     scheduler.post([] {});
     (void)scheduler.poll();
+    const auto background_group = scheduler.create_cancel_group();
+    server::core::concurrent::TaskScheduler::RepeatPolicy repeat_policy{};
+    repeat_policy.interval = std::chrono::milliseconds(100);
+    const auto background_tick = scheduler.schedule_every_controlled(
+        [](const server::core::concurrent::TaskScheduler::RepeatContext&) {
+            return server::core::concurrent::TaskScheduler::RepeatDecision::kStop;
+        },
+        repeat_policy,
+        {},
+        background_group);
+    (void)background_tick;
 
     runtime.mark_stopped();
     return 0;
@@ -100,3 +111,4 @@ pwsh scripts/run_linux_installed_consumer.ps1
 ## 참고
 - 이 빠른 시작 문서는 의도적으로 `Transitional`, `Internal` 헤더를 사용하지 않습니다.
 - 공개 API 경계는 `docs/core-api-boundary.md`에서 정의합니다.
+- `TaskScheduler`는 호출자가 `poll()`을 소유하는 pull 모델을 유지하면서도 cancel token/group, validator-gated repeat policy, reschedule/update 같은 richer control surface를 제공합니다.

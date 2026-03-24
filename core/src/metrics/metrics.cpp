@@ -447,6 +447,21 @@ void append_prometheus_metrics(std::ostream& out) {
 
 void append_runtime_core_metrics(std::ostream& out) {
     const auto snap = server::core::runtime_metrics::snapshot();
+    const auto watchdogs = server::core::runtime_metrics::watchdog_snapshot();
+
+    out << "# TYPE core_runtime_liveness_state gauge\n";
+    constexpr std::array<server::core::runtime_metrics::LivenessState, 5> kLivenessStates{
+        server::core::runtime_metrics::LivenessState::kBootstrapping,
+        server::core::runtime_metrics::LivenessState::kRunning,
+        server::core::runtime_metrics::LivenessState::kDegraded,
+        server::core::runtime_metrics::LivenessState::kStopping,
+        server::core::runtime_metrics::LivenessState::kFailed,
+    };
+    for (const auto state : kLivenessStates) {
+        out << "core_runtime_liveness_state{state=\""
+            << server::core::runtime_metrics::liveness_state_name(state)
+            << "\"} " << (snap.liveness_state == state ? 1 : 0) << "\n";
+    }
 
     out << "# TYPE core_runtime_accept_total counter\n";
     out << "core_runtime_accept_total " << snap.accept_total << "\n";
@@ -543,6 +558,49 @@ void append_runtime_core_metrics(std::ostream& out) {
 
     out << "# TYPE core_runtime_setting_reload_latency_max_ns gauge\n";
     out << "core_runtime_setting_reload_latency_max_ns " << snap.runtime_setting_reload_latency_max_ns << "\n";
+
+    out << "# TYPE core_runtime_watchdog_total gauge\n";
+    out << "core_runtime_watchdog_total " << snap.watchdog_total << "\n";
+    out << "# TYPE core_runtime_watchdog_unhealthy_total gauge\n";
+    out << "core_runtime_watchdog_unhealthy_total " << snap.watchdog_unhealthy_total << "\n";
+    out << "# TYPE core_runtime_watchdog_transition_total counter\n";
+    out << "core_runtime_watchdog_transition_total " << snap.watchdog_transition_total << "\n";
+    out << "# TYPE core_runtime_watchdog_freeze_suspect_total counter\n";
+    out << "core_runtime_watchdog_freeze_suspect_total " << snap.watchdog_freeze_suspect_total << "\n";
+    out << "# TYPE core_runtime_detailed_telemetry_activation_total counter\n";
+    out << "core_runtime_detailed_telemetry_activation_total " << snap.detailed_telemetry_activation_total << "\n";
+    out << "# TYPE core_runtime_detailed_telemetry_active gauge\n";
+    out << "core_runtime_detailed_telemetry_active " << (snap.detailed_telemetry_active ? 1 : 0) << "\n";
+    out << "# TYPE core_runtime_detailed_telemetry_capture_budget_remaining gauge\n";
+    out << "core_runtime_detailed_telemetry_capture_budget_remaining "
+        << snap.detailed_telemetry_capture_budget_remaining << "\n";
+    out << "# TYPE core_runtime_detailed_telemetry_captured_exception_total counter\n";
+    out << "core_runtime_detailed_telemetry_captured_exception_total "
+        << snap.detailed_telemetry_captured_exception_total << "\n";
+    out << "# TYPE core_runtime_detailed_telemetry_captured_dispatch_latency_max_ns gauge\n";
+    out << "core_runtime_detailed_telemetry_captured_dispatch_latency_max_ns "
+        << snap.detailed_telemetry_captured_dispatch_latency_max_ns << "\n";
+
+    if (!watchdogs.empty()) {
+        out << "# TYPE core_runtime_watchdog_status gauge\n";
+        out << "# TYPE core_runtime_watchdog_unhealthy_samples_total counter\n";
+        out << "# TYPE core_runtime_watchdog_transition_named_total counter\n";
+        out << "# TYPE core_runtime_watchdog_freeze_suspect_named_total counter\n";
+        for (const auto& watchdog : watchdogs) {
+            out << "core_runtime_watchdog_status{watchdog=\""
+                << escape_prometheus_label_value(watchdog.name)
+                << "\"} " << (watchdog.healthy ? 1 : 0) << "\n";
+            out << "core_runtime_watchdog_unhealthy_samples_total{watchdog=\""
+                << escape_prometheus_label_value(watchdog.name)
+                << "\"} " << watchdog.unhealthy_samples_total << "\n";
+            out << "core_runtime_watchdog_transition_named_total{watchdog=\""
+                << escape_prometheus_label_value(watchdog.name)
+                << "\"} " << watchdog.transition_total << "\n";
+            out << "core_runtime_watchdog_freeze_suspect_named_total{watchdog=\""
+                << escape_prometheus_label_value(watchdog.name)
+                << "\"} " << watchdog.freeze_suspect_total << "\n";
+        }
+    }
 
     out << "# TYPE core_runtime_rudp_handshake_total counter\n";
     out << "core_runtime_rudp_handshake_total{result=\"ok\"} " << snap.rudp_handshake_ok_total << "\n";

@@ -3,11 +3,13 @@
 #include <cstdint>
 #include <future>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <random>
 #include <span>
 #include <sstream>
 #include <string>
+#include <thread>
 
 #include <boost/asio/io_context.hpp>
 
@@ -48,6 +50,7 @@
 #include "server/core/net/dispatcher.hpp"
 #include "server/core/net/hive.hpp"
 #include "server/core/net/listener.hpp"
+#include "server/core/net/transport_router.hpp"
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/protocol/protocol_flags.hpp"
@@ -90,6 +93,26 @@ public:
     bool health_check() override { return true; }
 };
 
+class InstalledConsumerTransportSession final : public server::core::net::ITransportSession {
+public:
+    server::core::protocol::SessionStatus session_status() const noexcept override {
+        return server::core::protocol::SessionStatus::kAny;
+    }
+
+    bool post_serialized(std::function<void()> fn) override {
+        fn();
+        return true;
+    }
+
+    void send_error(std::uint16_t code, std::string_view message) override {
+        last_error_code = code;
+        last_error_message.assign(message);
+    }
+
+    std::uint16_t last_error_code{0};
+    std::string last_error_message;
+};
+
 } // namespace
 
 int main() {
@@ -101,10 +124,35 @@ int main() {
     server::core::app::EngineRuntime runtime =
         server::core::app::EngineBuilder("installed_consumer")
             .declare_dependency("dep")
+            .register_module(
+                "installed-module",
+                [](server::core::app::EngineRuntime&) {},
+                [] {},
+                []() {
+                    server::core::app::EngineRuntime::WatchdogStatus status;
+                    status.healthy = true;
+                    status.detail = "installed-module-ready";
+                    return status;
+                })
             .build();
     server::core::app::AppHost& host = runtime.host();
     runtime.set_dependency_ok("dep", true);
+    runtime.start_modules();
     runtime.mark_running();
+    const auto runtime_started_snapshot = runtime.snapshot();
+    const auto runtime_started_modules = runtime.module_snapshot();
+    if (!require_true(runtime_started_snapshot.registered_module_count == 1, "runtime snapshot should report one registered module after startup")) {
+        return 1;
+    }
+    if (!require_true(runtime_started_snapshot.started_module_count == 1, "runtime snapshot should report one started module before shutdown")) {
+        return 1;
+    }
+    if (!require_true(runtime_started_snapshot.watchdog_count == 1, "runtime snapshot should report one watchdog after startup")) {
+        return 1;
+    }
+    if (!require_true(!runtime_started_modules.empty() && runtime_started_modules.front().watchdog_detail == "installed-module-ready", "runtime module snapshot should expose watchdog detail after startup")) {
+        return 1;
+    }
 
     server::core::app::EngineContext local_context;
     server::core::app::EngineRuntime peer_runtime =
@@ -677,6 +725,85 @@ int main() {
     server::core::concurrent::TaskScheduler scheduler;
     scheduler.post([] {});
     (void)scheduler.poll();
+    int controlled_total = 0;
+    const auto cancel_group = scheduler.create_cancel_group();
+    server::core::concurrent::TaskScheduler::TaskOptions delayed_options{};
+    delayed_options.cancel_group = cancel_group;
+    const auto delayed = scheduler.schedule_controlled(
+        [&controlled_total] { controlled_total += 1; },
+        std::chrono::milliseconds(5),
+        delayed_options);
+    if (!require_true(scheduler.reschedule(delayed.cancel_token, std::chrono::milliseconds(20)),
+                      "controlled delayed task should reschedule")) {
+        return 1;
+    }
+    if (!require_true(scheduler.cancel(cancel_group) == 1u,
+                      "cancel group should cancel exactly one delayed task")) {
+        return 1;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    if (!require_true(scheduler.poll() == 0u && controlled_total == 0,
+                      "canceled controlled delayed task should not execute")) {
+        return 1;
+    }
+    std::chrono::milliseconds repeat_interval{0};
+    std::size_t repeat_run_count = std::numeric_limits<std::size_t>::max();
+    server::core::concurrent::TaskScheduler::RepeatPolicy repeat_policy{};
+    repeat_policy.interval = std::chrono::milliseconds(1);
+    const auto repeat = scheduler.schedule_every_controlled(
+        [&repeat_interval, &repeat_run_count](const server::core::concurrent::TaskScheduler::RepeatContext& context) {
+            repeat_interval = std::chrono::duration_cast<std::chrono::milliseconds>(context.current_interval);
+            repeat_run_count = context.run_count;
+            return server::core::concurrent::TaskScheduler::RepeatDecision::kStop;
+        },
+        repeat_policy);
+    repeat_policy.interval = std::chrono::milliseconds(2);
+    if (!require_true(scheduler.update_repeat_policy(repeat.cancel_token, repeat_policy),
+                      "repeat policy update should succeed")) {
+        return 1;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    if (!require_true(
+            scheduler.poll() == 1u
+                && repeat_run_count == 0u
+                && repeat_interval == std::chrono::milliseconds(2),
+            "controlled repeat task should observe updated repeat interval")) {
+        return 1;
+    }
+    server::core::runtime_metrics::set_liveness_state(server::core::runtime_metrics::LivenessState::kRunning);
+    server::core::runtime_metrics::record_watchdog_sample(
+        "installed-consumer-watchdog",
+        true,
+        "installed-consumer-ready");
+    server::core::runtime_metrics::record_watchdog_sample(
+        "installed-consumer-watchdog",
+        false,
+        "installed-consumer-late");
+    server::core::runtime_metrics::record_watchdog_sample(
+        "installed-consumer-watchdog",
+        false,
+        "installed-consumer-late-again");
+    server::core::runtime_metrics::record_watchdog_freeze_suspect(
+        "installed-consumer-watchdog",
+        std::chrono::milliseconds(4),
+        std::chrono::milliseconds(1),
+        "installed-consumer-freeze");
+    server::core::runtime_metrics::record_exception_recoverable();
+    const auto process_runtime_metrics = server::core::runtime_metrics::snapshot();
+    const auto watchdogs = server::core::runtime_metrics::watchdog_snapshot();
+    const auto detail_window = server::core::runtime_metrics::detailed_telemetry_snapshot();
+    if (!require_true(
+            process_runtime_metrics.liveness_state == server::core::runtime_metrics::LivenessState::kDegraded
+                && process_runtime_metrics.watchdog_total >= 1
+                && process_runtime_metrics.watchdog_freeze_suspect_total >= 1
+                && process_runtime_metrics.detailed_telemetry_activation_total >= 1,
+            "runtime metrics should expose liveness/watchdog aggregate state")) {
+        return 1;
+    }
+    if (!require_true(!watchdogs.empty() && !detail_window.trigger.empty(),
+                      "runtime metrics should expose watchdog and detailed telemetry snapshots")) {
+        return 1;
+    }
 
     server::core::SessionOptions options{};
     options.read_timeout_ms = 1000;
@@ -692,9 +819,31 @@ int main() {
     server::core::BufferManager buffers(128, 2);
     (void)buffers.Acquire();
 
-    server::core::Dispatcher dispatcher;
-    dispatcher.register_handler(server::core::protocol::MSG_PING,
-                                [](server::core::Session&, std::span<const std::uint8_t>) {});
+    server::core::net::TransportRouter transport_router;
+    auto transport_session = std::make_shared<InstalledConsumerTransportSession>();
+    bool transport_handler_called = false;
+    transport_router.register_handler(
+        server::core::protocol::MSG_PING,
+        [&transport_handler_called](server::core::net::ITransportSession&,
+                                    std::span<const std::uint8_t> payload) {
+            transport_handler_called = payload.size() == 2;
+        });
+    if (!require_true(
+            transport_router.dispatch(
+                server::core::protocol::MSG_PING,
+                transport_session,
+                std::array<std::uint8_t, 2>{0x03, 0x04}),
+            "transport router should dispatch ping through the public session seam")) {
+        return 1;
+    }
+    if (!require_true(transport_handler_called, "transport router should invoke the registered handler")) {
+        return 1;
+    }
+    if (!require_true(
+            transport_session->last_error_code == 0 && transport_session->last_error_message.empty(),
+            "transport router should not emit a protocol error for the happy path")) {
+        return 1;
+    }
 
     server::core::protocol::PacketHeader header{};
     std::array<std::uint8_t, server::core::protocol::k_header_bytes> encoded{};
@@ -733,10 +882,23 @@ int main() {
     peer_runtime.bridge_service(peer_service);
     const auto runtime_snapshot = runtime.snapshot();
     const auto peer_snapshot = peer_runtime.snapshot();
+    const auto runtime_modules = runtime.module_snapshot();
     if (!require_true(runtime_snapshot.context_service_count == 2, "runtime snapshot should report local context services")) {
         return 1;
     }
     if (!require_true(runtime_snapshot.compatibility_bridge_count == 1, "runtime snapshot should report one compatibility bridge")) {
+        return 1;
+    }
+    if (!require_true(runtime_snapshot.registered_module_count == 1, "runtime snapshot should report one registered module")) {
+        return 1;
+    }
+    if (!require_true(runtime_snapshot.started_module_count == 0, "runtime snapshot should report zero started modules after shutdown")) {
+        return 1;
+    }
+    if (!require_true(runtime_snapshot.watchdog_count == 1, "runtime snapshot should report one watchdog")) {
+        return 1;
+    }
+    if (!require_true(!runtime_modules.empty() && runtime_modules.front().watchdog_detail == "installed-module-ready", "runtime module snapshot should expose watchdog detail after shutdown")) {
         return 1;
     }
     if (!require_true(peer_snapshot.context_service_count == 1, "peer runtime snapshot should stay isolated")) {

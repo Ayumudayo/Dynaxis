@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <vector>
 
 #include <boost/asio/io_context.hpp>
 
@@ -31,6 +32,25 @@ public:
     using LogsCallback = server::core::metrics::MetricsHttpServer::LogsCallback;
     using RouteCallback = server::core::metrics::MetricsHttpServer::RouteCallback;
 
+    /** @brief 모듈 watchdog 평가 결과입니다. */
+    struct WatchdogStatus {
+        bool healthy{true};
+        std::string detail;
+    };
+
+    /** @brief 등록된 runtime module의 operator-facing 상태 스냅샷입니다. */
+    struct ModuleSnapshot {
+        std::string name;
+        bool started{false};
+        bool has_watchdog{false};
+        bool watchdog_healthy{true};
+        std::string watchdog_detail;
+    };
+
+    using ModuleStartupCallback = std::function<void(EngineRuntime&)>;
+    using ModuleShutdownCallback = std::function<void()>;
+    using WatchdogCallback = std::function<WatchdogStatus()>;
+
     /** @brief canonical consumer가 읽는 instance-scoped lifecycle/service ownership 스냅샷입니다. */
     struct Snapshot {
         std::string name;
@@ -41,6 +61,10 @@ public:
         bool stop_requested{false};
         std::size_t context_service_count{0};
         std::size_t compatibility_bridge_count{0};
+        std::size_t registered_module_count{0};
+        std::size_t started_module_count{0};
+        std::size_t watchdog_count{0};
+        std::size_t unhealthy_watchdog_count{0};
     };
 
     explicit EngineRuntime(std::string name);
@@ -116,6 +140,29 @@ public:
                           RouteCallback route_callback = {});
     void stop_admin_http();
 
+    /**
+     * @brief runtime-owned orchestration module을 등록합니다.
+     * @param name operator-facing module 이름
+     * @param startup `start_modules()` 시 registration order로 실행할 startup 콜백
+     * @param shutdown runtime shutdown LIFO 체인에 연결할 정리 콜백
+     * @param watchdog module 상태를 점검할 선택적 watchdog 콜백
+     *
+     * startup phase가 이미 시작된 뒤에 등록되면 startup 콜백은 즉시 실행됩니다.
+     */
+    void register_module(std::string name,
+                         ModuleStartupCallback startup = {},
+                         ModuleShutdownCallback shutdown = {},
+                         WatchdogCallback watchdog = {});
+    /**
+     * @brief 등록된 module startup 콜백을 선언 순서대로 한 번 실행합니다.
+     */
+    void start_modules();
+    /**
+     * @brief 등록된 module과 watchdog의 현재 상태를 operator-facing snapshot으로 반환합니다.
+     * @return registration order 기준 module snapshot 배열
+     */
+    [[nodiscard]] std::vector<ModuleSnapshot> module_snapshot() const;
+
     void add_shutdown_step(std::string name, std::function<void()> step);
 
     void install_process_signal_handlers();
@@ -131,6 +178,8 @@ private:
         std::unordered_set<std::string> keys;
     };
 
+    struct ModuleRegistry;
+
     [[nodiscard]] server::core::util::services::Registry::OwnerToken bridge_owner_token() const noexcept;
     void remember_bridge_key(std::string key);
     void clear_bridge_keys() noexcept;
@@ -140,6 +189,7 @@ private:
     std::unique_ptr<EngineContext> context_;
     std::unique_ptr<AppHost> host_;
     std::shared_ptr<BridgeState> bridge_state_;
+    std::shared_ptr<ModuleRegistry> module_registry_;
 };
 
 } // namespace server::core::app

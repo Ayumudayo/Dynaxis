@@ -3,11 +3,13 @@
 #include <cstdint>
 #include <filesystem>
 #include <future>
+#include <limits>
 #include <memory>
 #include <random>
 #include <span>
 #include <sstream>
 #include <string>
+#include <thread>
 
 #include <boost/asio/io_context.hpp>
 
@@ -51,6 +53,7 @@
 #include "server/core/net/dispatcher.hpp"
 #include "server/core/net/hive.hpp"
 #include "server/core/net/listener.hpp"
+#include "server/core/net/transport_router.hpp"
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/protocol/protocol_flags.hpp"
@@ -93,6 +96,26 @@ struct PublicSmokePluginApi {
     const char* name{"public_api_smoke"};
 };
 
+class PublicSmokeTransportSession final : public server::core::net::ITransportSession {
+public:
+    server::core::protocol::SessionStatus session_status() const noexcept override {
+        return server::core::protocol::SessionStatus::kAny;
+    }
+
+    bool post_serialized(std::function<void()> fn) override {
+        fn();
+        return true;
+    }
+
+    void send_error(std::uint16_t code, std::string_view message) override {
+        last_error_code = code;
+        last_error_message.assign(message);
+    }
+
+    std::uint16_t last_error_code{0};
+    std::string last_error_message;
+};
+
 } // namespace
 
 int main() {
@@ -105,9 +128,20 @@ int main() {
     server::core::app::EngineRuntime runtime =
         server::core::app::EngineBuilder("core_public_api_smoke")
             .declare_dependency("sample")
+            .register_module(
+                "runtime-sample",
+                [](server::core::app::EngineRuntime&) {},
+                [] {},
+                []() {
+                    server::core::app::EngineRuntime::WatchdogStatus status;
+                    status.healthy = true;
+                    status.detail = "runtime-sample-ready";
+                    return status;
+                })
             .build();
     server::core::app::AppHost& host = runtime.host();
     runtime.set_dependency_ok("sample", true);
+    runtime.start_modules();
     runtime.mark_running();
 
     server::core::app::EngineContext local_context;
@@ -121,6 +155,74 @@ int main() {
     server::core::concurrent::TaskScheduler scheduler;
     scheduler.post([] {});
     (void)scheduler.poll();
+    int controlled_total = 0;
+    const auto cancel_group = scheduler.create_cancel_group();
+    server::core::concurrent::TaskScheduler::TaskOptions delayed_options{};
+    delayed_options.cancel_group = cancel_group;
+    const auto delayed = scheduler.schedule_controlled(
+        [&controlled_total] { controlled_total += 1; },
+        std::chrono::milliseconds(5),
+        delayed_options);
+    if (!scheduler.reschedule(delayed.cancel_token, std::chrono::milliseconds(20))) {
+        return 1;
+    }
+    if (scheduler.cancel(cancel_group) != 1u) {
+        return 1;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    if (scheduler.poll() != 0u || controlled_total != 0) {
+        return 1;
+    }
+    std::chrono::milliseconds repeat_interval{0};
+    std::size_t repeat_run_count = std::numeric_limits<std::size_t>::max();
+    server::core::concurrent::TaskScheduler::RepeatPolicy repeat_policy{};
+    repeat_policy.interval = std::chrono::milliseconds(1);
+    const auto repeat = scheduler.schedule_every_controlled(
+        [&repeat_interval, &repeat_run_count](const server::core::concurrent::TaskScheduler::RepeatContext& context) {
+            repeat_interval = std::chrono::duration_cast<std::chrono::milliseconds>(context.current_interval);
+            repeat_run_count = context.run_count;
+            return server::core::concurrent::TaskScheduler::RepeatDecision::kStop;
+        },
+        repeat_policy);
+    repeat_policy.interval = std::chrono::milliseconds(2);
+    if (!scheduler.update_repeat_policy(repeat.cancel_token, repeat_policy)) {
+        return 1;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    if (scheduler.poll() != 1u || repeat_run_count != 0u || repeat_interval != std::chrono::milliseconds(2)) {
+        return 1;
+    }
+    server::core::runtime_metrics::set_liveness_state(server::core::runtime_metrics::LivenessState::kRunning);
+    server::core::runtime_metrics::record_watchdog_sample(
+        "public-smoke-watchdog",
+        true,
+        "public-smoke-ready");
+    server::core::runtime_metrics::record_watchdog_sample(
+        "public-smoke-watchdog",
+        false,
+        "public-smoke-late");
+    server::core::runtime_metrics::record_watchdog_sample(
+        "public-smoke-watchdog",
+        false,
+        "public-smoke-late-again");
+    server::core::runtime_metrics::record_watchdog_freeze_suspect(
+        "public-smoke-watchdog",
+        std::chrono::milliseconds(4),
+        std::chrono::milliseconds(1),
+        "public-smoke-freeze");
+    server::core::runtime_metrics::record_exception_recoverable();
+    const auto process_snapshot = server::core::runtime_metrics::snapshot();
+    const auto watchdog_snapshot = server::core::runtime_metrics::watchdog_snapshot();
+    const auto detailed_telemetry = server::core::runtime_metrics::detailed_telemetry_snapshot();
+    if (process_snapshot.liveness_state != server::core::runtime_metrics::LivenessState::kDegraded
+        || process_snapshot.watchdog_total < 1
+        || process_snapshot.watchdog_freeze_suspect_total < 1
+        || process_snapshot.detailed_telemetry_activation_total < 1
+        || watchdog_snapshot.empty()
+        || watchdog_snapshot.front().name != "public-smoke-watchdog"
+        || detailed_telemetry.trigger.empty()) {
+        return 1;
+    }
 
     server::core::JobQueue queue(8);
     server::core::ThreadManager workers(queue);
@@ -140,7 +242,19 @@ int main() {
     runtime.wait_for_stop(std::chrono::milliseconds(1));
     runtime.run_shutdown();
     runtime.mark_stopped();
-    (void)runtime.snapshot();
+    const auto runtime_snapshot = runtime.snapshot();
+    if (runtime_snapshot.registered_module_count != 1
+        || runtime_snapshot.started_module_count != 0
+        || runtime_snapshot.watchdog_count != 1
+        || runtime_snapshot.unhealthy_watchdog_count != 0) {
+        return 1;
+    }
+    const auto runtime_modules = runtime.module_snapshot();
+    if (runtime_modules.size() != 1
+        || runtime_modules.front().name != "runtime-sample"
+        || runtime_modules.front().watchdog_detail != "runtime-sample-ready") {
+        return 1;
+    }
 
     server::core::SessionOptions options{};
     options.read_timeout_ms = 1000;
@@ -583,9 +697,26 @@ int main() {
     auto pooled = buffers.Acquire();
     (void)pooled;
 
-    server::core::Dispatcher dispatcher;
-    dispatcher.register_handler(server::core::protocol::MSG_PING,
-                                [](server::core::Session&, std::span<const std::uint8_t>) {});
+    server::core::net::TransportRouter transport_router;
+    auto transport_session = std::make_shared<PublicSmokeTransportSession>();
+    bool transport_handler_called = false;
+    transport_router.register_handler(
+        server::core::protocol::MSG_PING,
+        [&transport_handler_called](server::core::net::ITransportSession&,
+                                    std::span<const std::uint8_t> payload) {
+            transport_handler_called = payload.size() == 2;
+        });
+    if (!transport_router.dispatch(
+            server::core::protocol::MSG_PING,
+            transport_session,
+            std::array<std::uint8_t, 2>{0x01, 0x02})) {
+        return 1;
+    }
+    if (!transport_handler_called
+        || transport_session->last_error_code != 0
+        || !transport_session->last_error_message.empty()) {
+        return 1;
+    }
 
     server::core::protocol::PacketHeader header{};
     std::array<std::uint8_t, server::core::protocol::k_header_bytes> encoded{};

@@ -836,6 +836,8 @@ GatewayApp::GatewayApp()
     , engine_(server::core::app::EngineBuilder("gateway_app").build())
     , app_host_(engine_.host())
     , authenticator_(std::make_shared<auth::NoopAuthenticator>()) {
+    server::core::runtime_metrics::set_liveness_state(
+        server::core::runtime_metrics::LivenessState::kBootstrapping);
     configure_gateway();
 
     boot_id_ = make_boot_id();
@@ -1164,7 +1166,31 @@ GatewayApp::GatewayApp()
         return stream.str();
     });
 
-    engine_.add_shutdown_step("stop gateway", [this]() { stop(); });
+    engine_.register_module(
+        "gateway-runtime",
+        [this](server::core::app::EngineRuntime&) {
+            start_listener();
+            start_udp_listener();
+            start_infrastructure_probe();
+        },
+        [this]() { stop(); },
+        [this]() {
+            server::core::app::EngineRuntime::WatchdogStatus status;
+            const bool listener_ready = static_cast<bool>(listener_);
+            const bool udp_ready = (udp_listen_port_ == 0) || static_cast<bool>(udp_socket_);
+            const bool probe_ready = redis_client_ == nullptr || infra_probe_thread_.joinable();
+            status.healthy = listener_ready && udp_ready && probe_ready;
+            if (!listener_ready) {
+                status.detail = "listener-missing";
+            } else if (!udp_ready) {
+                status.detail = "udp-listener-missing";
+            } else if (!probe_ready) {
+                status.detail = "infra-probe-missing";
+            } else {
+                status.detail = "gateway-runtime-ready";
+            }
+            return status;
+        });
 }
 
 GatewayApp::~GatewayApp() {
@@ -1172,15 +1198,17 @@ GatewayApp::~GatewayApp() {
 }
 
 int GatewayApp::run() {
-    start_listener();
-    start_udp_listener();
+    engine_.start_modules();
     engine_.mark_running();
-    start_infrastructure_probe();
+    server::core::runtime_metrics::set_liveness_state(
+        server::core::runtime_metrics::LivenessState::kRunning);
     engine_.install_asio_termination_signals(io_, {});
 
     server::core::log::info("GatewayApp starting main loop");
     hive_->run();
 
+    server::core::runtime_metrics::set_liveness_state(
+        server::core::runtime_metrics::LivenessState::kStopping);
     engine_.run_shutdown();
     engine_.mark_stopped();
     server::core::log::info("GatewayApp stopped");

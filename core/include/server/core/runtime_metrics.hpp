@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cstdint>
 #include <cstddef>
+#include <string>
+#include <string_view>
 #include <vector>
 #include <utility>
 
@@ -39,6 +41,38 @@ enum class RudpFallbackReason : std::uint8_t {
     kOther,
 };
 
+/** @brief 프로세스 전역 liveness 상태 모델입니다. */
+enum class LivenessState : std::uint8_t {
+    kBootstrapping = 0,
+    kRunning,
+    kDegraded,
+    kStopping,
+    kFailed,
+};
+
+/** @brief liveness enum을 operator-facing 라벨 문자열로 변환합니다. */
+const char* liveness_state_name(LivenessState state) noexcept;
+
+/** @brief 프로세스 전역 watchdog 상태 스냅샷입니다. */
+struct WatchdogSnapshot {
+    std::string name;
+    bool healthy{true};
+    std::string detail;
+    std::uint64_t unhealthy_samples_total{0};
+    std::uint64_t transition_total{0};
+    std::uint64_t freeze_suspect_total{0};
+};
+
+/** @brief threshold-triggered detailed telemetry window 상태 스냅샷입니다. */
+struct DetailedTelemetrySnapshot {
+    bool active{false};
+    std::string trigger;
+    std::uint64_t activation_total{0};
+    std::uint64_t capture_budget_remaining{0};
+    std::uint64_t captured_exception_total{0};
+    std::uint64_t captured_dispatch_latency_max_ns{0};
+};
+
 /**
  * @brief 디스패치 지연시간 히스토그램 버킷 상한(ns) 목록입니다.
  *
@@ -71,6 +105,7 @@ inline constexpr std::array<std::uint64_t, 15> kDispatchLatencyBucketUpperBounds
  * "어떤 시점의 값 묶음"을 비교적 일관되게 다룰 수 있습니다.
  */
 struct Snapshot {
+    LivenessState liveness_state{LivenessState::kBootstrapping};
     std::uint64_t accept_total{0};
     std::uint64_t session_started_total{0};
     std::uint64_t session_stopped_total{0};
@@ -137,6 +172,15 @@ struct Snapshot {
     std::uint64_t runtime_setting_reload_failure_total{0};
     std::uint64_t runtime_setting_reload_latency_sum_ns{0};
     std::uint64_t runtime_setting_reload_latency_max_ns{0};
+    std::uint64_t watchdog_total{0};
+    std::uint64_t watchdog_unhealthy_total{0};
+    std::uint64_t watchdog_transition_total{0};
+    std::uint64_t watchdog_freeze_suspect_total{0};
+    std::uint64_t detailed_telemetry_activation_total{0};
+    bool detailed_telemetry_active{false};
+    std::uint64_t detailed_telemetry_capture_budget_remaining{0};
+    std::uint64_t detailed_telemetry_captured_exception_total{0};
+    std::uint64_t detailed_telemetry_captured_dispatch_latency_max_ns{0};
     std::uint64_t rudp_handshake_ok_total{0};
     std::uint64_t rudp_handshake_fail_total{0};
     std::uint64_t rudp_retransmit_total{0};
@@ -293,6 +337,29 @@ void record_runtime_setting_reload_failure();
 /** @brief 런타임 설정 리로드 지연을 기록합니다. */
 void record_runtime_setting_reload_latency(std::chrono::nanoseconds elapsed);
 
+/** @brief 프로세스 전역 liveness 상태를 갱신합니다. */
+void set_liveness_state(LivenessState state);
+
+/**
+ * @brief named watchdog 상태 샘플을 기록합니다.
+ * @param name watchdog 식별 이름
+ * @param healthy 현재 샘플의 healthy 판정
+ * @param detail operator-facing detail 문자열
+ */
+void record_watchdog_sample(std::string_view name, bool healthy, std::string_view detail = {});
+
+/**
+ * @brief watchdog freeze suspicion을 기록하고 detailed telemetry를 활성화합니다.
+ * @param name watchdog 식별 이름
+ * @param stall 관찰된 stall 길이
+ * @param threshold freeze suspicion threshold
+ * @param detail operator-facing detail 문자열
+ */
+void record_watchdog_freeze_suspect(std::string_view name,
+                                    std::chrono::nanoseconds stall,
+                                    std::chrono::nanoseconds threshold,
+                                    std::string_view detail = {});
+
 /** @brief RUDP handshake 결과를 기록합니다. */
 void record_rudp_handshake_result(bool ok);
 /** @brief RUDP 재전송 건수를 누적합니다. */
@@ -309,5 +376,9 @@ void record_rudp_fallback(RudpFallbackReason reason);
  * @return 시점 기준 메트릭 스냅샷
  */
 Snapshot snapshot();
+/** @brief named watchdog detail snapshot을 반환합니다. */
+std::vector<WatchdogSnapshot> watchdog_snapshot();
+/** @brief 상세 telemetry window snapshot을 반환합니다. */
+DetailedTelemetrySnapshot detailed_telemetry_snapshot();
 
 } // namespace server::core::runtime_metrics

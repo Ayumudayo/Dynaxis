@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -224,4 +225,161 @@ TEST(EngineCompositionTest, DualRuntimeSnapshotsRemainIsolated) {
     EXPECT_EQ(right_after_clear.compatibility_bridge_count, 1u);
 
     server::core::util::services::clear();
+}
+
+TEST(EngineCompositionTest, BuilderRegisteredModulesStartInOrderAndStopInReverseOrder) {
+    using EngineRuntime = server::core::app::EngineRuntime;
+
+    std::vector<std::string> lifecycle_events;
+    bool worker_watchdog_healthy = false;
+
+    server::core::app::EngineBuilder builder("engine_runtime_module_test");
+    builder.register_module(
+        "bootstrap-metrics",
+        [&lifecycle_events](EngineRuntime&) { lifecycle_events.emplace_back("start:bootstrap-metrics"); },
+        [&lifecycle_events]() { lifecycle_events.emplace_back("stop:bootstrap-metrics"); });
+    builder.register_module(
+        "worker-loop",
+        [&lifecycle_events](EngineRuntime&) { lifecycle_events.emplace_back("start:worker-loop"); },
+        [&lifecycle_events]() { lifecycle_events.emplace_back("stop:worker-loop"); },
+        [&worker_watchdog_healthy]() {
+            EngineRuntime::WatchdogStatus status;
+            status.healthy = worker_watchdog_healthy;
+            status.detail = worker_watchdog_healthy ? "worker-ready" : "worker-stalled";
+            return status;
+        });
+
+    auto runtime = builder.build();
+
+    const auto initial_snapshot = runtime.snapshot();
+    EXPECT_EQ(initial_snapshot.registered_module_count, 2u);
+    EXPECT_EQ(initial_snapshot.started_module_count, 0u);
+    EXPECT_EQ(initial_snapshot.watchdog_count, 1u);
+    EXPECT_EQ(initial_snapshot.unhealthy_watchdog_count, 1u);
+
+    const auto initial_modules = runtime.module_snapshot();
+    ASSERT_EQ(initial_modules.size(), 2u);
+    EXPECT_EQ(initial_modules[0].name, "bootstrap-metrics");
+    EXPECT_FALSE(initial_modules[0].started);
+    EXPECT_FALSE(initial_modules[0].has_watchdog);
+    EXPECT_EQ(initial_modules[1].name, "worker-loop");
+    EXPECT_FALSE(initial_modules[1].started);
+    EXPECT_TRUE(initial_modules[1].has_watchdog);
+    EXPECT_FALSE(initial_modules[1].watchdog_healthy);
+    EXPECT_EQ(initial_modules[1].watchdog_detail, "worker-stalled");
+
+    runtime.start_modules();
+
+    EXPECT_EQ(
+        lifecycle_events,
+        (std::vector<std::string>{"start:bootstrap-metrics", "start:worker-loop"}));
+
+    worker_watchdog_healthy = true;
+
+    const auto started_snapshot = runtime.snapshot();
+    EXPECT_EQ(started_snapshot.started_module_count, 2u);
+    EXPECT_EQ(started_snapshot.unhealthy_watchdog_count, 0u);
+
+    const auto started_modules = runtime.module_snapshot();
+    ASSERT_EQ(started_modules.size(), 2u);
+    EXPECT_TRUE(started_modules[0].started);
+    EXPECT_TRUE(started_modules[1].started);
+    EXPECT_TRUE(started_modules[1].watchdog_healthy);
+    EXPECT_EQ(started_modules[1].watchdog_detail, "worker-ready");
+
+    runtime.run_shutdown();
+
+    EXPECT_EQ(
+        lifecycle_events,
+        (std::vector<std::string>{
+            "start:bootstrap-metrics",
+            "start:worker-loop",
+            "stop:worker-loop",
+            "stop:bootstrap-metrics",
+        }));
+
+    const auto shutdown_snapshot = runtime.snapshot();
+    EXPECT_EQ(shutdown_snapshot.started_module_count, 0u);
+
+    runtime.run_shutdown();
+    EXPECT_EQ(
+        lifecycle_events,
+        (std::vector<std::string>{
+            "start:bootstrap-metrics",
+            "start:worker-loop",
+            "stop:worker-loop",
+            "stop:bootstrap-metrics",
+        }));
+}
+
+TEST(EngineCompositionTest, RuntimeLateModuleRegistrationStartsImmediatelyAfterStartup) {
+    using EngineRuntime = server::core::app::EngineRuntime;
+
+    std::vector<std::string> lifecycle_events;
+
+    auto runtime = server::core::app::EngineBuilder("engine_runtime_late_module_test").build();
+    runtime.start_modules();
+
+    runtime.register_module(
+        "late-module",
+        [&lifecycle_events](EngineRuntime&) { lifecycle_events.emplace_back("start:late-module"); },
+        [&lifecycle_events]() { lifecycle_events.emplace_back("stop:late-module"); },
+        []() {
+            EngineRuntime::WatchdogStatus status;
+            status.healthy = true;
+            status.detail = "late-module-ready";
+            return status;
+        });
+
+    EXPECT_EQ(lifecycle_events, (std::vector<std::string>{"start:late-module"}));
+
+    const auto snapshot = runtime.snapshot();
+    EXPECT_EQ(snapshot.registered_module_count, 1u);
+    EXPECT_EQ(snapshot.started_module_count, 1u);
+    EXPECT_EQ(snapshot.watchdog_count, 1u);
+    EXPECT_EQ(snapshot.unhealthy_watchdog_count, 0u);
+
+    const auto modules = runtime.module_snapshot();
+    ASSERT_EQ(modules.size(), 1u);
+    EXPECT_EQ(modules[0].name, "late-module");
+    EXPECT_TRUE(modules[0].started);
+    EXPECT_TRUE(modules[0].watchdog_healthy);
+    EXPECT_EQ(modules[0].watchdog_detail, "late-module-ready");
+
+    runtime.run_shutdown();
+    EXPECT_EQ(
+        lifecycle_events,
+        (std::vector<std::string>{
+            "start:late-module",
+            "stop:late-module",
+        }));
+}
+
+TEST(EngineCompositionTest, RuntimeLateModuleRegistrationDoesNotStartAfterStopRequested) {
+    using EngineRuntime = server::core::app::EngineRuntime;
+
+    std::vector<std::string> lifecycle_events;
+
+    auto runtime = server::core::app::EngineBuilder("engine_runtime_late_module_stop_guard").build();
+    runtime.start_modules();
+    runtime.request_stop();
+
+    runtime.register_module(
+        "late-module-after-stop",
+        [&lifecycle_events](EngineRuntime&) { lifecycle_events.emplace_back("start:late-module-after-stop"); },
+        [&lifecycle_events]() { lifecycle_events.emplace_back("stop:late-module-after-stop"); });
+
+    EXPECT_TRUE(lifecycle_events.empty());
+
+    const auto snapshot = runtime.snapshot();
+    EXPECT_EQ(snapshot.registered_module_count, 1u);
+    EXPECT_EQ(snapshot.started_module_count, 0u);
+
+    const auto modules = runtime.module_snapshot();
+    ASSERT_EQ(modules.size(), 1u);
+    EXPECT_EQ(modules[0].name, "late-module-after-stop");
+    EXPECT_FALSE(modules[0].started);
+
+    runtime.run_shutdown();
+    EXPECT_TRUE(lifecycle_events.empty());
 }

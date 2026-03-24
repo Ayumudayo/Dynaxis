@@ -1,14 +1,33 @@
 #include "server/core/app/engine_runtime.hpp"
 
 #include <thread>
+#include <utility>
+#include <vector>
 
 namespace server::core::app {
+
+struct EngineRuntime::ModuleRegistry {
+    struct Entry {
+        std::string name;
+        ModuleStartupCallback startup;
+        ModuleShutdownCallback shutdown;
+        WatchdogCallback watchdog;
+        std::atomic<bool> started{false};
+        std::atomic<bool> shutdown_ran{false};
+    };
+
+    mutable std::mutex mutex;
+    std::vector<std::shared_ptr<Entry>> entries;
+    bool startup_phase_started{false};
+    bool shutdown_phase_started{false};
+};
 
 EngineRuntime::EngineRuntime(std::string name)
     : name_(std::move(name))
     , context_(std::make_unique<EngineContext>())
     , host_(std::make_unique<AppHost>(name_))
-    , bridge_state_(std::make_shared<BridgeState>()) {
+    , bridge_state_(std::make_shared<BridgeState>())
+    , module_registry_(std::make_shared<ModuleRegistry>()) {
 }
 
 EngineRuntime::~EngineRuntime() = default;
@@ -106,6 +125,10 @@ void EngineRuntime::wait_for_stop(std::chrono::milliseconds poll_interval) const
 }
 
 void EngineRuntime::run_shutdown() noexcept {
+    if (module_registry_) {
+        std::lock_guard<std::mutex> lock(module_registry_->mutex);
+        module_registry_->shutdown_phase_started = true;
+    }
     request_stop();
     set_ready(false);
     host_->run_shutdown_steps();
@@ -126,6 +149,127 @@ void EngineRuntime::stop_admin_http() {
     host_->stop_admin_http();
 }
 
+void EngineRuntime::register_module(std::string name,
+                                    ModuleStartupCallback startup,
+                                    ModuleShutdownCallback shutdown,
+                                    WatchdogCallback watchdog) {
+    if (!module_registry_) {
+        module_registry_ = std::make_shared<ModuleRegistry>();
+    }
+
+    if (name.empty()) {
+        name = "(unnamed module)";
+    }
+
+    auto entry = std::make_shared<ModuleRegistry::Entry>();
+    entry->name = std::move(name);
+    entry->startup = std::move(startup);
+    entry->shutdown = std::move(shutdown);
+    entry->watchdog = std::move(watchdog);
+
+    bool start_immediately = false;
+    {
+        std::lock_guard<std::mutex> lock(module_registry_->mutex);
+        start_immediately = module_registry_->startup_phase_started
+            && !module_registry_->shutdown_phase_started
+            && !host_->stop_requested();
+        module_registry_->entries.emplace_back(entry);
+    }
+
+    if (entry->shutdown) {
+        add_shutdown_step("stop module " + entry->name, [entry]() {
+            if (!entry->started.exchange(false, std::memory_order_acq_rel)) {
+                return;
+            }
+            if (entry->shutdown_ran.exchange(true, std::memory_order_acq_rel)) {
+                return;
+            }
+            entry->shutdown();
+        });
+    }
+
+    if (start_immediately && !stop_requested()) {
+        if (entry->startup) {
+            entry->startup(*this);
+        }
+        entry->shutdown_ran.store(false, std::memory_order_relaxed);
+        entry->started.store(true, std::memory_order_release);
+    }
+}
+
+void EngineRuntime::start_modules() {
+    if (!module_registry_) {
+        return;
+    }
+
+    std::vector<std::shared_ptr<ModuleRegistry::Entry>> entries;
+    {
+        std::lock_guard<std::mutex> lock(module_registry_->mutex);
+        if (module_registry_->startup_phase_started || module_registry_->shutdown_phase_started || stop_requested()) {
+            return;
+        }
+        module_registry_->startup_phase_started = true;
+        entries = module_registry_->entries;
+    }
+
+    for (const auto& entry : entries) {
+        if (!entry) {
+            continue;
+        }
+        if (entry->started.load(std::memory_order_acquire)) {
+            continue;
+        }
+        if (entry->startup) {
+            entry->startup(*this);
+        }
+        entry->shutdown_ran.store(false, std::memory_order_relaxed);
+        entry->started.store(true, std::memory_order_release);
+    }
+}
+
+std::vector<EngineRuntime::ModuleSnapshot> EngineRuntime::module_snapshot() const {
+    std::vector<ModuleSnapshot> snapshots;
+    if (!module_registry_) {
+        return snapshots;
+    }
+
+    std::vector<std::shared_ptr<ModuleRegistry::Entry>> entries;
+    {
+        std::lock_guard<std::mutex> lock(module_registry_->mutex);
+        entries = module_registry_->entries;
+    }
+
+    snapshots.reserve(entries.size());
+    for (const auto& entry : entries) {
+        if (!entry) {
+            continue;
+        }
+
+        ModuleSnapshot snapshot;
+        snapshot.name = entry->name;
+        snapshot.started = entry->started.load(std::memory_order_acquire);
+        snapshot.has_watchdog = static_cast<bool>(entry->watchdog);
+
+        if (entry->watchdog) {
+            try {
+                const auto watchdog = entry->watchdog();
+                snapshot.watchdog_healthy = watchdog.healthy;
+                snapshot.watchdog_detail = watchdog.detail;
+            } catch (const std::exception& ex) {
+                snapshot.watchdog_healthy = false;
+                snapshot.watchdog_detail = ex.what();
+            } catch (...) {
+                snapshot.watchdog_healthy = false;
+                snapshot.watchdog_detail = "watchdog-exception";
+            }
+        }
+
+        snapshots.emplace_back(std::move(snapshot));
+    }
+
+    return snapshots;
+}
+
 void EngineRuntime::add_shutdown_step(std::string name, std::function<void()> step) {
     host_->add_shutdown_step(std::move(name), std::move(step));
 }
@@ -140,6 +284,23 @@ void EngineRuntime::install_asio_termination_signals(boost::asio::io_context& io
 }
 
 EngineRuntime::Snapshot EngineRuntime::snapshot() const {
+    const auto modules = module_snapshot();
+
+    std::size_t started_module_count = 0;
+    std::size_t watchdog_count = 0;
+    std::size_t unhealthy_watchdog_count = 0;
+    for (const auto& module : modules) {
+        if (module.started) {
+            ++started_module_count;
+        }
+        if (module.has_watchdog) {
+            ++watchdog_count;
+            if (!module.watchdog_healthy) {
+                ++unhealthy_watchdog_count;
+            }
+        }
+    }
+
     return Snapshot{
         .name = name_,
         .lifecycle_phase = lifecycle_phase(),
@@ -149,6 +310,10 @@ EngineRuntime::Snapshot EngineRuntime::snapshot() const {
         .stop_requested = stop_requested(),
         .context_service_count = context_->service_count(),
         .compatibility_bridge_count = compatibility_bridge_count(),
+        .registered_module_count = modules.size(),
+        .started_module_count = started_module_count,
+        .watchdog_count = watchdog_count,
+        .unhealthy_watchdog_count = unhealthy_watchdog_count,
     };
 }
 

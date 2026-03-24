@@ -56,9 +56,10 @@
 | `server/core/metrics/metrics.hpp` | Stable | 백엔드가 없을 때 no-op fallback을 제공하는 명명 메트릭 접근 계약 |
 | `server/core/net/acceptor.hpp` | Internal | `SessionOptions`/`ConnectionRuntimeState`와 결합된 서버 전용 accept 루프이며 stable transport 계약 대상이 아님 |
 | `server/core/net/connection.hpp` | Stable | FIFO send-queue 순서, bounded queue backpressure, 멱등 stop 수명주기를 갖는 확장형 transport 기반 |
-| `server/core/net/dispatcher.hpp` | Stable | core msg_id 라우팅 계약 |
+| `server/core/net/dispatcher.hpp` | Stable | legacy packet dispatcher 계약은 유지되지만, 새 public consumer의 기본 선택은 `transport_router.hpp` higher-level seam이어야 함 |
 | `server/core/net/hive.hpp` | Stable | transport 모듈이 공유하는 `io_context` 수명주기 래퍼 |
 | `server/core/net/listener.hpp` | Stable | connection factory 주입과 멱등 stop 의미를 갖는 범용 accept 루프 계약 |
+| `server/core/net/transport_router.hpp` | Stable | `ITransportSession`만 요구하는 domain-neutral higher-level transport/session routing seam |
 | `server/core/net/rudp/ack_window.hpp` | Internal | gateway canary RUDP 경로에서 사용하는 실험/튜닝 대상 ACK window 구성요소 |
 | `server/core/net/rudp/retransmission_queue.hpp` | Internal | 재전송 타이머/ACK 마스크 세부 동작이 안정화 전인 internal 큐 계약 |
 | `server/core/net/rudp/rudp_engine.hpp` | Internal | gateway 통합 전개 단계의 실험적 RUDP 엔진 API(기본 OFF) |
