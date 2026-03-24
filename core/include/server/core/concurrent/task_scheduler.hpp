@@ -123,8 +123,19 @@ public:
      */
     void post(Task task);
 
-    /** @brief cancel token/group/validator가 포함된 즉시 작업을 등록합니다. */
-    [[nodiscard]] ScheduleHandle post_controlled(Task task, TaskOptions options = {});
+    /**
+     * @brief 기본 제어 옵션으로 즉시 작업을 등록합니다.
+     * @param task 즉시 실행 대기열에 추가할 작업
+     * @return 생성된 작업 핸들
+     */
+    [[nodiscard]] ScheduleHandle post_controlled(Task task);
+    /**
+     * @brief cancel token/group/validator가 포함된 즉시 작업을 등록합니다.
+     * @param task 즉시 실행 대기열에 추가할 작업
+     * @param options cancel group/validator를 담은 제어 옵션
+     * @return 생성된 작업 핸들
+     */
+    [[nodiscard]] ScheduleHandle post_controlled(Task task, TaskOptions options);
 
     /**
      * @brief delay 이후 실행되도록 작업을 예약한다.
@@ -136,10 +147,23 @@ public:
      */
     void schedule(Task task, Clock::duration delay);
 
-    /** @brief cancel token/group/validator가 포함된 지연 작업을 등록합니다. */
+    /**
+     * @brief 기본 제어 옵션으로 지연 작업을 등록합니다.
+     * @param task 실행할 작업
+     * @param delay 현재 시점부터의 지연 시간
+     * @return 생성된 작업 핸들
+     */
+    [[nodiscard]] ScheduleHandle schedule_controlled(Task task, Clock::duration delay);
+    /**
+     * @brief cancel token/group/validator가 포함된 지연 작업을 등록합니다.
+     * @param task 실행할 작업
+     * @param delay 현재 시점부터의 지연 시간
+     * @param options cancel group/validator를 담은 제어 옵션
+     * @return 생성된 작업 핸들
+     */
     [[nodiscard]] ScheduleHandle schedule_controlled(Task task,
                                                      Clock::duration delay,
-                                                     TaskOptions options = {});
+                                                     TaskOptions options);
 
     /**
      * @brief interval 간격으로 반복 실행되는 작업을 예약한다.
@@ -160,10 +184,14 @@ public:
      * @param cancel_group 연관 작업 묶음 취소용 group
      * @return 생성된 작업 핸들
      */
+    [[nodiscard]] ScheduleHandle schedule_every_controlled(RepeatTask task, RepeatPolicy policy);
     [[nodiscard]] ScheduleHandle schedule_every_controlled(RepeatTask task,
                                                            RepeatPolicy policy,
-                                                           RepeatValidator validator = {},
-                                                           CancelGroup cancel_group = {});
+                                                           RepeatValidator validator);
+    [[nodiscard]] ScheduleHandle schedule_every_controlled(RepeatTask task,
+                                                           RepeatPolicy policy,
+                                                           RepeatValidator validator,
+                                                           CancelGroup cancel_group);
 
     /**
      * @brief cancel token 하나를 취소합니다.

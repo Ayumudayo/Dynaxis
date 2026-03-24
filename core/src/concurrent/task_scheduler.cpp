@@ -1,5 +1,6 @@
 #include "server/core/concurrent/task_scheduler.hpp"
 
+#include <algorithm>
 #include <limits>
 
 /**
@@ -64,11 +65,11 @@ bool TaskScheduler::is_shutdown() const {
 }
 
 TaskScheduler::ScheduleHandle TaskScheduler::make_handle(TaskId id, CancelGroup group) const noexcept {
-    return ScheduleHandle{
-        .task_id = id,
-        .cancel_token = CancelToken{id},
-        .cancel_group = group,
-    };
+    ScheduleHandle handle{};
+    handle.task_id = id;
+    handle.cancel_token = CancelToken{id};
+    handle.cancel_group = group;
+    return handle;
 }
 
 TaskScheduler::Clock::duration TaskScheduler::apply_jitter(Clock::duration delay, Clock::duration jitter) {
@@ -99,7 +100,7 @@ TaskScheduler::Clock::duration TaskScheduler::next_repeat_delay(const TaskRecord
         if (record.repeat_policy.max_interval > Clock::duration::zero()) {
             const auto cap_ns =
                 std::chrono::duration_cast<std::chrono::nanoseconds>(record.repeat_policy.max_interval).count();
-            next_ns = std::min(next_ns, cap_ns);
+            next_ns = std::min<long long>(next_ns, static_cast<long long>(cap_ns));
         }
         delay = std::chrono::nanoseconds(next_ns);
     } else {
@@ -113,6 +114,10 @@ void TaskScheduler::post(Task task) {
     (void)post_controlled(std::move(task));
 }
 
+TaskScheduler::ScheduleHandle TaskScheduler::post_controlled(Task task) {
+    return post_controlled(std::move(task), TaskOptions{});
+}
+
 TaskScheduler::ScheduleHandle TaskScheduler::post_controlled(Task task, TaskOptions options) {
     return schedule_controlled(std::move(task), Clock::duration::zero(), std::move(options));
 }
@@ -121,11 +126,15 @@ void TaskScheduler::schedule(Task task, Clock::duration delay) {
     (void)schedule_controlled(std::move(task), delay);
 }
 
+TaskScheduler::ScheduleHandle TaskScheduler::schedule_controlled(Task task, Clock::duration delay) {
+    return schedule_controlled(std::move(task), delay, TaskOptions{});
+}
+
 TaskScheduler::ScheduleHandle TaskScheduler::schedule_controlled(Task task,
                                                                  Clock::duration delay,
                                                                  TaskOptions options) {
     if (!task || is_shutdown()) {
-        return {};
+        return ScheduleHandle{};
     }
 
     auto record = std::make_shared<TaskRecord>();
@@ -138,7 +147,7 @@ TaskScheduler::ScheduleHandle TaskScheduler::schedule_controlled(Task task,
 
     std::lock_guard<std::mutex> lock(mutex_);
     if (is_shutdown()) {
-        return {};
+        return ScheduleHandle{};
     }
 
     tasks_[record->id] = record;
@@ -161,12 +170,23 @@ void TaskScheduler::schedule_every(Task task, Clock::duration interval) {
         policy);
 }
 
+TaskScheduler::ScheduleHandle TaskScheduler::schedule_every_controlled(RepeatTask task, RepeatPolicy policy) {
+    return schedule_every_controlled(std::move(task), std::move(policy), RepeatValidator{}, CancelGroup{});
+}
+
+TaskScheduler::ScheduleHandle TaskScheduler::schedule_every_controlled(RepeatTask task,
+                                                                       RepeatPolicy policy,
+                                                                       RepeatValidator validator) {
+    return schedule_every_controlled(
+        std::move(task), std::move(policy), std::move(validator), CancelGroup{});
+}
+
 TaskScheduler::ScheduleHandle TaskScheduler::schedule_every_controlled(RepeatTask task,
                                                                        RepeatPolicy policy,
                                                                        RepeatValidator validator,
                                                                        CancelGroup cancel_group) {
     if (!task || !is_valid_repeat_policy(policy) || is_shutdown()) {
-        return {};
+        return ScheduleHandle{};
     }
 
     auto record = std::make_shared<TaskRecord>();
@@ -183,7 +203,7 @@ TaskScheduler::ScheduleHandle TaskScheduler::schedule_every_controlled(RepeatTas
 
     std::lock_guard<std::mutex> lock(mutex_);
     if (is_shutdown()) {
-        return {};
+        return ScheduleHandle{};
     }
 
     tasks_[record->id] = record;
