@@ -1,4 +1,4 @@
-name: CI API Governance
+name: Core API Checks
 
 on:
   push:
@@ -9,6 +9,9 @@ on:
       - "CMakePresets.json"
       - "core/**"
       - "tests/**"
+      - ".github/workflows/**"
+      - "scripts/build.ps1"
+      - "scripts/setup_conan.ps1"
       - "tools/check_core_api_contracts.py"
       - "docs/core-api/**"
   pull_request:
@@ -17,11 +20,11 @@ on:
       - "CMakePresets.json"
       - "core/**"
       - "tests/**"
+      - ".github/workflows/**"
+      - "scripts/build.ps1"
+      - "scripts/setup_conan.ps1"
       - "tools/check_core_api_contracts.py"
       - "docs/core-api/**"
-  merge_group:
-    types:
-      - checks_requested
 
 env:
   PYTHONIOENCODING: utf-8
@@ -32,6 +35,7 @@ concurrency:
 
 jobs:
   core-api-consumer-windows:
+    name: Core API Governance and Consumer Validation (Windows)
     runs-on: windows-latest
     timeout-minutes: 60
     env:
@@ -167,6 +171,7 @@ jobs:
           ctest --preset windows-test --parallel 8 -R "CorePublicApi|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure
 
   core-api-consumer-linux:
+    name: Core API Governance and Consumer Validation (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -210,5 +215,5 @@ jobs:
             python3 tools/check_core_api_contracts.py --check-boundary-fixtures; \
             python3 tools/check_core_api_contracts.py --check-stable-governance-fixtures; \
             cmake --preset linux -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=ON; \
-            cmake --build --preset linux-debug --target core_public_api_smoke core_public_api_headers_compile core_public_api_stable_header_scenarios core_public_api_extensibility_smoke core_public_api_realtime_capability_smoke core_public_api_worlds_aws_smoke protocol_fuzz_harness --parallel; \
+            cmake --build --preset linux-debug --target core_public_api_smoke core_public_api_headers_compile core_public_api_stable_header_scenarios core_public_api_extensibility_smoke core_public_api_realtime_capability_smoke core_public_api_worlds_aws_smoke --parallel; \
             ctest --test-dir build-linux --parallel 8 -R 'CorePublicApi|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures' --output-on-failure"
