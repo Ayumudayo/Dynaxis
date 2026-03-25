@@ -38,6 +38,19 @@ EngineBuilder& EngineBuilder::admin_http(unsigned short port,
     return *this;
 }
 
+EngineBuilder& EngineBuilder::register_module(std::string name,
+                                              EngineRuntime::ModuleStartupCallback startup,
+                                              EngineRuntime::ModuleShutdownCallback shutdown,
+                                              EngineRuntime::WatchdogCallback watchdog) {
+    ModuleSpec module;
+    module.name = std::move(name);
+    module.startup = std::move(startup);
+    module.shutdown = std::move(shutdown);
+    module.watchdog = std::move(watchdog);
+    modules_.push_back(std::move(module));
+    return *this;
+}
+
 EngineRuntime EngineBuilder::build() & {
     return std::move(*this).build();
 }
@@ -54,6 +67,14 @@ EngineRuntime EngineBuilder::build() && {
 
     for (auto& dependency : dependencies_) {
         runtime.declare_dependency(std::move(dependency.name), dependency.requirement);
+    }
+
+    for (auto& module : modules_) {
+        runtime.register_module(
+            std::move(module.name),
+            std::move(module.startup),
+            std::move(module.shutdown),
+            std::move(module.watchdog));
     }
 
     if (admin_http_.has_value() && admin_http_->port != 0) {

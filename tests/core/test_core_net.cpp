@@ -9,7 +9,9 @@
 #include <server/core/net/connection_runtime_state.hpp>
 #include <server/core/net/queue_budget.hpp>
 #include <server/core/net/session.hpp>
+#include <server/core/net/transport_router.hpp>
 #include <server/core/protocol/packet.hpp>
+#include <server/core/protocol/protocol_errors.hpp>
 #include <server/core/protocol/system_opcodes.hpp>
 #include <server/core/protocol/version.hpp>
 #include <server/core/runtime_metrics.hpp>
@@ -18,8 +20,10 @@
 #include <gateway/gateway_app.hpp>
 
 #include <chrono>
+#include <deque>
 #include <memory>
 #include <optional>
+#include <string>
 #include <thread>
 #include <type_traits>
 #include <vector>
@@ -48,6 +52,39 @@ protected:
 
     void on_disconnect() override {
         ++disconnect_count;
+    }
+};
+
+class TestTransportSession final : public server::core::net::ITransportSession {
+public:
+    server::core::protocol::SessionStatus status{
+        server::core::protocol::SessionStatus::kAny};
+    bool accept_serialized_posts{true};
+    std::vector<std::pair<std::uint16_t, std::string>> errors;
+    std::deque<std::function<void()>> serialized_tasks;
+
+    server::core::protocol::SessionStatus session_status() const noexcept override {
+        return status;
+    }
+
+    bool post_serialized(std::function<void()> fn) override {
+        if (!accept_serialized_posts) {
+            return false;
+        }
+        serialized_tasks.push_back(std::move(fn));
+        return true;
+    }
+
+    void send_error(std::uint16_t code, std::string_view message) override {
+        errors.emplace_back(code, std::string(message));
+    }
+
+    void drain_serialized() {
+        while (!serialized_tasks.empty()) {
+            auto task = std::move(serialized_tasks.front());
+            serialized_tasks.pop_front();
+            task();
+        }
     }
 };
 
@@ -330,6 +367,72 @@ TEST(DispatcherTest, InvalidProcessingPlaceIsRejected) {
     EXPECT_EQ(after.dispatch_processing_place_calls_total[0], before.dispatch_processing_place_calls_total[0]);
     EXPECT_EQ(after.dispatch_processing_place_calls_total[1], before.dispatch_processing_place_calls_total[1]);
     EXPECT_EQ(after.dispatch_processing_place_calls_total[2], before.dispatch_processing_place_calls_total[2]);
+}
+
+TEST(TransportRouterTest, RegisterAndDispatchWithoutPacketSession) {
+    server::core::net::TransportRouter router;
+    auto session = std::make_shared<TestTransportSession>();
+
+    bool called = false;
+    std::vector<std::uint8_t> observed_payload;
+    router.register_handler(
+        4101,
+        [&](server::core::net::ITransportSession& routed_session,
+            std::span<const std::uint8_t> payload) {
+            called = &routed_session == session.get();
+            observed_payload.assign(payload.begin(), payload.end());
+        });
+
+    const std::vector<std::uint8_t> payload{4, 1, 0, 1};
+    EXPECT_TRUE(router.dispatch(4101, session, payload));
+    EXPECT_TRUE(called);
+    EXPECT_EQ(observed_payload, payload);
+    EXPECT_FALSE(router.dispatch(4999, session, payload));
+}
+
+TEST(TransportRouterTest, HonorsPolicyAndProcessingPlaceWithoutPacketSession) {
+    server::core::net::TransportRouter router;
+    auto session = std::make_shared<TestTransportSession>();
+
+    bool called = false;
+    server::core::protocol::OpcodePolicy policy{};
+    policy.required_state = server::core::protocol::SessionStatus::kAuthenticated;
+    policy.transport = server::core::protocol::TransportMask::kUdp;
+    policy.processing_place = server::core::protocol::ProcessingPlace::kWorker;
+    router.register_handler(
+        4102,
+        [&](server::core::net::ITransportSession&, std::span<const std::uint8_t>) {
+            called = true;
+        },
+        policy);
+
+    EXPECT_TRUE(router.dispatch(4102, session, std::vector<std::uint8_t>{1, 2, 3}));
+    ASSERT_EQ(session->errors.size(), 1u);
+    EXPECT_EQ(session->errors.front().first, server::core::protocol::errc::FORBIDDEN);
+    EXPECT_FALSE(called);
+
+    session->errors.clear();
+    session->status = server::core::protocol::SessionStatus::kAuthenticated;
+
+    auto job_queue = std::make_shared<JobQueue>(16);
+    services::set(job_queue);
+    EXPECT_TRUE(router.dispatch(
+        4102,
+        session,
+        std::vector<std::uint8_t>{4, 1, 0, 2},
+        server::core::protocol::TransportKind::kUdp));
+    EXPECT_FALSE(called);
+
+    auto job = job_queue->Pop();
+    ASSERT_TRUE(static_cast<bool>(job));
+    job();
+    EXPECT_FALSE(called);
+
+    session->drain_serialized();
+    EXPECT_TRUE(called);
+
+    job_queue->Stop();
+    services::clear();
 }
 
 TEST(SessionTest, HelloPayloadVersionContract) {

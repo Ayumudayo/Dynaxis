@@ -11,6 +11,7 @@
 #include <boost/asio/read.hpp>
 #include <boost/asio/write.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdlib>
@@ -210,6 +211,53 @@ TEST(RuntimeMetricsTest, ExtendedRuntimeCountersAreSnapshotted) {
     EXPECT_EQ(after.runtime_setting_reload_attempt_total, before.runtime_setting_reload_attempt_total + 1);
 }
 
+TEST(RuntimeMetricsTest, WatchdogAndLivenessSignalsAreSnapshotted) {
+    server::core::runtime_metrics::set_liveness_state(
+        server::core::runtime_metrics::LivenessState::kRunning);
+    server::core::runtime_metrics::record_watchdog_sample("scheduler-poll-loop", false, "scheduler-loop-stalled");
+    server::core::runtime_metrics::record_watchdog_sample("scheduler-poll-loop", true, "scheduler-loop-recovered");
+
+    const auto after = server::core::runtime_metrics::snapshot();
+    const auto watchdogs = server::core::runtime_metrics::watchdog_snapshot();
+
+    EXPECT_EQ(after.liveness_state, server::core::runtime_metrics::LivenessState::kRunning);
+    EXPECT_GE(after.watchdog_total, 1u);
+    EXPECT_GE(after.watchdog_transition_total, 1u);
+
+    auto it = std::find_if(watchdogs.begin(), watchdogs.end(), [](const auto& watchdog) {
+        return watchdog.name == "scheduler-poll-loop";
+    });
+    ASSERT_NE(it, watchdogs.end());
+    EXPECT_TRUE(it->healthy);
+    EXPECT_EQ(it->detail, "scheduler-loop-recovered");
+    EXPECT_GE(it->unhealthy_samples_total, 1u);
+}
+
+TEST(RuntimeMetricsTest, FreezeSignalsTriggerDetailedTelemetryCapture) {
+    server::core::runtime_metrics::set_liveness_state(
+        server::core::runtime_metrics::LivenessState::kDegraded);
+    server::core::runtime_metrics::record_watchdog_sample("scheduler-poll-loop", false, "late-1");
+    server::core::runtime_metrics::record_watchdog_sample("scheduler-poll-loop", false, "late-2");
+    server::core::runtime_metrics::record_watchdog_freeze_suspect(
+        "scheduler-poll-loop",
+        std::chrono::milliseconds(250),
+        std::chrono::milliseconds(100),
+        "scheduler-freeze");
+    server::core::runtime_metrics::record_exception_recoverable();
+    server::core::runtime_metrics::record_dispatch_attempt(true, std::chrono::milliseconds(3));
+
+    const auto after = server::core::runtime_metrics::snapshot();
+    const auto detail = server::core::runtime_metrics::detailed_telemetry_snapshot();
+
+    EXPECT_EQ(after.liveness_state, server::core::runtime_metrics::LivenessState::kDegraded);
+    EXPECT_GE(after.watchdog_freeze_suspect_total, 1u);
+    EXPECT_GE(after.detailed_telemetry_activation_total, 1u);
+    EXPECT_TRUE(detail.active);
+    EXPECT_FALSE(detail.trigger.empty());
+    EXPECT_GE(detail.captured_exception_total, 1u);
+    EXPECT_GE(detail.captured_dispatch_latency_max_ns, static_cast<std::uint64_t>(3'000'000));
+}
+
 TEST(RuntimeMetricsTest, RudpCountersAreSnapshotted) {
     const auto before = server::core::runtime_metrics::snapshot();
 
@@ -249,6 +297,30 @@ TEST(MetricsTest, RuntimeCoreMetricsIncludeExtendedSignals) {
     EXPECT_NE(text.find("core_runtime_log_async_flush_total"), std::string::npos);
     EXPECT_NE(text.find("core_runtime_http_auth_reject_total"), std::string::npos);
     EXPECT_NE(text.find("core_runtime_setting_reload_success_total"), std::string::npos);
+}
+
+TEST(MetricsTest, RuntimeCoreMetricsIncludeWatchdogAndDetailedTelemetrySignals) {
+    server::core::runtime_metrics::set_liveness_state(
+        server::core::runtime_metrics::LivenessState::kRunning);
+    server::core::runtime_metrics::record_watchdog_sample("scheduler-poll-loop", false, "late-1");
+    server::core::runtime_metrics::record_watchdog_sample("scheduler-poll-loop", false, "late-2");
+    server::core::runtime_metrics::record_watchdog_freeze_suspect(
+        "scheduler-poll-loop",
+        std::chrono::milliseconds(250),
+        std::chrono::milliseconds(100),
+        "scheduler-freeze");
+    server::core::runtime_metrics::record_exception_recoverable();
+
+    std::ostringstream out;
+    append_runtime_core_metrics(out);
+    const std::string text = out.str();
+
+    EXPECT_NE(text.find("core_runtime_liveness_state{state=\"degraded\"} 1"), std::string::npos);
+    EXPECT_NE(text.find("core_runtime_watchdog_total"), std::string::npos);
+    EXPECT_NE(text.find("core_runtime_watchdog_freeze_suspect_total"), std::string::npos);
+    EXPECT_NE(text.find("core_runtime_watchdog_status{watchdog=\"scheduler-poll-loop\"} 0"), std::string::npos);
+    EXPECT_NE(text.find("core_runtime_detailed_telemetry_activation_total"), std::string::npos);
+    EXPECT_NE(text.find("core_runtime_detailed_telemetry_active 1"), std::string::npos);
 }
 
 TEST(MetricsTest, RuntimeCoreMetricsIncludeRudpSignals) {

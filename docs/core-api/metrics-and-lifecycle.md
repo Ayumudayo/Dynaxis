@@ -18,8 +18,10 @@
 - `AppHost` 수명주기 단계: `init -> bootstrapping -> running -> stopping -> stopped|failed`
 - `EngineBuilder`는 bootstrap 기본값(`bootstrapping`, `ready=false`, declared dependencies, optional admin HTTP)을 같은 규약으로 설정합니다.
 - `EngineRuntime`는 `AppHost` + `EngineContext` 조합으로 lifecycle/dependency/shutdown/admin-http를 한 인스턴스 단위로 묶습니다.
+- `EngineBuilder::register_module()` / `EngineRuntime::register_module()` / `start_modules()`는 runtime-owned orchestration module registration, ordered startup, shutdown hook attachment를 같은 규약으로 묶습니다.
 - `EngineRuntime::set_alias()` / `bridge_alias()`는 stack object reference를 alias shared_ptr로 context/global registry에 연결하는 표준 helper입니다.
-- `EngineRuntime::snapshot()`은 lifecycle/readiness/stop/context-service-count/compatibility-bridge-count를 인스턴스 단위로 읽는 canonical consumer surface입니다.
+- `EngineRuntime::snapshot()`은 lifecycle/readiness/stop/context-service-count/compatibility-bridge-count와 module/watchdog aggregate counts를 인스턴스 단위로 읽는 canonical consumer surface입니다.
+- `EngineRuntime::module_snapshot()`은 registration order 기준 module started/watchdog 상태를 operator-facing snapshot으로 읽는 canonical detail surface입니다.
 - `EngineRuntime::mark_running()` / `mark_stopped()` / `mark_failed()`는 readiness + lifecycle terminal transitions를 같은 shape로 적용합니다.
 - `EngineRuntime::wait_for_stop()`은 non-Asio control-plane/worker loop가 termination polling을 open-code하지 않도록 하는 표준 helper입니다.
 - `EngineRuntime::run_shutdown()`은 `request_stop() + ready=false + registered shutdown steps`를 normal teardown 경로에서도 같은 shape로 실행합니다.
@@ -33,12 +35,16 @@
 - `metrics` API(`get_counter/get_gauge/get_histogram`)는 exporter 백엔드가 없을 때도 no-op 안전 fallback을 보장합니다.
 - `MetricsHttpServer`는 `/metrics`, `/healthz`, `/readyz`와 선택적 커스텀 라우트를 노출합니다.
 - `build_info` helper는 Prometheus 텍스트 포맷으로 `runtime_build_info`를 출력합니다.
-- `runtime_metrics` snapshot은 프로세스 전역 카운터와 히스토그램 버킷을 안정적인 읽기 계약으로 제공합니다.
+- `runtime_metrics` snapshot은 프로세스 전역 카운터와 히스토그램 버킷뿐 아니라 liveness state, named watchdog aggregate, freeze suspicion, threshold-triggered detailed telemetry window 상태까지 안정적인 읽기 계약으로 제공합니다.
 - canonical embeddability consumer는 인스턴스 ownership 관측에 `EngineRuntime::snapshot()`을 우선 사용하고, `runtime_metrics`는 process-wide operational telemetry로 취급합니다.
 
 ## Consumer Guidance
 - 인스턴스 단위 lifecycle, readiness, context service ownership을 읽고 싶다면 `EngineRuntime::snapshot()`을 사용합니다.
-- 프로세스 전체의 hot-path telemetry, queue depth, dispatch latency, HTTP reject, RUDP fallback 같은 운영 카운터를 읽고 싶다면 `runtime_metrics`를 사용합니다.
+- bootstrap-owned module started/watchdog detail을 읽고 싶다면 `EngineRuntime::module_snapshot()`을 사용합니다.
+- 프로세스 전체의 hot-path telemetry, queue depth, dispatch latency, HTTP reject, RUDP fallback, liveness/watchdog aggregate를 읽고 싶다면 `runtime_metrics`를 사용합니다.
+- `runtime_metrics::set_liveness_state()`는 process-global lifecycle/liveness 모델을 갱신하는 stable hook입니다.
+- `runtime_metrics::record_watchdog_sample()` / `watchdog_snapshot()`은 named watchdog transition/health aggregate를 다루는 stable hook입니다.
+- `runtime_metrics::record_watchdog_freeze_suspect()` / `detailed_telemetry_snapshot()`은 freeze suspicion과 threshold-triggered detailed telemetry window를 읽는 stable hook입니다.
 - `runtime_metrics`는 process-wide aggregation이므로, multi-runtime embedding 환경에서 per-runtime ownership source처럼 해석하면 안 됩니다.
 - `metrics::metrics` registry는 서비스별 추가 series를 노출하는 exporter plane이고, `runtime_metrics`는 core가 고정적으로 소유하는 substrate counter plane입니다.
 

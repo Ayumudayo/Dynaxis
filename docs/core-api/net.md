@@ -8,13 +8,19 @@
 | `server/core/net/dispatcher.hpp` | `[Stable]` |
 | `server/core/net/listener.hpp` | `[Stable]` |
 | `server/core/net/connection.hpp` | `[Stable]` |
+| `server/core/net/transport_router.hpp` | `[Stable]` |
 
 ## 핵심 계약
 - `Hive`는 공유 `io_context`의 run/stop 수명주기를 소유합니다.
-- `Dispatcher`는 `msg_id`를 핸들러로 매핑하며 비즈니스 로직을 소유하지 않습니다.
 - `Listener`는 accept 루프 수명주기를 소유하고 `connection_factory`를 통해 전송 객체 생성을 주입합니다.
 - `Connection`은 FIFO 쓰기 순서와 제한된 send-queue 백프레셔를 갖는 비동기 read/write 루프를 소유합니다.
+- `TransportRouter`는 `ITransportSession`만 요구하는 higher-level routing seam이며, public consumer가 packet `Session` 헤더 없이 opcode policy/processing place를 적용할 수 있게 합니다.
 - 서버 전용 패킷 세션 구현(`acceptor`/`session`)은 내부 범위이며 공개 API 사용 대상이 아닙니다.
+
+## Routing Seams
+- 새 public consumer는 가능하면 `TransportRouter`를 기본 선택으로 사용합니다. 이 경로는 `session.hpp`를 포함하지 않고도 required state, transport allowlist, worker/serialized execution policy를 적용할 수 있습니다.
+- `Dispatcher`는 기존 packet-session routing contract를 계속 제공하지만, 새 public consumer는 가능하면 `TransportRouter`를 기본 선택으로 사용합니다.
+- `ITransportSession`은 최소 contract만 노출합니다: 현재 session status, serialized callback posting, protocol error reply. 앱별 상태/전송 구현 소유권은 consumer가 유지합니다.
 
 ## Resilience / Backpressure Story
 - `Connection`의 생성자 `send_queue_max_bytes`는 transport 경계에서 사용할 수 있는 현재 stable backpressure knob입니다. 큐 예산을 초과한 `async_send()`는 `no_buffer_space` 오류 경로로 연결을 정리합니다.
