@@ -479,6 +479,16 @@ if (BUILD_CONTRACT_TESTS)
       )
       set_tests_properties(DoxygenCoverageToolTests PROPERTIES LABELS "contract;docs-policy")
       add_test(
+        NAME WindowsValidationLayoutTests
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/test_windows_validation_layout.py"
+      )
+      set_tests_properties(WindowsValidationLayoutTests PROPERTIES LABELS "contract;docs-policy")
+      add_test(
+        NAME DeployDockerBuildPlanTests
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/test_deploy_docker_build_plan.py"
+      )
+      set_tests_properties(DeployDockerBuildPlanTests PROPERTIES LABELS "contract;docs-policy")
+      add_test(
         NAME CoreApiStableGovernanceFixtures
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/check_core_api_contracts.py" --check-stable-governance-fixtures
       )

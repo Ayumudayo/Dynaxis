@@ -105,6 +105,9 @@ if (-not $BuildDir -or $BuildDir -eq '') {
     if ($ClientOnly) {
       $BuildDir = 'build-windows-client'
     }
+    elseif ($Config -eq 'Release') {
+      $BuildDir = 'build-windows-release'
+    }
     else {
       $BuildDir = 'build-windows'
     }
@@ -122,6 +125,7 @@ if ($Clean) {
 if (-not $Generator -or $Generator -eq '') {
   if ($onWindows) {
     if ($ClientOnly) { $Preset = 'windows-client' }
+    elseif ($Config -eq 'Release') { $Preset = 'windows-release-tree' }
     else { $Preset = 'windows' }
   } else {
     if ($Config -eq 'Debug') { $Preset = 'linux-conan' }

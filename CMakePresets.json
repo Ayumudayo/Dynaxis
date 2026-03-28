@@ -68,6 +68,14 @@
       "description": "Windows configuration using Visual Studio 2022"
     },
     {
+      "name": "windows-release-tree",
+      "inherits": "windows-base",
+      "displayName": "Windows Release Tree (VS2022)",
+      "description": "Dedicated Windows release-validation tree using Visual Studio 2022",
+      "binaryDir": "${sourceDir}/build-windows-release",
+      "toolchainFile": "${sourceDir}/build-windows-release/conan/build/generators/conan_toolchain.cmake"
+    },
+    {
       "name": "windows-core-engine",
       "inherits": "windows-base",
       "displayName": "Windows Core Engine (VS2022)",
@@ -321,8 +329,19 @@
   "testPresets": [
     {
       "name": "windows-test",
-      "configurePreset": "windows",
+      "configurePreset": "windows-release-tree",
       "configuration": "Release",
+      "execution": {
+        "jobs": 8
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-debug-test",
+      "configurePreset": "windows",
+      "configuration": "Debug",
       "execution": {
         "jobs": 8
       },
