@@ -1,12 +1,9 @@
-name: CI Hardening
+name: Reliability Checks
 
 on:
   push:
     branches:
       - main
-  merge_group:
-    types:
-      - checks_requested
   schedule:
     - cron: "0 3 * * *"
   workflow_dispatch:
@@ -20,6 +17,7 @@ concurrency:
 
 jobs:
   linux-hardening:
+    name: Sanitizer, Fuzz, and Soak Checks (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:

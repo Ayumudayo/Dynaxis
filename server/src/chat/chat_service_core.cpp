@@ -487,16 +487,19 @@ ChatService::ChatService(boost::asio::io_context& io,
             }
             if (interval_ms > 0) {
                 if (auto scheduler = services::get<server::core::concurrent::TaskScheduler>()) {
-                    scheduler->schedule_every([this]() {
+                    server::core::concurrent::TaskScheduler::RepeatPolicy policy{};
+                    policy.interval = std::chrono::milliseconds{static_cast<long long>(interval_ms)};
+                    (void)scheduler->schedule_every_controlled([this](const server::core::concurrent::TaskScheduler::RepeatContext&) {
                         if (!hook_plugin_) {
-                            return;
+                            return server::core::concurrent::TaskScheduler::RepeatDecision::kStop;
                         }
                         (void)job_queue_.TryPush([this]() {
                             if (hook_plugin_) {
                                 hook_plugin_->chain.poll_reload();
                             }
                         });
-                    }, std::chrono::milliseconds{static_cast<long long>(interval_ms)});
+                        return server::core::concurrent::TaskScheduler::RepeatDecision::kContinue;
+                    }, policy);
                 }
             }
         }

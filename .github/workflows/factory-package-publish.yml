@@ -1,4 +1,4 @@
-name: Factory Package Publish
+name: Factory Package Release
 
 on:
   workflow_dispatch:
@@ -12,6 +12,7 @@ concurrency:
 
 jobs:
   publish-factory-packages-windows:
+    name: Factory Package Build and Validation (Windows)
     runs-on: windows-latest
     timeout-minutes: 90
     env:

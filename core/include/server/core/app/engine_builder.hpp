@@ -24,6 +24,14 @@ public:
         AppHost::DependencyRequirement requirement{AppHost::DependencyRequirement::kRequired};
     };
 
+    /** @brief runtime build 시점에 seed하는 module 선언 한 건입니다. */
+    struct ModuleSpec {
+        std::string name;
+        EngineRuntime::ModuleStartupCallback startup;
+        EngineRuntime::ModuleShutdownCallback shutdown;
+        EngineRuntime::WatchdogCallback watchdog;
+    };
+
     explicit EngineBuilder(std::string name);
 
     EngineBuilder& initial_lifecycle_phase(AppHost::LifecyclePhase phase) noexcept;
@@ -33,6 +41,17 @@ public:
     EngineBuilder& declare_dependency(std::string name,
                                       AppHost::DependencyRequirement requirement = AppHost::DependencyRequirement::kRequired);
     EngineBuilder& admin_http(unsigned short port, EngineRuntime::MetricsCallback metrics_callback);
+    /**
+     * @brief build 직후 runtime에 seed할 orchestration module을 등록합니다.
+     * @param name operator-facing module 이름
+     * @param startup runtime startup phase에서 실행할 콜백
+     * @param shutdown runtime shutdown chain에 연결할 콜백
+     * @param watchdog module 상태를 읽을 선택적 watchdog 콜백
+     */
+    EngineBuilder& register_module(std::string name,
+                                   EngineRuntime::ModuleStartupCallback startup = {},
+                                   EngineRuntime::ModuleShutdownCallback shutdown = {},
+                                   EngineRuntime::WatchdogCallback watchdog = {});
 
     [[nodiscard]] EngineRuntime build() &;
     [[nodiscard]] EngineRuntime build() &&;
@@ -44,6 +63,7 @@ private:
     bool initial_healthy_{true};
     bool install_process_signal_handlers_{false};
     std::vector<DependencySpec> dependencies_;
+    std::vector<ModuleSpec> modules_;
 
     /** @brief 선택적인 admin HTTP 노출 설정입니다. */
     struct AdminHttpSpec {

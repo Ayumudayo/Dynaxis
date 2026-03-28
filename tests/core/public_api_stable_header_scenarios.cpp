@@ -51,6 +51,7 @@
 #include "server/core/net/dispatcher.hpp"
 #include "server/core/net/hive.hpp"
 #include "server/core/net/listener.hpp"
+#include "server/core/net/transport_router.hpp"
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/protocol/protocol_flags.hpp"
@@ -93,15 +94,40 @@ struct StableScenarioPluginApi {
     const char* name{"stable_header_scenarios"};
 };
 
+class StableScenarioTransportSession final : public server::core::net::ITransportSession {
+public:
+    server::core::protocol::SessionStatus session_status() const noexcept override {
+        return server::core::protocol::SessionStatus::kAny;
+    }
+
+    bool post_serialized(std::function<void()> fn) override {
+        fn();
+        return true;
+    }
+
+    void send_error(std::uint16_t, std::string_view) override {}
+};
+
 void scenario_api_and_app() {
     (void)server::core::api::version_string();
 
     server::core::app::EngineRuntime runtime =
         server::core::app::EngineBuilder("stable_header_scenarios")
             .declare_dependency("dep")
+            .register_module(
+                "stable-module",
+                [](server::core::app::EngineRuntime&) {},
+                [] {},
+                []() {
+                    server::core::app::EngineRuntime::WatchdogStatus status;
+                    status.healthy = true;
+                    status.detail = "stable-module-ready";
+                    return status;
+                })
             .build();
     server::core::app::AppHost& host = runtime.host();
     runtime.set_dependency_ok("dep", true);
+    runtime.start_modules();
     runtime.mark_running();
 
     server::core::app::EngineContext local_context;
@@ -124,6 +150,7 @@ void scenario_api_and_app() {
     (void)host.lifecycle_metrics_text();
     (void)host.dependency_metrics_text();
     (void)runtime.snapshot();
+    (void)runtime.module_snapshot();
 }
 
 void scenario_concurrency_and_config() {
@@ -133,6 +160,24 @@ void scenario_concurrency_and_config() {
     server::core::concurrent::TaskScheduler scheduler;
     scheduler.post([] {});
     (void)scheduler.poll();
+    const auto background_group = scheduler.create_cancel_group();
+    server::core::concurrent::TaskScheduler::TaskOptions task_options{};
+    task_options.cancel_group = background_group;
+    task_options.validator = [] { return true; };
+    const auto delayed =
+        scheduler.schedule_controlled([] {}, std::chrono::milliseconds(1), task_options);
+    server::core::concurrent::TaskScheduler::RepeatPolicy repeat_policy{};
+    repeat_policy.interval = std::chrono::milliseconds(1);
+    const auto repeat = scheduler.schedule_every_controlled(
+        [](const server::core::concurrent::TaskScheduler::RepeatContext&) {
+            return server::core::concurrent::TaskScheduler::RepeatDecision::kStop;
+        },
+        repeat_policy,
+        {},
+        background_group);
+    (void)scheduler.reschedule(delayed.cancel_token, std::chrono::milliseconds(2));
+    (void)scheduler.update_repeat_policy(repeat.cancel_token, repeat_policy);
+    (void)scheduler.cancel(background_group);
 
     server::core::JobQueue queue(8);
     server::core::ThreadManager workers(queue);
@@ -143,6 +188,18 @@ void scenario_concurrency_and_config() {
 
 void scenario_metrics_and_runtime() {
     server::core::metrics::MetricsHttpServer metrics_server(0, [] { return std::string{}; });
+    server::core::runtime_metrics::set_liveness_state(server::core::runtime_metrics::LivenessState::kRunning);
+    server::core::runtime_metrics::record_watchdog_sample(
+        "stable-header-watchdog",
+        true,
+        "stable-header-ready");
+    server::core::runtime_metrics::record_watchdog_freeze_suspect(
+        "stable-header-watchdog",
+        std::chrono::milliseconds(2),
+        std::chrono::milliseconds(1),
+        "stable-header-freeze");
+    (void)server::core::runtime_metrics::watchdog_snapshot();
+    (void)server::core::runtime_metrics::detailed_telemetry_snapshot();
     server::core::realtime::WorldRuntime fps_runtime(server::core::realtime::RuntimeConfig{
         .max_delta_actors_per_tick = 2,
     });
@@ -527,9 +584,15 @@ void scenario_net_and_utils() {
     auto runtime = server::core::app::EngineBuilder("stable_header_scenarios_net").build();
     auto peer_runtime = server::core::app::EngineBuilder("stable_header_scenarios_net_peer").build();
 
-    server::core::Dispatcher dispatcher;
-    dispatcher.register_handler(server::core::protocol::MSG_PING,
-                                [](server::core::Session&, std::span<const std::uint8_t>) {});
+    server::core::net::TransportRouter transport_router;
+    auto transport_session = std::make_shared<StableScenarioTransportSession>();
+    transport_router.register_handler(
+        server::core::protocol::MSG_PING,
+        [](server::core::net::ITransportSession&, std::span<const std::uint8_t>) {});
+    (void)transport_router.dispatch(
+        server::core::protocol::MSG_PING,
+        transport_session,
+        std::array<std::uint8_t, 1>{0x02});
 
     server::core::net::Listener listener(
         hive,

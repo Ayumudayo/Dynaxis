@@ -1,8 +1,12 @@
 #include "server/core/runtime_metrics.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <mutex>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 /**
@@ -16,6 +20,7 @@ namespace server::core::runtime_metrics {
 namespace {
 // 런타임에서 빠르게 꺼내 쓸 수 있도록 모든 카운터를 단일 구조체의 원자 타입으로 모아둔다.
 struct RuntimeCounters {
+    std::atomic<std::uint8_t> liveness_state{static_cast<std::uint8_t>(LivenessState::kBootstrapping)};
     std::atomic<std::uint64_t> accept_total{0};
 
     std::atomic<std::uint64_t> session_started_total{0};
@@ -74,6 +79,13 @@ struct RuntimeCounters {
     std::atomic<std::uint64_t> runtime_setting_reload_failure_total{0};
     std::atomic<std::uint64_t> runtime_setting_reload_latency_sum_ns{0};
     std::atomic<std::uint64_t> runtime_setting_reload_latency_max_ns{0};
+    std::atomic<std::uint64_t> watchdog_transition_total{0};
+    std::atomic<std::uint64_t> watchdog_freeze_suspect_total{0};
+    std::atomic<std::uint64_t> detailed_telemetry_activation_total{0};
+    std::atomic<bool> detailed_telemetry_active{false};
+    std::atomic<std::uint64_t> detailed_telemetry_capture_budget_remaining{0};
+    std::atomic<std::uint64_t> detailed_telemetry_captured_exception_total{0};
+    std::atomic<std::uint64_t> detailed_telemetry_captured_dispatch_latency_max_ns{0};
     std::atomic<std::uint64_t> rudp_handshake_ok_total{0};
     std::atomic<std::uint64_t> rudp_handshake_fail_total{0};
     std::atomic<std::uint64_t> rudp_retransmit_total{0};
@@ -101,6 +113,84 @@ RuntimeCounters& counters() {
     return c;
 }
 
+struct WatchdogState {
+    bool healthy{true};
+    std::string detail;
+    std::uint64_t unhealthy_samples_total{0};
+    std::uint64_t transition_total{0};
+    std::uint64_t freeze_suspect_total{0};
+    std::uint64_t consecutive_unhealthy_samples{0};
+};
+
+std::mutex& watchdog_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::unordered_map<std::string, WatchdogState>& watchdog_registry() {
+    static std::unordered_map<std::string, WatchdogState> registry;
+    return registry;
+}
+
+std::mutex& detailed_telemetry_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::string& detailed_telemetry_trigger() {
+    static std::string trigger;
+    return trigger;
+}
+
+constexpr std::uint64_t kDetailedTelemetryCaptureBudget = 8;
+constexpr std::uint64_t kDetailedTelemetryWatchdogThreshold = 2;
+
+void activate_detailed_telemetry(std::string trigger) {
+    auto& c = counters();
+    c.detailed_telemetry_activation_total.fetch_add(1, std::memory_order_relaxed);
+    c.detailed_telemetry_active.store(true, std::memory_order_relaxed);
+    c.detailed_telemetry_capture_budget_remaining.store(kDetailedTelemetryCaptureBudget, std::memory_order_relaxed);
+    c.detailed_telemetry_captured_exception_total.store(0, std::memory_order_relaxed);
+    c.detailed_telemetry_captured_dispatch_latency_max_ns.store(0, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(detailed_telemetry_mutex());
+    detailed_telemetry_trigger() = std::move(trigger);
+}
+
+void consume_detailed_telemetry_budget() {
+    auto& c = counters();
+    if (!c.detailed_telemetry_active.load(std::memory_order_relaxed)) {
+        return;
+    }
+
+    const auto previous = c.detailed_telemetry_capture_budget_remaining.fetch_sub(1, std::memory_order_relaxed);
+    if (previous <= 1) {
+        c.detailed_telemetry_capture_budget_remaining.store(0, std::memory_order_relaxed);
+        c.detailed_telemetry_active.store(false, std::memory_order_relaxed);
+    }
+}
+
+void record_detailed_exception_capture() {
+    auto& c = counters();
+    if (!c.detailed_telemetry_active.load(std::memory_order_relaxed)) {
+        return;
+    }
+    c.detailed_telemetry_captured_exception_total.fetch_add(1, std::memory_order_relaxed);
+    consume_detailed_telemetry_budget();
+}
+
+void record_detailed_dispatch_latency_capture(std::uint64_t ns) {
+    auto& c = counters();
+    if (!c.detailed_telemetry_active.load(std::memory_order_relaxed)) {
+        return;
+    }
+    auto& max_ref = c.detailed_telemetry_captured_dispatch_latency_max_ns;
+    std::uint64_t current_max = max_ref.load(std::memory_order_relaxed);
+    while (current_max < ns && !max_ref.compare_exchange_weak(current_max, ns, std::memory_order_relaxed)) {
+        // retry
+    }
+    consume_detailed_telemetry_budget();
+}
+
 std::size_t normalize_dispatch_place_index(std::size_t place_index) {
     return place_index < kDispatchProcessingPlaceCount ? place_index : (kDispatchProcessingPlaceCount - 1);
 }
@@ -111,6 +201,26 @@ std::size_t normalize_rudp_fallback_index(RudpFallbackReason reason) {
 }
 
 } // namespace
+
+const char* liveness_state_name(LivenessState state) noexcept {
+    switch (state) {
+    case LivenessState::kBootstrapping:
+        return "bootstrapping";
+    case LivenessState::kRunning:
+        return "running";
+    case LivenessState::kDegraded:
+        return "degraded";
+    case LivenessState::kStopping:
+        return "stopping";
+    case LivenessState::kFailed:
+        return "failed";
+    }
+    return "bootstrapping";
+}
+
+void set_liveness_state(LivenessState state) {
+    counters().liveness_state.store(static_cast<std::uint8_t>(state), std::memory_order_relaxed);
+}
 
 void record_accept() {
     counters().accept_total.fetch_add(1, std::memory_order_relaxed);
@@ -189,6 +299,8 @@ void record_dispatch_attempt(bool handler_found, std::chrono::nanoseconds elapse
             break;
         }
     }
+
+    record_detailed_dispatch_latency_capture(ns);
 }
 
 void record_dispatch_exception() {
@@ -212,14 +324,17 @@ void record_dispatch_processing_place_exception(std::size_t place_index) {
 
 void record_exception_recoverable() {
     counters().exception_recoverable_total.fetch_add(1, std::memory_order_relaxed);
+    record_detailed_exception_capture();
 }
 
 void record_exception_fatal() {
     counters().exception_fatal_total.fetch_add(1, std::memory_order_relaxed);
+    record_detailed_exception_capture();
 }
 
 void record_exception_ignored() {
     counters().exception_ignored_total.fetch_add(1, std::memory_order_relaxed);
+    record_detailed_exception_capture();
 }
 
 void record_job_queue_depth(std::size_t depth) {
@@ -420,6 +535,62 @@ void record_runtime_setting_reload_latency(std::chrono::nanoseconds elapsed) {
     }
 }
 
+void record_watchdog_sample(std::string_view name, bool healthy, std::string_view detail) {
+    if (name.empty()) {
+        return;
+    }
+
+    bool should_activate_detail = false;
+    {
+        std::lock_guard<std::mutex> lock(watchdog_mutex());
+        auto& state = watchdog_registry()[std::string(name)];
+        if (state.healthy != healthy) {
+            ++state.transition_total;
+            counters().watchdog_transition_total.fetch_add(1, std::memory_order_relaxed);
+        }
+        state.healthy = healthy;
+        state.detail.assign(detail.begin(), detail.end());
+        if (healthy) {
+            state.consecutive_unhealthy_samples = 0;
+        } else {
+            ++state.unhealthy_samples_total;
+            ++state.consecutive_unhealthy_samples;
+            should_activate_detail = state.consecutive_unhealthy_samples >= kDetailedTelemetryWatchdogThreshold;
+        }
+    }
+
+    if (!healthy && should_activate_detail) {
+        activate_detailed_telemetry("watchdog:" + std::string(name));
+    }
+}
+
+void record_watchdog_freeze_suspect(std::string_view name,
+                                    std::chrono::nanoseconds stall,
+                                    std::chrono::nanoseconds threshold,
+                                    std::string_view detail) {
+    if (name.empty() || stall < threshold) {
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(watchdog_mutex());
+        auto& state = watchdog_registry()[std::string(name)];
+        if (state.healthy) {
+            ++state.transition_total;
+            counters().watchdog_transition_total.fetch_add(1, std::memory_order_relaxed);
+        }
+        state.healthy = false;
+        state.detail.assign(detail.begin(), detail.end());
+        ++state.freeze_suspect_total;
+        ++state.unhealthy_samples_total;
+        ++state.consecutive_unhealthy_samples;
+    }
+
+    counters().watchdog_freeze_suspect_total.fetch_add(1, std::memory_order_relaxed);
+    counters().liveness_state.store(static_cast<std::uint8_t>(LivenessState::kDegraded), std::memory_order_relaxed);
+    activate_detailed_telemetry("freeze:" + std::string(name));
+}
+
 void record_rudp_handshake_result(bool ok) {
     if (ok) {
         counters().rudp_handshake_ok_total.fetch_add(1, std::memory_order_relaxed);
@@ -470,6 +641,7 @@ void record_rudp_fallback(RudpFallbackReason reason) {
 Snapshot snapshot() {
     Snapshot snap{};
     auto& c = counters();
+    snap.liveness_state = static_cast<LivenessState>(c.liveness_state.load(std::memory_order_relaxed));
     snap.accept_total = c.accept_total.load(std::memory_order_relaxed);
     snap.session_started_total = c.session_started_total.load(std::memory_order_relaxed);
     snap.session_stopped_total = c.session_stopped_total.load(std::memory_order_relaxed);
@@ -543,6 +715,16 @@ Snapshot snapshot() {
     snap.runtime_setting_reload_failure_total = c.runtime_setting_reload_failure_total.load(std::memory_order_relaxed);
     snap.runtime_setting_reload_latency_sum_ns = c.runtime_setting_reload_latency_sum_ns.load(std::memory_order_relaxed);
     snap.runtime_setting_reload_latency_max_ns = c.runtime_setting_reload_latency_max_ns.load(std::memory_order_relaxed);
+    snap.watchdog_transition_total = c.watchdog_transition_total.load(std::memory_order_relaxed);
+    snap.watchdog_freeze_suspect_total = c.watchdog_freeze_suspect_total.load(std::memory_order_relaxed);
+    snap.detailed_telemetry_activation_total = c.detailed_telemetry_activation_total.load(std::memory_order_relaxed);
+    snap.detailed_telemetry_active = c.detailed_telemetry_active.load(std::memory_order_relaxed);
+    snap.detailed_telemetry_capture_budget_remaining =
+        c.detailed_telemetry_capture_budget_remaining.load(std::memory_order_relaxed);
+    snap.detailed_telemetry_captured_exception_total =
+        c.detailed_telemetry_captured_exception_total.load(std::memory_order_relaxed);
+    snap.detailed_telemetry_captured_dispatch_latency_max_ns =
+        c.detailed_telemetry_captured_dispatch_latency_max_ns.load(std::memory_order_relaxed);
     snap.rudp_handshake_ok_total = c.rudp_handshake_ok_total.load(std::memory_order_relaxed);
     snap.rudp_handshake_fail_total = c.rudp_handshake_fail_total.load(std::memory_order_relaxed);
     snap.rudp_retransmit_total = c.rudp_retransmit_total.load(std::memory_order_relaxed);
@@ -557,6 +739,16 @@ Snapshot snapshot() {
         snap.rudp_fallback_total[i] = c.rudp_fallback_total[i].load(std::memory_order_relaxed);
     }
 
+    {
+        std::lock_guard<std::mutex> lock(watchdog_mutex());
+        snap.watchdog_total = watchdog_registry().size();
+        for (const auto& [_, state] : watchdog_registry()) {
+            if (!state.healthy) {
+                ++snap.watchdog_unhealthy_total;
+            }
+        }
+    }
+
     for (std::size_t i = 0; i < c.opcode_counters.size(); ++i) {
         auto value = c.opcode_counters[i].load(std::memory_order_relaxed);
         if (value != 0) {
@@ -565,6 +757,46 @@ Snapshot snapshot() {
     }
 
     return snap;
+}
+
+std::vector<WatchdogSnapshot> watchdog_snapshot() {
+    std::vector<WatchdogSnapshot> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(watchdog_mutex());
+        snapshot.reserve(watchdog_registry().size());
+        for (const auto& [name, state] : watchdog_registry()) {
+            snapshot.push_back(WatchdogSnapshot{
+                .name = name,
+                .healthy = state.healthy,
+                .detail = state.detail,
+                .unhealthy_samples_total = state.unhealthy_samples_total,
+                .transition_total = state.transition_total,
+                .freeze_suspect_total = state.freeze_suspect_total,
+            });
+        }
+    }
+
+    std::sort(snapshot.begin(), snapshot.end(), [](const WatchdogSnapshot& lhs, const WatchdogSnapshot& rhs) {
+        return lhs.name < rhs.name;
+    });
+    return snapshot;
+}
+
+DetailedTelemetrySnapshot detailed_telemetry_snapshot() {
+    DetailedTelemetrySnapshot snapshot{};
+    auto& c = counters();
+    snapshot.active = c.detailed_telemetry_active.load(std::memory_order_relaxed);
+    snapshot.activation_total = c.detailed_telemetry_activation_total.load(std::memory_order_relaxed);
+    snapshot.capture_budget_remaining = c.detailed_telemetry_capture_budget_remaining.load(std::memory_order_relaxed);
+    snapshot.captured_exception_total =
+        c.detailed_telemetry_captured_exception_total.load(std::memory_order_relaxed);
+    snapshot.captured_dispatch_latency_max_ns =
+        c.detailed_telemetry_captured_dispatch_latency_max_ns.load(std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(detailed_telemetry_mutex());
+        snapshot.trigger = detailed_telemetry_trigger();
+    }
+    return snapshot;
 }
 
 } // namespace server::core::runtime_metrics

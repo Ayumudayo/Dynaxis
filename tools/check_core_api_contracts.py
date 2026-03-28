@@ -55,6 +55,7 @@ STABLE_HEADERS = {
     "server/core/net/dispatcher.hpp",
     "server/core/net/hive.hpp",
     "server/core/net/listener.hpp",
+    "server/core/net/transport_router.hpp",
     "server/core/protocol/packet.hpp",
     "server/core/protocol/protocol_errors.hpp",
     "server/core/protocol/protocol_flags.hpp",

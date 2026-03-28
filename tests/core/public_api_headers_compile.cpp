@@ -51,6 +51,7 @@
 #include "server/core/net/dispatcher.hpp"
 #include "server/core/net/hive.hpp"
 #include "server/core/net/listener.hpp"
+#include "server/core/net/transport_router.hpp"
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/protocol/protocol_flags.hpp"
@@ -86,6 +87,20 @@ struct PublicCompilePluginApi {
     const char* name{"public_api_headers_compile"};
 };
 
+class PublicCompileTransportSession final : public server::core::net::ITransportSession {
+public:
+    server::core::protocol::SessionStatus session_status() const noexcept override {
+        return server::core::protocol::SessionStatus::kAny;
+    }
+
+    bool post_serialized(std::function<void()> fn) override {
+        fn();
+        return true;
+    }
+
+    void send_error(std::uint16_t, std::string_view) override {}
+};
+
 } // namespace
 
 int main() {
@@ -98,16 +113,57 @@ int main() {
     server::core::concurrent::TaskScheduler scheduler;
     scheduler.post([] {});
     (void)scheduler.poll();
+    const auto compile_group = scheduler.create_cancel_group();
+    server::core::concurrent::TaskScheduler::TaskOptions task_options{};
+    task_options.cancel_group = compile_group;
+    task_options.validator = [] { return true; };
+    const auto controlled_task =
+        scheduler.schedule_controlled([] {}, std::chrono::milliseconds(1), task_options);
+    server::core::concurrent::TaskScheduler::RepeatPolicy repeat_policy{};
+    repeat_policy.interval = std::chrono::milliseconds(1);
+    const auto repeat_task = scheduler.schedule_every_controlled(
+        [](const server::core::concurrent::TaskScheduler::RepeatContext&) {
+            return server::core::concurrent::TaskScheduler::RepeatDecision::kStop;
+        },
+        repeat_policy,
+        {},
+        compile_group);
+    (void)scheduler.reschedule(controlled_task.cancel_token, std::chrono::milliseconds(2));
+    (void)scheduler.update_repeat_policy(repeat_task.cancel_token, repeat_policy);
+    (void)scheduler.cancel(compile_group);
+    server::core::runtime_metrics::set_liveness_state(server::core::runtime_metrics::LivenessState::kRunning);
+    server::core::runtime_metrics::record_watchdog_sample(
+        "public-compile-watchdog",
+        true,
+        "public-compile-ready");
+    server::core::runtime_metrics::record_watchdog_freeze_suspect(
+        "public-compile-watchdog",
+        std::chrono::milliseconds(2),
+        std::chrono::milliseconds(1),
+        "public-compile-freeze");
+    (void)server::core::runtime_metrics::watchdog_snapshot();
+    (void)server::core::runtime_metrics::detailed_telemetry_snapshot();
 
     server::core::app::EngineRuntime runtime =
         server::core::app::EngineBuilder("public_api_headers_compile")
             .declare_dependency("dep")
+            .register_module(
+                "compile-module",
+                [](server::core::app::EngineRuntime&) {},
+                [] {},
+                []() {
+                    server::core::app::EngineRuntime::WatchdogStatus status;
+                    status.healthy = true;
+                    status.detail = "compile-module-ready";
+                    return status;
+                })
             .build();
     server::core::app::EngineContext local_context;
     auto runtime_flag = std::make_shared<int>(1);
     local_context.set(runtime_flag);
     runtime.set_service(runtime_flag);
     runtime.set_dependency_ok("dep", true);
+    runtime.start_modules();
     runtime.mark_running();
     runtime.start_admin_http(
         0,
@@ -121,6 +177,7 @@ int main() {
     runtime.wait_for_stop(std::chrono::milliseconds(1));
     runtime.run_shutdown();
     runtime.mark_stopped();
+    (void)runtime.module_snapshot();
     server::core::realtime::WorldRuntime fps_runtime;
     (void)fps_runtime.stage_input(1, server::core::realtime::InputCommand{.input_seq = 1});
     (void)fps_runtime.tick();
@@ -287,9 +344,15 @@ int main() {
     auto pooled = buffers.Acquire();
     (void)pooled;
 
-    server::core::Dispatcher dispatcher;
-    dispatcher.register_handler(server::core::protocol::MSG_PING,
-                                [](server::core::Session&, std::span<const std::uint8_t>) {});
+    server::core::net::TransportRouter transport_router;
+    auto transport_session = std::make_shared<PublicCompileTransportSession>();
+    transport_router.register_handler(
+        server::core::protocol::MSG_PING,
+        [](server::core::net::ITransportSession&, std::span<const std::uint8_t>) {});
+    transport_router.dispatch(
+        server::core::protocol::MSG_PING,
+        transport_session,
+        std::array<std::uint8_t, 1>{0x01});
 
     server::core::protocol::PacketHeader header{};
     std::array<std::uint8_t, server::core::protocol::k_header_bytes> encoded{};
