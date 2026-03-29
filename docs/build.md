@@ -14,7 +14,7 @@ Windows는 개발/디버깅(빌드/클라이언트) 용도로 유지한다.
 큰 변경(빌드/의존성/워크플로우/다중 모듈 변경)은 push 전에 로컬 검증을 통과하는 것을 권장한다.
 
 - 핵심 원칙: 로컬 검증 실패 상태에서는 push하지 않는다.
-- 권장 최소 검증: `pwsh scripts/build.ps1 -Config Release`, `ctest --preset windows-test --output-on-failure`
+- 권장 최소 검증: `pwsh scripts/build.ps1 -Config Release`, `ctest --preset windows-test -R WindowsReleaseTreeReady --output-on-failure --no-tests=error`, `ctest --preset windows-test --parallel 8 --output-on-failure`
 
 ## 윈도우(Windows) 개발 빌드
 
@@ -34,7 +34,9 @@ pwsh scripts/build.ps1 -Config Debug -Target server_app
 
 ### 2) 테스트
 ```powershell
-ctest --preset windows-test
+pwsh scripts/build.ps1 -Config Release
+ctest --preset windows-test -R WindowsReleaseTreeReady --output-on-failure --no-tests=error
+ctest --preset windows-test --parallel 8 --output-on-failure
 ```
 
 ### 3) 산출물 위치(예시)

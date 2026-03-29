@@ -9,7 +9,8 @@
 
 ```powershell
 pwsh scripts/build.ps1 -Config Release
-ctest --preset windows-test --output-on-failure
+ctest --preset windows-test -R WindowsReleaseTreeReady --output-on-failure --no-tests=error
+ctest --preset windows-test --parallel 8 --output-on-failure
 python tools/gen_opcode_docs.py --check
 python tools/check_markdown_links.py
 ```
