@@ -138,6 +138,11 @@ jobs:
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Release
 
+      - name: Run Windows Release Tree Preflight
+        shell: pwsh
+        run: |
+          ctest --preset windows-test -R WindowsReleaseTreeReady --output-on-failure --no-tests=error
+
       - name: Run Windows Tests Including Public API And Installed Consumer (ctest)
         shell: pwsh
         run: |

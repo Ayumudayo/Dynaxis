@@ -484,6 +484,13 @@ if (BUILD_CONTRACT_TESTS)
       )
       set_tests_properties(WindowsValidationLayoutTests PROPERTIES LABELS "contract;docs-policy")
       add_test(
+        NAME WindowsReleaseTreeReady
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/verify_windows_release_tree_ready.py"
+                --build-dir "${CMAKE_BINARY_DIR}"
+                --config "$<CONFIG>"
+      )
+      set_tests_properties(WindowsReleaseTreeReady PROPERTIES LABELS "contract;docs-policy")
+      add_test(
         NAME DeployDockerBuildPlanTests
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/test_deploy_docker_build_plan.py"
       )
@@ -501,61 +508,10 @@ endif()
 
 if (Python3_Interpreter_FOUND)
     add_test(
-      NAME StackPythonVerifyPluginMetrics
+      NAME StackPythonPluginScriptAcceptance
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
-              "${CMAKE_SOURCE_DIR}/tests/python/verify_plugin_hot_reload.py" --check-only
-    )
-    add_test(
-      NAME StackPythonVerifyRuntimeTogglesOn
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
-              "${CMAKE_SOURCE_DIR}/tests/python/verify_runtime_toggle_metrics.py"
-              --expect-chat-hook-enabled 1
-              --expect-lua-enabled 1
-    )
-    add_test(
-      NAME StackPythonHotReloadPluginV2
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
-              "${CMAKE_SOURCE_DIR}/tests/python/verify_plugin_hot_reload.py"
-    )
-    add_test(
-      NAME StackPythonVerifyPluginV2Fallback
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
-              "${CMAKE_SOURCE_DIR}/tests/python/verify_plugin_v2_fallback.py"
-    )
-    add_test(
-      NAME StackPythonRollbackPluginV1
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
-              "${CMAKE_SOURCE_DIR}/tests/python/verify_plugin_rollback.py"
-    )
-    add_test(
-      NAME StackPythonHotReloadLuaScript
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
-              "${CMAKE_SOURCE_DIR}/tests/python/verify_script_hot_reload.py"
-    )
-    add_test(
-      NAME StackPythonVerifyScriptFallbackSwitch
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
-              "${CMAKE_SOURCE_DIR}/tests/python/verify_script_fallback_switch.py"
-    )
-    add_test(
-      NAME StackPythonChatHookBehavior
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
-              "${CMAKE_SOURCE_DIR}/tests/python/verify_chat_hook_behavior.py"
-    )
-    add_test(
-      NAME StackPythonVerifyFpsStateTransport
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
-              "${CMAKE_SOURCE_DIR}/tests/python/verify_fps_state_transport.py"
-    )
-    add_test(
-      NAME StackPythonVerifyFpsRudpTransport
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
-              "${CMAKE_SOURCE_DIR}/tests/python/verify_fps_rudp_transport.py"
-    )
-    add_test(
-      NAME StackPythonVerifyFpsRudpTransportMatrix
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
-              "${CMAKE_SOURCE_DIR}/tests/python/verify_fps_rudp_transport_matrix.py"
+              "${CMAKE_SOURCE_DIR}/tests/python/verify_plugin_script_matrix.py"
+              --scenario runtime-on-acceptance
     )
     add_test(
       NAME StackPythonVerifyFpsPhase2Acceptance
@@ -563,30 +519,6 @@ if (Python3_Interpreter_FOUND)
               "${CMAKE_SOURCE_DIR}/tests/python/verify_fps_rudp_transport_matrix.py"
               --scenario phase2-acceptance
               --no-build
-    )
-    add_test(
-      NAME StackPythonVerifyFpsNetemRehearsal
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
-              "${CMAKE_SOURCE_DIR}/tests/python/verify_fps_netem_rehearsal.py"
-              --scenario fps-pair
-    )
-    add_test(
-      NAME StackPythonVerifyWorldDrainProgress
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
-              "${CMAKE_SOURCE_DIR}/tests/python/verify_session_continuity_restart.py"
-              --scenario world-drain-progress
-    )
-    add_test(
-      NAME StackPythonVerifyWorldDrainTransferClosure
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
-              "${CMAKE_SOURCE_DIR}/tests/python/verify_session_continuity_restart.py"
-              --scenario world-drain-transfer-closure
-    )
-    add_test(
-      NAME StackPythonVerifyWorldDrainMigrationClosure
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
-              "${CMAKE_SOURCE_DIR}/tests/python/verify_session_continuity_restart.py"
-              --scenario world-drain-migration-closure
     )
     add_test(
       NAME StackPythonVerifyMmorpgRuntimeClosureMatrix
@@ -601,24 +533,6 @@ if (Python3_Interpreter_FOUND)
               "${CMAKE_SOURCE_DIR}/tests/python/verify_continuity_recovery_matrix.py"
               --scenario phase5-recovery-baseline
               --no-build
-    )
-    add_test(
-      NAME StackPythonVerifyWorldOwnerTransferCommit
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
-              "${CMAKE_SOURCE_DIR}/tests/python/verify_session_continuity_restart.py"
-              --scenario world-owner-transfer-commit
-    )
-    add_test(
-      NAME StackPythonVerifyWorldMigrationHandoff
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
-              "${CMAKE_SOURCE_DIR}/tests/python/verify_session_continuity_restart.py"
-              --scenario world-migration-handoff
-    )
-    add_test(
-      NAME StackPythonVerifyWorldMigrationTargetRoomHandoff
-      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/run_stack_test.py"
-              "${CMAKE_SOURCE_DIR}/tests/python/verify_session_continuity_restart.py"
-              --scenario world-migration-target-room-handoff
     )
     add_test(
       NAME KubernetesWorldsLocalDevManifestCheck
@@ -682,46 +596,22 @@ if (Python3_Interpreter_FOUND)
     )
 
     set_tests_properties(
-      StackPythonVerifyPluginMetrics
-      StackPythonVerifyRuntimeTogglesOn
-      StackPythonHotReloadPluginV2
-      StackPythonVerifyPluginV2Fallback
-      StackPythonRollbackPluginV1
-      StackPythonHotReloadLuaScript
-      StackPythonVerifyScriptFallbackSwitch
-      StackPythonChatHookBehavior
+      StackPythonPluginScriptAcceptance
       PROPERTIES
         LABELS "python;stack;plugin-script"
         SKIP_RETURN_CODE 77
         RUN_SERIAL TRUE
     )
     set_tests_properties(
-      StackPythonVerifyFpsStateTransport
-      StackPythonVerifyFpsRudpTransport
-      StackPythonVerifyFpsRudpTransportMatrix
       StackPythonVerifyFpsPhase2Acceptance
-      StackPythonVerifyFpsNetemRehearsal
       PROPERTIES
         LABELS "python;stack;fps;hardening"
         SKIP_RETURN_CODE 77
         RUN_SERIAL TRUE
     )
     set_tests_properties(
-      StackPythonVerifyWorldDrainProgress
-      StackPythonVerifyWorldDrainTransferClosure
-      StackPythonVerifyWorldDrainMigrationClosure
       StackPythonVerifyMmorpgRuntimeClosureMatrix
       StackPythonVerifyContinuityRecoveryMatrix
-      StackPythonVerifyWorldOwnerTransferCommit
-      StackPythonVerifyWorldMigrationHandoff
-      StackPythonVerifyWorldMigrationTargetRoomHandoff
-      PROPERTIES
-        LABELS "python;stack;continuity"
-        SKIP_RETURN_CODE 77
-        RUN_SERIAL TRUE
-    )
-    set_tests_properties(
-      StackPythonVerifyWorldMigrationHandoff
       PROPERTIES
         LABELS "python;stack;continuity"
         SKIP_RETURN_CODE 77

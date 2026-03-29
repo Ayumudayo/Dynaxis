@@ -235,6 +235,7 @@ def _infer_prerequisite_reason(script_path: Path, script_args: list[str]) -> str
     script_name = script_path.name
 
     if script_name in {
+        "verify_plugin_script_matrix.py",
         "verify_plugin_hot_reload.py",
         "verify_plugin_v2_fallback.py",
         "verify_plugin_rollback.py",
