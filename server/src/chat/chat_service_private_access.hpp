@@ -56,6 +56,10 @@ struct ChatServicePrivateAccess {
 
     static ChatServiceAppMigrationRoomHandoff resolve_app_world_migration_room_handoff(
         const server::core::worlds::WorldMigrationEnvelope& migration);
+
+    static std::optional<std::string> lookup_room_owner(
+        ChatService& service,
+        std::string_view room_name);
 };
 
 } // namespace server::app::chat

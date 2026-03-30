@@ -1,4 +1,5 @@
 #include "server/chat/chat_service.hpp"
+#include "chat_room_state.hpp"
 #include "chat_service_state.hpp"
 #include "server/core/protocol/opcode_policy.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
@@ -195,8 +196,13 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             // fallback room을 먼저 정하지 않으면 로그인 직후 "현재 방 없음" 상태가 길게 남아 refresh와 제재 경로가 흔들린다.
             std::string room = current_room.empty() ? std::string("lobby") : current_room;
             current_room = room;
-            impl_->state.cur_room[session_sp.get()] = room;
-            impl_->state.rooms[room].insert(session_sp);
+            place_session_in_room_locked(
+                impl_->state,
+                session_sp,
+                room,
+                new_user,
+                false,
+                !resumed_login);
         }
 
         // 게스트와 로그인 사용자를 모두 UUID로 일관되게 식별하고 IP/로그를 남긴다.

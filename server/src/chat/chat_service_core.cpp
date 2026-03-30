@@ -1,4 +1,5 @@
 #include "server/chat/chat_service.hpp"
+#include "chat_room_state.hpp"
 #include "chat_service_private_access.hpp"
 #include "chat_service_state.hpp"
 #include "server/app/topology_runtime_assignment.hpp"
@@ -862,6 +863,12 @@ std::string ChatServicePrivateAccess::make_continuity_world_migration_key(
     return service.make_continuity_world_migration_key(world_id);
 }
 
+std::optional<std::string> ChatServicePrivateAccess::lookup_room_owner(
+    ChatService& service,
+    std::string_view room_name) {
+    return service.lua_get_room_owner(room_name);
+}
+
 bool ChatService::continuity_enabled() const {
     return impl_->continuity.enabled && static_cast<bool>(impl_->runtime.db_pool);
 }
@@ -1416,15 +1423,7 @@ void ChatService::send_rooms_list(Session& s) {
     {
         // 2. 로컬 상태 처리 (Lock 필요)
         std::lock_guard<std::mutex> lk(impl_->state.mu);
-
-        // 로컬 방 정리
-        std::vector<std::string> to_remove;
-        for (auto it = impl_->state.rooms.begin(); it != impl_->state.rooms.end(); ++it) {
-            std::size_t alive = 0;
-            for (auto wit = it->second.begin(); wit != it->second.end(); ) { if (auto p = wit->lock()) { ++alive; ++wit; } else { wit = it->second.erase(wit); } }
-            if (alive == 0 && it->first != std::string("lobby")) { to_remove.push_back(it->first); continue; }
-        }
-        for (auto& name : to_remove) { impl_->state.rooms.erase(name); impl_->state.room_passwords.erase(name); }
+        const auto local_rooms = collect_local_room_summaries_locked(impl_->state);
 
         if (redis_available) {
             // Redis 데이터 기반으로 메시지 구성
@@ -1433,7 +1432,7 @@ void ChatService::send_rooms_list(Session& s) {
                 bool is_locked = info.is_locked;
 
                 // Redis에 잠금 정보가 없어도 로컬에 있을 수 있음
-                if (!is_locked && impl_->state.room_passwords.count(info.name)) {
+                if (!is_locked && room_is_locked_locked(impl_->state, info.name)) {
                     is_locked = true;
                 }
 
@@ -1444,13 +1443,12 @@ void ChatService::send_rooms_list(Session& s) {
             }
         } else {
             // Fallback to local state
-            for (auto it = impl_->state.rooms.begin(); it != impl_->state.rooms.end(); ++it) {
-                std::size_t alive = it->second.size();
-                std::string display_name = it->first;
-                if (impl_->state.room_passwords.count(it->first)) {
+            for (const auto& room_info : local_rooms) {
+                std::string display_name = room_info.name;
+                if (room_info.is_locked) {
                     display_name = "🔒" + display_name;
                 }
-                msg += " " + display_name + "(" + std::to_string(alive) + ")";
+                msg += " " + display_name + "(" + std::to_string(room_info.member_count) + ")";
             }
         }
     }
@@ -1476,10 +1474,7 @@ void ChatService::broadcast_refresh_local(const std::string& room) {
     std::vector<std::shared_ptr<Session>> targets;
     {
         std::lock_guard<std::mutex> lk(impl_->state.mu);
-        auto it = impl_->state.rooms.find(room);
-        if (it != impl_->state.rooms.end()) {
-            collect_room_sessions(it->second, targets);
-        }
+        targets = collect_room_targets_locked(impl_->state, room);
     }
 
     for (auto& s : targets) {
@@ -1514,24 +1509,8 @@ void ChatService::send_room_users(Session& s, const std::string& target) {
 
     {
         std::lock_guard<std::mutex> lk(impl_->state.mu);
-        auto itroom = impl_->state.rooms.find(target);
-        bool is_locked = impl_->state.room_passwords.count(target) > 0;
-        bool is_member = false;
-
-        // 로컬 세션에서 멤버 여부 확인
-        if (itroom != impl_->state.rooms.end()) {
-            for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) {
-                if (auto p = wit->lock()) {
-                    if (p.get() == &s) {
-                        is_member = true;
-                        break;
-                    }
-                    ++wit;
-                } else {
-                    wit = itroom->second.erase(wit);
-                }
-            }
-        }
+        const bool is_locked = room_is_locked_locked(impl_->state, target);
+        const bool is_member = room_contains_session_locked(impl_->state, target, s);
 
         if (is_locked && !is_member) {
             allow = false;
@@ -1558,19 +1537,7 @@ void ChatService::send_room_users(Session& s, const std::string& target) {
     // Redis가 없거나 실패한 경우 로컬 상태를 fallback으로 사용
     if (names.empty()) {
         std::lock_guard<std::mutex> lk(impl_->state.mu);
-        auto itroom = impl_->state.rooms.find(target);
-        if (itroom != impl_->state.rooms.end()) {
-            for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) {
-                if (auto p = wit->lock()) {
-                    auto itu = impl_->state.user.find(p.get());
-                    std::string name = (itu != impl_->state.user.end()) ? itu->second : std::string("guest");
-                    names.push_back(std::move(name));
-                    ++wit;
-                } else {
-                    wit = itroom->second.erase(wit);
-                }
-            }
-        }
+        names = collect_room_user_names_locked(impl_->state, target);
     }
 
     server::wire::v1::RoomUsers pb;
@@ -1676,14 +1643,7 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
     {
         // 2. 로컬 상태 처리 (Lock 필요)
         std::lock_guard<std::mutex> lk(impl_->state.mu);
-
-        // 로컬 방 정리
-        std::vector<std::string> to_remove;
-        for (auto it = impl_->state.rooms.begin(); it != impl_->state.rooms.end(); ++it) {
-            std::uint32_t alive = 0; for (auto wit = it->second.begin(); wit != it->second.end(); ) { if (auto p = wit->lock()) { ++alive; ++wit; } else { wit = it->second.erase(wit); } }
-            if (alive == 0 && it->first != std::string("lobby")) { to_remove.push_back(it->first); continue; }
-        }
-        for (auto& name : to_remove) { impl_->state.rooms.erase(name); impl_->state.room_passwords.erase(name); }
+        const auto local_rooms = collect_local_room_summaries_locked(impl_->state);
 
         if (redis_available) {
             // Redis 데이터 기반으로 메시지 구성
@@ -1693,16 +1653,18 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
                 ri->set_members(info.count);
 
                 bool locked = info.is_locked;
-                if (!locked && impl_->state.room_passwords.count(info.name)) {
+                if (!locked && room_is_locked_locked(impl_->state, info.name)) {
                     locked = true;
                 }
                 ri->set_locked(locked);
             }
         } else {
             // Fallback to local state
-            for (auto it = impl_->state.rooms.begin(); it != impl_->state.rooms.end(); ++it) {
-                std::size_t alive = it->second.size();
-                auto* ri = pb.add_rooms(); ri->set_name(it->first); ri->set_members(alive); ri->set_locked(impl_->state.room_passwords.count(it->first) > 0);
+            for (const auto& room_info : local_rooms) {
+                auto* ri = pb.add_rooms();
+                ri->set_name(room_info.name);
+                ri->set_members(room_info.member_count);
+                ri->set_locked(room_info.is_locked);
             }
         }
     }
@@ -1740,19 +1702,11 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
         } else {
             // Fallback to local state
             std::lock_guard<std::mutex> lk(impl_->state.mu);
-            auto itroom = impl_->state.rooms.find(current);
-            if (itroom != impl_->state.rooms.end()) {
-                for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) {
-                    if (auto p = wit->lock()) {
-                        auto itu = impl_->state.user.find(p.get());
-                        std::string name = (itu != impl_->state.user.end()) ? itu->second : std::string("guest");
-                        if (viewer_blocked.count(name) > 0) {
-                            ++wit;
-                            continue;
-                        }
-                        pb.add_users(name); ++wit;
-                    } else { wit = itroom->second.erase(wit); }
+            for (const auto& name : collect_room_user_names_locked(impl_->state, current)) {
+                if (viewer_blocked.count(name) > 0) {
+                    continue;
                 }
+                pb.add_users(name);
             }
         }
     }
@@ -1916,28 +1870,7 @@ void ChatService::broadcast_room(const std::string& room, const std::vector<std:
     std::vector<std::shared_ptr<Session>> targets;
     {
         std::lock_guard<std::mutex> lk(impl_->state.mu);
-        auto it = impl_->state.rooms.find(room);
-        if (it != impl_->state.rooms.end()) {
-            collect_room_sessions(it->second, targets);
-        }
-
-        if (!sender.empty()) {
-            std::vector<std::shared_ptr<Session>> filtered_targets;
-            filtered_targets.reserve(targets.size());
-            for (auto& target : targets) {
-                auto receiver_it = impl_->state.user.find(target.get());
-                if (receiver_it == impl_->state.user.end()) {
-                    continue;
-                }
-                const std::string& receiver = receiver_it->second;
-                if (auto blk_it = impl_->state.user_blacklists.find(receiver);
-                    blk_it != impl_->state.user_blacklists.end() && blk_it->second.count(sender) > 0) {
-                    continue;
-                }
-                filtered_targets.push_back(target);
-            }
-            targets = std::move(filtered_targets);
-        }
+        targets = collect_room_targets_locked(impl_->state, room, sender);
     }
     for (auto& t : targets) {
         int f = 0; // 재전파에서는 self 플래그를 사용하지 않는다.
@@ -2456,26 +2389,10 @@ void ChatService::admin_broadcast_notice(const std::string& text) {
     const std::string notice = text;
     if (!job_queue_.TryPush([this, notice]() {
         std::vector<std::shared_ptr<Session>> sessions;
-        std::unordered_set<Session*> seen;
 
         {
             std::lock_guard<std::mutex> lk(impl_->state.mu);
-            for (auto& [_, room_set] : impl_->state.rooms) {
-                for (auto wit = room_set.begin(); wit != room_set.end();) {
-                    if (auto session = wit->lock()) {
-                        if (!impl_->state.authed.count(session.get()) || impl_->state.guest.count(session.get())) {
-                            ++wit;
-                            continue;
-                        }
-                        if (seen.insert(session.get()).second) {
-                            sessions.push_back(std::move(session));
-                        }
-                        ++wit;
-                    } else {
-                        wit = room_set.erase(wit);
-                    }
-                }
-            }
+            sessions = collect_authenticated_session_targets_locked(impl_->state);
         }
 
         for (auto& session : sessions) {
@@ -2802,26 +2719,10 @@ bool ChatService::broadcast_notice_to_all_sessions(std::string notice) {
 
     if (!job_queue_.TryPush([this, notice = std::move(notice)]() {
         std::vector<std::shared_ptr<Session>> sessions;
-        std::unordered_set<Session*> seen;
 
         {
             std::lock_guard<std::mutex> lk(impl_->state.mu);
-            for (auto& [_, room_set] : impl_->state.rooms) {
-                for (auto it = room_set.begin(); it != room_set.end();) {
-                    if (auto session = it->lock()) {
-                        if (!impl_->state.authed.count(session.get()) || impl_->state.guest.count(session.get())) {
-                            ++it;
-                            continue;
-                        }
-                        if (seen.insert(session.get()).second) {
-                            sessions.push_back(std::move(session));
-                        }
-                        ++it;
-                    } else {
-                        it = room_set.erase(it);
-                    }
-                }
-            }
+            sessions = collect_authenticated_session_targets_locked(impl_->state);
         }
 
         for (auto& session : sessions) {
@@ -2990,38 +2891,13 @@ std::vector<std::string> ChatService::lua_get_room_users(std::string_view room_n
     }
 
     std::lock_guard<std::mutex> lk(impl_->state.mu);
-    const auto it = impl_->state.rooms.find(std::string(room_name));
-    if (it == impl_->state.rooms.end()) {
-        return users;
-    }
-
-    for (auto wit = it->second.begin(); wit != it->second.end();) {
-        if (auto session = wit->lock()) {
-            if (impl_->state.authed.count(session.get()) > 0 && impl_->state.guest.count(session.get()) == 0) {
-                if (const auto user_it = impl_->state.user.find(session.get()); user_it != impl_->state.user.end()) {
-                    users.push_back(user_it->second);
-                }
-            }
-            ++wit;
-        } else {
-            wit = it->second.erase(wit);
-        }
-    }
-
-    std::sort(users.begin(), users.end());
-    users.erase(std::unique(users.begin(), users.end()), users.end());
+    users = collect_authenticated_room_user_names_locked(impl_->state, room_name);
     return users;
 }
 
 std::vector<std::string> ChatService::lua_get_room_list() {
-    std::vector<std::string> rooms;
     std::lock_guard<std::mutex> lk(impl_->state.mu);
-    rooms.reserve(impl_->state.rooms.size());
-    for (const auto& [room_name, _] : impl_->state.rooms) {
-        rooms.push_back(room_name);
-    }
-    std::sort(rooms.begin(), rooms.end());
-    return rooms;
+    return collect_sorted_room_names_locked(impl_->state);
 }
 
 std::optional<std::string> ChatService::lua_get_room_owner(std::string_view room_name) {
@@ -3030,11 +2906,7 @@ std::optional<std::string> ChatService::lua_get_room_owner(std::string_view room
     }
 
     std::lock_guard<std::mutex> lk(impl_->state.mu);
-    const auto it = impl_->state.room_owners.find(std::string(room_name));
-    if (it == impl_->state.room_owners.end()) {
-        return std::nullopt;
-    }
-    return it->second;
+    return find_room_owner_locked(impl_->state, room_name);
 }
 
 bool ChatService::lua_is_user_muted(std::string_view nickname) {
@@ -3089,7 +2961,7 @@ std::size_t ChatService::lua_get_online_count() {
 
 std::size_t ChatService::lua_get_room_count() {
     std::lock_guard<std::mutex> lk(impl_->state.mu);
-    return impl_->state.rooms.size();
+    return count_local_rooms_locked(impl_->state);
 }
 
 bool ChatService::lua_send_notice(std::uint32_t session_id, std::string_view text) {
@@ -3117,7 +2989,7 @@ bool ChatService::lua_broadcast_room(std::string_view room_name, std::string_vie
 
     {
         std::lock_guard<std::mutex> lk(impl_->state.mu);
-        if (impl_->state.rooms.find(std::string(room_name)) == impl_->state.rooms.end()) {
+        if (!room_exists_locked(impl_->state, room_name)) {
             return false;
         }
     }

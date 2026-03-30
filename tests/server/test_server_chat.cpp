@@ -1209,6 +1209,32 @@ TEST_F(ChatServiceTest, BlacklistCommandsRoundTrip) {
     EXPECT_TRUE(WaitForBroadcastText("blacklist remove: blocked_user"));
 }
 
+TEST_F(ChatServiceTest, ChatSpamThresholdTemporarilyMutesSender) {
+    ScopedEnvVar spam_threshold("CHAT_SPAM_THRESHOLD", "3");
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    LoginAs("spam_user");
+    WaitForData();
+
+    JoinRoom("spam_room");
+    WaitForData();
+
+    SendChat("spam_room", "first spam candidate");
+    EXPECT_TRUE(WaitForBroadcastText("first spam candidate"));
+
+    SendChat("spam_room", "second spam candidate");
+    EXPECT_TRUE(WaitForBroadcastText("second spam candidate"));
+
+    SendChat("spam_room", "third spam candidate");
+    EXPECT_TRUE(WaitForBroadcastText("third spam candidate"));
+
+    SendChat("spam_room", "fourth spam candidate");
+    const auto error = WaitForError();
+    ASSERT_TRUE(error.has_value());
+    EXPECT_EQ(error->code, core_proto::errc::FORBIDDEN);
+    EXPECT_EQ(error->message, "temporarily muted for spam");
+}
+
 TEST_F(ChatServiceTest, AdminModerationCommandsDeniedForNonAdmin) {
     LoginAs("regular_user");
     WaitForData();
@@ -1272,6 +1298,42 @@ TEST_F(ChatServiceTest, RoomOwnerCanRemoveOwnRoom) {
 
     SendChat("owner_room", "/room remove");
     EXPECT_TRUE(WaitForBroadcastText("room removed: owner_room"));
+}
+
+TEST_F(ChatServiceTest, ContinuityResumeDoesNotGrantRoomOwnerPrivilegesAfterRestart) {
+    ScopedEnvVar continuity_enabled("SESSION_CONTINUITY_ENABLED", "1");
+    ScopedEnvVar continuity_prefix("SESSION_CONTINUITY_REDIS_PREFIX", "dynaxis");
+    ScopedEnvVar world_default("WORLD_ADMISSION_DEFAULT", "starter-a");
+
+    redis_ = std::make_shared<MockRedisClient>();
+    db_pool_ = std::make_shared<MockConnectionPool>();
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    LoginAs("resume_owner", "resume_owner_token");
+    const auto initial_login = WaitForLoginResponse();
+    ASSERT_TRUE(initial_login.has_value());
+    ASSERT_FALSE(initial_login->resume_token().empty());
+
+    JoinRoom("resume_owner_room");
+    WaitForData();
+
+    chat_service_.reset();
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    std::vector<std::uint8_t> resume_payload;
+    write_lp_utf8(resume_payload, "resume_owner");
+    write_lp_utf8(resume_payload, "resume:" + initial_login->resume_token());
+    chat_service_->on_login(*session_, resume_payload);
+    ProcessJobs();
+    FlushSessionIO();
+
+    const auto resumed_login = WaitForLoginResponse();
+    ASSERT_TRUE(resumed_login.has_value());
+    EXPECT_TRUE(resumed_login->resumed());
+
+    const auto resumed_owner =
+        ChatServicePrivateAccess::lookup_room_owner(*chat_service_, "resume_owner_room");
+    EXPECT_FALSE(resumed_owner.has_value());
 }
 
 TEST_F(ChatServiceTest, RuntimeSettingRejectsOutOfRangeWithoutCountingSuccess) {

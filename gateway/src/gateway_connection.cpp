@@ -7,7 +7,7 @@
 
 #include <openssl/sha.h>
 
-#include "gateway/gateway_app.hpp"
+#include "gateway_app_access.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
@@ -178,13 +178,14 @@ void GatewayConnection::handle_backend_payload(std::vector<std::uint8_t> payload
                 resume_token.has_value() && !resume_token->empty()) {
                 const std::string routing_key = make_resume_routing_key(*resume_token);
                 if (!routing_key.empty() && !backend_instance_id_.empty()) {
-                    app_.register_resume_routing_key(routing_key, backend_instance_id_);
+                    GatewayAppAccess::register_resume_routing_key(app_, routing_key, backend_instance_id_);
                 }
             }
         }
 
         const bool delivered_direct =
-            !session_id_.empty() && app_.try_send_direct_client_frame(session_id_, header.msg_id, frame_span);
+            !session_id_.empty()
+            && GatewayAppAccess::try_send_direct_client_frame(app_, session_id_, header.msg_id, frame_span);
         if (!delivered_direct) {
             tcp_payload.insert(tcp_payload.end(), frame_span.begin(), frame_span.end());
         }
@@ -211,17 +212,17 @@ void GatewayConnection::handle_backend_close(const std::string& reason) {
 }
 
 void GatewayConnection::on_connect() {
-    const auto admission = app_.admit_ingress_connection();
-    if (admission != GatewayApp::IngressAdmission::kAccept) {
+    const auto admission = GatewayAppAccess::admit_ingress_connection(app_);
+    if (admission != GatewayAppAccess::IngressAdmission::kAccept) {
         server::core::log::warn(
             "GatewayConnection rejected by ingress admission: reason="
-            + std::string(GatewayApp::ingress_admission_name(admission))
+            + std::string(GatewayAppAccess::ingress_admission_name(admission))
         );
         stop();
         return;
     }
 
-    app_.record_connection_accept();
+    GatewayAppAccess::record_connection_accept(app_);
 
     try {
         const auto remote = socket().remote_endpoint();
@@ -248,7 +249,7 @@ void GatewayConnection::on_disconnect() {
     (void)handshake_timer_.cancel();
 
     if (!session_id_.empty()) {
-        app_.close_backend_connection(session_id_);
+        GatewayAppAccess::close_backend_connection(app_, session_id_);
     }
     backend_connection_.reset();
     server::core::log::info("GatewayConnection disconnected");
@@ -423,7 +424,7 @@ bool GatewayConnection::try_finish_handshake() {
             routing_key = "anonymous";
         }
 
-        if (!app_.allow_anonymous()) {
+        if (!GatewayAppAccess::allow_anonymous(app_)) {
             if (request.token.empty()) {
                 server::core::log::warn("GatewayConnection anonymous login disabled: token required");
                 stop();
@@ -444,7 +445,7 @@ bool GatewayConnection::try_finish_handshake() {
             return true;
         }
 
-        if (auto udp_bind_ticket = app_.make_udp_bind_ticket_frame(session_id_)) {
+        if (auto udp_bind_ticket = GatewayAppAccess::make_udp_bind_ticket_frame(app_, session_id_)) {
             async_send(std::move(*udp_bind_ticket));
         }
 
@@ -470,7 +471,7 @@ void GatewayConnection::open_backend_connection() {
 
     auto self = std::static_pointer_cast<GatewayConnection>(shared_from_this());
     std::weak_ptr<GatewayConnection> weak_self = self;
-    auto created_backend = app_.create_backend_connection(client_id_, weak_self);
+    auto created_backend = GatewayAppAccess::create_backend_connection(app_, client_id_, weak_self);
     if (!created_backend.has_value() || !created_backend->session) {
         server::core::log::error("GatewayConnection failed to create backend connection");
         stop();
@@ -524,7 +525,7 @@ void GatewayConnection::inspect_backend_payload(std::span<const std::uint8_t> pa
                 resume_token.has_value() && !resume_token->empty()) {
                 const std::string routing_key = make_resume_routing_key(*resume_token);
                 if (!routing_key.empty() && !backend_instance_id_.empty()) {
-                    app_.register_resume_routing_key(routing_key, backend_instance_id_);
+                    GatewayAppAccess::register_resume_routing_key(app_, routing_key, backend_instance_id_);
                 }
             }
         }

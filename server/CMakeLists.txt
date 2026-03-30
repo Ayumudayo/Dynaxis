@@ -24,7 +24,11 @@ target_link_libraries(server_app_backends PUBLIC server_core)
 target_link_libraries(server_app_backends PRIVATE server_storage_pg_factory infra_redis_factory)
 
 add_library(server_chat_runtime STATIC
+    src/chat/chat_blacklist_state.cpp
+    src/chat/chat_command_authorization.cpp
+    src/chat/chat_spam_moderation.cpp
     src/chat/chat_service_core.cpp
+    src/chat/chat_room_state.cpp
     src/chat/chat_hook_plugin_manager.cpp
     src/chat/chat_hook_plugin_chain.cpp
     src/scripting/chat_lua_bindings.cpp
