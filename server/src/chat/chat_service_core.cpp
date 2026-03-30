@@ -56,6 +56,11 @@ struct ChatServiceHookPluginState {
     ChatHookPluginChain chain;
 };
 
+ChatServiceRuntimeState::ChatServiceRuntimeState() = default;
+ChatServiceRuntimeState::~ChatServiceRuntimeState() = default;
+ChatServiceRuntimeState::ChatServiceRuntimeState(ChatServiceRuntimeState&&) noexcept = default;
+ChatServiceRuntimeState& ChatServiceRuntimeState::operator=(ChatServiceRuntimeState&&) noexcept = default;
+
 namespace {
 
 constexpr std::string_view kRoomPasswordHashPrefix = "sha256:";

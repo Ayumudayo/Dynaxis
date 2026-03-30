@@ -113,6 +113,13 @@ struct ChatServiceHistoryConfig {
 
 /** @brief 앱-로컬 서비스 의존성과 운영 중 조정 가능한 설정 묶음입니다. */
 struct ChatServiceRuntimeState {
+    ChatServiceRuntimeState();
+    ~ChatServiceRuntimeState();
+    ChatServiceRuntimeState(const ChatServiceRuntimeState&) = delete;
+    ChatServiceRuntimeState& operator=(const ChatServiceRuntimeState&) = delete;
+    ChatServiceRuntimeState(ChatServiceRuntimeState&&) noexcept;
+    ChatServiceRuntimeState& operator=(ChatServiceRuntimeState&&) noexcept;
+
     std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool{};
     std::shared_ptr<server::core::storage::redis::IRedisClient> redis{};
     std::shared_ptr<server::core::scripting::LuaRuntime> lua_runtime{};
