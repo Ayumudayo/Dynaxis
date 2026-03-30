@@ -31,10 +31,11 @@
 #include <boost/asio/ip/tcp.hpp>
 
 #include "gateway/auth/authenticator.hpp"
+#include "gateway/direct_egress_route.hpp"
 #include "gateway/gateway_connection.hpp"
 #include "gateway/registry_backend_factory.hpp"
 #include "gateway/session_directory.hpp"
-#include "gateway/udp_sequenced_metrics.hpp"
+#include "gateway_app_state.hpp"
 #include "gateway_backend_connection.hpp"
 #include "server/core/app/engine_builder.hpp"
 #include "server/core/net/hive.hpp"
@@ -494,9 +495,9 @@ BackendConnection::BackendConnection(GatewayApp& app,
     , backend_instance_id_(std::move(backend_instance_id))
     , sticky_hit_(sticky_hit)
     , connection_(std::move(connection))
-    , socket_(app.io_)
-    , connect_timer_(app.io_)
-    , retry_timer_(app.io_)
+    , socket_(app.impl_->io_)
+    , connect_timer_(app.impl_->io_)
+    , retry_timer_(app.impl_->io_)
     , send_queue_max_bytes_(send_queue_max_bytes > 0 ? send_queue_max_bytes : kDefaultBackendSendQueueMaxBytes)
     , connect_timeout_(connect_timeout > std::chrono::milliseconds{0}
                            ? connect_timeout
@@ -521,7 +522,7 @@ void BackendConnection::do_connect(const std::string& host, std::uint16_t port) 
     close_socket_for_retry();
 
     auto self = shared_from_this();
-    auto resolver = std::make_shared<boost::asio::ip::tcp::resolver>(app_.io_);
+    auto resolver = std::make_shared<boost::asio::ip::tcp::resolver>(app_.impl_->io_);
     
     resolver->async_resolve(host, std::to_string(port),
         [self, this, resolver](const boost::system::error_code& ec, boost::asio::ip::tcp::resolver::results_type results) {
@@ -848,60 +849,47 @@ const std::string& BackendConnection::session_id() const {
 
 // --- GatewayApp Implementation ---
 
-struct GatewayApp::SessionState {
-    TransportSessionPtr session;
-    std::string client_id;
-    std::string backend_instance_id;
-    bool udp_bound{false};
-    boost::asio::ip::udp::endpoint udp_endpoint;
-    std::uint64_t udp_nonce{0};
-    std::uint64_t udp_expires_unix_ms{0};
-    std::uint64_t udp_ticket_issued_unix_ms{0};
-    std::uint32_t udp_bind_fail_attempts{0};
-    std::uint64_t udp_bind_retry_after_unix_ms{0};
-    std::string udp_token;
-    UdpSequencedMetrics udp_sequenced_metrics;
-    bool rudp_selected{false};
-    bool rudp_fallback_to_tcp{false};
-    std::unique_ptr<server::core::net::rudp::RudpEngine> rudp_engine;
-};
-
-GatewayApp::GatewayApp()
+GatewayApp::Impl::Impl()
     : hive_(std::make_shared<server::core::net::Hive>(io_))
     , engine_(server::core::app::EngineBuilder("gateway_app").build())
     , app_host_(engine_.host())
     , authenticator_(std::make_shared<auth::NoopAuthenticator>())
-    , rudp_config_(std::make_unique<server::core::net::rudp::RudpConfig>()) {
+    , rudp_config_(std::make_unique<server::core::net::rudp::RudpConfig>()) {}
+
+GatewayApp::Impl::~Impl() = default;
+
+GatewayApp::GatewayApp()
+    : impl_(std::make_unique<Impl>()) {
     server::core::runtime_metrics::set_liveness_state(
         server::core::runtime_metrics::LivenessState::kBootstrapping);
     configure_gateway();
 
-    boot_id_ = make_boot_id();
-    server::core::log::info("GatewayApp boot_id=" + boot_id_);
+    impl_->boot_id_ = make_boot_id();
+    server::core::log::info("GatewayApp boot_id=" + impl_->boot_id_);
 
-    if (udp_listen_port_ != 0 && udp_bind_secret_.empty()) {
-        udp_bind_secret_ = boot_id_;
+    if (impl_->udp_listen_port_ != 0 && impl_->udp_bind_secret_.empty()) {
+        impl_->udp_bind_secret_ = impl_->boot_id_;
         server::core::log::warn("GatewayApp GATEWAY_UDP_BIND_SECRET not set; using boot_id derived secret");
     }
 
     configure_infrastructure();
-    engine_.set_service(hive_);
-    engine_.set_service(authenticator_);
+    impl_->engine_.set_service(impl_->hive_);
+    impl_->engine_.set_service(impl_->authenticator_);
 
     // Redis는 백엔드 탐색(discovery)과 고정 라우팅(sticky routing)에 필수다.
     // 이 의존성을 readiness에 반영해야, 엣지가 백엔드를 찾지 못하는 상태를 "정상 준비"로 오해하지 않는다.
-    engine_.declare_dependency("redis", server::core::app::AppHost::DependencyRequirement::kRequired);
-    engine_.set_ready(false);
+    impl_->engine_.declare_dependency("redis", server::core::app::AppHost::DependencyRequirement::kRequired);
+    impl_->engine_.set_ready(false);
 
     if (const char* port_env = std::getenv("METRICS_PORT")) {
         try {
-            metrics_port_ = static_cast<std::uint16_t>(std::stoul(port_env));
+            impl_->metrics_port_ = static_cast<std::uint16_t>(std::stoul(port_env));
         } catch (...) {
             server::core::log::warn("GatewayApp invalid METRICS_PORT; using default");
         }
     }
 
-    engine_.start_admin_http(metrics_port_, [this]() {
+    impl_->engine_.start_admin_http(impl_->metrics_port_, [this]() {
         std::ostringstream stream;
 
         // build metadata(git hash/describe + build time)를 함께 노출해,
@@ -912,127 +900,127 @@ GatewayApp::GatewayApp()
 
         stream << "# TYPE gateway_sessions_active gauge\n";
         {
-            std::lock_guard<std::mutex> lock(session_mutex_);
-            stream << "gateway_sessions_active " << sessions_.size() << "\n";
+            std::lock_guard<std::mutex> lock(impl_->session_mutex_);
+            stream << "gateway_sessions_active " << impl_->sessions_.size() << "\n";
         }
         stream << "# TYPE gateway_connections_total counter\n";
-        stream << "gateway_connections_total " << connections_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "gateway_connections_total " << impl_->connections_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_backend_resolve_fail_total counter\n";
         stream << "gateway_backend_resolve_fail_total "
-               << backend_resolve_fail_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->backend_resolve_fail_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_backend_connect_fail_total counter\n";
         stream << "gateway_backend_connect_fail_total "
-               << backend_connect_fail_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->backend_connect_fail_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_backend_connect_timeout_total counter\n";
         stream << "gateway_backend_connect_timeout_total "
-               << backend_connect_timeout_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->backend_connect_timeout_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_backend_write_error_total counter\n";
         stream << "gateway_backend_write_error_total "
-               << backend_write_error_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->backend_write_error_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_backend_send_queue_overflow_total counter\n";
         stream << "gateway_backend_send_queue_overflow_total "
-               << backend_send_queue_overflow_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->backend_send_queue_overflow_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_backend_connect_timeout_ms gauge\n";
-        stream << "gateway_backend_connect_timeout_ms " << backend_connect_timeout_ms_ << "\n";
+        stream << "gateway_backend_connect_timeout_ms " << impl_->backend_connect_timeout_ms_ << "\n";
 
         stream << "# TYPE gateway_backend_send_queue_max_bytes gauge\n";
-        stream << "gateway_backend_send_queue_max_bytes " << backend_send_queue_max_bytes_ << "\n";
+        stream << "gateway_backend_send_queue_max_bytes " << impl_->backend_send_queue_max_bytes_ << "\n";
 
         stream << "# TYPE gateway_backend_circuit_open_total counter\n";
         stream << "gateway_backend_circuit_open_total "
-               << backend_circuit_open_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->backend_circuit_open_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_backend_circuit_reject_total counter\n";
         stream << "gateway_backend_circuit_reject_total "
-               << backend_circuit_reject_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->backend_circuit_reject_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_backend_connect_retry_total counter\n";
         stream << "gateway_backend_connect_retry_total "
-               << backend_connect_retry_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->backend_connect_retry_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_backend_retry_budget_exhausted_total counter\n";
         stream << "gateway_backend_retry_budget_exhausted_total "
-               << backend_retry_budget_exhausted_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->backend_retry_budget_exhausted_total_.load(std::memory_order_relaxed) << "\n";
         stream << "# TYPE gateway_resume_routing_bind_total counter\n";
         stream << "gateway_resume_routing_bind_total "
-               << resume_routing_bind_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->resume_routing_bind_total_.load(std::memory_order_relaxed) << "\n";
         stream << "# TYPE gateway_resume_routing_hit_total counter\n";
         stream << "gateway_resume_routing_hit_total "
-               << resume_routing_hit_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->resume_routing_hit_total_.load(std::memory_order_relaxed) << "\n";
         stream << "# TYPE gateway_resume_locator_bind_total counter\n";
         stream << "gateway_resume_locator_bind_total "
-               << resume_locator_bind_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->resume_locator_bind_total_.load(std::memory_order_relaxed) << "\n";
         stream << "# TYPE gateway_resume_locator_lookup_hit_total counter\n";
         stream << "gateway_resume_locator_lookup_hit_total "
-               << resume_locator_lookup_hit_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->resume_locator_lookup_hit_total_.load(std::memory_order_relaxed) << "\n";
         stream << "# TYPE gateway_resume_locator_lookup_miss_total counter\n";
         stream << "gateway_resume_locator_lookup_miss_total "
-               << resume_locator_lookup_miss_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->resume_locator_lookup_miss_total_.load(std::memory_order_relaxed) << "\n";
         stream << "# TYPE gateway_resume_locator_selector_hit_total counter\n";
         stream << "gateway_resume_locator_selector_hit_total "
-               << resume_locator_selector_hit_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->resume_locator_selector_hit_total_.load(std::memory_order_relaxed) << "\n";
         stream << "# TYPE gateway_resume_locator_selector_fallback_total counter\n";
         stream << "gateway_resume_locator_selector_fallback_total "
-               << resume_locator_selector_fallback_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->resume_locator_selector_fallback_total_.load(std::memory_order_relaxed) << "\n";
         stream << "# TYPE gateway_resume_locator_ttl_sec gauge\n";
         stream << "gateway_resume_locator_ttl_sec "
-               << resume_locator_ttl_sec_ << "\n";
+               << impl_->resume_locator_ttl_sec_ << "\n";
 
         stream << "# TYPE gateway_backend_circuit_open gauge\n";
         stream << "gateway_backend_circuit_open "
-               << (backend_circuit_breaker_.is_open(steady_time_ms()) ? 1 : 0) << "\n";
+               << (impl_->backend_circuit_breaker_.is_open(steady_time_ms()) ? 1 : 0) << "\n";
 
         stream << "# TYPE gateway_backend_circuit_fail_threshold gauge\n";
-        stream << "gateway_backend_circuit_fail_threshold " << backend_circuit_fail_threshold_ << "\n";
+        stream << "gateway_backend_circuit_fail_threshold " << impl_->backend_circuit_fail_threshold_ << "\n";
 
         stream << "# TYPE gateway_backend_circuit_open_ms gauge\n";
-        stream << "gateway_backend_circuit_open_ms " << backend_circuit_open_ms_ << "\n";
+        stream << "gateway_backend_circuit_open_ms " << impl_->backend_circuit_open_ms_ << "\n";
 
         stream << "# TYPE gateway_backend_connect_retry_budget_per_min gauge\n";
-        stream << "gateway_backend_connect_retry_budget_per_min " << backend_connect_retry_budget_per_min_ << "\n";
+        stream << "gateway_backend_connect_retry_budget_per_min " << impl_->backend_connect_retry_budget_per_min_ << "\n";
 
         stream << "# TYPE gateway_backend_connect_retry_backoff_ms gauge\n";
-        stream << "gateway_backend_connect_retry_backoff_ms " << backend_connect_retry_backoff_ms_ << "\n";
+        stream << "gateway_backend_connect_retry_backoff_ms " << impl_->backend_connect_retry_backoff_ms_ << "\n";
 
         stream << "# TYPE gateway_backend_connect_retry_backoff_max_ms gauge\n";
-        stream << "gateway_backend_connect_retry_backoff_max_ms " << backend_connect_retry_backoff_max_ms_ << "\n";
+        stream << "gateway_backend_connect_retry_backoff_max_ms " << impl_->backend_connect_retry_backoff_max_ms_ << "\n";
 
         stream << "# TYPE gateway_ingress_reject_not_ready_total counter\n";
         stream << "gateway_ingress_reject_not_ready_total "
-               << ingress_reject_not_ready_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->ingress_reject_not_ready_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_ingress_reject_rate_limit_total counter\n";
         stream << "gateway_ingress_reject_rate_limit_total "
-               << ingress_reject_rate_limit_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->ingress_reject_rate_limit_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_ingress_reject_session_limit_total counter\n";
         stream << "gateway_ingress_reject_session_limit_total "
-               << ingress_reject_session_limit_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->ingress_reject_session_limit_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_ingress_reject_circuit_open_total counter\n";
         stream << "gateway_ingress_reject_circuit_open_total "
-               << ingress_reject_circuit_open_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->ingress_reject_circuit_open_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_ingress_tokens_per_sec gauge\n";
-        stream << "gateway_ingress_tokens_per_sec " << ingress_tokens_per_sec_ << "\n";
+        stream << "gateway_ingress_tokens_per_sec " << impl_->ingress_tokens_per_sec_ << "\n";
 
         stream << "# TYPE gateway_ingress_burst_tokens gauge\n";
-        stream << "gateway_ingress_burst_tokens " << ingress_burst_tokens_ << "\n";
+        stream << "gateway_ingress_burst_tokens " << impl_->ingress_burst_tokens_ << "\n";
 
         stream << "# TYPE gateway_ingress_max_active_sessions gauge\n";
-        stream << "gateway_ingress_max_active_sessions " << ingress_max_active_sessions_ << "\n";
+        stream << "gateway_ingress_max_active_sessions " << impl_->ingress_max_active_sessions_ << "\n";
 
         stream << "# TYPE gateway_ingress_tokens_available gauge\n";
-        stream << "gateway_ingress_tokens_available " << ingress_token_bucket_.available(steady_time_ms()) << "\n";
+        stream << "gateway_ingress_tokens_available " << impl_->ingress_token_bucket_.available(steady_time_ms()) << "\n";
 
         stream << "# TYPE gateway_udp_enabled gauge\n";
-        stream << "gateway_udp_enabled " << (udp_enabled_.load(std::memory_order_relaxed) ? 1 : 0) << "\n";
+        stream << "gateway_udp_enabled " << (impl_->udp_enabled_.load(std::memory_order_relaxed) ? 1 : 0) << "\n";
 
         stream << "# TYPE gateway_udp_ingress_feature_enabled gauge\n";
         stream << "gateway_udp_ingress_feature_enabled " << (kGatewayUdpIngressBuildEnabled ? 1 : 0) << "\n";
@@ -1041,168 +1029,168 @@ GatewayApp::GatewayApp()
         stream << "gateway_rudp_core_build_enabled " << (kCoreRudpBuildEnabled ? 1 : 0) << "\n";
 
         stream << "# TYPE gateway_rudp_enabled gauge\n";
-        stream << "gateway_rudp_enabled " << (rudp_rollout_policy_.enabled ? 1 : 0) << "\n";
+        stream << "gateway_rudp_enabled " << (impl_->rudp_rollout_policy_.enabled ? 1 : 0) << "\n";
 
         stream << "# TYPE gateway_rudp_canary_percent gauge\n";
-        stream << "gateway_rudp_canary_percent " << rudp_rollout_policy_.canary_percent << "\n";
+        stream << "gateway_rudp_canary_percent " << impl_->rudp_rollout_policy_.canary_percent << "\n";
 
         stream << "# TYPE gateway_rudp_opcode_allowlist_size gauge\n";
-        stream << "gateway_rudp_opcode_allowlist_size " << rudp_rollout_policy_.opcode_allowlist.size() << "\n";
+        stream << "gateway_rudp_opcode_allowlist_size " << impl_->rudp_rollout_policy_.opcode_allowlist.size() << "\n";
 
         stream << "# TYPE gateway_udp_packets_total counter\n";
-        stream << "gateway_udp_packets_total " << udp_packets_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "gateway_udp_packets_total " << impl_->udp_packets_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_receive_error_total counter\n";
-        stream << "gateway_udp_receive_error_total " << udp_receive_error_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "gateway_udp_receive_error_total " << impl_->udp_receive_error_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_send_error_total counter\n";
-        stream << "gateway_udp_send_error_total " << udp_send_error_total_.load(std::memory_order_relaxed) << "\n";
+        stream << "gateway_udp_send_error_total " << impl_->udp_send_error_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_bind_ticket_issued_total counter\n";
         stream << "gateway_udp_bind_ticket_issued_total "
-               << udp_bind_ticket_issued_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_bind_ticket_issued_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_bind_success_total counter\n";
         stream << "gateway_udp_bind_success_total "
-               << udp_bind_success_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_bind_success_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_bind_reject_total counter\n";
         stream << "gateway_udp_bind_reject_total "
-               << udp_bind_reject_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_bind_reject_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_bind_block_total counter\n";
         stream << "gateway_udp_bind_block_total "
-               << udp_bind_block_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_bind_block_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_bind_rate_limit_reject_total counter\n";
         stream << "gateway_udp_bind_rate_limit_reject_total "
-               << udp_bind_rate_limit_reject_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_bind_rate_limit_reject_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_bind_retry_backoff_total counter\n";
         stream << "gateway_udp_bind_retry_backoff_total "
-               << udp_bind_retry_backoff_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_bind_retry_backoff_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_bind_retry_reject_total counter\n";
         stream << "gateway_udp_bind_retry_reject_total "
-               << udp_bind_retry_reject_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_bind_retry_reject_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_opcode_allowlist_reject_total counter\n";
         stream << "gateway_udp_opcode_allowlist_reject_total "
-               << udp_opcode_allowlist_reject_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_opcode_allowlist_reject_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_bind_fail_window_ms gauge\n";
-        stream << "gateway_udp_bind_fail_window_ms " << udp_bind_fail_window_ms_ << "\n";
+        stream << "gateway_udp_bind_fail_window_ms " << impl_->udp_bind_fail_window_ms_ << "\n";
 
         stream << "# TYPE gateway_udp_bind_fail_limit gauge\n";
-        stream << "gateway_udp_bind_fail_limit " << udp_bind_fail_limit_ << "\n";
+        stream << "gateway_udp_bind_fail_limit " << impl_->udp_bind_fail_limit_ << "\n";
 
         stream << "# TYPE gateway_udp_bind_block_ms gauge\n";
-        stream << "gateway_udp_bind_block_ms " << udp_bind_block_ms_ << "\n";
+        stream << "gateway_udp_bind_block_ms " << impl_->udp_bind_block_ms_ << "\n";
 
         stream << "# TYPE gateway_udp_bind_retry_backoff_ms gauge\n";
-        stream << "gateway_udp_bind_retry_backoff_ms " << udp_bind_retry_backoff_ms_ << "\n";
+        stream << "gateway_udp_bind_retry_backoff_ms " << impl_->udp_bind_retry_backoff_ms_ << "\n";
 
         stream << "# TYPE gateway_udp_bind_retry_backoff_max_ms gauge\n";
-        stream << "gateway_udp_bind_retry_backoff_max_ms " << udp_bind_retry_backoff_max_ms_ << "\n";
+        stream << "gateway_udp_bind_retry_backoff_max_ms " << impl_->udp_bind_retry_backoff_max_ms_ << "\n";
 
         stream << "# TYPE gateway_udp_bind_retry_max_attempts gauge\n";
-        stream << "gateway_udp_bind_retry_max_attempts " << udp_bind_retry_max_attempts_ << "\n";
+        stream << "gateway_udp_bind_retry_max_attempts " << impl_->udp_bind_retry_max_attempts_ << "\n";
 
         stream << "# TYPE gateway_udp_opcode_allowlist_size gauge\n";
-        stream << "gateway_udp_opcode_allowlist_size " << udp_opcode_allowlist_.size() << "\n";
+        stream << "gateway_udp_opcode_allowlist_size " << impl_->udp_opcode_allowlist_.size() << "\n";
 
         stream << "# TYPE gateway_udp_bind_ttl_ms gauge\n";
-        stream << "gateway_udp_bind_ttl_ms " << udp_bind_ttl_ms_ << "\n";
+        stream << "gateway_udp_bind_ttl_ms " << impl_->udp_bind_ttl_ms_ << "\n";
 
         stream << "# TYPE gateway_udp_forward_total counter\n";
         stream << "gateway_udp_forward_total "
-               << udp_forward_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_forward_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_transport_delivery_forward_total counter\n";
         stream << "gateway_transport_delivery_forward_total{transport=\"udp\",delivery=\"reliable_ordered\"} "
-               << udp_forward_reliable_ordered_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_forward_reliable_ordered_total_.load(std::memory_order_relaxed) << "\n";
         stream << "gateway_transport_delivery_forward_total{transport=\"udp\",delivery=\"reliable\"} "
-               << udp_forward_reliable_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_forward_reliable_total_.load(std::memory_order_relaxed) << "\n";
         stream << "gateway_transport_delivery_forward_total{transport=\"udp\",delivery=\"unreliable_sequenced\"} "
-               << udp_forward_unreliable_sequenced_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_forward_unreliable_sequenced_total_.load(std::memory_order_relaxed) << "\n";
         stream << "# TYPE gateway_udp_direct_state_delta_total counter\n";
         stream << "gateway_udp_direct_state_delta_total "
-               << udp_direct_state_delta_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_direct_state_delta_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_replay_drop_total counter\n";
         stream << "gateway_udp_replay_drop_total "
-               << udp_replay_drop_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_replay_drop_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_reorder_drop_total counter\n";
         stream << "gateway_udp_reorder_drop_total "
-               << udp_reorder_drop_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_reorder_drop_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_duplicate_drop_total counter\n";
         stream << "gateway_udp_duplicate_drop_total "
-               << udp_duplicate_drop_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_duplicate_drop_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_transport_delivery_drop_total counter\n";
         stream << "gateway_transport_delivery_drop_total{transport=\"udp\",delivery=\"unreliable_sequenced\",reason=\"replay\"} "
-               << udp_replay_drop_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_replay_drop_total_.load(std::memory_order_relaxed) << "\n";
         stream << "gateway_transport_delivery_drop_total{transport=\"udp\",delivery=\"unreliable_sequenced\",reason=\"reorder\"} "
-               << udp_reorder_drop_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_reorder_drop_total_.load(std::memory_order_relaxed) << "\n";
         stream << "gateway_transport_delivery_drop_total{transport=\"udp\",delivery=\"unreliable_sequenced\",reason=\"duplicate\"} "
-               << udp_duplicate_drop_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_duplicate_drop_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_retransmit_total counter\n";
         stream << "gateway_udp_retransmit_total "
-               << udp_retransmit_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_retransmit_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_loss_estimated_total counter\n";
         stream << "gateway_udp_loss_estimated_total "
-               << udp_loss_estimated_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_loss_estimated_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_jitter_ms_last gauge\n";
         stream << "gateway_udp_jitter_ms_last "
-               << udp_jitter_ms_last_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_jitter_ms_last_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_udp_rtt_ms_last gauge\n";
         stream << "gateway_udp_rtt_ms_last "
-               << udp_rtt_ms_last_.load(std::memory_order_relaxed) << "\n";
+               << impl_->udp_rtt_ms_last_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_rudp_packets_total counter\n";
         stream << "gateway_rudp_packets_total "
-               << rudp_packets_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->rudp_packets_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_rudp_packets_reject_total counter\n";
         stream << "gateway_rudp_packets_reject_total "
-               << rudp_packets_reject_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->rudp_packets_reject_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_rudp_inner_forward_total counter\n";
         stream << "gateway_rudp_inner_forward_total "
-               << rudp_inner_forward_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->rudp_inner_forward_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_rudp_fallback_total counter\n";
         stream << "gateway_rudp_fallback_total "
-               << rudp_fallback_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->rudp_fallback_total_.load(std::memory_order_relaxed) << "\n";
         stream << "# TYPE gateway_rudp_direct_state_delta_total counter\n";
         stream << "gateway_rudp_direct_state_delta_total "
-               << rudp_direct_state_delta_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->rudp_direct_state_delta_total_.load(std::memory_order_relaxed) << "\n";
         stream << "# TYPE gateway_direct_state_delta_tcp_fallback_total counter\n";
         stream << "gateway_direct_state_delta_tcp_fallback_total "
-               << direct_state_delta_tcp_fallback_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->direct_state_delta_tcp_fallback_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_world_policy_filtered_total counter\n";
         stream << "gateway_world_policy_filtered_total{source=\"sticky\"} "
-               << world_policy_filtered_sticky_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->world_policy_filtered_sticky_total_.load(std::memory_order_relaxed) << "\n";
         stream << "gateway_world_policy_filtered_total{source=\"candidate\"} "
-               << world_policy_filtered_candidate_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->world_policy_filtered_candidate_total_.load(std::memory_order_relaxed) << "\n";
 
         stream << "# TYPE gateway_world_policy_replacement_selected_total counter\n";
         stream << "gateway_world_policy_replacement_selected_total "
-               << world_policy_replacement_selected_total_.load(std::memory_order_relaxed) << "\n";
+               << impl_->world_policy_replacement_selected_total_.load(std::memory_order_relaxed) << "\n";
 
-        stream << app_host_.dependency_metrics_text();
-        stream << app_host_.lifecycle_metrics_text();
+        stream << impl_->app_host_.dependency_metrics_text();
+        stream << impl_->app_host_.lifecycle_metrics_text();
         return stream.str();
     });
 
-    engine_.register_module(
+    impl_->engine_.register_module(
         "gateway-runtime",
         [this](server::core::app::EngineRuntime&) {
             start_listener();
@@ -1212,9 +1200,9 @@ GatewayApp::GatewayApp()
         [this]() { stop(); },
         [this]() {
             server::core::app::EngineRuntime::WatchdogStatus status;
-            const bool listener_ready = static_cast<bool>(listener_);
-            const bool udp_ready = (udp_listen_port_ == 0) || static_cast<bool>(udp_socket_);
-            const bool probe_ready = redis_client_ == nullptr || infra_probe_thread_.joinable();
+            const bool listener_ready = static_cast<bool>(impl_->listener_);
+            const bool udp_ready = (impl_->udp_listen_port_ == 0) || static_cast<bool>(impl_->udp_socket_);
+            const bool probe_ready = impl_->redis_client_ == nullptr || impl_->infra_probe_thread_.joinable();
             status.healthy = listener_ready && udp_ready && probe_ready;
             if (!listener_ready) {
                 status.detail = "listener-missing";
@@ -1233,78 +1221,118 @@ GatewayApp::~GatewayApp() {
     stop();
 }
 
+std::string GatewayApp::gateway_id() const {
+    return impl_->gateway_id_;
+}
+
+bool GatewayApp::allow_anonymous() const noexcept {
+    return impl_->allow_anonymous_;
+}
+
+void GatewayApp::record_connection_accept() {
+    (void)impl_->connections_total_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void GatewayApp::record_backend_resolve_fail() {
+    (void)impl_->backend_resolve_fail_total_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void GatewayApp::record_backend_connect_fail() {
+    (void)impl_->backend_connect_fail_total_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void GatewayApp::record_backend_connect_timeout() {
+    (void)impl_->backend_connect_timeout_total_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void GatewayApp::record_backend_write_error() {
+    (void)impl_->backend_write_error_total_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void GatewayApp::record_backend_send_queue_overflow() {
+    (void)impl_->backend_send_queue_overflow_total_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void GatewayApp::record_backend_retry_scheduled() {
+    (void)impl_->backend_connect_retry_total_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void GatewayApp::record_backend_retry_budget_exhausted() {
+    (void)impl_->backend_retry_budget_exhausted_total_.fetch_add(1, std::memory_order_relaxed);
+}
+
 int GatewayApp::run() {
-    engine_.start_modules();
-    engine_.mark_running();
+    impl_->engine_.start_modules();
+    impl_->engine_.mark_running();
     server::core::runtime_metrics::set_liveness_state(
         server::core::runtime_metrics::LivenessState::kRunning);
-    engine_.install_asio_termination_signals(io_, {});
+    impl_->engine_.install_asio_termination_signals(impl_->io_, {});
 
     server::core::log::info("GatewayApp starting main loop");
-    hive_->run();
+    impl_->hive_->run();
 
     server::core::runtime_metrics::set_liveness_state(
         server::core::runtime_metrics::LivenessState::kStopping);
-    engine_.run_shutdown();
-    engine_.mark_stopped();
+    impl_->engine_.run_shutdown();
+    impl_->engine_.mark_stopped();
     server::core::log::info("GatewayApp stopped");
     return 0;
 }
 
 void GatewayApp::stop() {
-    app_host_.request_stop();
-    app_host_.set_ready(false);
+    impl_->app_host_.request_stop();
+    impl_->app_host_.set_ready(false);
     stop_infrastructure_probe();
-    app_host_.stop_admin_http();
+    impl_->app_host_.stop_admin_http();
 
-    if (listener_) {
-        listener_->stop();
+    if (impl_->listener_) {
+        impl_->listener_->stop();
     }
 
     stop_udp_listener();
 
     {
-        std::lock_guard<std::mutex> lock(session_mutex_);
-        for (auto& [_, state] : sessions_) {
+        std::lock_guard<std::mutex> lock(impl_->session_mutex_);
+        for (auto& [_, state] : impl_->sessions_) {
             if (state && state->session) {
                 state->session->close();
             }
         }
-        sessions_.clear();
+        impl_->sessions_.clear();
     }
 
-    if (hive_) {
-        hive_->stop();
+    if (impl_->hive_) {
+        impl_->hive_->stop();
     }
-    io_.stop();
+    impl_->io_.stop();
 }
 
 GatewayApp::IngressAdmission GatewayApp::admit_ingress_connection() {
-    if (!app_host_.ready() || !app_host_.healthy() || app_host_.stop_requested()) {
-        (void)ingress_reject_not_ready_total_.fetch_add(1, std::memory_order_relaxed);
+    if (!impl_->app_host_.ready() || !impl_->app_host_.healthy() || impl_->app_host_.stop_requested()) {
+        (void)impl_->ingress_reject_not_ready_total_.fetch_add(1, std::memory_order_relaxed);
         return IngressAdmission::kRejectNotReady;
     }
 
     const auto now_ms = steady_time_ms();
-    if (backend_circuit_breaker_.is_open(now_ms)) {
-        (void)ingress_reject_circuit_open_total_.fetch_add(1, std::memory_order_relaxed);
+    if (impl_->backend_circuit_breaker_.is_open(now_ms)) {
+        (void)impl_->ingress_reject_circuit_open_total_.fetch_add(1, std::memory_order_relaxed);
         return IngressAdmission::kRejectCircuitOpen;
     }
 
-    if (ingress_max_active_sessions_ > 0) {
+    if (impl_->ingress_max_active_sessions_ > 0) {
         std::size_t session_count = 0;
         {
-            std::lock_guard<std::mutex> lock(session_mutex_);
-            session_count = sessions_.size();
+            std::lock_guard<std::mutex> lock(impl_->session_mutex_);
+            session_count = impl_->sessions_.size();
         }
-        if (session_count >= ingress_max_active_sessions_) {
-            (void)ingress_reject_session_limit_total_.fetch_add(1, std::memory_order_relaxed);
+        if (session_count >= impl_->ingress_max_active_sessions_) {
+            (void)impl_->ingress_reject_session_limit_total_.fetch_add(1, std::memory_order_relaxed);
             return IngressAdmission::kRejectSessionLimit;
         }
     }
 
-    if (!ingress_token_bucket_.consume(now_ms)) {
-        (void)ingress_reject_rate_limit_total_.fetch_add(1, std::memory_order_relaxed);
+    if (!impl_->ingress_token_bucket_.consume(now_ms)) {
+        (void)impl_->ingress_reject_rate_limit_total_.fetch_add(1, std::memory_order_relaxed);
         return IngressAdmission::kRejectRateLimited;
     }
 
@@ -1328,57 +1356,57 @@ const char* GatewayApp::ingress_admission_name(IngressAdmission admission) noexc
 }
 
 bool GatewayApp::backend_circuit_allows_connect() {
-    if (backend_circuit_breaker_.allow(steady_time_ms())) {
+    if (impl_->backend_circuit_breaker_.allow(steady_time_ms())) {
         return true;
     }
 
-    (void)backend_circuit_reject_total_.fetch_add(1, std::memory_order_relaxed);
+    (void)impl_->backend_circuit_reject_total_.fetch_add(1, std::memory_order_relaxed);
     return false;
 }
 
 void GatewayApp::record_backend_connect_success_event() {
-    backend_circuit_breaker_.record_success();
+    impl_->backend_circuit_breaker_.record_success();
 }
 
 void GatewayApp::record_backend_connect_failure_event() {
-    if (backend_circuit_breaker_.record_failure(steady_time_ms())) {
-        (void)backend_circuit_open_total_.fetch_add(1, std::memory_order_relaxed);
+    if (impl_->backend_circuit_breaker_.record_failure(steady_time_ms())) {
+        (void)impl_->backend_circuit_open_total_.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
 bool GatewayApp::consume_backend_retry_budget() {
-    return backend_retry_budget_.consume(steady_time_ms());
+    return impl_->backend_retry_budget_.consume(steady_time_ms());
 }
 
 std::chrono::milliseconds GatewayApp::backend_retry_delay(std::uint32_t attempt) const {
     const auto capped_attempt = std::min<std::uint32_t>(attempt, 8);
     const auto factor = 1ull << (capped_attempt == 0 ? 0 : (capped_attempt - 1));
-    const auto base_delay = static_cast<std::uint64_t>(backend_connect_retry_backoff_ms_) * factor;
-    const auto bounded_delay = std::min<std::uint64_t>(base_delay, backend_connect_retry_backoff_max_ms_);
+    const auto base_delay = static_cast<std::uint64_t>(impl_->backend_connect_retry_backoff_ms_) * factor;
+    const auto bounded_delay = std::min<std::uint64_t>(base_delay, impl_->backend_connect_retry_backoff_max_ms_);
     return std::chrono::milliseconds{bounded_delay};
 }
 
 std::uint32_t GatewayApp::udp_bind_retry_delay_ms(std::uint32_t attempt) const {
     const auto capped_attempt = std::min<std::uint32_t>(attempt, 8);
     const auto factor = 1ull << (capped_attempt == 0 ? 0 : (capped_attempt - 1));
-    const auto base_delay = static_cast<std::uint64_t>(udp_bind_retry_backoff_ms_) * factor;
-    const auto bounded_delay = std::min<std::uint64_t>(base_delay, udp_bind_retry_backoff_max_ms_);
+    const auto base_delay = static_cast<std::uint64_t>(impl_->udp_bind_retry_backoff_ms_) * factor;
+    const auto bounded_delay = std::min<std::uint64_t>(base_delay, impl_->udp_bind_retry_backoff_max_ms_);
     return static_cast<std::uint32_t>(bounded_delay);
 }
 
 void GatewayApp::start_infrastructure_probe() {
-    if (infra_probe_thread_.joinable()) {
+    if (impl_->infra_probe_thread_.joinable()) {
         return;
     }
 
-    infra_probe_stop_.store(false, std::memory_order_relaxed);
-    infra_probe_thread_ = std::thread([this]() {
+    impl_->infra_probe_stop_.store(false, std::memory_order_relaxed);
+    impl_->infra_probe_thread_ = std::thread([this]() {
         bool last_ok = true;
-        while (!infra_probe_stop_.load(std::memory_order_relaxed) && !app_host_.stop_requested()) {
+        while (!impl_->infra_probe_stop_.load(std::memory_order_relaxed) && !impl_->app_host_.stop_requested()) {
             bool ok = false;
             try {
-                if (redis_client_) {
-                    ok = redis_client_->health_check();
+                if (impl_->redis_client_) {
+                    ok = impl_->redis_client_->health_check();
                 }
             } catch (const std::exception& e) {
                 server::core::log::warn(std::string("GatewayApp Redis health_check exception: ") + e.what());
@@ -1388,7 +1416,7 @@ void GatewayApp::start_infrastructure_probe() {
                 ok = false;
             }
 
-            app_host_.set_dependency_ok("redis", ok);
+            impl_->app_host_.set_dependency_ok("redis", ok);
 
             if (ok != last_ok) {
                 if (ok) {
@@ -1400,20 +1428,20 @@ void GatewayApp::start_infrastructure_probe() {
             }
 
             for (int i = 0; i < 20; ++i) {
-                if (infra_probe_stop_.load(std::memory_order_relaxed) || app_host_.stop_requested()) {
+                if (impl_->infra_probe_stop_.load(std::memory_order_relaxed) || impl_->app_host_.stop_requested()) {
                     break;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
         }
-        app_host_.set_dependency_ok("redis", false);
+        impl_->app_host_.set_dependency_ok("redis", false);
     });
 }
 
 void GatewayApp::stop_infrastructure_probe() {
-    infra_probe_stop_.store(true, std::memory_order_relaxed);
-    if (infra_probe_thread_.joinable() && infra_probe_thread_.get_id() != std::this_thread::get_id()) {
-        infra_probe_thread_.join();
+    impl_->infra_probe_stop_.store(true, std::memory_order_relaxed);
+    if (impl_->infra_probe_thread_.joinable() && impl_->infra_probe_thread_.get_id() != std::this_thread::get_id()) {
+        impl_->infra_probe_thread_.join();
     }
 }
 
@@ -1434,7 +1462,7 @@ std::optional<GatewayApp::CreatedBackendSession> GatewayApp::create_backend_conn
     // 세션 ID는 gateway 로컬 상관관계 키 역할만 하면 된다.
     // 전역 유일성보다 "가볍고 충돌 없이 현재 프로세스 안에서 추적 가능함"이 더 중요하므로 원자 카운터로 충분하다.
     static std::atomic<std::uint64_t> counter{0};
-    std::string session_id = gateway_id_ + "-" + boot_id_ + "-" + std::to_string(++counter);
+    std::string session_id = impl_->gateway_id_ + "-" + impl_->boot_id_ + "-" + std::to_string(++counter);
 
     auto session = std::make_shared<BackendConnection>(
         *this,
@@ -1443,8 +1471,8 @@ std::optional<GatewayApp::CreatedBackendSession> GatewayApp::create_backend_conn
         selected->record.instance_id,
         selected->sticky_hit,
         std::move(connection),
-        backend_send_queue_max_bytes_,
-        std::chrono::milliseconds{backend_connect_timeout_ms_}
+        impl_->backend_send_queue_max_bytes_,
+        std::chrono::milliseconds{impl_->backend_connect_timeout_ms_}
     );
 
     server::core::log::info(
@@ -1455,12 +1483,12 @@ std::optional<GatewayApp::CreatedBackendSession> GatewayApp::create_backend_conn
     session->connect(selected->record.host, selected->record.port);
 
     {
-        std::lock_guard<std::mutex> lock(session_mutex_);
-        auto state = std::make_unique<SessionState>();
+        std::lock_guard<std::mutex> lock(impl_->session_mutex_);
+        auto state = std::make_unique<Impl::SessionState>();
         state->session = session;
         state->client_id = client_id;
         state->backend_instance_id = selected->record.instance_id;
-        sessions_[session_id] = std::move(state);
+        impl_->sessions_[session_id] = std::move(state);
     }
 
     CreatedBackendSession created{};
@@ -1473,11 +1501,11 @@ std::optional<GatewayApp::CreatedBackendSession> GatewayApp::create_backend_conn
 void GatewayApp::close_backend_connection(const std::string& session_id) {
     TransportSessionPtr session;
     {
-        std::lock_guard<std::mutex> lock(session_mutex_);
-        auto it = sessions_.find(session_id);
-        if (it != sessions_.end()) {
+        std::lock_guard<std::mutex> lock(impl_->session_mutex_);
+        auto it = impl_->sessions_.find(session_id);
+        if (it != impl_->sessions_.end()) {
             session = it->second ? it->second->session : nullptr;
-            sessions_.erase(it);
+            impl_->sessions_.erase(it);
         }
     }
     if (session) {
@@ -1488,12 +1516,12 @@ void GatewayApp::close_backend_connection(const std::string& session_id) {
 std::string GatewayApp::make_udp_bind_token(std::string_view session_id,
                                             std::uint64_t nonce,
                                             std::uint64_t expires_unix_ms) const {
-    if (udp_bind_secret_.empty()) {
+    if (impl_->udp_bind_secret_.empty()) {
         return {};
     }
 
     const auto signing_input = make_bind_signing_input(session_id, nonce, expires_unix_ms);
-    return hmac_sha256_hex(udp_bind_secret_, signing_input);
+    return hmac_sha256_hex(impl_->udp_bind_secret_, signing_input);
 }
 
 std::vector<std::uint8_t> GatewayApp::make_udp_bind_res_frame(std::uint16_t code,
@@ -1545,20 +1573,20 @@ std::vector<std::uint8_t> GatewayApp::make_udp_bind_res_frame(std::uint16_t code
 }
 
 std::optional<std::vector<std::uint8_t>> GatewayApp::make_udp_bind_ticket_frame(const std::string& session_id) {
-    if (udp_listen_port_ == 0) {
+    if (impl_->udp_listen_port_ == 0) {
         return std::nullopt;
     }
 
-    if (udp_bind_secret_.empty()) {
+    if (impl_->udp_bind_secret_.empty()) {
         return std::nullopt;
     }
 
     UdpBindTicket ticket{};
     bool rudp_selected = false;
     {
-        std::lock_guard<std::mutex> lock(session_mutex_);
-        auto it = sessions_.find(session_id);
-        if (it == sessions_.end()) {
+        std::lock_guard<std::mutex> lock(impl_->session_mutex_);
+        auto it = impl_->sessions_.find(session_id);
+        if (it == impl_->sessions_.end()) {
             return std::nullopt;
         }
         auto& state = *it->second;
@@ -1566,7 +1594,7 @@ std::optional<std::vector<std::uint8_t>> GatewayApp::make_udp_bind_ticket_frame(
         std::random_device rd;
         const std::uint64_t nonce = (static_cast<std::uint64_t>(rd()) << 32) ^ static_cast<std::uint64_t>(rd());
         const std::uint64_t issued_unix_ms = unix_time_ms();
-        const std::uint64_t expires_unix_ms = issued_unix_ms + static_cast<std::uint64_t>(udp_bind_ttl_ms_);
+        const std::uint64_t expires_unix_ms = issued_unix_ms + static_cast<std::uint64_t>(impl_->udp_bind_ttl_ms_);
         const std::string token = make_udp_bind_token(session_id, nonce, expires_unix_ms);
         if (token.empty()) {
             return std::nullopt;
@@ -1583,13 +1611,13 @@ std::optional<std::vector<std::uint8_t>> GatewayApp::make_udp_bind_ticket_frame(
         state.udp_sequenced_metrics.reset();
         state.rudp_fallback_to_tcp = false;
         const auto attach_decision = server::core::realtime::evaluate_direct_attach(
-            rudp_rollout_policy_,
+            impl_->rudp_rollout_policy_,
             session_id,
             nonce);
         state.rudp_selected =
             attach_decision.mode == server::core::realtime::DirectAttachMode::kRudpCanary;
         if (state.rudp_selected) {
-            state.rudp_engine = std::make_unique<server::core::net::rudp::RudpEngine>(*rudp_config_);
+            state.rudp_engine = std::make_unique<server::core::net::rudp::RudpEngine>(*impl_->rudp_config_);
         } else {
             state.rudp_engine.reset();
         }
@@ -1601,7 +1629,7 @@ std::optional<std::vector<std::uint8_t>> GatewayApp::make_udp_bind_ticket_frame(
         rudp_selected = state.rudp_selected;
     }
 
-    (void)udp_bind_ticket_issued_total_.fetch_add(1, std::memory_order_relaxed);
+    (void)impl_->udp_bind_ticket_issued_total_.fetch_add(1, std::memory_order_relaxed);
     server::core::log::info(
         "GatewayApp UDP bind ticket issued: session=" + ticket.session_id
         + " nonce=" + std::to_string(ticket.nonce)
@@ -1630,9 +1658,9 @@ std::uint16_t GatewayApp::apply_udp_bind_request(const ParsedUdpBindRequest& req
 
     const auto now_ms = unix_time_ms();
 
-    std::lock_guard<std::mutex> lock(session_mutex_);
-    auto it = sessions_.find(req.session_id);
-    if (it == sessions_.end()) {
+    std::lock_guard<std::mutex> lock(impl_->session_mutex_);
+    auto it = impl_->sessions_.find(req.session_id);
+    if (it == impl_->sessions_.end()) {
         message = "unknown session";
         return UNAUTHORIZED;
     }
@@ -1641,16 +1669,16 @@ std::uint16_t GatewayApp::apply_udp_bind_request(const ParsedUdpBindRequest& req
 
     const auto apply_retry_backoff = [&]() {
         const auto next_attempt = std::min<std::uint32_t>(state.udp_bind_fail_attempts + 1u,
-                                                          udp_bind_retry_max_attempts_);
+                                                          impl_->udp_bind_retry_max_attempts_);
         state.udp_bind_fail_attempts = next_attempt;
         const auto delay_ms = udp_bind_retry_delay_ms(next_attempt);
         state.udp_bind_retry_after_unix_ms = now_ms + static_cast<std::uint64_t>(delay_ms);
-        (void)udp_bind_retry_backoff_total_.fetch_add(1, std::memory_order_relaxed);
+        (void)impl_->udp_bind_retry_backoff_total_.fetch_add(1, std::memory_order_relaxed);
     };
 
     if (state.udp_bind_retry_after_unix_ms > now_ms) {
         message = "bind retry backoff";
-        (void)udp_bind_retry_reject_total_.fetch_add(1, std::memory_order_relaxed);
+        (void)impl_->udp_bind_retry_reject_total_.fetch_add(1, std::memory_order_relaxed);
         return SERVER_BUSY;
     }
 
@@ -1698,12 +1726,12 @@ std::uint16_t GatewayApp::apply_udp_bind_request(const ParsedUdpBindRequest& req
     state.udp_bind_retry_after_unix_ms = 0;
     state.rudp_fallback_to_tcp = false;
     if (state.rudp_selected && !state.rudp_engine) {
-        state.rudp_engine = std::make_unique<server::core::net::rudp::RudpEngine>(*rudp_config_);
+        state.rudp_engine = std::make_unique<server::core::net::rudp::RudpEngine>(*impl_->rudp_config_);
     }
 
     if (state.udp_ticket_issued_unix_ms != 0 && now_ms >= state.udp_ticket_issued_unix_ms) {
         const auto bind_rtt_ms = now_ms - state.udp_ticket_issued_unix_ms;
-        udp_rtt_ms_last_.store(bind_rtt_ms, std::memory_order_relaxed);
+        impl_->udp_rtt_ms_last_.store(bind_rtt_ms, std::memory_order_relaxed);
     }
 
     applied_ticket.session_id = req.session_id;
@@ -1717,7 +1745,7 @@ std::uint16_t GatewayApp::apply_udp_bind_request(const ParsedUdpBindRequest& req
 
 void GatewayApp::send_udp_datagram(std::vector<std::uint8_t> frame,
                                    const boost::asio::ip::udp::endpoint& endpoint) {
-    if (!udp_socket_) {
+    if (!impl_->udp_socket_) {
         return;
     }
 
@@ -1725,7 +1753,7 @@ void GatewayApp::send_udp_datagram(std::vector<std::uint8_t> frame,
     trace_udp_bind_send(std::span<const std::uint8_t>(buffer->data(), buffer->size()), endpoint);
     auto handler = [this, buffer, endpoint](const boost::system::error_code& ec, std::size_t) {
         if (ec) {
-            (void)udp_send_error_total_.fetch_add(1, std::memory_order_relaxed);
+            (void)impl_->udp_send_error_total_.fetch_add(1, std::memory_order_relaxed);
             server::core::log::warn(
                 "GatewayApp UDP send failed: endpoint="
                 + endpoint.address().to_string() + ":" + std::to_string(endpoint.port())
@@ -1733,7 +1761,7 @@ void GatewayApp::send_udp_datagram(std::vector<std::uint8_t> frame,
         }
     };
 
-    udp_socket_->async_send_to(
+    impl_->udp_socket_->async_send_to(
         boost::asio::buffer(*buffer),
         endpoint,
         std::move(handler));
@@ -1750,10 +1778,10 @@ bool GatewayApp::try_send_direct_client_frame(std::string_view session_id,
     DirectEgressDecision decision{};
 
     {
-        std::lock_guard<std::mutex> lock(session_mutex_);
-        const auto it = sessions_.find(std::string(session_id));
-        if (it == sessions_.end()) {
-            (void)direct_state_delta_tcp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+        std::lock_guard<std::mutex> lock(impl_->session_mutex_);
+        const auto it = impl_->sessions_.find(std::string(session_id));
+        if (it == impl_->sessions_.end()) {
+            (void)impl_->direct_state_delta_tcp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
         auto& state = *it->second;
@@ -1775,23 +1803,23 @@ bool GatewayApp::try_send_direct_client_frame(std::string_view session_id,
             const auto channel = server::protocol::opcode_policy(msg_id).channel;
             if (!state.rudp_engine->queue_unreliable_payload(frame, channel, unix_time_ms(), datagram)) {
                 state.rudp_fallback_to_tcp = true;
-                (void)rudp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
-                (void)direct_state_delta_tcp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+                (void)impl_->rudp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+                (void)impl_->direct_state_delta_tcp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
             send_udp_datagram(std::move(datagram), endpoint);
-            (void)rudp_direct_state_delta_total_.fetch_add(1, std::memory_order_relaxed);
+            (void)impl_->rudp_direct_state_delta_total_.fetch_add(1, std::memory_order_relaxed);
             return true;
         }
     }
 
     if (decision.route == DirectEgressRoute::kUdp) {
         send_udp_datagram(std::vector<std::uint8_t>(frame.begin(), frame.end()), endpoint);
-        (void)udp_direct_state_delta_total_.fetch_add(1, std::memory_order_relaxed);
+        (void)impl_->udp_direct_state_delta_total_.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
 
-    (void)direct_state_delta_tcp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+    (void)impl_->direct_state_delta_tcp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
     return false;
 }
 
@@ -1835,24 +1863,24 @@ void GatewayApp::trace_udp_bind_send(std::span<const std::uint8_t> frame,
 }
 
 std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const std::string& client_id) {
-    if (!backend_registry_) {
+    if (!impl_->backend_registry_) {
         return std::nullopt;
     }
 
-    auto instances = backend_registry_->list_instances();
+    auto instances = impl_->backend_registry_->list_instances();
     if (instances.empty()) {
         return std::nullopt;
     }
 
-    const auto world_policy_index = load_world_policy_index(redis_client_.get(), continuity_prefix_, instances);
+    const auto world_policy_index = load_world_policy_index(impl_->redis_client_.get(), impl_->continuity_prefix_, instances);
     const auto backend_policy_decision = [&](const server::core::discovery::InstanceRecord& record) {
         return evaluate_world_policy_backend(record, world_policy_index);
     };
 
     // 1) 세션 스티키니스: 기존 바인딩이 유효하면 우선 사용한다.
     // 재접속 사용자가 매번 다른 백엔드로 튀면 warm cache, continuity, 사용자 체감 지연이 모두 나빠질 수 있다.
-    if (session_directory_ && !client_id.empty() && client_id != "anonymous") {
-        if (auto backend_id = session_directory_->find_backend(client_id)) {
+    if (impl_->session_directory_ && !client_id.empty() && client_id != "anonymous") {
+        if (auto backend_id = impl_->session_directory_->find_backend(client_id)) {
             auto it = std::find_if(instances.begin(), instances.end(), [&](const auto& rec) {
                 return rec.instance_id == *backend_id && rec.ready;
             });
@@ -1860,17 +1888,17 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
                 const auto policy_decision = backend_policy_decision(*it);
                 if (policy_decision.allowed) {
                     if (is_resume_routing_key(client_id)) {
-                        (void)resume_routing_hit_total_.fetch_add(1, std::memory_order_relaxed);
+                        (void)impl_->resume_routing_hit_total_.fetch_add(1, std::memory_order_relaxed);
                     }
                     return SelectedBackend{*it, true};
                 }
                 if (policy_decision.draining_filtered) {
-                    (void)world_policy_filtered_sticky_total_.fetch_add(1, std::memory_order_relaxed);
+                    (void)impl_->world_policy_filtered_sticky_total_.fetch_add(1, std::memory_order_relaxed);
                 }
             }
             // 바인딩된 인스턴스가 사라졌거나 비활성화되었으므로 바인딩을 해제한다.
             // 해제를 미루면 이미 죽은 백엔드를 계속 우선 후보로 시도해 엣지가 실패를 반복하게 된다.
-            session_directory_->release_backend(client_id, *backend_id);
+            impl_->session_directory_->release_backend(client_id, *backend_id);
         }
     }
 
@@ -1884,8 +1912,8 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
     // registry만 보면 heartbeat 지연이 있을 수 있고, 로컬 부하만 보면 전체 백엔드 분포를 놓치기 쉽다.
     std::unordered_map<std::string, std::size_t> local_backend_load;
     {
-        std::lock_guard<std::mutex> lock(session_mutex_);
-        for (const auto& [session_id, state] : sessions_) {
+        std::lock_guard<std::mutex> lock(impl_->session_mutex_);
+        for (const auto& [session_id, state] : impl_->sessions_) {
             (void)session_id;
             if (state && !state->backend_instance_id.empty()) {
                 ++local_backend_load[state->backend_instance_id];
@@ -1908,7 +1936,7 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
                 const auto policy_decision = backend_policy_decision(rec);
                 if (!policy_decision.allowed) {
                     if (policy_decision.draining_filtered) {
-                        (void)world_policy_filtered_candidate_total_.fetch_add(1, std::memory_order_relaxed);
+                        (void)impl_->world_policy_filtered_candidate_total_.fetch_add(1, std::memory_order_relaxed);
                         if (policy_decision.world_id.has_value()) {
                             filtered_world_ids.insert(*policy_decision.world_id);
                         }
@@ -1934,10 +1962,10 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
 
     auto [candidates, filtered_world_ids] = build_candidates(resume_locator_selector);
     if (candidates.empty() && resume_locator_selector.has_value()) {
-        (void)resume_locator_selector_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+        (void)impl_->resume_locator_selector_fallback_total_.fetch_add(1, std::memory_order_relaxed);
         std::tie(candidates, filtered_world_ids) = build_candidates(std::nullopt);
     } else if (!candidates.empty() && resume_locator_selector.has_value()) {
-        (void)resume_locator_selector_hit_total_.fetch_add(1, std::memory_order_relaxed);
+        (void)impl_->resume_locator_selector_hit_total_.fetch_add(1, std::memory_order_relaxed);
     }
 
     if (candidates.empty()) {
@@ -1960,7 +1988,7 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
     if (selected_policy_decision.replacement_match
         && selected_policy_decision.world_id.has_value()
         && filtered_world_ids.contains(*selected_policy_decision.world_id)) {
-        (void)world_policy_replacement_selected_total_.fetch_add(1, std::memory_order_relaxed);
+        (void)impl_->world_policy_replacement_selected_total_.fetch_add(1, std::memory_order_relaxed);
     }
 
     return SelectedBackend{selected, false};
@@ -1968,14 +1996,14 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
 
 void GatewayApp::register_resume_routing_key(const std::string& routing_key,
                                              const std::string& backend_instance_id) {
-    if (!session_directory_ || routing_key.empty() || backend_instance_id.empty()) {
+    if (!impl_->session_directory_ || routing_key.empty() || backend_instance_id.empty()) {
         return;
     }
     if (!is_resume_routing_key(routing_key)) {
         return;
     }
 
-    const auto bound = session_directory_->ensure_backend(routing_key, backend_instance_id);
+    const auto bound = impl_->session_directory_->ensure_backend(routing_key, backend_instance_id);
     if (bound && *bound != backend_instance_id) {
         server::core::log::warn(
             "GatewayApp resume routing key already bound: key=" + routing_key
@@ -1984,13 +2012,13 @@ void GatewayApp::register_resume_routing_key(const std::string& routing_key,
         return;
     }
 
-    (void)resume_routing_bind_total_.fetch_add(1, std::memory_order_relaxed);
+    (void)impl_->resume_routing_bind_total_.fetch_add(1, std::memory_order_relaxed);
 
-    if (!backend_registry_) {
+    if (!impl_->backend_registry_) {
         return;
     }
 
-    const auto instances = backend_registry_->list_instances();
+    const auto instances = impl_->backend_registry_->list_instances();
     const auto it = std::find_if(instances.begin(), instances.end(), [&](const auto& rec) {
         return rec.instance_id == backend_instance_id;
     });
@@ -2005,24 +2033,24 @@ std::string GatewayApp::make_resume_locator_key(std::string_view routing_key) co
     }
 
     std::string key;
-    key.reserve(resume_locator_prefix_.size() + routing_key.size());
-    key.append(resume_locator_prefix_);
+    key.reserve(impl_->resume_locator_prefix_.size() + routing_key.size());
+    key.append(impl_->resume_locator_prefix_);
     key.append(routing_key);
     return key;
 }
 
 std::optional<server::core::discovery::InstanceSelector> GatewayApp::load_resume_locator_selector(
     std::string_view routing_key) {
-    if (!redis_client_ || routing_key.empty() || !is_resume_routing_key(routing_key)) {
+    if (!impl_->redis_client_ || routing_key.empty() || !is_resume_routing_key(routing_key)) {
         return std::nullopt;
     }
 
-    const auto payload = redis_client_->get(make_resume_locator_key(routing_key));
+    const auto payload = impl_->redis_client_->get(make_resume_locator_key(routing_key));
     if (!payload.has_value() || payload->empty()) {
-        (void)resume_locator_lookup_miss_total_.fetch_add(1, std::memory_order_relaxed);
+        (void)impl_->resume_locator_lookup_miss_total_.fetch_add(1, std::memory_order_relaxed);
         return std::nullopt;
     }
-    (void)resume_locator_lookup_hit_total_.fetch_add(1, std::memory_order_relaxed);
+    (void)impl_->resume_locator_lookup_hit_total_.fetch_add(1, std::memory_order_relaxed);
 
     const auto hint = parse_resume_locator_hint(*payload);
     if (!hint.has_value()) {
@@ -2058,7 +2086,7 @@ std::optional<server::core::discovery::InstanceSelector> GatewayApp::load_resume
 
 void GatewayApp::persist_resume_locator_hint(std::string_view routing_key,
                                              const server::core::discovery::InstanceRecord& record) {
-    if (!redis_client_ || routing_key.empty() || !is_resume_routing_key(routing_key) || resume_locator_ttl_sec_ == 0) {
+    if (!impl_->redis_client_ || routing_key.empty() || !is_resume_routing_key(routing_key) || impl_->resume_locator_ttl_sec_ == 0) {
         return;
     }
 
@@ -2070,11 +2098,11 @@ void GatewayApp::persist_resume_locator_hint(std::string_view routing_key,
     hint.region = record.region;
     hint.shard = record.shard;
 
-    if (redis_client_->setex(
+    if (impl_->redis_client_->setex(
             make_resume_locator_key(routing_key),
             serialize_resume_locator_hint(hint),
-            resume_locator_ttl_sec_)) {
-        (void)resume_locator_bind_total_.fetch_add(1, std::memory_order_relaxed);
+            impl_->resume_locator_ttl_sec_)) {
+        (void)impl_->resume_locator_bind_total_.fetch_add(1, std::memory_order_relaxed);
     } else {
         server::core::log::warn("GatewayApp failed to persist resume locator hint");
     }
@@ -2083,7 +2111,7 @@ void GatewayApp::persist_resume_locator_hint(std::string_view routing_key,
 void GatewayApp::on_backend_connected(const std::string& client_id,
                                      const std::string& backend_instance_id,
                                      bool sticky_hit) {
-    if (!session_directory_) {
+    if (!impl_->session_directory_) {
         return;
     }
     if (client_id.empty() || client_id == "anonymous") {
@@ -2097,7 +2125,7 @@ void GatewayApp::on_backend_connected(const std::string& client_id,
     // 백엔드 TCP 연결이 실제로 성공한 뒤에만 고정 라우팅(sticky mapping)을 확정한다.
     // 그렇지 않으면 연결 실패 백엔드를 가리키는 zombie mapping이 남을 수 있다.
     // `ensure_backend()`는 매핑이 없으면 생성(SETNX)하고, 이미 있으면 TTL만 갱신한다.
-    auto bound = session_directory_->ensure_backend(client_id, backend_instance_id);
+    auto bound = impl_->session_directory_->ensure_backend(client_id, backend_instance_id);
     if (sticky_hit && bound && *bound != backend_instance_id) {
         server::core::log::warn(
             "GatewayApp sticky mismatch: client_id=" + client_id +
@@ -2110,18 +2138,18 @@ void GatewayApp::on_backend_connected(const std::string& client_id,
 void GatewayApp::configure_gateway() {
     const char* listen_env = std::getenv(kEnvGatewayListen);
     const auto [host, port] = parse_listen(listen_env ? std::string_view(listen_env) : std::string_view(kDefaultGatewayListen),
-                                           listen_port_);
-    listen_host_ = host;
-    listen_port_ = port;
+                                           impl_->listen_port_);
+    impl_->listen_host_ = host;
+    impl_->listen_port_ = port;
 
     const char* id_env = std::getenv(kEnvGatewayId);
     if (id_env && *id_env) {
-        gateway_id_ = id_env;
+        impl_->gateway_id_ = id_env;
     } else {
-        gateway_id_ = kDefaultGatewayId;
+        impl_->gateway_id_ = kDefaultGatewayId;
     }
 
-    backend_connect_timeout_ms_ = parse_env_u32_bounded(
+    impl_->backend_connect_timeout_ms_ = parse_env_u32_bounded(
         kEnvGatewayBackendConnectTimeoutMs,
         kDefaultBackendConnectTimeoutMs,
         100,
@@ -2129,7 +2157,7 @@ void GatewayApp::configure_gateway() {
         "GatewayApp invalid GATEWAY_BACKEND_CONNECT_TIMEOUT_MS; using default"
     );
 
-    backend_send_queue_max_bytes_ = parse_env_size_bounded(
+    impl_->backend_send_queue_max_bytes_ = parse_env_size_bounded(
         kEnvGatewayBackendSendQueueMaxBytes,
         kDefaultBackendSendQueueMaxBytes,
         1024,
@@ -2137,12 +2165,12 @@ void GatewayApp::configure_gateway() {
         "GatewayApp invalid GATEWAY_BACKEND_SEND_QUEUE_MAX_BYTES; using default"
     );
 
-    backend_circuit_breaker_enabled_ = parse_env_bool(
+    impl_->backend_circuit_breaker_enabled_ = parse_env_bool(
         kEnvGatewayBackendCircuitEnabled,
         kDefaultBackendCircuitEnabled
     );
 
-    backend_circuit_fail_threshold_ = parse_env_u32_bounded(
+    impl_->backend_circuit_fail_threshold_ = parse_env_u32_bounded(
         kEnvGatewayBackendCircuitFailThreshold,
         kDefaultBackendCircuitFailThreshold,
         1,
@@ -2150,7 +2178,7 @@ void GatewayApp::configure_gateway() {
         "GatewayApp invalid GATEWAY_BACKEND_CIRCUIT_FAIL_THRESHOLD; using default"
     );
 
-    backend_circuit_open_ms_ = parse_env_u32_bounded(
+    impl_->backend_circuit_open_ms_ = parse_env_u32_bounded(
         kEnvGatewayBackendCircuitOpenMs,
         kDefaultBackendCircuitOpenMs,
         100,
@@ -2158,7 +2186,7 @@ void GatewayApp::configure_gateway() {
         "GatewayApp invalid GATEWAY_BACKEND_CIRCUIT_OPEN_MS; using default"
     );
 
-    backend_connect_retry_budget_per_min_ = parse_env_u32_bounded(
+    impl_->backend_connect_retry_budget_per_min_ = parse_env_u32_bounded(
         kEnvGatewayBackendRetryBudgetPerMin,
         kDefaultBackendRetryBudgetPerMin,
         0,
@@ -2166,7 +2194,7 @@ void GatewayApp::configure_gateway() {
         "GatewayApp invalid GATEWAY_BACKEND_CONNECT_RETRY_BUDGET_PER_MIN; using default"
     );
 
-    backend_connect_retry_backoff_ms_ = parse_env_u32_bounded(
+    impl_->backend_connect_retry_backoff_ms_ = parse_env_u32_bounded(
         kEnvGatewayBackendRetryBackoffMs,
         kDefaultBackendRetryBackoffMs,
         10,
@@ -2174,18 +2202,18 @@ void GatewayApp::configure_gateway() {
         "GatewayApp invalid GATEWAY_BACKEND_CONNECT_RETRY_BACKOFF_MS; using default"
     );
 
-    backend_connect_retry_backoff_max_ms_ = parse_env_u32_bounded(
+    impl_->backend_connect_retry_backoff_max_ms_ = parse_env_u32_bounded(
         kEnvGatewayBackendRetryBackoffMaxMs,
         kDefaultBackendRetryBackoffMaxMs,
         10,
         300000,
         "GatewayApp invalid GATEWAY_BACKEND_CONNECT_RETRY_BACKOFF_MAX_MS; using default"
     );
-    if (backend_connect_retry_backoff_max_ms_ < backend_connect_retry_backoff_ms_) {
-        backend_connect_retry_backoff_max_ms_ = backend_connect_retry_backoff_ms_;
+    if (impl_->backend_connect_retry_backoff_max_ms_ < impl_->backend_connect_retry_backoff_ms_) {
+        impl_->backend_connect_retry_backoff_max_ms_ = impl_->backend_connect_retry_backoff_ms_;
     }
 
-    ingress_tokens_per_sec_ = parse_env_u32_bounded(
+    impl_->ingress_tokens_per_sec_ = parse_env_u32_bounded(
         kEnvGatewayIngressTokensPerSec,
         kDefaultIngressTokensPerSec,
         1,
@@ -2193,18 +2221,18 @@ void GatewayApp::configure_gateway() {
         "GatewayApp invalid GATEWAY_INGRESS_TOKENS_PER_SEC; using default"
     );
 
-    ingress_burst_tokens_ = parse_env_u32_bounded(
+    impl_->ingress_burst_tokens_ = parse_env_u32_bounded(
         kEnvGatewayIngressBurstTokens,
         kDefaultIngressBurstTokens,
         1,
         200000,
         "GatewayApp invalid GATEWAY_INGRESS_BURST_TOKENS; using default"
     );
-    if (ingress_burst_tokens_ < ingress_tokens_per_sec_) {
-        ingress_burst_tokens_ = ingress_tokens_per_sec_;
+    if (impl_->ingress_burst_tokens_ < impl_->ingress_tokens_per_sec_) {
+        impl_->ingress_burst_tokens_ = impl_->ingress_tokens_per_sec_;
     }
 
-    ingress_max_active_sessions_ = parse_env_size_bounded(
+    impl_->ingress_max_active_sessions_ = parse_env_size_bounded(
         kEnvGatewayIngressMaxActiveSessions,
         kDefaultIngressMaxActiveSessions,
         1,
@@ -2212,28 +2240,28 @@ void GatewayApp::configure_gateway() {
         "GatewayApp invalid GATEWAY_INGRESS_MAX_ACTIVE_SESSIONS; using default"
     );
 
-    ingress_token_bucket_.configure(
-        static_cast<double>(ingress_tokens_per_sec_),
-        static_cast<double>(ingress_burst_tokens_)
+    impl_->ingress_token_bucket_.configure(
+        static_cast<double>(impl_->ingress_tokens_per_sec_),
+        static_cast<double>(impl_->ingress_burst_tokens_)
     );
-    backend_retry_budget_.configure(backend_connect_retry_budget_per_min_, 60000);
-    backend_circuit_breaker_.configure(
-        backend_circuit_breaker_enabled_,
-        backend_circuit_fail_threshold_,
-        backend_circuit_open_ms_
+    impl_->backend_retry_budget_.configure(impl_->backend_connect_retry_budget_per_min_, 60000);
+    impl_->backend_circuit_breaker_.configure(
+        impl_->backend_circuit_breaker_enabled_,
+        impl_->backend_circuit_fail_threshold_,
+        impl_->backend_circuit_open_ms_
     );
 
     if (const char* udp_listen_env = std::getenv(kEnvGatewayUdpListen); udp_listen_env && *udp_listen_env) {
         const auto [udp_host, udp_port] = parse_listen(std::string_view(udp_listen_env), 0);
-        udp_listen_host_ = udp_host;
-        udp_listen_port_ = udp_port;
+        impl_->udp_listen_host_ = udp_host;
+        impl_->udp_listen_port_ = udp_port;
     }
 
     if (const char* udp_secret_env = std::getenv(kEnvGatewayUdpBindSecret); udp_secret_env && *udp_secret_env) {
-        udp_bind_secret_ = udp_secret_env;
+        impl_->udp_bind_secret_ = udp_secret_env;
     }
 
-    udp_bind_ttl_ms_ = parse_env_u32_bounded(
+    impl_->udp_bind_ttl_ms_ = parse_env_u32_bounded(
         kEnvGatewayUdpBindTtlMs,
         kDefaultUdpBindTtlMs,
         1000,
@@ -2241,7 +2269,7 @@ void GatewayApp::configure_gateway() {
         "GatewayApp invalid GATEWAY_UDP_BIND_TTL_MS; using default"
     );
 
-    udp_bind_fail_window_ms_ = parse_env_u32_bounded(
+    impl_->udp_bind_fail_window_ms_ = parse_env_u32_bounded(
         kEnvGatewayUdpBindFailWindowMs,
         kDefaultUdpBindFailWindowMs,
         1000,
@@ -2249,7 +2277,7 @@ void GatewayApp::configure_gateway() {
         "GatewayApp invalid GATEWAY_UDP_BIND_FAIL_WINDOW_MS; using default"
     );
 
-    udp_bind_fail_limit_ = parse_env_u32_bounded(
+    impl_->udp_bind_fail_limit_ = parse_env_u32_bounded(
         kEnvGatewayUdpBindFailLimit,
         kDefaultUdpBindFailLimit,
         2,
@@ -2257,7 +2285,7 @@ void GatewayApp::configure_gateway() {
         "GatewayApp invalid GATEWAY_UDP_BIND_FAIL_LIMIT; using default"
     );
 
-    udp_bind_block_ms_ = parse_env_u32_bounded(
+    impl_->udp_bind_block_ms_ = parse_env_u32_bounded(
         kEnvGatewayUdpBindBlockMs,
         kDefaultUdpBindBlockMs,
         1000,
@@ -2265,7 +2293,7 @@ void GatewayApp::configure_gateway() {
         "GatewayApp invalid GATEWAY_UDP_BIND_BLOCK_MS; using default"
     );
 
-    udp_bind_retry_backoff_ms_ = parse_env_u32_bounded(
+    impl_->udp_bind_retry_backoff_ms_ = parse_env_u32_bounded(
         kEnvGatewayUdpBindRetryBackoffMs,
         kDefaultUdpBindRetryBackoffMs,
         10,
@@ -2273,18 +2301,18 @@ void GatewayApp::configure_gateway() {
         "GatewayApp invalid GATEWAY_UDP_BIND_RETRY_BACKOFF_MS; using default"
     );
 
-    udp_bind_retry_backoff_max_ms_ = parse_env_u32_bounded(
+    impl_->udp_bind_retry_backoff_max_ms_ = parse_env_u32_bounded(
         kEnvGatewayUdpBindRetryBackoffMaxMs,
         kDefaultUdpBindRetryBackoffMaxMs,
         10,
         300000,
         "GatewayApp invalid GATEWAY_UDP_BIND_RETRY_BACKOFF_MAX_MS; using default"
     );
-    if (udp_bind_retry_backoff_max_ms_ < udp_bind_retry_backoff_ms_) {
-        udp_bind_retry_backoff_max_ms_ = udp_bind_retry_backoff_ms_;
+    if (impl_->udp_bind_retry_backoff_max_ms_ < impl_->udp_bind_retry_backoff_ms_) {
+        impl_->udp_bind_retry_backoff_max_ms_ = impl_->udp_bind_retry_backoff_ms_;
     }
 
-    udp_bind_retry_max_attempts_ = parse_env_u32_bounded(
+    impl_->udp_bind_retry_max_attempts_ = parse_env_u32_bounded(
         kEnvGatewayUdpBindRetryMaxAttempts,
         kDefaultUdpBindRetryMaxAttempts,
         1,
@@ -2294,19 +2322,19 @@ void GatewayApp::configure_gateway() {
 
     if (const char* udp_allowlist_env = std::getenv(kEnvGatewayUdpOpcodeAllowlist);
         udp_allowlist_env && *udp_allowlist_env) {
-        udp_opcode_allowlist_ = gateway::parse_udp_opcode_allowlist(udp_allowlist_env);
+        impl_->udp_opcode_allowlist_ = gateway::parse_udp_opcode_allowlist(udp_allowlist_env);
     } else {
-        udp_opcode_allowlist_.clear();
+        impl_->udp_opcode_allowlist_.clear();
     }
-    if (udp_opcode_allowlist_.empty()) {
-        udp_opcode_allowlist_.insert(server::protocol::MSG_UDP_BIND_REQ);
+    if (impl_->udp_opcode_allowlist_.empty()) {
+        impl_->udp_opcode_allowlist_.insert(server::protocol::MSG_UDP_BIND_REQ);
     }
 
-    rudp_rollout_policy_.enabled = parse_env_bool(
+    impl_->rudp_rollout_policy_.enabled = parse_env_bool(
         kEnvGatewayRudpEnable,
         kDefaultGatewayRudpEnable
     );
-    rudp_rollout_policy_.canary_percent = parse_env_u32_bounded(
+    impl_->rudp_rollout_policy_.canary_percent = parse_env_u32_bounded(
         kEnvGatewayRudpCanaryPercent,
         kDefaultGatewayRudpCanaryPercent,
         0,
@@ -2315,160 +2343,160 @@ void GatewayApp::configure_gateway() {
     );
 
     if (const char* allowlist_env = std::getenv(kEnvGatewayRudpOpcodeAllowlist); allowlist_env && *allowlist_env) {
-        rudp_rollout_policy_.opcode_allowlist = gateway::parse_rudp_opcode_allowlist(allowlist_env);
+        impl_->rudp_rollout_policy_.opcode_allowlist = gateway::parse_rudp_opcode_allowlist(allowlist_env);
     } else {
-        rudp_rollout_policy_.opcode_allowlist.clear();
+        impl_->rudp_rollout_policy_.opcode_allowlist.clear();
     }
 
-    rudp_config_->handshake_timeout_ms = parse_env_u32_bounded(
+    impl_->rudp_config_->handshake_timeout_ms = parse_env_u32_bounded(
         kEnvGatewayRudpHandshakeTimeoutMs,
         1500,
         100,
         60000,
         "GatewayApp invalid GATEWAY_RUDP_HANDSHAKE_TIMEOUT_MS; using default"
     );
-    rudp_config_->idle_timeout_ms = parse_env_u32_bounded(
+    impl_->rudp_config_->idle_timeout_ms = parse_env_u32_bounded(
         kEnvGatewayRudpIdleTimeoutMs,
         10000,
         1000,
         300000,
         "GatewayApp invalid GATEWAY_RUDP_IDLE_TIMEOUT_MS; using default"
     );
-    rudp_config_->ack_delay_ms = parse_env_u32_bounded(
+    impl_->rudp_config_->ack_delay_ms = parse_env_u32_bounded(
         kEnvGatewayRudpAckDelayMs,
         10,
         1,
         200,
         "GatewayApp invalid GATEWAY_RUDP_ACK_DELAY_MS; using default"
     );
-    rudp_config_->max_inflight_packets = parse_env_size_bounded(
+    impl_->rudp_config_->max_inflight_packets = parse_env_size_bounded(
         kEnvGatewayRudpMaxInflightPackets,
         256,
         1,
         4096,
         "GatewayApp invalid GATEWAY_RUDP_MAX_INFLIGHT_PACKETS; using default"
     );
-    rudp_config_->max_inflight_bytes = parse_env_size_bounded(
+    impl_->rudp_config_->max_inflight_bytes = parse_env_size_bounded(
         kEnvGatewayRudpMaxInflightBytes,
         256 * 1024,
         1024,
         16 * 1024 * 1024,
         "GatewayApp invalid GATEWAY_RUDP_MAX_INFLIGHT_BYTES; using default"
     );
-    rudp_config_->mtu_payload_bytes = parse_env_size_bounded(
+    impl_->rudp_config_->mtu_payload_bytes = parse_env_size_bounded(
         kEnvGatewayRudpMtuPayloadBytes,
         1200,
         256,
         1400,
         "GatewayApp invalid GATEWAY_RUDP_MTU_PAYLOAD_BYTES; using default"
     );
-    rudp_config_->rto_min_ms = parse_env_u32_bounded(
+    impl_->rudp_config_->rto_min_ms = parse_env_u32_bounded(
         kEnvGatewayRudpRtoMinMs,
         50,
         1,
         10000,
         "GatewayApp invalid GATEWAY_RUDP_RTO_MIN_MS; using default"
     );
-    rudp_config_->rto_max_ms = parse_env_u32_bounded(
+    impl_->rudp_config_->rto_max_ms = parse_env_u32_bounded(
         kEnvGatewayRudpRtoMaxMs,
         2000,
         1,
         60000,
         "GatewayApp invalid GATEWAY_RUDP_RTO_MAX_MS; using default"
     );
-    if (rudp_config_->rto_max_ms < rudp_config_->rto_min_ms) {
-        rudp_config_->rto_max_ms = rudp_config_->rto_min_ms;
+    if (impl_->rudp_config_->rto_max_ms < impl_->rudp_config_->rto_min_ms) {
+        impl_->rudp_config_->rto_max_ms = impl_->rudp_config_->rto_min_ms;
     }
 
-    if (!rudp_rollout_policy_.enabled) {
-        rudp_rollout_policy_.canary_percent = 0;
+    if (!impl_->rudp_rollout_policy_.enabled) {
+        impl_->rudp_rollout_policy_.canary_percent = 0;
     }
 
-    udp_bind_abuse_guard_.configure(udp_bind_fail_window_ms_, udp_bind_fail_limit_, udp_bind_block_ms_);
+    impl_->udp_bind_abuse_guard_.configure(impl_->udp_bind_fail_window_ms_, impl_->udp_bind_fail_limit_, impl_->udp_bind_block_ms_);
 
-    allow_anonymous_ = true;
+    impl_->allow_anonymous_ = true;
     if (const char* anonymous_env = std::getenv(kEnvAllowAnonymous); anonymous_env && *anonymous_env) {
-        allow_anonymous_ = (std::string_view(anonymous_env) != "0");
+        impl_->allow_anonymous_ = (std::string_view(anonymous_env) != "0");
     }
 
-    server::core::log::info("GatewayApp configured: gateway_id=" + gateway_id_
-        + " listen=" + listen_host_ + ":" + std::to_string(listen_port_)
+    server::core::log::info("GatewayApp configured: gateway_id=" + impl_->gateway_id_
+        + " listen=" + impl_->listen_host_ + ":" + std::to_string(impl_->listen_port_)
         + " udp_listen="
-        + (udp_listen_port_ == 0 ? std::string("disabled") : (udp_listen_host_ + ":" + std::to_string(udp_listen_port_)))
-        + " udp_bind_ttl_ms=" + std::to_string(udp_bind_ttl_ms_)
-        + " udp_bind_fail_window_ms=" + std::to_string(udp_bind_fail_window_ms_)
-        + " udp_bind_fail_limit=" + std::to_string(udp_bind_fail_limit_)
-        + " udp_bind_block_ms=" + std::to_string(udp_bind_block_ms_)
-        + " udp_bind_retry_backoff_ms=" + std::to_string(udp_bind_retry_backoff_ms_)
-        + " udp_bind_retry_backoff_max_ms=" + std::to_string(udp_bind_retry_backoff_max_ms_)
-        + " udp_bind_retry_max_attempts=" + std::to_string(udp_bind_retry_max_attempts_)
-        + " udp_opcode_allowlist_size=" + std::to_string(udp_opcode_allowlist_.size())
+        + (impl_->udp_listen_port_ == 0 ? std::string("disabled") : (impl_->udp_listen_host_ + ":" + std::to_string(impl_->udp_listen_port_)))
+        + " udp_bind_ttl_ms=" + std::to_string(impl_->udp_bind_ttl_ms_)
+        + " udp_bind_fail_window_ms=" + std::to_string(impl_->udp_bind_fail_window_ms_)
+        + " udp_bind_fail_limit=" + std::to_string(impl_->udp_bind_fail_limit_)
+        + " udp_bind_block_ms=" + std::to_string(impl_->udp_bind_block_ms_)
+        + " udp_bind_retry_backoff_ms=" + std::to_string(impl_->udp_bind_retry_backoff_ms_)
+        + " udp_bind_retry_backoff_max_ms=" + std::to_string(impl_->udp_bind_retry_backoff_max_ms_)
+        + " udp_bind_retry_max_attempts=" + std::to_string(impl_->udp_bind_retry_max_attempts_)
+        + " udp_opcode_allowlist_size=" + std::to_string(impl_->udp_opcode_allowlist_.size())
         + " udp_ingress_feature=" + std::string(kGatewayUdpIngressBuildEnabled ? "on" : "off")
-        + " backend_connect_timeout_ms=" + std::to_string(backend_connect_timeout_ms_)
-        + " backend_send_queue_max_bytes=" + std::to_string(backend_send_queue_max_bytes_)
-        + " backend_circuit_enabled=" + std::string(backend_circuit_breaker_enabled_ ? "1" : "0")
-        + " backend_circuit_fail_threshold=" + std::to_string(backend_circuit_fail_threshold_)
-        + " backend_circuit_open_ms=" + std::to_string(backend_circuit_open_ms_)
-        + " backend_connect_retry_budget_per_min=" + std::to_string(backend_connect_retry_budget_per_min_)
-        + " backend_connect_retry_backoff_ms=" + std::to_string(backend_connect_retry_backoff_ms_)
-        + " backend_connect_retry_backoff_max_ms=" + std::to_string(backend_connect_retry_backoff_max_ms_)
-        + " ingress_tokens_per_sec=" + std::to_string(ingress_tokens_per_sec_)
-        + " ingress_burst_tokens=" + std::to_string(ingress_burst_tokens_)
-        + " ingress_max_active_sessions=" + std::to_string(ingress_max_active_sessions_)
-        + " allow_anonymous=" + std::string(allow_anonymous_ ? "1" : "0")
+        + " backend_connect_timeout_ms=" + std::to_string(impl_->backend_connect_timeout_ms_)
+        + " backend_send_queue_max_bytes=" + std::to_string(impl_->backend_send_queue_max_bytes_)
+        + " backend_circuit_enabled=" + std::string(impl_->backend_circuit_breaker_enabled_ ? "1" : "0")
+        + " backend_circuit_fail_threshold=" + std::to_string(impl_->backend_circuit_fail_threshold_)
+        + " backend_circuit_open_ms=" + std::to_string(impl_->backend_circuit_open_ms_)
+        + " backend_connect_retry_budget_per_min=" + std::to_string(impl_->backend_connect_retry_budget_per_min_)
+        + " backend_connect_retry_backoff_ms=" + std::to_string(impl_->backend_connect_retry_backoff_ms_)
+        + " backend_connect_retry_backoff_max_ms=" + std::to_string(impl_->backend_connect_retry_backoff_max_ms_)
+        + " ingress_tokens_per_sec=" + std::to_string(impl_->ingress_tokens_per_sec_)
+        + " ingress_burst_tokens=" + std::to_string(impl_->ingress_burst_tokens_)
+        + " ingress_max_active_sessions=" + std::to_string(impl_->ingress_max_active_sessions_)
+        + " allow_anonymous=" + std::string(impl_->allow_anonymous_ ? "1" : "0")
         + " rudp_core_build=" + std::string(kCoreRudpBuildEnabled ? "1" : "0")
-        + " rudp_enable=" + std::string(rudp_rollout_policy_.enabled ? "1" : "0")
-        + " rudp_canary_percent=" + std::to_string(rudp_rollout_policy_.canary_percent)
-        + " rudp_opcode_allowlist_size=" + std::to_string(rudp_rollout_policy_.opcode_allowlist.size())
-        + " rudp_handshake_timeout_ms=" + std::to_string(rudp_config_->handshake_timeout_ms)
-        + " rudp_idle_timeout_ms=" + std::to_string(rudp_config_->idle_timeout_ms)
-        + " rudp_ack_delay_ms=" + std::to_string(rudp_config_->ack_delay_ms)
-        + " rudp_rto_min_ms=" + std::to_string(rudp_config_->rto_min_ms)
-        + " rudp_rto_max_ms=" + std::to_string(rudp_config_->rto_max_ms)
-        + " rudp_max_inflight_packets=" + std::to_string(rudp_config_->max_inflight_packets)
-        + " rudp_max_inflight_bytes=" + std::to_string(rudp_config_->max_inflight_bytes)
-        + " rudp_mtu_payload_bytes=" + std::to_string(rudp_config_->mtu_payload_bytes));
+        + " rudp_enable=" + std::string(impl_->rudp_rollout_policy_.enabled ? "1" : "0")
+        + " rudp_canary_percent=" + std::to_string(impl_->rudp_rollout_policy_.canary_percent)
+        + " rudp_opcode_allowlist_size=" + std::to_string(impl_->rudp_rollout_policy_.opcode_allowlist.size())
+        + " rudp_handshake_timeout_ms=" + std::to_string(impl_->rudp_config_->handshake_timeout_ms)
+        + " rudp_idle_timeout_ms=" + std::to_string(impl_->rudp_config_->idle_timeout_ms)
+        + " rudp_ack_delay_ms=" + std::to_string(impl_->rudp_config_->ack_delay_ms)
+        + " rudp_rto_min_ms=" + std::to_string(impl_->rudp_config_->rto_min_ms)
+        + " rudp_rto_max_ms=" + std::to_string(impl_->rudp_config_->rto_max_ms)
+        + " rudp_max_inflight_packets=" + std::to_string(impl_->rudp_config_->max_inflight_packets)
+        + " rudp_max_inflight_bytes=" + std::to_string(impl_->rudp_config_->max_inflight_bytes)
+        + " rudp_mtu_payload_bytes=" + std::to_string(impl_->rudp_config_->mtu_payload_bytes));
 }
 
 void GatewayApp::configure_infrastructure() {
     const char* redis_env = std::getenv(kEnvRedisUri);
-    redis_uri_ = redis_env ? redis_env : kDefaultRedisUri;
+    impl_->redis_uri_ = redis_env ? redis_env : kDefaultRedisUri;
     if (const char* prefix = std::getenv(kEnvSessionContinuityRedisPrefix); prefix && *prefix) {
-        continuity_prefix_ = prefix;
+        impl_->continuity_prefix_ = prefix;
     } else if (const char* prefix = std::getenv(kEnvRedisChannelPrefix); prefix && *prefix) {
-        continuity_prefix_ = prefix;
+        impl_->continuity_prefix_ = prefix;
     } else {
-        continuity_prefix_.clear();
+        impl_->continuity_prefix_.clear();
     }
-    if (!continuity_prefix_.empty() && continuity_prefix_.back() != ':') {
-        continuity_prefix_.push_back(':');
+    if (!impl_->continuity_prefix_.empty() && impl_->continuity_prefix_.back() != ':') {
+        impl_->continuity_prefix_.push_back(':');
     }
-    continuity_prefix_ += "continuity:";
-    session_directory_prefix_ = kDefaultSessionDirectoryPrefix;
-    if (!session_directory_prefix_.empty() && session_directory_prefix_.back() != '/') {
-        session_directory_prefix_.push_back('/');
+    impl_->continuity_prefix_ += "continuity:";
+    impl_->session_directory_prefix_ = kDefaultSessionDirectoryPrefix;
+    if (!impl_->session_directory_prefix_.empty() && impl_->session_directory_prefix_.back() != '/') {
+        impl_->session_directory_prefix_.push_back('/');
     }
-    resume_locator_prefix_ = session_directory_prefix_ + "locator/";
+    impl_->resume_locator_prefix_ = impl_->session_directory_prefix_ + "locator/";
 
     if (const char* ttl_env = std::getenv(kEnvSessionContinuityLeaseTtlSec); ttl_env && *ttl_env) {
         try {
             const auto parsed = std::stoul(ttl_env);
             if (parsed > 0) {
-                resume_locator_ttl_sec_ = static_cast<std::uint32_t>(parsed);
+                impl_->resume_locator_ttl_sec_ = static_cast<std::uint32_t>(parsed);
             }
         } catch (...) {
             server::core::log::warn("GatewayApp invalid SESSION_CONTINUITY_LEASE_TTL_SEC; using default");
-            resume_locator_ttl_sec_ = kDefaultResumeLocatorTtlSec;
+            impl_->resume_locator_ttl_sec_ = kDefaultResumeLocatorTtlSec;
         }
     } else {
-        resume_locator_ttl_sec_ = kDefaultResumeLocatorTtlSec;
+        impl_->resume_locator_ttl_sec_ = kDefaultResumeLocatorTtlSec;
     }
 
     try {
         server::core::storage::redis::Options opts;
-        redis_client_ = gateway::make_redis_client(redis_uri_, opts);
+        impl_->redis_client_ = gateway::make_redis_client(impl_->redis_uri_, opts);
         
-        if (redis_client_) {
+        if (impl_->redis_client_) {
              std::string registry_prefix = kDefaultServerRegistryPrefix;
              if (const char* v = std::getenv(kEnvServerRegistryPrefix); v && *v) {
                  registry_prefix = v;
@@ -2486,11 +2514,11 @@ void GatewayApp::configure_infrastructure() {
                  }
              }
 
-              backend_registry_ = make_registry_backend(redis_client_, std::move(registry_prefix), registry_ttl);
+              impl_->backend_registry_ = make_registry_backend(impl_->redis_client_, std::move(registry_prefix), registry_ttl);
               
-              session_directory_ = std::make_unique<SessionDirectory>(
-                  redis_client_,
-                  session_directory_prefix_,
+              impl_->session_directory_ = std::make_unique<SessionDirectory>(
+                  impl_->redis_client_,
+                  impl_->session_directory_prefix_,
                   std::chrono::seconds(600) // 세션 stickiness 10분 유지
               );
 
@@ -2508,8 +2536,8 @@ void GatewayApp::start_listener() {
 
     boost::system::error_code ec;
     boost::asio::ip::address address = boost::asio::ip::address_v4::any();
-    if (!listen_host_.empty()) {
-        auto parsed = boost::asio::ip::make_address(listen_host_, ec);
+    if (!impl_->listen_host_.empty()) {
+        auto parsed = boost::asio::ip::make_address(impl_->listen_host_, ec);
         if (!ec) {
             address = parsed;
         } else {
@@ -2517,117 +2545,117 @@ void GatewayApp::start_listener() {
         }
     }
 
-    tcp::endpoint endpoint{address, listen_port_};
-    listener_ = std::make_shared<server::core::net::TransportListener>(
-        hive_,
+    tcp::endpoint endpoint{address, impl_->listen_port_};
+    impl_->listener_ = std::make_shared<server::core::net::TransportListener>(
+        impl_->hive_,
         endpoint,
-        [authenticator = authenticator_, this](std::shared_ptr<server::core::net::Hive> hive) {
+        [authenticator = impl_->authenticator_, this](std::shared_ptr<server::core::net::Hive> hive) {
             return std::make_shared<GatewayConnection>(std::move(hive), authenticator, *this);
         });
 
-    if (listener_->is_stopped()) {
+    if (impl_->listener_->is_stopped()) {
         throw std::runtime_error("GatewayApp listener failed to start");
     }
 
-    listener_->start();
-    auto bound = listener_->local_endpoint();
+    impl_->listener_->start();
+    auto bound = impl_->listener_->local_endpoint();
     server::core::log::info("GatewayApp listening on " + bound.address().to_string() + ":" + std::to_string(bound.port()));
 }
 
 void GatewayApp::start_udp_listener() {
-    if (udp_listen_port_ == 0) {
-        udp_enabled_.store(false, std::memory_order_relaxed);
+    if (impl_->udp_listen_port_ == 0) {
+        impl_->udp_enabled_.store(false, std::memory_order_relaxed);
         return;
     }
 
-    if (udp_bind_secret_.empty()) {
+    if (impl_->udp_bind_secret_.empty()) {
         server::core::log::warn("GatewayApp UDP bind secret is empty; UDP disabled");
-        udp_enabled_.store(false, std::memory_order_relaxed);
+        impl_->udp_enabled_.store(false, std::memory_order_relaxed);
         return;
     }
 
     boost::system::error_code ec;
-    auto address = boost::asio::ip::make_address(udp_listen_host_.empty() ? "0.0.0.0" : udp_listen_host_, ec);
+    auto address = boost::asio::ip::make_address(impl_->udp_listen_host_.empty() ? "0.0.0.0" : impl_->udp_listen_host_, ec);
     if (ec) {
         server::core::log::warn("GatewayApp failed to parse UDP listen address; UDP disabled");
-        udp_enabled_.store(false, std::memory_order_relaxed);
+        impl_->udp_enabled_.store(false, std::memory_order_relaxed);
         return;
     }
 
-    auto socket = std::make_unique<boost::asio::ip::udp::socket>(io_);
+    auto socket = std::make_unique<boost::asio::ip::udp::socket>(impl_->io_);
     socket->open(boost::asio::ip::udp::v4(), ec);
     if (ec) {
         server::core::log::warn("GatewayApp failed to open UDP socket; UDP disabled");
-        udp_enabled_.store(false, std::memory_order_relaxed);
+        impl_->udp_enabled_.store(false, std::memory_order_relaxed);
         return;
     }
 
     socket->set_option(boost::asio::socket_base::reuse_address(true), ec);
     if (ec) {
         server::core::log::warn("GatewayApp failed to set UDP reuse_address; UDP disabled");
-        udp_enabled_.store(false, std::memory_order_relaxed);
+        impl_->udp_enabled_.store(false, std::memory_order_relaxed);
         return;
     }
 
-    socket->bind(boost::asio::ip::udp::endpoint{address, udp_listen_port_}, ec);
+    socket->bind(boost::asio::ip::udp::endpoint{address, impl_->udp_listen_port_}, ec);
     if (ec) {
         server::core::log::warn("GatewayApp failed to bind UDP socket; UDP disabled");
-        udp_enabled_.store(false, std::memory_order_relaxed);
+        impl_->udp_enabled_.store(false, std::memory_order_relaxed);
         return;
     }
 
-    udp_socket_ = std::move(socket);
-    udp_enabled_.store(true, std::memory_order_relaxed);
+    impl_->udp_socket_ = std::move(socket);
+    impl_->udp_enabled_.store(true, std::memory_order_relaxed);
     do_udp_receive();
-    server::core::log::info("GatewayApp UDP listening on " + address.to_string() + ":" + std::to_string(udp_listen_port_));
+    server::core::log::info("GatewayApp UDP listening on " + address.to_string() + ":" + std::to_string(impl_->udp_listen_port_));
 }
 
 void GatewayApp::stop_udp_listener() {
-    udp_enabled_.store(false, std::memory_order_relaxed);
-    if (!udp_socket_) {
+    impl_->udp_enabled_.store(false, std::memory_order_relaxed);
+    if (!impl_->udp_socket_) {
         return;
     }
 
     boost::system::error_code ec;
-    udp_socket_->cancel(ec);
-    udp_socket_->close(ec);
-    udp_socket_.reset();
+    impl_->udp_socket_->cancel(ec);
+    impl_->udp_socket_->close(ec);
+    impl_->udp_socket_.reset();
 }
 
 void GatewayApp::do_udp_receive() {
-    if (!udp_socket_) {
+    if (!impl_->udp_socket_) {
         return;
     }
 
-    udp_socket_->async_receive_from(
-        boost::asio::buffer(udp_read_buffer_),
-        udp_remote_endpoint_,
+    impl_->udp_socket_->async_receive_from(
+        boost::asio::buffer(impl_->udp_read_buffer_),
+        impl_->udp_remote_endpoint_,
         [this](const boost::system::error_code& ec, std::size_t bytes) {
             if (ec) {
                 if (ec != boost::asio::error::operation_aborted) {
-                    (void)udp_receive_error_total_.fetch_add(1, std::memory_order_relaxed);
+                    (void)impl_->udp_receive_error_total_.fetch_add(1, std::memory_order_relaxed);
                     do_udp_receive();
                 }
                 return;
             }
 
             if (bytes > 0) {
-                (void)udp_packets_total_.fetch_add(1, std::memory_order_relaxed);
+                (void)impl_->udp_packets_total_.fetch_add(1, std::memory_order_relaxed);
             }
 
             namespace proto = server::core::protocol;
             const auto now_ms = unix_time_ms();
-            const auto incoming_datagram = std::span<const std::uint8_t>(udp_read_buffer_.data(), bytes);
+            const auto incoming_datagram = std::span<const std::uint8_t>(impl_->udp_read_buffer_.data(), bytes);
 
             if (server::core::net::rudp::looks_like_rudp(incoming_datagram)) {
-                (void)rudp_packets_total_.fetch_add(1, std::memory_order_relaxed);
+                (void)impl_->rudp_packets_total_.fetch_add(1, std::memory_order_relaxed);
 
                 TransportSessionPtr bound_session;
                 std::string bound_session_id;
                 {
-                    std::lock_guard<std::mutex> lock(session_mutex_);
-                    for (const auto& [sid, state] : sessions_) {
-                        if (state && state->udp_bound && state->udp_endpoint == udp_remote_endpoint_) {
+                    std::lock_guard<std::mutex> lock(impl_->session_mutex_);
+                    for (const auto& [sid, state] : impl_->sessions_) {
+                        if (state && state->udp_bound && state->udp_endpoint == impl_->udp_remote_endpoint_) {
                             bound_session = state->session;
                             bound_session_id = sid;
                             break;
@@ -2636,8 +2664,8 @@ void GatewayApp::do_udp_receive() {
                 }
 
                 if (!bound_session) {
-                    (void)udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
-                    (void)rudp_packets_reject_total_.fetch_add(1, std::memory_order_relaxed);
+                    (void)impl_->udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
+                    (void)impl_->rudp_packets_reject_total_.fetch_add(1, std::memory_order_relaxed);
                     do_udp_receive();
                     return;
                 }
@@ -2649,16 +2677,16 @@ void GatewayApp::do_udp_receive() {
                 bool invalid_inner = false;
 
                 {
-                    std::lock_guard<std::mutex> lock(session_mutex_);
-                    auto it = sessions_.find(bound_session_id);
-                    if (it == sessions_.end()
+                    std::lock_guard<std::mutex> lock(impl_->session_mutex_);
+                    auto it = impl_->sessions_.find(bound_session_id);
+                    if (it == impl_->sessions_.end()
                         || !it->second
                         || !it->second->udp_bound
-                        || it->second->udp_endpoint != udp_remote_endpoint_) {
+                        || it->second->udp_endpoint != impl_->udp_remote_endpoint_) {
                         fallback_required = true;
                     } else {
                         auto& state = *it->second;
-                        if (!rudp_rollout_policy_.enabled
+                        if (!impl_->rudp_rollout_policy_.enabled
                             || !state.rudp_selected
                             || state.rudp_fallback_to_tcp
                             || !state.rudp_engine) {
@@ -2691,11 +2719,11 @@ void GatewayApp::do_udp_receive() {
                 }
 
                 for (auto& frame : egress_datagrams) {
-                    send_udp_datagram(std::move(frame), udp_remote_endpoint_);
+                    send_udp_datagram(std::move(frame), impl_->udp_remote_endpoint_);
                 }
 
                 if (retransmit_count > 0) {
-                    (void)udp_retransmit_total_.fetch_add(retransmit_count, std::memory_order_relaxed);
+                    (void)impl_->udp_retransmit_total_.fetch_add(retransmit_count, std::memory_order_relaxed);
                 }
 
                 if (!fallback_required) {
@@ -2720,7 +2748,7 @@ void GatewayApp::do_udp_receive() {
                             break;
                         }
 
-                        if (!rudp_rollout_policy_.opcode_allowed(inner_header.msg_id)) {
+                        if (!impl_->rudp_rollout_policy_.opcode_allowed(inner_header.msg_id)) {
                             invalid_inner = true;
                             break;
                         }
@@ -2736,17 +2764,17 @@ void GatewayApp::do_udp_receive() {
                         }
 
                         bound_session->send(inner_frame.data(), inner_frame.size());
-                        (void)udp_forward_total_.fetch_add(1, std::memory_order_relaxed);
-                        (void)rudp_inner_forward_total_.fetch_add(1, std::memory_order_relaxed);
+                        (void)impl_->udp_forward_total_.fetch_add(1, std::memory_order_relaxed);
+                        (void)impl_->rudp_inner_forward_total_.fetch_add(1, std::memory_order_relaxed);
                         switch (policy.delivery) {
                             case server::core::protocol::DeliveryClass::kReliableOrdered:
-                                (void)udp_forward_reliable_ordered_total_.fetch_add(1, std::memory_order_relaxed);
+                                (void)impl_->udp_forward_reliable_ordered_total_.fetch_add(1, std::memory_order_relaxed);
                                 break;
                             case server::core::protocol::DeliveryClass::kReliable:
-                                (void)udp_forward_reliable_total_.fetch_add(1, std::memory_order_relaxed);
+                                (void)impl_->udp_forward_reliable_total_.fetch_add(1, std::memory_order_relaxed);
                                 break;
                             case server::core::protocol::DeliveryClass::kUnreliableSequenced:
-                                (void)udp_forward_unreliable_sequenced_total_.fetch_add(1, std::memory_order_relaxed);
+                                (void)impl_->udp_forward_unreliable_sequenced_total_.fetch_add(1, std::memory_order_relaxed);
                                 break;
                         }
                     }
@@ -2756,16 +2784,16 @@ void GatewayApp::do_udp_receive() {
                     fallback_required = true;
                     server::core::runtime_metrics::record_rudp_fallback(
                         server::core::runtime_metrics::RudpFallbackReason::kProtocolError);
-                    std::lock_guard<std::mutex> lock(session_mutex_);
-                    auto it = sessions_.find(bound_session_id);
-                    if (it != sessions_.end() && it->second) {
+                    std::lock_guard<std::mutex> lock(impl_->session_mutex_);
+                    auto it = impl_->sessions_.find(bound_session_id);
+                    if (it != impl_->sessions_.end() && it->second) {
                         it->second->rudp_fallback_to_tcp = true;
                     }
                 }
 
                 if (fallback_required) {
-                    (void)rudp_packets_reject_total_.fetch_add(1, std::memory_order_relaxed);
-                    (void)rudp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+                    (void)impl_->rudp_packets_reject_total_.fetch_add(1, std::memory_order_relaxed);
+                    (void)impl_->rudp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
                 }
 
                 do_udp_receive();
@@ -2773,36 +2801,36 @@ void GatewayApp::do_udp_receive() {
             }
 
             if (bytes < proto::k_header_bytes) {
-                (void)udp_receive_error_total_.fetch_add(1, std::memory_order_relaxed);
+                (void)impl_->udp_receive_error_total_.fetch_add(1, std::memory_order_relaxed);
                 do_udp_receive();
                 return;
             }
 
             proto::PacketHeader header{};
-            proto::decode_header(udp_read_buffer_.data(), header);
+            proto::decode_header(impl_->udp_read_buffer_.data(), header);
             const auto body_len = static_cast<std::size_t>(header.length);
             if (body_len != (bytes - proto::k_header_bytes)) {
-                (void)udp_receive_error_total_.fetch_add(1, std::memory_order_relaxed);
+                (void)impl_->udp_receive_error_total_.fetch_add(1, std::memory_order_relaxed);
                 do_udp_receive();
                 return;
             }
 
             const auto payload = std::span<const std::uint8_t>(
-                udp_read_buffer_.data() + proto::k_header_bytes,
+                impl_->udp_read_buffer_.data() + proto::k_header_bytes,
                 body_len
             );
 
             if (header.msg_id == server::protocol::MSG_UDP_BIND_REQ) {
-                const auto remote_key = endpoint_key(udp_remote_endpoint_);
-                const auto block_state = udp_bind_abuse_guard_.block_state(remote_key, now_ms);
+                const auto remote_key = endpoint_key(impl_->udp_remote_endpoint_);
+                const auto block_state = impl_->udp_bind_abuse_guard_.block_state(remote_key, now_ms);
                 server::core::log::info(
                     "GatewayApp UDP bind request recv: endpoint=" + remote_key
                     + " blocked=" + std::string(block_state.blocked ? "1" : "0")
                     + " retry_after_ms=" + std::to_string(block_state.retry_after_ms)
                     + " " + udp_frame_summary(incoming_datagram));
                 if (block_state.blocked) {
-                    (void)udp_bind_rate_limit_reject_total_.fetch_add(1, std::memory_order_relaxed);
-                    (void)udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
+                    (void)impl_->udp_bind_rate_limit_reject_total_.fetch_add(1, std::memory_order_relaxed);
+                    (void)impl_->udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
                     auto frame = make_udp_bind_res_frame(
                         server::core::protocol::errc::SERVER_BUSY,
                         std::string_view{},
@@ -2812,20 +2840,20 @@ void GatewayApp::do_udp_receive() {
                         "bind temporarily blocked",
                         header.seq
                     );
-                    send_udp_datagram(std::move(frame), udp_remote_endpoint_);
+                    send_udp_datagram(std::move(frame), impl_->udp_remote_endpoint_);
                     do_udp_receive();
                     return;
                 }
 
                 auto record_bind_failure = [&]() {
-                    if (udp_bind_abuse_guard_.record_failure(remote_key, now_ms)) {
-                        (void)udp_bind_block_total_.fetch_add(1, std::memory_order_relaxed);
+                    if (impl_->udp_bind_abuse_guard_.record_failure(remote_key, now_ms)) {
+                        (void)impl_->udp_bind_block_total_.fetch_add(1, std::memory_order_relaxed);
                     }
                 };
 
                 ParsedUdpBindRequest req{};
                 if (!parse_udp_bind_req(payload, req)) {
-                    (void)udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
+                    (void)impl_->udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
                     record_bind_failure();
                     server::core::log::warn(
                         "GatewayApp UDP bind request parse failed: endpoint=" + remote_key
@@ -2839,7 +2867,7 @@ void GatewayApp::do_udp_receive() {
                         "invalid bind payload",
                         header.seq
                     );
-                    send_udp_datagram(std::move(frame), udp_remote_endpoint_);
+                    send_udp_datagram(std::move(frame), impl_->udp_remote_endpoint_);
                     do_udp_receive();
                     return;
                 }
@@ -2854,10 +2882,10 @@ void GatewayApp::do_udp_receive() {
 
                 UdpBindTicket ticket{};
                 std::string message;
-                const auto code = apply_udp_bind_request(req, udp_remote_endpoint_, ticket, message);
+                const auto code = apply_udp_bind_request(req, impl_->udp_remote_endpoint_, ticket, message);
                 if (code == 0) {
-                    (void)udp_bind_success_total_.fetch_add(1, std::memory_order_relaxed);
-                    udp_bind_abuse_guard_.record_success(remote_key);
+                    (void)impl_->udp_bind_success_total_.fetch_add(1, std::memory_order_relaxed);
+                    impl_->udp_bind_abuse_guard_.record_success(remote_key);
                     server::core::log::info(
                         "GatewayApp UDP bind success: session=" + ticket.session_id
                         + " endpoint=" + remote_key
@@ -2865,7 +2893,7 @@ void GatewayApp::do_udp_receive() {
                         + " expires_unix_ms=" + std::to_string(ticket.expires_unix_ms)
                         + " seq=" + std::to_string(header.seq));
                 } else {
-                    (void)udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
+                    (void)impl_->udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
                     record_bind_failure();
                     server::core::log::warn(
                         "GatewayApp UDP bind reject: session=" + req.session_id
@@ -2886,7 +2914,7 @@ void GatewayApp::do_udp_receive() {
                                               req.token,
                                               message,
                                               header.seq);
-                send_udp_datagram(std::move(frame), udp_remote_endpoint_);
+                send_udp_datagram(std::move(frame), impl_->udp_remote_endpoint_);
                 do_udp_receive();
                 return;
             }
@@ -2894,9 +2922,9 @@ void GatewayApp::do_udp_receive() {
             TransportSessionPtr bound_session;
             std::string bound_session_id;
             {
-                std::lock_guard<std::mutex> lock(session_mutex_);
-                for (auto& [sid, state] : sessions_) {
-                    if (state && state->udp_bound && state->udp_endpoint == udp_remote_endpoint_) {
+                std::lock_guard<std::mutex> lock(impl_->session_mutex_);
+                for (auto& [sid, state] : impl_->sessions_) {
+                    if (state && state->udp_bound && state->udp_endpoint == impl_->udp_remote_endpoint_) {
                         bound_session = state->session;
                         bound_session_id = sid;
                         break;
@@ -2905,7 +2933,7 @@ void GatewayApp::do_udp_receive() {
             }
 
             if (!bound_session) {
-                (void)udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
+                (void)impl_->udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
                 auto frame = make_udp_bind_res_frame(
                     server::core::protocol::errc::UNAUTHORIZED,
                     std::string_view{},
@@ -2915,7 +2943,7 @@ void GatewayApp::do_udp_receive() {
                     "udp session not bound",
                     header.seq
                 );
-                send_udp_datagram(std::move(frame), udp_remote_endpoint_);
+                send_udp_datagram(std::move(frame), impl_->udp_remote_endpoint_);
                 do_udp_receive();
                 return;
             }
@@ -2923,7 +2951,7 @@ void GatewayApp::do_udp_receive() {
             const bool is_game_opcode = !server::protocol::opcode_name(header.msg_id).empty();
             const bool is_core_opcode = !server::core::protocol::opcode_name(header.msg_id).empty();
             if (!is_game_opcode && !is_core_opcode) {
-                (void)udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
+                (void)impl_->udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
                 auto frame = make_udp_bind_res_frame(
                     server::core::protocol::errc::UNKNOWN_MSG_ID,
                     std::string_view{},
@@ -2933,14 +2961,14 @@ void GatewayApp::do_udp_receive() {
                     "unknown udp msg_id",
                     header.seq
                 );
-                send_udp_datagram(std::move(frame), udp_remote_endpoint_);
+                send_udp_datagram(std::move(frame), impl_->udp_remote_endpoint_);
                 do_udp_receive();
                 return;
             }
 
-            if (!udp_opcode_allowlist_.contains(header.msg_id)) {
-                (void)udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
-                (void)udp_opcode_allowlist_reject_total_.fetch_add(1, std::memory_order_relaxed);
+            if (!impl_->udp_opcode_allowlist_.contains(header.msg_id)) {
+                (void)impl_->udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
+                (void)impl_->udp_opcode_allowlist_reject_total_.fetch_add(1, std::memory_order_relaxed);
                 auto frame = make_udp_bind_res_frame(
                     server::core::protocol::errc::FORBIDDEN,
                     std::string_view{},
@@ -2950,7 +2978,7 @@ void GatewayApp::do_udp_receive() {
                     "opcode not in udp allowlist",
                     header.seq
                 );
-                send_udp_datagram(std::move(frame), udp_remote_endpoint_);
+                send_udp_datagram(std::move(frame), impl_->udp_remote_endpoint_);
                 do_udp_receive();
                 return;
             }
@@ -2959,7 +2987,7 @@ void GatewayApp::do_udp_receive() {
                 ? server::protocol::opcode_policy(header.msg_id)
                 : server::core::protocol::opcode_policy(header.msg_id);
             if (!server::core::protocol::transport_allows(policy.transport, server::core::protocol::TransportKind::kUdp)) {
-                (void)udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
+                (void)impl_->udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
                 auto frame = make_udp_bind_res_frame(
                     server::core::protocol::errc::FORBIDDEN,
                     std::string_view{},
@@ -2969,7 +2997,7 @@ void GatewayApp::do_udp_receive() {
                     "opcode not allowed on udp",
                     header.seq
                 );
-                send_udp_datagram(std::move(frame), udp_remote_endpoint_);
+                send_udp_datagram(std::move(frame), impl_->udp_remote_endpoint_);
                 do_udp_receive();
                 return;
             }
@@ -2977,25 +3005,25 @@ void GatewayApp::do_udp_receive() {
             if (policy.delivery == server::core::protocol::DeliveryClass::kUnreliableSequenced) {
                 gateway::UdpSequencedMetrics::UpdateResult update{};
                 {
-                    std::lock_guard<std::mutex> lock(session_mutex_);
-                    auto it = sessions_.find(bound_session_id);
-                    if (it != sessions_.end()
+                    std::lock_guard<std::mutex> lock(impl_->session_mutex_);
+                    auto it = impl_->sessions_.find(bound_session_id);
+                    if (it != impl_->sessions_.end()
                         && it->second
                         && it->second->udp_bound
-                        && it->second->udp_endpoint == udp_remote_endpoint_) {
+                        && it->second->udp_endpoint == impl_->udp_remote_endpoint_) {
                         update = it->second->udp_sequenced_metrics.on_packet(header.seq, now_ms);
                     }
                 }
 
                 if (!update.accepted) {
-                    (void)udp_replay_drop_total_.fetch_add(1, std::memory_order_relaxed);
-                    (void)udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
+                    (void)impl_->udp_replay_drop_total_.fetch_add(1, std::memory_order_relaxed);
+                    (void)impl_->udp_bind_reject_total_.fetch_add(1, std::memory_order_relaxed);
 
                     if (update.duplicate) {
-                        (void)udp_duplicate_drop_total_.fetch_add(1, std::memory_order_relaxed);
-                        (void)udp_retransmit_total_.fetch_add(1, std::memory_order_relaxed);
+                        (void)impl_->udp_duplicate_drop_total_.fetch_add(1, std::memory_order_relaxed);
+                        (void)impl_->udp_retransmit_total_.fetch_add(1, std::memory_order_relaxed);
                     } else if (update.reordered) {
-                        (void)udp_reorder_drop_total_.fetch_add(1, std::memory_order_relaxed);
+                        (void)impl_->udp_reorder_drop_total_.fetch_add(1, std::memory_order_relaxed);
                     }
 
                     auto frame = make_udp_bind_res_frame(
@@ -3007,30 +3035,30 @@ void GatewayApp::do_udp_receive() {
                         "stale sequenced udp packet",
                         header.seq
                     );
-                    send_udp_datagram(std::move(frame), udp_remote_endpoint_);
+                    send_udp_datagram(std::move(frame), impl_->udp_remote_endpoint_);
                     do_udp_receive();
                     return;
                 }
 
                 if (update.estimated_lost_packets > 0) {
-                    (void)udp_loss_estimated_total_.fetch_add(update.estimated_lost_packets, std::memory_order_relaxed);
+                    (void)impl_->udp_loss_estimated_total_.fetch_add(update.estimated_lost_packets, std::memory_order_relaxed);
                 }
                 if (update.jitter_ms > 0) {
-                    udp_jitter_ms_last_.store(update.jitter_ms, std::memory_order_relaxed);
+                    impl_->udp_jitter_ms_last_.store(update.jitter_ms, std::memory_order_relaxed);
                 }
             }
 
-            bound_session->send(udp_read_buffer_.data(), bytes);
-            (void)udp_forward_total_.fetch_add(1, std::memory_order_relaxed);
+            bound_session->send(impl_->udp_read_buffer_.data(), bytes);
+            (void)impl_->udp_forward_total_.fetch_add(1, std::memory_order_relaxed);
             switch (policy.delivery) {
                 case server::core::protocol::DeliveryClass::kReliableOrdered:
-                    (void)udp_forward_reliable_ordered_total_.fetch_add(1, std::memory_order_relaxed);
+                    (void)impl_->udp_forward_reliable_ordered_total_.fetch_add(1, std::memory_order_relaxed);
                     break;
                 case server::core::protocol::DeliveryClass::kReliable:
-                    (void)udp_forward_reliable_total_.fetch_add(1, std::memory_order_relaxed);
+                    (void)impl_->udp_forward_reliable_total_.fetch_add(1, std::memory_order_relaxed);
                     break;
                 case server::core::protocol::DeliveryClass::kUnreliableSequenced:
-                    (void)udp_forward_unreliable_sequenced_total_.fetch_add(1, std::memory_order_relaxed);
+                    (void)impl_->udp_forward_unreliable_sequenced_total_.fetch_add(1, std::memory_order_relaxed);
                     break;
             }
             do_udp_receive();
@@ -3038,3 +3066,4 @@ void GatewayApp::do_udp_receive() {
 }
 
 } // namespace gateway
+

@@ -184,6 +184,11 @@ if (Python3_Interpreter_FOUND)
   )
   set_tests_properties(PackageConsumerContractTests PROPERTIES LABELS "contract;docs-policy")
   add_test(
+    NAME GatewayPublicHeaderContracts
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/test_gateway_public_header_contracts.py"
+  )
+  set_tests_properties(GatewayPublicHeaderContracts PROPERTIES LABELS "contract;public-api;gateway")
+  add_test(
     NAME WindowsReleaseTreeReady
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/python/verify_windows_release_tree_ready.py"
             --build-dir "${CMAKE_BINARY_DIR}"
