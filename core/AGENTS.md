@@ -20,11 +20,13 @@ Shared C++20 library used by `server_app`, `gateway_app`, tools, and the Windows
 ## Protocol / Wire Codegen
 - Sources: `core/protocol/system_opcodes.json`, `server/protocol/game_opcodes.json`, `protocol/wire_map.json`
 - Generators: `tools/gen_opcodes.py`, `tools/gen_wire_codec.py`
-- Generated headers:
+- Tracked forwarding headers:
   - `core/include/server/core/protocol/system_opcodes.hpp`
-  - `server/include/server/protocol/game_opcodes.hpp`
+  - `core/include/server/protocol/game_opcodes.hpp`
   - `core/include/server/wire/codec.hpp`
-- Rule: treat generated headers as write-only; edit the JSON + generator instead.
+- Build/install generated payload:
+  - `build/generated/include/server/generated/**`
+- Rule: treat generated payload as write-only; edit the JSON + generator instead.
 
 ## Build / Test (Windows)
 ```powershell

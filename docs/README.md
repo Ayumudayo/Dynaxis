@@ -27,6 +27,8 @@
   - core/runtime layering과 ownership 요약
 - `docs/core-architecture-rationale.md`
   - `server_core`가 왜 현재 구조를 갖는지에 대한 심층 배경
+- `docs/architecture/README.md`
+  - architecture/build-test ownership 재정리 문서 인덱스
 - `docs/protocol.md`
   - 프로토콜 개요
 - `docs/protocol/snapshot.md`

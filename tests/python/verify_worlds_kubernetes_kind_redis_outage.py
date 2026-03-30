@@ -262,18 +262,23 @@ def main() -> int:
                 scale_redis(cluster_name, namespace, 1)
                 wait_for_redis_pod_ready(cluster_name, namespace, timeout_seconds=args.wait_timeout_seconds)
 
+                recovered_instances_status, recovered_instances_payload = wait_for_instances_status(
+                    base_url,
+                    200,
+                    timeout_seconds=float(args.wait_timeout_seconds),
+                )
                 recovered_admin_redis = wait_for_metric_value(
                     base_url,
                     "admin_redis_available",
                     lambda value: value == 1.0,
-                    timeout_seconds=60.0,
+                    timeout_seconds=float(args.wait_timeout_seconds),
                 )
                 recovered_dep_redis = wait_for_metric_value(
                     base_url,
                     "runtime_dependency_ready",
                     lambda value: value == 1.0,
                     labels={"name": "redis", "required": "false"},
-                    timeout_seconds=60.0,
+                    timeout_seconds=float(args.wait_timeout_seconds),
                 )
                 recovered_deps_ok = read_metric(base_url, "runtime_dependencies_ok")
 
@@ -313,6 +318,8 @@ def main() -> int:
                         "instances_payload": instances_outage_payload,
                     },
                     "recovered": {
+                        "instances_status": recovered_instances_status,
+                        "instances_payload": recovered_instances_payload,
                         "worlds_total": int(after_summary.get("worlds_total") or 0),
                         "instances_total": after_total_instances,
                         "admin_redis_available": recovered_admin_redis,

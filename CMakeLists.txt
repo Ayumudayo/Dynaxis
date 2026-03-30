@@ -81,13 +81,12 @@ if (ENABLE_IPO)
     endif()
 endif()
 
-if (NOT BUILD_SERVER_STACK)
-
-    if (BUILD_WRITE_BEHIND_TOOLS)
-        message(FATAL_ERROR "write-behind tools require BUILD_SERVER_STACK=ON")
+if (BUILD_SERVER_TESTS)
+    if (NOT BUILD_SERVER_STACK)
+        message(FATAL_ERROR "BUILD_SERVER_TESTS=ON requires BUILD_SERVER_STACK=ON")
     endif()
-    if (BUILD_LOADGEN_TOOLS)
-        message(FATAL_ERROR "load generator tools require BUILD_SERVER_STACK=ON")
+    if (NOT BUILD_GATEWAY_APP)
+        message(FATAL_ERROR "BUILD_SERVER_TESTS=ON requires BUILD_GATEWAY_APP=ON")
     endif()
 endif()
 
@@ -115,36 +114,73 @@ message(STATUS "Boost libs: ${Boost_LIBRARIES}")
 message(STATUS "Boost lib dirs: ${Boost_LIBRARY_DIRS}")
 
 find_package(nlohmann_json CONFIG QUIET)
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
-# Python3가 있으면 opcode 헤더를 빌드 시 자동 생성
-find_package(Python3 COMPONENTS Interpreter QUIET)
-if (Python3_Interpreter_FOUND)
-    set(OPCODES_JSON ${CMAKE_SOURCE_DIR}/core/protocol/system_opcodes.json)
-    set(GENERATED_HEADER ${CMAKE_SOURCE_DIR}/core/include/server/core/protocol/system_opcodes.hpp)
-    add_custom_command(
-        OUTPUT ${GENERATED_HEADER}
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/gen_opcodes.py ${OPCODES_JSON} ${GENERATED_HEADER}
-        DEPENDS ${OPCODES_JSON} ${CMAKE_SOURCE_DIR}/tools/gen_opcodes.py
-        COMMENT "Generating protocol system opcodes header"
-        VERBATIM)
-    add_custom_target(generate_opcodes DEPENDS ${GENERATED_HEADER})
+set(DYNAXIS_GENERATED_INCLUDE_DIR "${CMAKE_BINARY_DIR}/generated/include")
+set(DYNAXIS_SYSTEM_OPCODES_GENERATED_HEADER
+    "${DYNAXIS_GENERATED_INCLUDE_DIR}/server/generated/core/protocol/system_opcodes.generated.hpp")
+set(DYNAXIS_GAME_OPCODES_GENERATED_HEADER
+    "${DYNAXIS_GENERATED_INCLUDE_DIR}/server/generated/protocol/game_opcodes.generated.hpp")
+set(DYNAXIS_WIRE_CODEC_GENERATED_HEADER
+    "${DYNAXIS_GENERATED_INCLUDE_DIR}/server/generated/wire/codec.generated.hpp")
 
-    # wire codec header generation
-    set(WIRE_MAP_JSON ${CMAKE_SOURCE_DIR}/protocol/wire_map.json)
-    set(GENERATED_WIRE_CODEC ${CMAKE_SOURCE_DIR}/core/include/server/wire/codec.hpp)
-    add_custom_command(
-        OUTPUT ${GENERATED_WIRE_CODEC}
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/gen_wire_codec.py ${WIRE_MAP_JSON} ${GENERATED_WIRE_CODEC}
-        DEPENDS ${WIRE_MAP_JSON} ${CMAKE_SOURCE_DIR}/tools/gen_wire_codec.py ${CMAKE_SOURCE_DIR}/proto/wire.proto
-        COMMENT "Generating wire codec header"
-        VERBATIM)
-    add_custom_target(generate_wire_codec DEPENDS ${GENERATED_WIRE_CODEC})
-else()
-    message(WARNING "Python3 not found: opcode 자동 생성 비활성화. 기존 헤더를 사용합니다.")
-endif()
+set(OPCODES_JSON "${CMAKE_SOURCE_DIR}/core/protocol/system_opcodes.json")
+set(GAME_OPCODES_JSON "${CMAKE_SOURCE_DIR}/server/protocol/game_opcodes.json")
+set(WIRE_MAP_JSON "${CMAKE_SOURCE_DIR}/protocol/wire_map.json")
 
-add_subdirectory(core)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${OPCODES_JSON}"
+    "${GAME_OPCODES_JSON}"
+    "${WIRE_MAP_JSON}"
+    "${CMAKE_SOURCE_DIR}/tools/gen_opcodes.py"
+    "${CMAKE_SOURCE_DIR}/tools/gen_wire_codec.py"
+    "${CMAKE_SOURCE_DIR}/proto/wire.proto")
+
+function(dynaxis_generate_header description script input output)
+    get_filename_component(_out_dir "${output}" DIRECTORY)
+    file(MAKE_DIRECTORY "${_out_dir}")
+
+    execute_process(
+        COMMAND "${Python3_EXECUTABLE}" "${script}" "${input}" "${output}" ${ARGN}
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        RESULT_VARIABLE _generate_result
+        OUTPUT_VARIABLE _generate_stdout
+        ERROR_VARIABLE _generate_stderr
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE
+    )
+
+    if (NOT _generate_result EQUAL 0)
+        string(STRIP "${_generate_stdout}" _generate_stdout)
+        string(STRIP "${_generate_stderr}" _generate_stderr)
+        message(FATAL_ERROR
+            "${description} failed with exit code ${_generate_result}\n"
+            "stdout:\n${_generate_stdout}\n"
+            "stderr:\n${_generate_stderr}")
+    endif()
+endfunction()
+
+dynaxis_generate_header(
+    "Generating protocol system opcodes header"
+    "${CMAKE_SOURCE_DIR}/tools/gen_opcodes.py"
+    "${OPCODES_JSON}"
+    "${DYNAXIS_SYSTEM_OPCODES_GENERATED_HEADER}")
+dynaxis_generate_header(
+    "Generating protocol game opcodes header"
+    "${CMAKE_SOURCE_DIR}/tools/gen_opcodes.py"
+    "${GAME_OPCODES_JSON}"
+    "${DYNAXIS_GAME_OPCODES_GENERATED_HEADER}")
+dynaxis_generate_header(
+    "Generating wire codec header"
+    "${CMAKE_SOURCE_DIR}/tools/gen_wire_codec.py"
+    "${WIRE_MAP_JSON}"
+    "${DYNAXIS_WIRE_CODEC_GENERATED_HEADER}")
+
 add_subdirectory(proto)
+add_subdirectory(core)
+if (BUILD_SERVER_STACK OR BUILD_GATEWAY_APP OR BUILD_WRITE_BEHIND_TOOLS OR BUILD_ADMIN_APP)
+  add_subdirectory(infra)
+endif()
 if (BUILD_SERVER_STACK)
   add_subdirectory(server)
 endif()
@@ -158,152 +194,8 @@ if (BUILD_SERVER_TESTS)
   add_subdirectory(tests)
 endif()
 
-if (BUILD_WRITE_BEHIND_TOOLS)
-  add_library(wb_common_redis_factory STATIC tools/wb_common/redis_client_factory.cpp)
-  target_link_libraries(wb_common_redis_factory PUBLIC server_core)
-
-  add_executable(wb_worker tools/wb_worker/main.cpp)
-  add_executable(wb_dlq_replayer tools/wb_dlq_replayer/main.cpp)
-  add_executable(wb_emit tools/wb_emit/main.cpp)
-  add_executable(wb_check tools/wb_check/main.cpp)
-
-  target_link_libraries(wb_worker PRIVATE server_core)
-  target_link_libraries(wb_dlq_replayer PRIVATE server_core)
-  target_link_libraries(wb_emit PRIVATE server_core)
-  target_link_libraries(wb_check PRIVATE server_core)
-
-  if (TARGET server_storage_pg)
-  endif()
-  if (TARGET server_storage_redis_factory)
-    target_link_libraries(wb_common_redis_factory PRIVATE server_storage_redis_factory)
-  endif()
-
-  target_link_libraries(wb_worker PRIVATE wb_common_redis_factory)
-  target_link_libraries(wb_dlq_replayer PRIVATE wb_common_redis_factory)
-  target_link_libraries(wb_emit PRIVATE wb_common_redis_factory)
-
-  if (TARGET nlohmann_json::nlohmann_json)
-    target_link_libraries(wb_worker PRIVATE nlohmann_json::nlohmann_json)
-    target_link_libraries(wb_dlq_replayer PRIVATE nlohmann_json::nlohmann_json)
-    target_link_libraries(wb_check PRIVATE nlohmann_json::nlohmann_json)
-  else()
-    message(WARNING "nlohmann_json target not found ? wb_worker/wb_dlq_replayer/wb_check may fail to compile")
-  endif()
-
-  set(_PQXX_TARGET "")
-  find_package(libpqxx CONFIG QUIET)
-  if (libpqxx_FOUND AND TARGET libpqxx::pqxx)
-    set(_PQXX_TARGET libpqxx::pqxx)
-  else()
-    pkg_check_modules(libpqxx QUIET IMPORTED_TARGET libpqxx)
-    if (libpqxx_FOUND)
-      set(_PQXX_TARGET PkgConfig::libpqxx)
-    else()
-      find_package(unofficial-libpqxx CONFIG QUIET)
-      if (unofficial-libpqxx_FOUND AND TARGET unofficial::libpqxx::libpqxx)
-        set(_PQXX_TARGET unofficial::libpqxx::libpqxx)
-      endif()
-    endif()
-  endif()
-if (_PQXX_TARGET)
-  target_link_libraries(wb_worker PRIVATE ${_PQXX_TARGET})
-  target_link_libraries(wb_dlq_replayer PRIVATE ${_PQXX_TARGET})
-  target_link_libraries(wb_check PRIVATE ${_PQXX_TARGET})
-else()
-  message(WARNING "libpqxx not found ? wb_worker/wb_dlq_replayer/wb_check will fail to link")
-endif()
-endif()
-
-if (BUILD_LOADGEN_TOOLS)
-  if (NOT TARGET nlohmann_json::nlohmann_json)
-    message(FATAL_ERROR "nlohmann_json target not found ? stack_loadgen requires nlohmann_json")
-  endif()
-
-  add_executable(stack_loadgen
-    tools/loadgen/main.cpp
-    tools/loadgen/report_writer.cpp
-    tools/loadgen/scenario_loader.cpp
-    tools/loadgen/scenario_runner.cpp
-    tools/loadgen/session_client.cpp
-  )
-  target_include_directories(stack_loadgen PRIVATE
-    ${CMAKE_BINARY_DIR}/proto
-  )
-  target_link_libraries(stack_loadgen PRIVATE
-    server_core
-    wire_proto
-    nlohmann_json::nlohmann_json
-  )
-
-  if (TARGET generate_game_opcodes)
-    add_dependencies(stack_loadgen generate_game_opcodes)
-  endif()
-
-  add_custom_target(tcp_loadgen DEPENDS stack_loadgen)
-
-  if (WIN32 AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.21")
-    add_custom_command(TARGET stack_loadgen POST_BUILD
-      COMMAND ${CMAKE_COMMAND}
-              -Druntime_dlls=$<TARGET_RUNTIME_DLLS:stack_loadgen>
-              -Dtarget_dir=$<TARGET_FILE_DIR:stack_loadgen>
-              -P ${CMAKE_SOURCE_DIR}/cmake/copy_runtime_dlls_if_any.cmake
-      COMMAND_EXPAND_LISTS)
-  endif()
-endif()
-
-if (BUILD_ADMIN_APP)
-  add_library(admin_app_backends STATIC tools/admin_app/redis_client_factory.cpp)
-  target_link_libraries(admin_app_backends PUBLIC server_core)
-  if (TARGET server_storage_redis_factory)
-    target_link_libraries(admin_app_backends PRIVATE server_storage_redis_factory)
-  endif()
-
-  add_executable(admin_app tools/admin_app/main.cpp)
-  target_link_libraries(admin_app PRIVATE server_core)
-  target_include_directories(admin_app PRIVATE ${CMAKE_SOURCE_DIR}/server/include)
-  if (TARGET nlohmann_json::nlohmann_json)
-    target_link_libraries(admin_app PRIVATE nlohmann_json::nlohmann_json)
-  else()
-    message(WARNING "nlohmann_json target not found ? admin_app may fail to compile")
-  endif()
-  target_link_libraries(admin_app PRIVATE admin_app_backends)
-
-  add_custom_command(TARGET admin_app POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/tools/admin_app/admin_ui.html"
-            "$<TARGET_FILE_DIR:admin_app>/admin_ui.html")
-
-  if (WIN32 AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.21")
-    # Ensure local execution works without manually extending PATH.
-    add_custom_command(TARGET admin_app POST_BUILD
-      COMMAND ${CMAKE_COMMAND}
-              -Druntime_dlls=$<TARGET_RUNTIME_DLLS:admin_app>
-              -Dtarget_dir=$<TARGET_FILE_DIR:admin_app>
-              -P ${CMAKE_SOURCE_DIR}/cmake/copy_runtime_dlls_if_any.cmake
-      COMMAND_EXPAND_LISTS)
-  endif()
-endif()
-
-if (BUILD_MIGRATIONS_RUNNER)
-  # migrations runner (requires libpqxx)
-  add_executable(migrations_runner tools/migrations/runner.cpp)
-  target_include_directories(migrations_runner PRIVATE ${CMAKE_SOURCE_DIR}/core/include)
-  find_package(libpqxx CONFIG QUIET)
-  if (libpqxx_FOUND AND TARGET libpqxx::pqxx)
-    target_link_libraries(migrations_runner PRIVATE libpqxx::pqxx)
-  else()
-    pkg_check_modules(libpqxx QUIET IMPORTED_TARGET libpqxx)
-    if (libpqxx_FOUND)
-      target_link_libraries(migrations_runner PRIVATE PkgConfig::libpqxx)
-    else()
-      find_package(unofficial-libpqxx CONFIG QUIET)
-      if (unofficial-libpqxx_FOUND AND TARGET unofficial::libpqxx::libpqxx)
-        target_link_libraries(migrations_runner PRIVATE unofficial::libpqxx::libpqxx)
-      else()
-        message(WARNING "libpqxx not found — migrations_runner will fail to link")
-      endif()
-    endif()
-  endif()
+if (BUILD_WRITE_BEHIND_TOOLS OR BUILD_LOADGEN_TOOLS OR BUILD_ADMIN_APP OR BUILD_MIGRATIONS_RUNNER)
+  add_subdirectory(tools)
 endif()
 
 if (WIN32)

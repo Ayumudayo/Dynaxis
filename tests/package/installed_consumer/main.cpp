@@ -60,6 +60,9 @@
 #include "server/core/util/log.hpp"
 #include "server/core/util/paths.hpp"
 #include "server/core/util/service_registry.hpp"
+#include "server/protocol/game_opcodes.hpp"
+#include "server/wire/codec.hpp"
+#include "wire.pb.h"
 
 namespace {
 
@@ -117,6 +120,28 @@ public:
 
 int main() {
     (void)server::core::api::version_string();
+    const auto login_opcode_name = server::protocol::opcode_name(server::protocol::MSG_LOGIN_REQ);
+    if (!require_true(login_opcode_name == "MSG_LOGIN_REQ", "game opcode forwarder should expose generated opcode lookup")) {
+        return 1;
+    }
+
+    server::wire::v1::LoginRes login_res;
+    login_res.set_effective_user("installed-consumer");
+    auto login_res_bytes = server::wire::codec::Encode(login_res);
+    server::wire::v1::LoginRes decoded_login_res;
+    if (!require_true(
+            server::wire::codec::MsgId<server::wire::v1::LoginRes>() == server::protocol::MSG_LOGIN_RES,
+            "wire codec msg-id glue should match generated game opcode constants")) {
+        return 1;
+    }
+    if (!require_true(
+            server::wire::codec::Decode(login_res_bytes.data(), login_res_bytes.size(), decoded_login_res),
+            "wire codec forwarder should decode generated protobuf payloads")) {
+        return 1;
+    }
+    if (!require_true(decoded_login_res.effective_user() == "installed-consumer", "wire codec round-trip should preserve protobuf payload")) {
+        return 1;
+    }
 
     boost::asio::io_context io;
     auto hive = std::make_shared<server::core::net::Hive>(io);

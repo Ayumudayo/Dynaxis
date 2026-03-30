@@ -8,6 +8,7 @@ else()
     find_dependency(Boost CONFIG REQUIRED COMPONENTS system)
 endif()
 
+find_dependency(Protobuf REQUIRED)
 find_dependency(OpenSSL REQUIRED)
 
 find_package(lz4 CONFIG QUIET)

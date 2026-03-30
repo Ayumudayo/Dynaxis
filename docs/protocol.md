@@ -46,6 +46,9 @@ flag 표준 정의는 `core/include/server/core/protocol/protocol_flags.hpp`를 
 - 생성 헤더:
   - `core/include/server/core/protocol/system_opcodes.hpp`
   - `core/include/server/protocol/game_opcodes.hpp`
+  - `core/include/server/wire/codec.hpp`
+- build/install generated output:
+  - `build/generated/include/server/generated/**`
 - 생성 문서:
   - `docs/protocol/opcodes.md`
 

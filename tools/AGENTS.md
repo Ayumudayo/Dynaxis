@@ -11,14 +11,15 @@ Aux binaries + code generation.
 - `tools/migrations/runner.cpp` + `tools/migrations/*.sql`: schema migrations.
 - `tools/gen_opcodes.py`: generates opcode headers from JSON specs (grouping + `opcode_name()` helpers).
 - `tools/gen_opcode_docs.py`: validates opcode specs and generates `docs/protocol/opcodes.md` (system/game share the same 16-bit space).
-- `tools/gen_wire_codec.py`: generates `core/include/server/wire/codec.hpp` from `protocol/wire_map.json`.
+- `tools/gen_wire_codec.py`: generates build/install payload under `build/generated/include/server/generated/wire/codec.generated.hpp` from `protocol/wire_map.json`. The tracked forwarding entrypoint remains `core/include/server/wire/codec.hpp`.
 - `tools/new_plugin.py`: scaffold generator for ChatHook ABI v2 plugin source + manifest.
 - `tools/new_script.py`: scaffold generator for Lua cold-hook script + manifest.
 - `tools/ext_inventory.py`: manifest inventory scanner/validator for plugin/script artifacts.
 
 ## Opcode Codegen
 - Specs (JSON): `core/protocol/system_opcodes.json`, `server/protocol/game_opcodes.json`
-- Generated headers (C++): `core/include/server/core/protocol/system_opcodes.hpp`, `server/include/server/protocol/game_opcodes.hpp`
+- Tracked forwarding headers (C++): `core/include/server/core/protocol/system_opcodes.hpp`, `core/include/server/protocol/game_opcodes.hpp`, `core/include/server/wire/codec.hpp`
+- Build/install generated payload: `build/generated/include/server/generated/**`
 - Docs: `tools/gen_opcode_docs.py` -> `docs/protocol/opcodes.md`
 - CI check: `python tools/gen_opcode_docs.py --check`
 

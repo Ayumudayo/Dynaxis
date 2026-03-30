@@ -25,11 +25,13 @@
 #include "server/app/config.hpp"
 #include "server/app/core_internal_adapter.hpp"
 #include "server/app/metrics_server.hpp"
+#include "admin_fanout_subscription.hpp"
+#include "server_shutdown.hpp"
 #include "server/app/topology_runtime_assignment.hpp"
 #include "server/fps/fps_service.hpp"
+#include "server_runtime_state.hpp"
 
 #include "server/core/net/dispatcher.hpp"
-#include "server/core/security/admin_command_auth.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/util/service_registry.hpp"
 #include "server/core/app/engine_builder.hpp"
@@ -53,8 +55,6 @@ namespace asio = boost::asio;
 namespace core = server::core;
 namespace corelog = server::core::log;
 namespace services = server::core::util::services;
-namespace admin_auth = server::core::security::admin_command_auth;
-
 namespace server::app {
 
 /**
@@ -66,140 +66,7 @@ namespace server::app {
  * 부트스트랩 순서가 흔들리면 ready 판정, Redis fanout 구독, 관리자 제어면, 종료 drain 동작이
  * 서로 다른 수명주기를 보게 되어 운영 중 재현하기 어려운 부팅/종료 버그가 생깁니다.
  */
-// 전역 메트릭 변수는 부트스트랩 경로와 메트릭 렌더링 경로가 같은 카운터를 공유하도록 둔다.
-// 이를 각 모듈 로컬 static으로 흩어 두면 shutdown drain 같은 교차 단계 메트릭을 한곳에서 모으기 어렵다.
-std::atomic<std::uint64_t> g_subscribe_total{0};
-std::atomic<std::uint64_t> g_self_echo_drop_total{0};
-std::atomic<long long>     g_subscribe_last_lag_ms{0};
-std::atomic<std::uint64_t> g_admin_command_verify_ok_total{0};
-std::atomic<std::uint64_t> g_admin_command_verify_fail_total{0};
-std::atomic<std::uint64_t> g_admin_command_verify_replay_total{0};
-std::atomic<std::uint64_t> g_admin_command_verify_signature_mismatch_total{0};
-std::atomic<std::uint64_t> g_admin_command_verify_expired_total{0};
-std::atomic<std::uint64_t> g_admin_command_verify_future_total{0};
-std::atomic<std::uint64_t> g_admin_command_verify_missing_field_total{0};
-std::atomic<std::uint64_t> g_admin_command_verify_invalid_issued_at_total{0};
-std::atomic<std::uint64_t> g_admin_command_verify_secret_not_configured_total{0};
-std::atomic<std::uint64_t> g_admin_command_target_mismatch_total{0};
-std::atomic<std::uint64_t> g_shutdown_drain_completed_total{0};
-std::atomic<std::uint64_t> g_shutdown_drain_timeout_total{0};
-std::atomic<std::uint64_t> g_shutdown_drain_forced_close_total{0};
-std::atomic<std::uint64_t> g_shutdown_drain_remaining_connections{0};
-std::atomic<long long> g_shutdown_drain_elapsed_ms{0};
-std::atomic<long long> g_shutdown_drain_timeout_ms{0};
-
 namespace {
-
-std::string trim_ascii(std::string_view value) {
-    std::size_t begin = 0;
-    while (begin < value.size() && std::isspace(static_cast<unsigned char>(value[begin])) != 0) {
-        ++begin;
-    }
-    std::size_t end = value.size();
-    while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1])) != 0) {
-        --end;
-    }
-    return std::string(value.substr(begin, end - begin));
-}
-
-std::unordered_map<std::string, std::string> parse_kv_lines(std::string_view payload) {
-    std::unordered_map<std::string, std::string> out;
-    std::size_t start = 0;
-    while (start <= payload.size()) {
-        std::size_t end = payload.find('\n', start);
-        if (end == std::string_view::npos) {
-            end = payload.size();
-        }
-
-        const auto line = payload.substr(start, end - start);
-        const auto eq = line.find('=');
-        if (eq != std::string_view::npos) {
-            const std::string key = trim_ascii(line.substr(0, eq));
-            const std::string value = trim_ascii(line.substr(eq + 1));
-            if (!key.empty()) {
-                out[key] = value;
-            }
-        }
-
-        if (end == payload.size()) {
-            break;
-        }
-        start = end + 1;
-    }
-    return out;
-}
-
-std::vector<std::string> split_csv(std::string_view input) {
-    std::vector<std::string> out;
-    std::size_t start = 0;
-    while (start <= input.size()) {
-        std::size_t end = input.find(',', start);
-        if (end == std::string_view::npos) {
-            end = input.size();
-        }
-
-        std::string token = trim_ascii(input.substr(start, end - start));
-        if (!token.empty()) {
-            out.push_back(std::move(token));
-        }
-
-        if (end == input.size()) {
-            break;
-        }
-        start = end + 1;
-    }
-    return out;
-}
-
-std::string to_lower_ascii(std::string_view value) {
-    std::string out;
-    out.reserve(value.size());
-    for (const char ch : value) {
-        out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
-    }
-    return out;
-}
-
-struct AdminSelectorParseResult {
-        server::core::discovery::InstanceSelector selector;
-    bool selector_specified{false};
-    bool valid{true};
-};
-
-AdminSelectorParseResult parse_admin_selector_fields(const std::unordered_map<std::string, std::string>& fields) {
-    AdminSelectorParseResult result;
-
-    auto parse_csv_field = [&](const char* key, std::vector<std::string>& out_values) {
-        const auto it = fields.find(key);
-        if (it == fields.end()) {
-            return;
-        }
-        result.selector_specified = true;
-        out_values = split_csv(it->second);
-    };
-
-    if (const auto it = fields.find("all"); it != fields.end()) {
-        result.selector_specified = true;
-        const std::string normalized = to_lower_ascii(trim_ascii(it->second));
-        if (normalized.empty() || normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on") {
-            result.selector.all = true;
-        } else if (normalized == "0" || normalized == "false" || normalized == "no" || normalized == "off") {
-            result.selector.all = false;
-        } else {
-            result.valid = false;
-            return result;
-        }
-    }
-
-    parse_csv_field("server_ids", result.selector.server_ids);
-    parse_csv_field("roles", result.selector.roles);
-    parse_csv_field("game_modes", result.selector.game_modes);
-    parse_csv_field("regions", result.selector.regions);
-    parse_csv_field("shards", result.selector.shards);
-    parse_csv_field("tags", result.selector.tags);
-
-    return result;
-}
 
 std::string make_lua_env_name(const std::filesystem::path& scripts_dir,
                               const std::filesystem::path& script_path) {
@@ -286,8 +153,8 @@ int run_server(int argc, char** argv) {
     std::shared_ptr<core::scripting::LuaRuntime> lua_runtime;
     std::shared_ptr<asio::strand<asio::io_context::executor_type>> lua_reload_strand;
     std::shared_ptr<core::scripting::ScriptWatcher> lua_script_watcher;
-        std::shared_ptr<server::core::discovery::IInstanceStateBackend> registry_backend;
-        server::core::discovery::InstanceRecord registry_record{};
+    std::shared_ptr<server::core::state::IInstanceStateBackend> registry_backend;
+    server::core::state::InstanceRecord registry_record{};
     bool registry_registered = false;
     auto engine = server::core::app::EngineBuilder("server_app").build();
     auto& app_host = engine.host();
@@ -312,14 +179,7 @@ int run_server(int argc, char** argv) {
             return 1;
         }
 
-        g_shutdown_drain_completed_total.store(0, std::memory_order_relaxed);
-        g_shutdown_drain_timeout_total.store(0, std::memory_order_relaxed);
-        g_shutdown_drain_forced_close_total.store(0, std::memory_order_relaxed);
-        g_shutdown_drain_remaining_connections.store(0, std::memory_order_relaxed);
-        g_shutdown_drain_elapsed_ms.store(0, std::memory_order_relaxed);
-        g_shutdown_drain_timeout_ms.store(
-            static_cast<long long>(config.shutdown_drain_timeout_ms),
-            std::memory_order_relaxed);
+        reset_bootstrap_shutdown_drain_metrics(config.shutdown_drain_timeout_ms);
 
         // readiness는 "필수 의존성이 실제로 준비됐는가"를 뜻한다.
         // DB는 항상 필수이고, Redis는 구성된 경우에만 필수로 선언해 환경별 의미를 고정한다.
@@ -826,7 +686,7 @@ int run_server(int argc, char** argv) {
                 };
             const auto apply_runtime_assignment =
                 [base_shard = config.server_shard, base_tags = config.server_tags, load_runtime_assignment](
-                    server::core::discovery::InstanceRecord& record) {
+                    server::core::state::InstanceRecord& record) {
                     const auto assignment = load_runtime_assignment();
                     record.shard = server::app::resolve_topology_runtime_assignment_shard(base_shard, assignment);
                     record.tags = server::app::apply_topology_runtime_assignment_tags(base_tags, assignment);
@@ -1036,364 +896,40 @@ int run_server(int argc, char** argv) {
             }
         }
 
-        admin_auth::VerifyOptions admin_verify_options;
-        admin_verify_options.ttl_ms = config.admin_command_ttl_ms;
-        admin_verify_options.future_skew_ms = config.admin_command_future_skew_ms;
-        auto admin_command_verifier = std::make_shared<admin_auth::Verifier>(
-            config.admin_command_signing_secret,
-            admin_verify_options);
-
-        server::core::discovery::InstanceRecord local_instance_selector_context{};
-        local_instance_selector_context.instance_id = config.server_instance_id;
-        local_instance_selector_context.role = config.server_role;
-        local_instance_selector_context.game_mode = config.server_game_mode;
-        local_instance_selector_context.region = config.server_region;
-        local_instance_selector_context.shard = config.server_shard;
-        local_instance_selector_context.tags = config.server_tags;
-
-        if (config.use_redis_pubsub && config.admin_command_signing_secret.empty()) {
-            corelog::warn("ADMIN_COMMAND_SIGNING_SECRET is empty; admin fanout commands will be rejected");
-        }
+        auto admin_command_verifier = make_admin_command_verifier(config);
+        const auto local_instance_selector_context = make_local_instance_selector_context(config);
 
         // 10. Redis Pub/Sub 구독 (분산 채팅용)
-        if (redis && config.use_redis_pubsub) {
-            // 통합 패턴 구독 (RedisClientImpl이 단일 구독만 지원하므로)
-            std::string pattern_all = config.redis_channel_prefix + std::string("fanout:*");
-            std::string gwid = config.gateway_id;
-
-            const std::string refresh_prefix = config.redis_channel_prefix + "fanout:refresh:";
-            const std::string room_prefix = config.redis_channel_prefix + "fanout:room:";
-
-            enum class ExactFanoutChannel {
-                kWhisper,
-                kAdminDisconnect,
-                kAdminAnnounce,
-                kAdminSettings,
-                kAdminModeration,
-            };
-
-            using ExactChannelEntry = std::pair<std::string, ExactFanoutChannel>;
-            const std::array<ExactChannelEntry, 5> exact_channels{{
-                {config.redis_channel_prefix + "fanout:whisper", ExactFanoutChannel::kWhisper},
-                {config.redis_channel_prefix + "fanout:admin:disconnect", ExactFanoutChannel::kAdminDisconnect},
-                {config.redis_channel_prefix + "fanout:admin:announce", ExactFanoutChannel::kAdminAnnounce},
-                {config.redis_channel_prefix + "fanout:admin:settings", ExactFanoutChannel::kAdminSettings},
-                {config.redis_channel_prefix + "fanout:admin:moderation", ExactFanoutChannel::kAdminModeration},
-            }};
-
-            redis->start_psubscribe(pattern_all,
-                                    [&chat,
-                                     gwid,
-                                     refresh_prefix,
-                                     room_prefix,
-                                     exact_channels,
-                                     admin_command_verifier,
-                                     local_instance_selector_context](const std::string& channel, const std::string& message) {
-            // 1. self-echo 방지
-            // 자신이 방금 fanout한 메시지를 다시 처리하면 로컬 사용자가 중복 이벤트를 보게 된다.
-            if (message.rfind("gw=", 0) == 0) {
-                    auto nl = message.find('\n');
-                    std::string from;
-                    if (nl != std::string::npos) {
-                        from = message.substr(3, nl - 3);
-                    } else {
-                        from = message.substr(3);
-                    }
-                    if (from == gwid) {
-                        // g_self_echo_drop_total++;
-                        return;
-                    }
-
-                    // 2. 채널 분기 처리
-                    // 채널 의미를 여기서 명시적으로 갈라 두어야 room fanout, refresh, admin 명령이 서로 다른 검증 규칙을 유지할 수 있다.
-                    if (channel.rfind(refresh_prefix, 0) == 0) {
-                        // refresh 알림은 payload보다 "로컬 스냅샷을 다시 보라"는 트리거 의미가 크다.
-                        std::string room = channel.substr(refresh_prefix.size());
-                        chat.broadcast_refresh_local(room);
-                        corelog::info("DEBUG: Received refresh notify for room: " + room + " from " + from);
-                        return;
-                    }
-
-                    if (channel.rfind(room_prefix, 0) == 0) {
-                        // room fanout은 이미 발신 측에서 room 결정이 끝난 payload를 재전송하는 단계다.
-                        if (nl == std::string::npos) {
-                            return; // 채팅은 payload 필수
-                        }
-                        std::string payload = message.substr(nl + 1);
-                        std::string room = channel.substr(room_prefix.size());
-                        std::vector<std::uint8_t> body(payload.begin(), payload.end());
-                        chat.broadcast_room(room, body, nullptr);
-                        g_subscribe_total++;
-                        return;
-                    }
-
-                    std::optional<ExactFanoutChannel> exact_match;
-                    for (const auto& [name, kind] : exact_channels) {
-                        if (channel == name) {
-                            exact_match = kind;
-                            break;
-                        }
-                    }
-
-                    if (!exact_match.has_value()) {
-                        return;
-                    }
-
-                    if (nl == std::string::npos) {
-                        return;
-                    }
-
-                    const std::string payload = message.substr(nl + 1);
-                    std::unordered_map<std::string, std::string> admin_fields;
-                    if (*exact_match != ExactFanoutChannel::kWhisper) {
-                        admin_fields = parse_kv_lines(payload);
-                        const admin_auth::VerifyResult verify_result = admin_command_verifier->verify(admin_fields);
-                        if (verify_result != admin_auth::VerifyResult::kOk) {
-                            g_admin_command_verify_fail_total.fetch_add(1, std::memory_order_relaxed);
-
-                            switch (verify_result) {
-                            case admin_auth::VerifyResult::kReplay:
-                                g_admin_command_verify_replay_total.fetch_add(1, std::memory_order_relaxed);
-                                break;
-                            case admin_auth::VerifyResult::kSignatureMismatch:
-                                g_admin_command_verify_signature_mismatch_total.fetch_add(1, std::memory_order_relaxed);
-                                break;
-                            case admin_auth::VerifyResult::kExpired:
-                                g_admin_command_verify_expired_total.fetch_add(1, std::memory_order_relaxed);
-                                break;
-                            case admin_auth::VerifyResult::kFuture:
-                                g_admin_command_verify_future_total.fetch_add(1, std::memory_order_relaxed);
-                                break;
-                            case admin_auth::VerifyResult::kMissingField:
-                                g_admin_command_verify_missing_field_total.fetch_add(1, std::memory_order_relaxed);
-                                break;
-                            case admin_auth::VerifyResult::kInvalidIssuedAt:
-                                g_admin_command_verify_invalid_issued_at_total.fetch_add(1, std::memory_order_relaxed);
-                                break;
-                            case admin_auth::VerifyResult::kSecretNotConfigured:
-                                g_admin_command_verify_secret_not_configured_total.fetch_add(1, std::memory_order_relaxed);
-                                break;
-                            case admin_auth::VerifyResult::kOk:
-                                break;
-                            }
-
-                            const auto request_id_it = admin_fields.find("request_id");
-                            const auto actor_it = admin_fields.find("actor");
-                            const std::string request_id = request_id_it == admin_fields.end() ? std::string("unknown")
-                                                                                                 : request_id_it->second;
-                            const std::string actor = actor_it == admin_fields.end() ? std::string("unknown")
-                                                                                       : actor_it->second;
-                            corelog::warn(
-                                "admin command rejected channel=" + channel
-                                + " reason=" + admin_auth::to_string(verify_result)
-                                + " request_id=" + request_id
-                                + " actor=" + actor);
-                            return;
-                        }
-
-                        g_admin_command_verify_ok_total.fetch_add(1, std::memory_order_relaxed);
-
-                        const AdminSelectorParseResult selector_parse = parse_admin_selector_fields(admin_fields);
-                        if (selector_parse.selector_specified) {
-                            bool target_match = false;
-                            if (selector_parse.valid) {
-                        target_match = server::core::discovery::matches_selector(
-                                    local_instance_selector_context,
-                                    selector_parse.selector);
-                            }
-
-                            if (!target_match) {
-                                g_admin_command_target_mismatch_total.fetch_add(1, std::memory_order_relaxed);
-                                const auto request_id_it = admin_fields.find("request_id");
-                                const auto actor_it = admin_fields.find("actor");
-                                const std::string request_id = request_id_it == admin_fields.end()
-                                    ? std::string("unknown")
-                                    : request_id_it->second;
-                                const std::string actor = actor_it == admin_fields.end()
-                                    ? std::string("unknown")
-                                    : actor_it->second;
-
-                                std::string layer = "invalid";
-                                if (selector_parse.valid) {
-                        layer = std::string(server::core::discovery::selector_policy_layer_name(
-                            server::core::discovery::classify_selector_policy_layer(selector_parse.selector)));
-                                }
-
-                                corelog::info(
-                                    "admin command ignored by target selector channel=" + channel
-                                    + " request_id=" + request_id
-                                    + " actor=" + actor
-                                    + " layer=" + layer
-                                    + " instance_id=" + local_instance_selector_context.instance_id);
-                                return;
-                            }
-                        }
-                    }
-
-                    switch (*exact_match) {
-                    case ExactFanoutChannel::kWhisper: {
-                        std::vector<std::uint8_t> body(payload.begin(), payload.end());
-                        chat.deliver_remote_whisper(body);
-                        g_subscribe_total++;
-                        return;
-                    }
-                    case ExactFanoutChannel::kAdminDisconnect: {
-                        const auto& fields = admin_fields;
-
-                        auto it = fields.find("client_ids");
-                        if (it == fields.end() || it->second.empty()) {
-                            return;
-                        }
-
-                        auto users = split_csv(it->second);
-                        if (users.empty()) {
-                            return;
-                        }
-
-                        std::string reason = "Disconnected by administrator";
-                        if (const auto reason_it = fields.find("reason"); reason_it != fields.end() && !reason_it->second.empty()) {
-                            reason = reason_it->second;
-                        }
-
-                        chat.admin_disconnect_users(users, reason);
-                        g_subscribe_total++;
-                        return;
-                    }
-                    case ExactFanoutChannel::kAdminAnnounce: {
-                        const auto& fields = admin_fields;
-
-                        const auto text_it = fields.find("text");
-                        if (text_it == fields.end() || text_it->second.empty()) {
-                            return;
-                        }
-
-                        chat.admin_broadcast_notice(text_it->second);
-                        g_subscribe_total++;
-                        return;
-                    }
-                    case ExactFanoutChannel::kAdminSettings: {
-                        const auto& fields = admin_fields;
-
-                        const auto key_it = fields.find("key");
-                        const auto value_it = fields.find("value");
-                        if (key_it == fields.end() || value_it == fields.end() || key_it->second.empty() || value_it->second.empty()) {
-                            return;
-                        }
-
-                        chat.admin_apply_runtime_setting(key_it->second, value_it->second);
-                        g_subscribe_total++;
-                        return;
-                    }
-                    case ExactFanoutChannel::kAdminModeration: {
-                        const auto& fields = admin_fields;
-
-                        const auto op_it = fields.find("op");
-                        const auto users_it = fields.find("client_ids");
-                        if (op_it == fields.end() || users_it == fields.end() || op_it->second.empty() || users_it->second.empty()) {
-                            return;
-                        }
-
-                        auto users = split_csv(users_it->second);
-                        if (users.empty()) {
-                            return;
-                        }
-
-                        std::uint32_t duration_sec = 0;
-                        if (const auto duration_it = fields.find("duration_sec"); duration_it != fields.end() && !duration_it->second.empty()) {
-                            try {
-                                duration_sec = static_cast<std::uint32_t>(std::stoul(duration_it->second));
-                            } catch (...) {
-                                core::runtime_metrics::record_exception_ignored();
-                                corelog::warn(
-                                    "component=server_bootstrap error_code=INVALID_DURATION admin moderation duration parse failed duration_sec="
-                                    + duration_it->second);
-                                duration_sec = 0;
-                            }
-                        }
-
-                        std::string reason;
-                        if (const auto reason_it = fields.find("reason"); reason_it != fields.end()) {
-                            reason = reason_it->second;
-                        }
-
-                        chat.admin_apply_user_moderation(op_it->second, users, duration_sec, reason);
-                        g_subscribe_total++;
-                        return;
-                    }
-                    }
-
-                    return;
-                }
-            });
-
-            corelog::info(std::string("Subscribed Redis pattern: ") + pattern_all);
-        }
+        start_chat_fanout_subscription(
+            chat,
+            redis,
+            config,
+            admin_command_verifier,
+            local_instance_selector_context);
 
         // 11. metrics/admin HTTP 시작
         // 운영 면은 데이터 plane과 거의 같이 열어 두되, ready 판정은 AppHost가 따로 쥔다.
         // 그래야 관측은 일찍 가능하면서도 실제 트래픽 수용 시점은 엄격하게 제어할 수 있다.
-        engine.start_admin_http(
-            config.metrics_port,
-            []() { return render_metrics_text(); },
-            []() { return render_logs_text(); });
+        start_server_admin_http(engine, config.metrics_port);
 
         // 12. 종료 시그널 대기 및 shutdown 순서 등록
         // drain -> accept 중지 -> 워커/타이머 정리 순서를 명시해 새 연결 유입과 기존 연결 정리를 섞지 않는다.
-        engine.add_shutdown_step("stop workers", [&]() { workers.Stop(); });
-        engine.add_shutdown_step("stop io_context", [&]() { io.stop(); });
-        engine.add_shutdown_step("drain active sessions", [&]() {
-            const std::uint64_t timeout_ms = config.shutdown_drain_timeout_ms;
-            const std::uint64_t poll_ms = std::max<std::uint64_t>(1, config.shutdown_drain_poll_ms);
-
-            g_shutdown_drain_timeout_ms.store(static_cast<long long>(timeout_ms), std::memory_order_relaxed);
-
-            const auto started_at = std::chrono::steady_clock::now();
-            for (;;) {
-                const std::uint64_t remaining = core_internal::connection_count(state);
-                g_shutdown_drain_remaining_connections.store(remaining, std::memory_order_relaxed);
-
-                const auto now = std::chrono::steady_clock::now();
-                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - started_at).count();
-                g_shutdown_drain_elapsed_ms.store(elapsed, std::memory_order_relaxed);
-
-                if (remaining == 0) {
-                    g_shutdown_drain_completed_total.fetch_add(1, std::memory_order_relaxed);
-                    corelog::info("Shutdown drain completed within timeout");
-                    break;
-                }
-
-                if (elapsed >= static_cast<long long>(timeout_ms)) {
-                    // drain이 무한정 기다리면 orchestration 종료가 멈추므로,
-                    // timeout 이후에는 남은 연결 수를 기록하고 상위 레이어가 다음 종료 단계로 넘어가게 한다.
-                    g_shutdown_drain_timeout_total.fetch_add(1, std::memory_order_relaxed);
-                    g_shutdown_drain_forced_close_total.fetch_add(remaining, std::memory_order_relaxed);
-                    corelog::warn(
-                        "Shutdown drain timeout reached; forcing close of remaining connections="
-                        + std::to_string(remaining));
-                    break;
-                }
-
-                std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
-            }
-        });
-        engine.add_shutdown_step("stop acceptor", [&]() { acceptor->stop(); });
-        engine.add_shutdown_step("stop db worker pool", [&]() {
-            core_internal::stop_db_worker_pool(db_workers);
-        });
-        engine.add_shutdown_step("reset lua runtime", [&]() {
-            if (lua_runtime) {
-                lua_runtime->reset();
-            }
-        });
-        engine.add_shutdown_step("stop redis pubsub", [&]() {
-            try { if (redis) redis->stop_psubscribe(); } catch (...) { core::runtime_metrics::record_exception_ignored(); }
-        });
-        engine.add_shutdown_step("deregister instance", [&]() {
-            if (registry_registered && registry_backend) {
-                try { registry_backend->remove(registry_record.instance_id); } catch (...) { core::runtime_metrics::record_exception_ignored(); }
-                registry_registered = false;
-            }
-        });
+        register_server_shutdown_steps(
+            engine,
+            ServerShutdownContext{
+                .workers = &workers,
+                .io = &io,
+                .connection_state = state,
+                .acceptor = acceptor,
+                .db_workers = db_workers,
+                .lua_runtime = lua_runtime,
+                .redis = redis,
+                .registry_registered = &registry_registered,
+                .registry_backend = registry_backend,
+                .registry_record = &registry_record,
+                .shutdown_drain_timeout_ms = config.shutdown_drain_timeout_ms,
+                .shutdown_drain_poll_ms = config.shutdown_drain_poll_ms,
+            });
 
         engine.install_asio_termination_signals(io, {});
 

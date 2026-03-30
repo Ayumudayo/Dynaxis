@@ -43,6 +43,15 @@ def wait_for_world_endpoint(
     raise RuntimeError(f"timeout waiting for {path}: {last_payload}")
 
 
+def wait_for_world_inventory(base_url: str, predicate, *, timeout_seconds: float) -> dict:
+    return wait_for_world_endpoint(
+        base_url,
+        "/api/v1/worlds?limit=100",
+        predicate,
+        timeout_seconds=timeout_seconds,
+    )
+
+
 def delete_world_endpoint(base_url: str, path: str) -> None:
     status, payload = request_json_http(base_url, path, method="DELETE")
     if status != 200:
@@ -181,8 +190,23 @@ def run_default_migration_closure(base_url: str) -> None:
     )
 
 
-def run_same_world_transfer_closure(base_url: str) -> None:
-    worlds_payload = load_json_http(base_url, "/api/v1/worlds?limit=100")
+def run_same_world_transfer_closure(base_url: str, timeout_seconds: float) -> None:
+    worlds_payload = wait_for_world_inventory(
+        base_url,
+        lambda payload: any(
+            isinstance(world, dict)
+            and len(
+                [
+                    item
+                    for item in world.get("instances", [])
+                    if isinstance(item, dict) and item.get("instance_id") and item.get("ready") is True
+                ]
+            )
+            >= 2
+            for world in payload.get("data", {}).get("items", [])
+        ),
+        timeout_seconds=timeout_seconds,
+    )
     source_world, replacement_owner_instance_id = select_same_world_transfer(worlds_payload)
     source_world_id = str(source_world["world_id"])
     drain_path = f"/api/v1/worlds/{source_world_id}/drain"
@@ -331,7 +355,7 @@ def run_stage(
                 if scenario_name == "default-migration-closure":
                     run_default_migration_closure(base_url)
                 elif scenario_name == "same-world-transfer-closure":
-                    run_same_world_transfer_closure(base_url)
+                    run_same_world_transfer_closure(base_url, float(timeout_seconds))
                 else:
                     raise RuntimeError(f"unknown scenario: {scenario_name}")
         finally:

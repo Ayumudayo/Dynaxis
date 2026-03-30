@@ -18,6 +18,8 @@
 #include <server/core/util/service_registry.hpp>
 #include <server/protocol/game_opcodes.hpp>
 #include <gateway/gateway_app.hpp>
+#include <gateway/transport_session.hpp>
+#include "gateway_backend_connection.hpp"
 
 #include <chrono>
 #include <deque>
@@ -91,8 +93,8 @@ public:
 } // namespace
 
 TEST(GatewayTransportAbstractionTest, BackendConnectionImplementsTransportSession) {
-    EXPECT_TRUE((std::is_base_of_v<gateway::GatewayApp::ITransportSession,
-                                   gateway::GatewayApp::BackendConnection>));
+    EXPECT_TRUE((std::is_base_of_v<gateway::ITransportSession,
+                                   gateway::BackendConnection>));
 }
 
 TEST(DispatcherTest, RegisterAndDispatch) {

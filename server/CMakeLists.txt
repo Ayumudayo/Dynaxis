@@ -21,10 +21,16 @@ add_library(server_app_backends STATIC
 )
 target_include_directories(server_app_backends PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(server_app_backends PUBLIC server_core)
-target_link_libraries(server_app_backends PRIVATE server_storage_pg_factory server_storage_redis_factory)
+target_link_libraries(server_app_backends PRIVATE server_storage_pg_factory infra_redis_factory)
 
 add_library(server_chat_runtime STATIC
+    src/chat/chat_blacklist_state.cpp
+    src/chat/chat_command_authorization.cpp
+    src/chat/chat_message_delivery.cpp
+    src/chat/chat_slash_commands.cpp
+    src/chat/chat_spam_moderation.cpp
     src/chat/chat_service_core.cpp
+    src/chat/chat_room_state.cpp
     src/chat/chat_hook_plugin_manager.cpp
     src/chat/chat_hook_plugin_chain.cpp
     src/scripting/chat_lua_bindings.cpp
@@ -43,24 +49,22 @@ if (TARGET nlohmann_json::nlohmann_json)
     target_link_libraries(server_chat_runtime PRIVATE nlohmann_json::nlohmann_json)
 endif()
 
-if (TARGET generate_game_opcodes)
-    add_dependencies(server_chat_runtime generate_game_opcodes)
-endif()
-
 add_library(server_fps_runtime STATIC
     src/fps/fps_service.cpp
 )
 target_include_directories(server_fps_runtime PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_include_directories(server_fps_runtime PRIVATE ${CMAKE_BINARY_DIR}/proto)
 target_link_libraries(server_fps_runtime PUBLIC server_core wire_proto)
-if (TARGET generate_game_opcodes)
-    add_dependencies(server_fps_runtime generate_game_opcodes)
-endif()
 
 add_executable(server_app
     src/main.cpp
+    src/app/admin_fanout_subscription.cpp
     src/app/bootstrap.cpp
+    src/app/chat_metrics_text.cpp
     src/app/metrics_server.cpp
+    src/app/runtime_metrics_text.cpp
+    src/app/server_shutdown.cpp
+    src/app/server_runtime_state.cpp
     src/app/router.cpp
 )
 target_include_directories(server_app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
@@ -72,20 +76,6 @@ if (TARGET nlohmann_json::nlohmann_json)
 endif()
 # protobuf 생성 헤더 경로 추가
 target_include_directories(server_app PRIVATE ${CMAKE_BINARY_DIR}/proto)
-
-# Game Opcodes 생성
-if (Python3_Interpreter_FOUND)
-    set(GAME_OPCODES_JSON ${CMAKE_SOURCE_DIR}/server/protocol/game_opcodes.json)
-    set(GAME_GENERATED_HEADER ${CMAKE_SOURCE_DIR}/core/include/server/protocol/game_opcodes.hpp)
-    add_custom_command(
-        OUTPUT ${GAME_GENERATED_HEADER}
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/gen_opcodes.py ${GAME_OPCODES_JSON} ${GAME_GENERATED_HEADER}
-        DEPENDS ${GAME_OPCODES_JSON} ${CMAKE_SOURCE_DIR}/tools/gen_opcodes.py
-        COMMENT "Generating protocol game opcodes header"
-        VERBATIM)
-    add_custom_target(generate_game_opcodes DEPENDS ${GAME_GENERATED_HEADER})
-    add_dependencies(server_app generate_game_opcodes)
-endif()
 
 # Runtime DLL 자동 복사(Windows)
 if(WIN32 AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.21")
@@ -138,67 +128,6 @@ if (NOT TARGET libpqxx::pqxx)
 endif()
 target_link_libraries(server_storage_pg_objects PUBLIC libpqxx::pqxx)
 target_link_libraries(server_storage_pg_factory PUBLIC libpqxx::pqxx)
-
-# Redis client/pool (skeleton)
-add_library(server_storage_redis_objects OBJECT
-    src/storage/redis/client.cpp
-)
-target_include_directories(server_storage_redis_objects PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
-target_link_libraries(server_storage_redis_objects PUBLIC server_core::server_core)
-
-add_library(server_storage_redis_factory STATIC
-    src/storage/redis/client_factory.cpp
-    $<TARGET_OBJECTS:server_storage_redis_objects>
-)
-add_library(server_storage_redis_factory::server_storage_redis_factory ALIAS server_storage_redis_factory)
-target_include_directories(server_storage_redis_factory PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-)
-target_link_libraries(server_storage_redis_factory PUBLIC server_core::server_core)
-
-# Compatibility umbrella for broader legacy link points.
-add_library(server_storage_redis INTERFACE)
-target_link_libraries(server_storage_redis INTERFACE server_storage_redis_factory)
-
-# Try to find redis-plus-plus exported targets
-find_package(redis++ CONFIG QUIET)
-if (NOT TARGET redis++::redis++)
-    if (TARGET redis++)
-        add_library(redis++::redis++ INTERFACE IMPORTED)
-        target_link_libraries(redis++::redis++ INTERFACE redis++)
-    elseif (TARGET redis++_static::redis++_static)
-        add_library(redis++::redis++ INTERFACE IMPORTED)
-        target_link_libraries(redis++::redis++ INTERFACE redis++_static::redis++_static)
-    elseif (TARGET redis++_static)
-        add_library(redis++::redis++ INTERFACE IMPORTED)
-        target_link_libraries(redis++::redis++ INTERFACE redis++_static)
-    endif()
-endif()
-if (TARGET redis++::redis++)
-    target_link_libraries(server_storage_redis_objects PUBLIC redis++::redis++)
-    target_link_libraries(server_storage_redis_factory PUBLIC redis++::redis++)
-    target_compile_definitions(server_storage_redis_factory PUBLIC HAVE_REDIS_PLUS_PLUS)
-    target_compile_definitions(server_storage_redis_objects PUBLIC HAVE_REDIS_PLUS_PLUS)
-elseif (TARGET redis++)
-    # fallback: some older exports may use un-namespaced target
-    target_link_libraries(server_storage_redis_objects PUBLIC redis++)
-    target_link_libraries(server_storage_redis_factory PUBLIC redis++)
-    target_compile_definitions(server_storage_redis_factory PUBLIC HAVE_REDIS_PLUS_PLUS)
-    target_compile_definitions(server_storage_redis_objects PUBLIC HAVE_REDIS_PLUS_PLUS)
-elseif (TARGET redis++_static::redis++_static)
-    target_link_libraries(server_storage_redis_objects PUBLIC redis++_static::redis++_static)
-    target_link_libraries(server_storage_redis_factory PUBLIC redis++_static::redis++_static)
-    target_compile_definitions(server_storage_redis_factory PUBLIC HAVE_REDIS_PLUS_PLUS)
-    target_compile_definitions(server_storage_redis_objects PUBLIC HAVE_REDIS_PLUS_PLUS)
-elseif (TARGET redis++_static)
-    target_link_libraries(server_storage_redis_objects PUBLIC redis++_static)
-    target_link_libraries(server_storage_redis_factory PUBLIC redis++_static)
-    target_compile_definitions(server_storage_redis_factory PUBLIC HAVE_REDIS_PLUS_PLUS)
-    target_compile_definitions(server_storage_redis_objects PUBLIC HAVE_REDIS_PLUS_PLUS)
-else()
-    message(WARNING "redis-plus-plus not found ? Redis client stays as stub")
-endif()
 
 add_library(server_state_common STATIC
     src/state/instance_registry_common.cpp
@@ -256,32 +185,5 @@ install(FILES
         "${CMAKE_CURRENT_LIST_DIR}/include/server/storage/unit_of_work.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/include/server/storage/repositories.hpp"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/server/storage")
-
-configure_package_config_file(
-    "${CMAKE_CURRENT_LIST_DIR}/cmake/server_storage_redis_factoryConfig.cmake.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/server_storage_redis_factoryConfig.cmake"
-    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/server_storage_redis_factory"
-)
-write_basic_package_version_file(
-    "${CMAKE_CURRENT_BINARY_DIR}/server_storage_redis_factoryConfigVersion.cmake"
-    VERSION "${SERVER_FACTORY_PACKAGE_VERSION}"
-    COMPATIBILITY SameMajorVersion
-)
-install(TARGETS server_storage_redis_factory
-        EXPORT server_storage_redis_factoryTargets
-        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
-install(EXPORT server_storage_redis_factoryTargets
-        FILE server_storage_redis_factoryTargets.cmake
-        NAMESPACE server_storage_redis_factory::
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/server_storage_redis_factory")
-install(FILES
-        "${CMAKE_CURRENT_BINARY_DIR}/server_storage_redis_factoryConfig.cmake"
-        "${CMAKE_CURRENT_BINARY_DIR}/server_storage_redis_factoryConfigVersion.cmake"
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/server_storage_redis_factory")
-install(FILES
-        "${CMAKE_CURRENT_LIST_DIR}/include/server/storage/redis/factory.hpp"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/server/storage/redis")
 
 add_subdirectory(plugins)

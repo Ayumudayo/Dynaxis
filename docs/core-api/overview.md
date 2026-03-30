@@ -41,6 +41,7 @@
 - 공개 소비자는 `[Stable]`로 분류된 헤더만 사용합니다.
 - include 형식은 `#include "server/core/..."` 또는 `<server/core/...>`를 사용합니다.
 - 구현 경로(`core/src/**`)나 `Internal` 헤더를 포함하지 않습니다.
+- generated public protocol/wire surface의 canonical tracked entrypoint는 `server/core/protocol/system_opcodes.hpp`, `server/protocol/game_opcodes.hpp`, `server/wire/codec.hpp`이며 실제 generated payload는 build/install tree의 `server/generated/**` 아래에서 제공됩니다.
 - realtime public surface의 canonical path/namespace는 `server/core/realtime/**`와 `server::core::realtime`입니다.
 - discovery public surface의 canonical path/namespace는 `server/core/discovery/**`와 `server::core::discovery`입니다.
 - `server/core/state/**`는 underlying/internal ownership 경로로 남으며 새 consumer의 기준 표면이 아닙니다.

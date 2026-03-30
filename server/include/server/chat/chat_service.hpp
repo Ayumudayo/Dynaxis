@@ -1,42 +1,32 @@
 #pragma once
 
-#include <atomic>
 #include <memory>
-#include <mutex>
 #include <optional>
-#include <set>
 #include <span>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 #include <cstdint>
-#include <array>
-#include <chrono>
-#include <deque>
 
 #include <boost/asio.hpp>
 
 #include "server/core/net/session.hpp"
-#include "server/core/worlds/migration.hpp"
-#include "server/core/worlds/topology.hpp"
-#include "server/core/protocol/system_opcodes.hpp"
-#include "server/core/discovery/world_lifecycle_policy.hpp"
-#include "server/core/storage/redis/client.hpp"
-#include "server/protocol/game_opcodes.hpp"
-#include "server/chat/chat_hook_plugin_abi.hpp"
+#include "server/chat/chat_metrics.hpp"
 #include "server/scripting/chat_lua_bindings.hpp"
-#include "wire.pb.h"
+
+enum class SessionEventKindV2 : std::uint32_t;
 
 namespace server::core { class JobQueue; }
 namespace server::core::scripting {
 class LuaRuntime;
 struct LuaHookContext;
 }
+namespace server::core::storage::redis { class IRedisClient; }
 namespace server::storage { class IRepositoryConnectionPool; }
 
 namespace server::app::chat {
+
+struct ChatServicePrivateAccess;
 
 /**
  * @brief `server_app`의 채팅 런타임을 한곳에서 조율하는 앱-로컬 서비스입니다.
@@ -64,7 +54,7 @@ namespace server::app::chat {
  *   공용 상태 컨테이너의 `mutex`로 보호해야 합니다.
  * - 이 규칙을 깨면 중복 로그인 정리, 방 멤버십, 스팸 제재, refresh 스냅샷이 서로 다른 시점을 보게 됩니다.
  */
-class ChatService : public server::app::scripting::ChatLuaHost {
+class ChatService : private server::app::scripting::ChatLuaHost {
 public:
     using NetSession = server::core::net::Session;
 
@@ -318,6 +308,7 @@ public:
                                      std::uint32_t duration_sec,
                                      const std::string& reason);
 
+private:
     std::optional<std::string> lua_get_user_name(std::uint32_t session_id) override;
     std::optional<std::string> lua_get_user_room(std::uint32_t session_id) override;
     std::vector<std::string> lua_get_room_users(std::string_view room_name) override;
@@ -338,284 +329,27 @@ public:
                       std::uint32_t duration_sec,
                       std::string_view reason) override;
 
-    /** @brief 단일 채팅 훅(hook) 플러그인 한 개의 상태와 재로드 결과를 담는 운영 스냅샷입니다. */
-    struct ChatHookPluginMetric {
-        /** @brief 훅(hook)별 호출 수, 오류 수, 지연 분포를 담는 세부 집계입니다. */
-        struct HookMetric {
-            std::string hook_name;
-            std::uint64_t calls_total{0};
-            std::uint64_t errors_total{0};
-            std::uint64_t duration_count{0};
-            std::uint64_t duration_sum_ns{0};
-            std::array<std::uint64_t, 12> duration_bucket_counts{};
-        };
-
-        std::string file;                        ///< 플러그인 파일 경로
-        bool loaded{false};                      ///< 현재 로드 성공 여부
-        std::string name;                        ///< 플러그인 이름
-        std::string version;                     ///< 플러그인 버전 문자열
-        std::uint64_t reload_attempt_total{0};  ///< reload 시도 누적 횟수
-        std::uint64_t reload_success_total{0};  ///< reload 성공 누적 횟수
-        std::uint64_t reload_failure_total{0};  ///< reload 실패 누적 횟수
-        std::vector<HookMetric> hook_metrics;    ///< hook별 호출/에러 누적 횟수
-    };
-
-    /** @brief 플러그인 체인 전체를 한 번에 관찰하기 위한 집계 스냅샷입니다. */
-    struct ChatHookPluginsMetrics {
-        bool enabled{false};                          ///< 플러그인 기능 활성화 여부
-        std::string mode;                             ///< 로드 모드(`none|dir|paths|single`)
-        std::vector<ChatHookPluginMetric> plugins;    ///< 플러그인별 메트릭 목록
-    };
-
+public:
     /**
      * @brief 현재 플러그인 로더 상태를 읽기 전용 스냅샷으로 반환합니다.
      * @return 플러그인 활성화 여부, 로드 모드, 개별 재로드 집계가 담긴 값 객체
      */
     ChatHookPluginsMetrics chat_hook_plugins_metrics() const;
 
-    /** @brief Lua 훅(hook) 하나가 얼마나 자주 실패하거나 자동 비활성화됐는지 보여 주는 집계입니다. */
-    struct LuaHookMetric {
-        std::string hook_name;
-        bool disabled{false};
-        std::uint64_t consecutive_failures{0};
-        std::uint64_t auto_disable_total{0};
-        std::uint64_t calls_total{0};
-        std::uint64_t errors_total{0};
-        std::uint64_t instruction_limit_hits{0};
-        std::uint64_t memory_limit_hits{0};
-    };
-
-    /** @brief 특정 훅(hook)과 특정 스크립트 조합의 누적 호출 결과를 담는 집계입니다. */
-    struct LuaScriptCallMetric {
-        std::string hook_name;
-        std::string script_name;
-        std::uint64_t calls_total{0};
-        std::uint64_t errors_total{0};
-    };
-
-    /** @brief Lua 런타임 전체 상태를 제어면과 메트릭 경로에서 읽기 쉽게 펼친 스냅샷입니다. */
-    struct LuaHooksMetrics {
-        bool enabled{false};
-        std::uint64_t auto_disable_threshold{0};
-        std::uint64_t reload_epoch{0};
-        std::size_t loaded_scripts{0};
-        std::size_t memory_used_bytes{0};
-        std::uint64_t calls_total{0};
-        std::uint64_t errors_total{0};
-        std::uint64_t instruction_limit_hits{0};
-        std::uint64_t memory_limit_hits{0};
-        std::vector<LuaHookMetric> hooks;
-        std::vector<LuaScriptCallMetric> script_calls;
-    };
-
     LuaHooksMetrics lua_hooks_metrics() const;
-
-    /** @brief continuity 임대(lease), world 복구, migration handoff의 성공/실패 누계를 묶은 집계입니다. */
-    struct ContinuityMetrics {
-        std::uint64_t lease_issue_total{0};
-        std::uint64_t lease_issue_fail_total{0};
-        std::uint64_t lease_resume_total{0};
-        std::uint64_t lease_resume_fail_total{0};
-        std::uint64_t state_write_total{0};
-        std::uint64_t state_write_fail_total{0};
-        std::uint64_t state_restore_total{0};
-        std::uint64_t state_restore_fallback_total{0};
-        std::uint64_t world_write_total{0};
-        std::uint64_t world_write_fail_total{0};
-        std::uint64_t world_restore_total{0};
-        std::uint64_t world_restore_fallback_total{0};
-        std::uint64_t world_restore_fallback_missing_world_total{0};
-        std::uint64_t world_restore_fallback_missing_owner_total{0};
-        std::uint64_t world_restore_fallback_owner_mismatch_total{0};
-        std::uint64_t world_restore_fallback_draining_replacement_unhonored_total{0};
-        std::uint64_t world_owner_write_total{0};
-        std::uint64_t world_owner_write_fail_total{0};
-        std::uint64_t world_owner_restore_total{0};
-        std::uint64_t world_owner_restore_fallback_total{0};
-        std::uint64_t world_migration_restore_total{0};
-        std::uint64_t world_migration_restore_fallback_total{0};
-        std::uint64_t world_migration_restore_fallback_target_world_missing_total{0};
-        std::uint64_t world_migration_restore_fallback_target_owner_missing_total{0};
-        std::uint64_t world_migration_restore_fallback_target_owner_not_ready_total{0};
-        std::uint64_t world_migration_restore_fallback_target_owner_mismatch_total{0};
-        std::uint64_t world_migration_restore_fallback_source_not_draining_total{0};
-        std::uint64_t world_migration_payload_room_handoff_total{0};
-        std::uint64_t world_migration_payload_room_handoff_fallback_total{0};
-    };
 
     ContinuityMetrics continuity_metrics() const;
 
 private:
     using Session = NetSession;
-    using WeakSession = std::weak_ptr<Session>;
-    using WeakLess = std::owner_less<WeakSession>;
-    // 방은 세션을 소유하지 않아야 합니다.
-    // 강한 참조를 잡으면 연결 종료 후에도 방 엔트리가 세션 수명을 붙들 수 있으므로 weak_ptr 집합을 씁니다.
-    using RoomSet = std::set<WeakSession, WeakLess>;
 
-    using Exec = boost::asio::io_context::executor_type;
-    // 방 단위 순서를 보장하려고 글로벌 락 하나로 모든 방을 막으면 hot room 하나가 전체를 지연시킵니다.
-    // 그래서 room별 strand를 두어 같은 방 안의 순서만 보장하고, 다른 방은 병렬성을 유지합니다.
-    using Strand = boost::asio::strand<Exec>;
+    /** @brief 채팅 런타임의 config/state/dispatch 세부 배치를 숨기는 단일 비공개 구현 상태입니다. */
+    struct Impl;
 
-    struct HookPluginState;
-
-    /** @brief write-behind 동작 파라미터 집합입니다. */
-    struct WriteBehindConfig {
-        bool enabled{false};
-        std::string stream_key{"session_events"};
-        std::optional<std::size_t> maxlen{};
-        bool approximate{true};
-    };
-
-    /** @brief presence 키 TTL/prefix 설정입니다. */
-    struct PresenceConfig {
-        unsigned int ttl{30}; // 초 단위. 너무 길면 유령 online 상태가 오래 남고, 너무 짧으면 재갱신 비용이 커집니다.
-        std::string prefix;
-    };
-
-    /**
-     * @brief reconnect/resume용 logical session continuity 설정입니다.
-     *
-     * transport 세션이 끊겨도 사용자 맥락을 잠시 이어 붙일 수 있도록
-     * lease TTL, Redis prefix, world ownership 키를 한군데로 묶습니다.
-     */
-    struct ContinuityConfig {
-        bool enabled{false};
-        unsigned int lease_ttl_sec{15 * 60};
-        std::string redis_prefix;
-        std::string default_world_id;
-        std::string current_owner_id;
-        std::string topology_runtime_assignment_key;
-    };
-
-    /**
-     * @brief 세션/방/제재 상태를 보관하는 서버 메모리 상태 컨테이너입니다.
-     *
-     * 상태를 한 구조체로 모으는 이유는 "어떤 맵을 어떤 락으로 보호하는가"를 분명히 하기 위해서입니다.
-     * 자료구조가 클래스 전역에 흩어지면 로그인/퇴장/제재가 서로 다른 락 규칙을 쓰기 쉬워집니다.
-     */
-    struct State {
-        /** @brief 만료 시각을 가진 제재 상태(뮤트/밴) 엔트리입니다. */
-        struct TimedPenalty {
-            std::chrono::steady_clock::time_point expires_at{};
-            std::string reason;
-        };
-
-        std::mutex mu;
-
-        // 방 관리
-        std::unordered_map<std::string, RoomSet> rooms;          // 방 이름 -> 참여 중인 세션 목록
-        std::unordered_map<std::string, std::string> room_ids;   // 방 이름 -> 방 UUID
-        std::unordered_map<std::string, std::string> room_passwords; // 방 이름 -> 비밀번호 해시
-        std::unordered_map<std::string, std::string> room_owners; // 방 이름 -> 소유자 닉네임
-        std::unordered_map<std::string, std::unordered_set<std::string>> room_invites; // 방 이름 -> 초대된 닉네임
-
-        // 유저/세션 관리
-        std::unordered_map<Session*, std::string> user;          // 세션 -> 닉네임
-        std::unordered_map<Session*, std::string> user_uuid;     // 세션 -> 유저 UUID
-        std::unordered_map<Session*, std::string> session_uuid;  // 세션 -> 세션 UUID
-        std::unordered_map<Session*, std::string> logical_session_id; // 세션 -> logical continuity session ID
-        std::unordered_map<Session*, std::uint64_t> logical_session_expires_unix_ms; // 세션 -> continuity lease 만료 시각
-        std::unordered_map<Session*, std::string> cur_world;     // 세션 -> 현재 소속 world residency ID
-        std::unordered_map<Session*, std::string> cur_room;      // 세션 -> 현재 참여 중인 방 이름
-        std::unordered_map<Session*, std::string> session_ip;     // 세션 -> 최근 로그인 IP
-        std::unordered_map<Session*, std::string> session_hwid_hash; // 세션 -> HWID 해시(로그인 토큰 기반)
-        std::unordered_map<std::string, std::string> user_last_ip; // 유저 -> 최근 로그인 IP
-        std::unordered_map<std::string, std::string> user_last_hwid_hash; // 유저 -> 최근 HWID 해시
-
-        // 세션 집합
-        std::unordered_set<Session*> authed;                     // 로그인한 세션 목록
-        std::unordered_set<Session*> guest;                      // 로그인하지 않은 게스트 세션
-
-        // 닉네임 역참조 (중복 로그인 방지 및 귓속말용)
-        std::unordered_map<std::string, RoomSet> by_user;        // 닉네임 -> 세션 목록 (다중 접속 허용 시 여러 개일 수 있음)
-        std::unordered_map<std::uint32_t, WeakSession> by_session_id; // 세션 ID -> 세션 weak 참조
-
-        // 제재/스팸 관리
-        std::unordered_map<std::string, TimedPenalty> muted_users; // 유저 -> 뮤트 만료/사유
-        std::unordered_map<std::string, TimedPenalty> banned_users; // 유저 -> 밴 만료/사유
-        std::unordered_map<std::string, std::chrono::steady_clock::time_point> banned_ips; // IP -> 밴 만료
-        std::unordered_map<std::string, std::chrono::steady_clock::time_point> banned_hwid_hashes; // HWID 해시 -> 밴 만료
-        std::unordered_map<std::string, std::deque<std::chrono::steady_clock::time_point>> spam_events; // 유저 -> 최근 메시지 시각
-        std::unordered_map<std::string, std::uint32_t> spam_violations; // 유저 -> 누적 위반 횟수
-        std::unordered_map<std::string, std::unordered_set<std::string>> user_blacklists; // 유저 -> 차단 대상 유저 집합
-    } state_;
+    std::unique_ptr<Impl> impl_;
 
     boost::asio::io_context* io_{};
     server::core::JobQueue& job_queue_;
-    std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool_{};
-    std::shared_ptr<server::core::storage::redis::IRedisClient> redis_{};
-    std::shared_ptr<server::core::scripting::LuaRuntime> lua_runtime_{};
-    std::shared_ptr<Strand> lua_execution_strand_{};
-    std::string gateway_id_{"gw-default"};
-    bool redis_pubsub_enabled_{false};
-    std::unordered_set<std::string> admin_users_{};
-    std::size_t spam_message_threshold_{6};
-    std::uint32_t spam_window_sec_{5};
-    std::uint32_t spam_mute_sec_{30};
-    std::uint32_t spam_ban_sec_{600};
-    std::uint32_t spam_ban_violation_threshold_{3};
-    std::uint64_t lua_auto_disable_threshold_{3};
-    std::uint64_t lua_hook_warn_budget_us_{0};
-    std::atomic<std::uint64_t> continuity_lease_issue_total_{0};
-    std::atomic<std::uint64_t> continuity_lease_issue_fail_total_{0};
-    std::atomic<std::uint64_t> continuity_lease_resume_total_{0};
-    std::atomic<std::uint64_t> continuity_lease_resume_fail_total_{0};
-    std::atomic<std::uint64_t> continuity_state_write_total_{0};
-    std::atomic<std::uint64_t> continuity_state_write_fail_total_{0};
-    std::atomic<std::uint64_t> continuity_state_restore_total_{0};
-    std::atomic<std::uint64_t> continuity_state_restore_fallback_total_{0};
-    std::atomic<std::uint64_t> continuity_world_write_total_{0};
-    std::atomic<std::uint64_t> continuity_world_write_fail_total_{0};
-    std::atomic<std::uint64_t> continuity_world_restore_total_{0};
-    std::atomic<std::uint64_t> continuity_world_restore_fallback_total_{0};
-    std::atomic<std::uint64_t> continuity_world_restore_fallback_missing_world_total_{0};
-    std::atomic<std::uint64_t> continuity_world_restore_fallback_missing_owner_total_{0};
-    std::atomic<std::uint64_t> continuity_world_restore_fallback_owner_mismatch_total_{0};
-    std::atomic<std::uint64_t> continuity_world_restore_fallback_draining_replacement_unhonored_total_{0};
-    std::atomic<std::uint64_t> continuity_world_owner_write_total_{0};
-    std::atomic<std::uint64_t> continuity_world_owner_write_fail_total_{0};
-    std::atomic<std::uint64_t> continuity_world_owner_restore_total_{0};
-    std::atomic<std::uint64_t> continuity_world_owner_restore_fallback_total_{0};
-    std::atomic<std::uint64_t> continuity_world_migration_restore_total_{0};
-    std::atomic<std::uint64_t> continuity_world_migration_restore_fallback_total_{0};
-    std::atomic<std::uint64_t> continuity_world_migration_restore_fallback_target_world_missing_total_{0};
-    std::atomic<std::uint64_t> continuity_world_migration_restore_fallback_target_owner_missing_total_{0};
-    std::atomic<std::uint64_t> continuity_world_migration_restore_fallback_target_owner_not_ready_total_{0};
-    std::atomic<std::uint64_t> continuity_world_migration_restore_fallback_target_owner_mismatch_total_{0};
-    std::atomic<std::uint64_t> continuity_world_migration_restore_fallback_source_not_draining_total_{0};
-    std::atomic<std::uint64_t> continuity_world_migration_payload_room_handoff_total_{0};
-    std::atomic<std::uint64_t> continuity_world_migration_payload_room_handoff_fallback_total_{0};
-    mutable std::mutex lua_hook_metrics_mu_;
-    std::unordered_map<std::string, std::uint64_t> lua_hook_consecutive_failures_;
-    std::unordered_map<std::string, std::uint64_t> lua_hook_auto_disable_total_;
-    std::unordered_map<std::string, std::uint64_t> lua_hook_calls_total_;
-    std::unordered_map<std::string, std::uint64_t> lua_hook_errors_total_;
-    std::unordered_map<std::string, std::uint64_t> lua_hook_instruction_limit_hits_;
-    std::unordered_map<std::string, std::uint64_t> lua_hook_memory_limit_hits_;
-    std::unordered_map<std::string, std::unordered_map<std::string, std::uint64_t>> lua_hook_script_calls_total_;
-    std::unordered_map<std::string, std::unordered_map<std::string, std::uint64_t>> lua_hook_script_errors_total_;
-    std::unordered_set<std::string> lua_hook_disabled_;
-    std::uint64_t lua_reload_epoch_{0};
-
-    std::unique_ptr<HookPluginState> hook_plugin_{};
-    
-    // 방별 메시지 순서를 보장하되, 전체 서버를 직렬화하지 않기 위한 room-local 실행기 테이블입니다.
-    std::unordered_map<std::string, std::shared_ptr<Strand>> room_strands_;
-    Strand& strand_for(const std::string& room);
-
-    WriteBehindConfig write_behind_;
-    PresenceConfig presence_{};
-    ContinuityConfig continuity_{};
-    
-    /** @brief 스냅샷/refresh 경로의 최근 메시지 캐시 파라미터입니다. */
-    struct HistoryConfig {
-        std::size_t recent_limit{20};
-        std::size_t max_list_len{200};
-        std::size_t fetch_factor{3};
-        unsigned int cache_ttl_sec{6 * 60 * 60};
-    } history_;
 
     // --- 내부 헬퍼 메서드 ---
     // public handler는 외부 계약을 유지하고, 실제 세부 단계는 아래 helper로 분리합니다.
@@ -648,6 +382,13 @@ private:
     std::string hash_hwid_token(std::string_view token) const;
     void send_whisper_result(Session& s, bool ok, const std::string& reason);
     std::string ensure_room_id_ci(const std::string& room_name);
+    bool try_handle_slash_command(std::shared_ptr<Session> session,
+                                  const std::string& current_room,
+                                  const std::string& text);
+    void dispatch_room_message(std::shared_ptr<Session> session,
+                               const std::string& current_room,
+                               const std::string& sender,
+                               const std::string& text);
 
     /** @brief persisted logical session lease 한 건의 복원/발급 결과입니다. */
     struct ContinuityLease {
@@ -661,16 +402,8 @@ private:
         bool resumed{false};
     };
 
-    /** @brief app-local migration payload에서 복원한 target room handoff 결과입니다. */
-    struct AppMigrationRoomHandoff {
-        bool recognized{false};
-        std::string room;
-    };
-
     // Redis 키 생성 규칙을 흩어 놓으면 읽기/쓰기 경로가 다른 네이밍을 써서 복원이 깨지기 쉽습니다.
     // 키 구성은 helper로 고정해 continuity와 캐시 스키마를 한곳에서 관리합니다.
-    std::string make_recent_list_key(const std::string& room_id) const;
-    std::string make_recent_message_key(std::uint64_t message_id) const;
     std::string make_continuity_room_key(const std::string& logical_session_id) const;
     std::string make_continuity_world_key(const std::string& logical_session_id) const;
     std::string make_continuity_world_owner_key(const std::string& world_id) const;
@@ -681,12 +414,7 @@ private:
     std::optional<std::string> load_continuity_room(const std::string& logical_session_id);
     std::optional<std::string> load_continuity_world(const std::string& logical_session_id);
     std::optional<std::string> load_continuity_world_owner(const std::string& world_id);
-    std::optional<server::core::discovery::WorldLifecyclePolicy> load_continuity_world_policy(const std::string& world_id);
-    std::optional<server::core::worlds::WorldMigrationEnvelope> load_continuity_world_migration(const std::string& world_id);
-    std::optional<server::core::worlds::TopologyActuationRuntimeAssignmentItem> load_topology_runtime_assignment() const;
     std::string current_runtime_default_world_id() const;
-    AppMigrationRoomHandoff resolve_app_world_migration_room_handoff(
-        const server::core::worlds::WorldMigrationEnvelope& migration) const;
     void persist_continuity_room(const std::string& logical_session_id,
                                  const std::string& room,
                                  std::uint64_t expires_unix_ms);
@@ -705,10 +433,6 @@ private:
 
     // refresh에서 저장소를 매번 다시 읽으면 재접속 폭주 시 Redis/DB가 먼저 흔들립니다.
     // 최근 메시지 캐시는 스냅샷 비용을 낮추되, TTL/길이를 제한해 메모리와 정합성 균형을 맞춥니다.
-    bool cache_recent_message(const std::string& room_id,
-                              const server::wire::v1::StateSnapshot::SnapshotMessage& message);
-    bool load_recent_messages_from_cache(const std::string& room_id,
-                                         std::vector<server::wire::v1::StateSnapshot::SnapshotMessage>& out);
     void handle_refresh(std::shared_ptr<Session> session);
 
     /** @brief Lua cold-hook 호출 결과를 기본 경로 제어용으로 정규화한 값입니다. */
@@ -742,10 +466,8 @@ private:
                                          std::string_view args,
                                          std::string& deny_reason);
 
-    friend struct ChatServiceHistoryTester;
-    friend struct ChatServiceContinuityTester;
+    friend struct ChatServicePrivateAccess;
 
-    static void collect_room_sessions(RoomSet& set, std::vector<std::shared_ptr<Session>>& out);
     std::shared_ptr<Session> find_session_by_id_locked(std::uint32_t session_id);
     std::vector<std::uint8_t> make_system_chat_body(std::string_view room, std::string_view text) const;
     bool broadcast_notice_to_all_sessions(std::string notice);

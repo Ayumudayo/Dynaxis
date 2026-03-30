@@ -6,7 +6,10 @@ class WindowsTestReworkContractsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.repo_root = Path(__file__).resolve().parents[2]
-        cls.tests_cmake = (cls.repo_root / "tests" / "CMakeLists.txt").read_text(encoding="utf-8")
+        cls.tests_cmake = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted((cls.repo_root / "tests").rglob("CMakeLists.txt"))
+        )
         cls.ci_workflow = (cls.repo_root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         cls.docs_build = (cls.repo_root / "docs" / "build.md").read_text(encoding="utf-8")
         cls.docs_tests = (cls.repo_root / "docs" / "tests.md").read_text(encoding="utf-8")

@@ -6,7 +6,7 @@
   - `server/core/storage_execution/connection_pool.hpp`
   - `server/core/storage_execution/db_worker_pool.hpp`
   - `server/core/storage_execution/retry_backoff.hpp`
-- shared Redis client contract, concrete Redis/Postgres adapter, chat repository DTO/UoW 계층은 계속 `[Internal]` 또는 app-owned로 남습니다.
+- shared Redis client contract, concrete Postgres adapter, chat repository DTO/UoW 계층은 계속 `[Internal]` 또는 app-owned로 남습니다.
 
 ## stable surface 범위
 - canonical `storage_execution/**` 헤더는 의도적으로 얇은 facade입니다. consumer는 이 경로를 public contract로 보고, underlying `storage/*` 헤더를 동등한 공개 API로 취급하면 안 됩니다.
@@ -21,19 +21,22 @@
 
 ## 의도적 비승격 영역
 - 채팅 도메인 repository 인터페이스와 DTO(`user/room/message/membership/session`)는 `server/storage/*`에 남습니다.
-- shared Redis client contract과 concrete Redis factory는 gateway/server/tools 공용 internal seam으로 유지됩니다.
+- shared Redis client contract은 gateway/server/tools 공용 internal seam으로 유지됩니다.
+- concrete Redis factory package의 canonical surface는 `infra_redis_factory`이며, source include는 계속 internal/app-owned입니다.
 - concrete Postgres 연결 구현과 repository-aware factory는 `server/storage/*` app-owned seam으로 유지됩니다.
 - stable consumer는 canonical `storage_execution` surface만 직접 사용하고, chat repository 계층이나 internal Redis client contract에 직접 의존하지 않아야 합니다.
 
 ## package-first 상태
 - storage factory package milestone은 계속 아래 seam을 기준으로 유지합니다.
   - `server_storage_pg_factory`
-  - `server_storage_redis_factory`
+  - `infra_redis_factory`
 - 설치된 소비자는 아래 imported target 이름을 사용합니다.
   - `server_storage_pg_factory::server_storage_pg_factory`
+  - `infra_redis_factory::infra_redis_factory`
+- legacy compatibility package/target은 1개 release cycle 동안 유지합니다.
   - `server_storage_redis_factory::server_storage_redis_factory`
 - `server_storage_pg_factory` consumer는 generic connection-pool 옵션을 `server::core::storage_execution::PoolOptions`로 다룹니다.
-- `server_storage_pg`, `server_storage_redis`는 monorepo 내부 compatibility umbrella로 남고, canonical package surface로 취급하지 않습니다.
+- `server_storage_pg`, `server_storage_redis`, `server_storage_redis_factory`는 monorepo 또는 install prefix 내부 compatibility umbrella로 남고, canonical package surface로 취급하지 않습니다.
 - `server_state_redis_factory`는 외부 소비자 수요가 확인되기 전까지 패키지화 대상에서 제외합니다.
 
 ## 사용 규칙

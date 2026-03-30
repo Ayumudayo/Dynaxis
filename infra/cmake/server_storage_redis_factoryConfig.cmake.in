@@ -1,0 +1,15 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(infra_redis_factory CONFIG REQUIRED)
+
+if (NOT TARGET server_storage_redis_factory::server_storage_redis_factory)
+    add_library(server_storage_redis_factory::server_storage_redis_factory INTERFACE IMPORTED)
+    set_property(
+        TARGET server_storage_redis_factory::server_storage_redis_factory
+        PROPERTY INTERFACE_LINK_LIBRARIES infra_redis_factory::infra_redis_factory
+    )
+endif()
+
+check_required_components(server_storage_redis_factory)

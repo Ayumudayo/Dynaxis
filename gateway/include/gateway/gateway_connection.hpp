@@ -9,7 +9,7 @@
 #include <boost/asio/steady_timer.hpp>
 
 #include "gateway/auth/authenticator.hpp"
-#include "gateway/gateway_app.hpp"
+#include "gateway/transport_session.hpp"
 #include "server/core/net/connection.hpp"
 
 namespace gateway {
@@ -25,7 +25,7 @@ class GatewayApp;
  *
  * 주요 역할:
  * 1. 클라이언트 인증(`Authenticator` 위임)
- * 2. backend 연결(`BackendConnection`) 생성과 수명주기 연결
+ * 2. backend transport 세션 생성과 수명주기 연결
  * 3. 양방향 payload 포워딩과 direct-path 보조 처리
  */
 class GatewayConnection : public server::core::net::TransportConnection {
@@ -68,6 +68,7 @@ private:
     void send_to_backend(std::vector<std::uint8_t> payload);
     void send_to_backend(const std::uint8_t* data, std::size_t length);
     void inspect_backend_payload(std::span<const std::uint8_t> payload);
+    void inspect_login_response_payload(std::span<const std::uint8_t> payload);
 
     std::shared_ptr<auth::IAuthenticator> authenticator_;
     GatewayApp& app_;
@@ -77,7 +78,8 @@ private:
     std::string resume_routing_key_;
     std::string remote_ip_;
     
-    GatewayApp::BackendConnectionPtr backend_connection_; 
+    gateway::TransportSessionPtr backend_connection_;
+    std::string backend_instance_id_;
     
     auth::AuthResult last_auth_result_{};
     std::atomic<bool> closing_{false};

@@ -400,7 +400,11 @@ def main() -> int:
 
                 cleanup_control_plane_documents(base_url)
 
-                actuation_initial = load_json_http(base_url, "/api/v1/topology/actuation")
+                actuation_initial = wait_for_json_ready(
+                    base_url,
+                    "/api/v1/topology/actuation?timeout_ms=5000",
+                    timeout_seconds=20.0,
+                )
                 initial_summary = actuation_initial.get("data", {}).get("summary", {})
                 if initial_summary.get("desired_present") is not False:
                     raise RuntimeError("topology actuation should report desired_present=false before PUT")
@@ -431,7 +435,11 @@ def main() -> int:
                 if desired_document.get("revision") != 1:
                     raise RuntimeError("desired topology revision mismatch")
 
-                actuation_after_desired = load_json_http(base_url, "/api/v1/topology/actuation")
+                actuation_after_desired = wait_for_json_ready(
+                    base_url,
+                    "/api/v1/topology/actuation?timeout_ms=5000",
+                    timeout_seconds=20.0,
+                )
                 scale_out_action = find_scale_out_action(actuation_after_desired, world_id, shard)
                 if scale_out_action.get("actionable") is not True:
                     raise RuntimeError("scale_out_pool action should be actionable")
@@ -580,7 +588,11 @@ def main() -> int:
                 if ((payload or {}).get("data", {}).get("lease", {}) or {}).get("revision") != 2:
                     raise RuntimeError("actuation adapter refresh revision mismatch")
 
-                adapter_status = load_json_http(base_url, "/api/v1/topology/actuation/adapter/status?timeout_ms=5000")
+                adapter_status = wait_for_json_ready(
+                    base_url,
+                    "/api/v1/topology/actuation/adapter/status?timeout_ms=5000",
+                    timeout_seconds=20.0,
+                )
                 adapter_status_summary = adapter_status.get("data", {}).get("summary", {})
                 if adapter_status_summary.get("realized_actions") != 1:
                     raise RuntimeError("adapter status should report one realized action")

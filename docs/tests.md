@@ -5,6 +5,13 @@
 
 `server_core` public package surface를 건드렸다면 이 문서를 `docs/core-api/overview.md`, `docs/core-api/quickstart.md`, `docs/core-api/compatibility-policy.md`, `docs/core-api/checklists.md`와 함께 읽는다. core API 문서는 public package story를 정의하고, 이 문서는 그 story를 저장소 전체 검증 진입점에 연결한다.
 
+테스트 build ownership은 domain manifest로 나뉜다.
+- prelude/dispatch: `tests/CMakeLists.txt`
+- core targets: `tests/core/CMakeLists.txt`
+- gateway targets: `tests/gateway/CMakeLists.txt`
+- server targets: `tests/server/CMakeLists.txt`
+- contract/policy lanes: `tests/contracts/CMakeLists.txt`, `tests/policy/CMakeLists.txt`
+
 ## 기본 로컬 게이트
 
 ```powershell
@@ -41,6 +48,7 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
   - `pwsh scripts/run_linux_installed_consumer.ps1`
 - additional package extraction 관련 검증:
   - `ctest --test-dir build-windows -C Debug -R "FactoryPgInstalledPackageConsumer|FactoryRedisInstalledPackageConsumer" --output-on-failure`
+  - Redis consumer는 canonical `infra_redis_factory`를 우선 찾고, install prefix에 legacy compatibility package만 있을 때만 `server_storage_redis_factory`로 fallback한다
 
 ## 스택 / 통합 검증
 
@@ -215,6 +223,7 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
   - 항상 도는 기본 검증 레인이다.
   - required status check 이름은 `Windows Build, Docs, and Tests`다.
   - Windows build/test + opcode/doc checks를 묶는 기본 게이트다.
+  - generated protocol/wire header는 source tree가 아니라 CI 임시 generated tree로 재생성하고, tracked forwarder header drift가 없는지만 검사한다.
 - `Core API Checks` (`.github/workflows/ci-api-governance.yml`)
   - `core/**`, core API docs, contract fixture를 위한 path-gated validation lane이다.
   - jobs: `Core API Governance and Consumer Validation (Windows)`, `Core API Governance and Consumer Validation (Linux)`
@@ -258,6 +267,7 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
   - workflow-dispatch-only release lane이며 PR required check나 merge-queue lane이 아니다.
   - job: `Factory Package Build and Validation (Windows)`
   - Windows factory package bundle을 빌드하고 `CoreInstalledPackageConsumer|FactoryPgInstalledPackageConsumer|FactoryRedisInstalledPackageConsumer` 검증 후 artifact를 업로드한다.
+  - Redis package의 canonical export는 `infra_redis_factory`이고, `server_storage_redis_factory`는 compatibility alias/config package로 함께 검증된다.
   - release artifact 이름은 `dynaxis-factory-packages-windows-release`다.
 
 ## Kubernetes worlds harness 체크

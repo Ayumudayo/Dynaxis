@@ -9,10 +9,19 @@ add_library(gateway_backends STATIC
 )
 target_include_directories(gateway_backends PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(gateway_backends PUBLIC server_core)
-target_link_libraries(gateway_backends PRIVATE server_storage_redis_factory)
+target_link_libraries(gateway_backends PRIVATE infra_redis_factory)
 
 add_executable(gateway_app
     src/gateway_connection.cpp
+    src/gateway_backend_connection.cpp
+    src/gateway_backend_frame_inspector.cpp
+    src/gateway_udp_ingress.cpp
+    src/gateway_routing_policy.cpp
+    src/gateway_configuration.cpp
+    src/gateway_infrastructure_probe.cpp
+    src/gateway_tcp_listener.cpp
+    src/gateway_lifecycle.cpp
+    src/gateway_metrics_text.cpp
     src/gateway_app.cpp
     src/main.cpp
 )
@@ -26,7 +35,3 @@ target_link_libraries(gateway_app PRIVATE
     gateway_session_directory
     server_core
 )
-
-if (TARGET generate_game_opcodes)
-    add_dependencies(gateway_app generate_game_opcodes)
-endif()

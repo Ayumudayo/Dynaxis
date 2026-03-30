@@ -2,12 +2,14 @@
 
 #include <memory>
 
+#include "server/core/app/engine_runtime.hpp"
 #include "server/core/metrics/http_server.hpp"
 
 namespace server::app {
 
 std::string render_metrics_text();
 std::string render_logs_text();
+void start_server_admin_http(server::core::app::EngineRuntime& runtime, unsigned short port);
 
 /**
  * @brief Prometheus 메트릭 및 로그를 제공하는 간단한 HTTP 서버입니다.
