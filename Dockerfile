@@ -31,11 +31,11 @@ RUN cmake --build --preset linux-release --target \
 
 RUN mkdir -p /opt/dynaxis/bin /opt/dynaxis/plugins/staging /opt/dynaxis/migrations /opt/dynaxis/scripts && \
     cp /app/build-linux/server/server_app /opt/dynaxis/bin/server_app && \
-    cp /app/build-linux/admin_app /opt/dynaxis/bin/admin_app && \
-    cp /app/build-linux/wb_worker /opt/dynaxis/bin/wb_worker && \
-    cp /app/build-linux/wb_dlq_replayer /opt/dynaxis/bin/wb_dlq_replayer && \
+    cp /app/build-linux/tools/admin_app /opt/dynaxis/bin/admin_app && \
+    cp /app/build-linux/tools/wb_worker /opt/dynaxis/bin/wb_worker && \
+    cp /app/build-linux/tools/wb_dlq_replayer /opt/dynaxis/bin/wb_dlq_replayer && \
     cp /app/build-linux/gateway/gateway_app /opt/dynaxis/bin/gateway_app && \
-    cp /app/build-linux/migrations_runner /opt/dynaxis/bin/migrations_runner && \
+    cp /app/build-linux/tools/migrations_runner /opt/dynaxis/bin/migrations_runner && \
     cp /app/build-linux/server/plugins/10_chat_hook_sample.so /opt/dynaxis/plugins/10_chat_hook_sample.so && \
     cp /app/build-linux/server/plugins/20_chat_hook_tag.so /opt/dynaxis/plugins/20_chat_hook_tag.so && \
     cp /app/build-linux/server/plugins/10_chat_hook_sample_v2.so /opt/dynaxis/plugins/staging/10_chat_hook_sample_v2.so && \
