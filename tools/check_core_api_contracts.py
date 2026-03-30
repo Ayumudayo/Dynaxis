@@ -277,6 +277,7 @@ def check_public_header_dependency_hygiene(repo_root: pathlib.Path) -> list[str]
             if (
                 inc.startswith("server/")
                 and not inc.startswith("server/core/")
+                and not inc.startswith("server/generated/")
                 and not inc.startswith("server/wire/")
             ):
                 errors.append(

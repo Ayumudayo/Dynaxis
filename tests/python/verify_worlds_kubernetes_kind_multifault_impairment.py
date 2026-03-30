@@ -210,20 +210,11 @@ def main() -> int:
             )
             restarted_gateway2_pod = next(iter(gateway_uids_after))
 
-            with PortForward(
-                cluster_name,
-                namespace,
-                restarted_gateway2_pod,
-                GATEWAY_SERVICE_PORT,
-                resource_kind="pod",
-            ) as gateway2_forward:
-                with PortForward(
-                    cluster_name,
-                    namespace,
-                    restarted_gateway2_pod,
-                    GATEWAY_METRICS_PORT,
-                    resource_kind="pod",
-                ) as gateway2_metrics_forward:
+            # Resume validation should follow the stable service path. The pod churn
+            # proof is already established by the UID change above, and service-based
+            # forwarding avoids binding the recovery checks to a transient pod name.
+            with PortForward(cluster_name, namespace, "gateway-2", GATEWAY_SERVICE_PORT) as gateway2_forward:
+                with PortForward(cluster_name, namespace, "gateway-2", GATEWAY_METRICS_PORT) as gateway2_metrics_forward:
                     gateway2_host, gateway2_port = wait_for_tcp_port_forward(gateway2_forward, timeout_seconds=60.0)
                     gateway2_metrics_url = gateway2_metrics_forward.base_url
 

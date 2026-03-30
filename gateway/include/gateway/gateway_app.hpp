@@ -13,31 +13,46 @@
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
-#include <deque>
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/udp.hpp>
-#include <boost/asio/steady_timer.hpp>
 
-#include "gateway/auth/authenticator.hpp"
 #include "gateway/direct_egress_route.hpp"
 #include "gateway/rudp_rollout_policy.hpp"
 #include "gateway/resilience_controls.hpp"
+#include "gateway/transport_session.hpp"
 #include "gateway/udp_bind_abuse_guard.hpp"
-#include "gateway/udp_sequenced_metrics.hpp"
 #include "server/core/app/engine_runtime.hpp"
 #include "server/core/realtime/direct_bind.hpp"
-#include "server/core/net/hive.hpp"
 #include "server/core/net/listener.hpp"
-#include "server/core/net/rudp/rudp_engine.hpp"
 #include "server/core/discovery/instance_registry.hpp"
-#include "server/core/storage/redis/client.hpp"
-#include "gateway/session_directory.hpp"
+
+namespace gateway::auth {
+class IAuthenticator;
+}
+
+namespace gateway {
+class SessionDirectory;
+}
+
+namespace server::core::net {
+class Hive;
+}
+
+namespace server::core::storage::redis {
+class IRedisClient;
+}
+
+namespace server::core::net::rudp {
+struct RudpConfig;
+}
 
 namespace gateway {
 
 class GatewayConnection;
+class BackendConnection;
 
 /**
  * @brief gateway 프로세스의 엣지 유입(edge ingress), 백엔드(backend) 선택, direct-transport 게이트를 조율하는 메인 오케스트레이터입니다.
@@ -49,147 +64,6 @@ class GatewayConnection;
  */
 class GatewayApp {
 public:
-    /**
-     * @brief Gateway 세션이 백엔드로 payload를 전달하기 위한 전송 인터페이스입니다.
-     *
-     * TCP/UDP 유입 경로는 이 인터페이스만 사용해 백엔드 전달을 수행하고,
-     * 실제 전송 구현(TCP bridge, 향후 UDP/RUDP direct path)은 구현체로 분리합니다.
-     */
-    class ITransportSession {
-    public:
-        virtual ~ITransportSession() = default;
-        virtual void send(std::vector<std::uint8_t> payload) = 0;
-        virtual void send(const std::uint8_t* data, std::size_t length) = 0;
-        virtual void close() = 0;
-        virtual const std::string& session_id() const = 0;
-    };
-    using TransportSessionPtr = std::shared_ptr<ITransportSession>;
-
-    enum class IngressAdmission {
-        kAccept = 0,
-        kRejectNotReady,
-        kRejectRateLimited,
-        kRejectSessionLimit,
-        kRejectCircuitOpen,
-    };
-
-    /** @brief 백엔드 선택 결과입니다. sticky 적중 여부를 함께 들고 다녀 후속 메트릭/정책 판단에 재사용합니다. */
-    struct SelectedBackend {
-        server::core::discovery::InstanceRecord record;
-        bool sticky_hit{false};
-    };
-
-    /** @brief 정확한 sticky binding이 사라졌을 때 resume 대상을 좁히기 위한 최소 locator 힌트입니다. */
-    struct ResumeLocatorHint {
-        std::string backend_instance_id;
-        std::string world_id;
-        std::string role;
-        std::string game_mode;
-        std::string region;
-        std::string shard;
-    };
-
-    /** @brief TCP 응답으로 전달되는 UDP bind ticket 정보입니다. direct path를 임의 endpoint에 열어 주지 않기 위한 최소 증표입니다. */
-    using UdpBindTicket = server::core::realtime::DirectBindTicket;
-
-    /**
-     * @brief 선택된 backend 서버와의 TCP 연결을 관리하는 내부 클래스입니다.
-     *
-     * 이 클래스는 `GatewayConnection`(클라이언트 측)과 game server 사이에서 payload를
-     * 양방향 브리지합니다. connect timeout, bounded send queue, retry/backoff를 직접
-     * 들고 있는 이유는, edge 쪽에서 느린 backend를 먼저 차단하지 않으면 gateway 전체가
-     * 같이 무거워질 수 있기 때문입니다.
-     */
-    class BackendConnection : public ITransportSession,
-                              public std::enable_shared_from_this<BackendConnection> {
-    public:
-        /**
-         * @brief backend 연결을 생성합니다.
-         * @param app 상위 GatewayApp 참조
-         * @param session_id gateway 내부 세션 ID
-         * @param client_id 클라이언트 식별자
-         * @param backend_instance_id 선택된 backend 인스턴스 ID
-         * @param sticky_hit sticky 라우팅 적중 여부
-         * @param connection 클라이언트 연결 약한 포인터
-         * @param send_queue_max_bytes backend 송신 큐 최대 바이트
-         * @param connect_timeout backend 연결 타임아웃
-         */
-        BackendConnection(GatewayApp& app,
-                       std::string session_id,
-                       std::string client_id,
-                       std::string backend_instance_id,
-                       bool sticky_hit,
-                       std::weak_ptr<GatewayConnection> connection,
-                       std::size_t send_queue_max_bytes,
-                       std::chrono::milliseconds connect_timeout);
-        ~BackendConnection();
-
-        /**
-         * @brief backend로 TCP 연결을 시작합니다.
-         * @param host backend 호스트
-         * @param port backend 포트
-         */
-        void connect(const std::string& host, std::uint16_t port);
-
-        /**
-         * @brief backend로 payload를 비동기 전송 큐에 넣습니다.
-         * @param payload 전송할 바이트 배열
-         */
-        void send(std::vector<std::uint8_t> payload) override;
-
-        /**
-         * @brief backend로 raw bytes를 복사해 비동기 전송 큐에 넣습니다.
-         * @param data 전송할 바이트 포인터
-         * @param length 전송할 바이트 길이
-         */
-        void send(const std::uint8_t* data, std::size_t length) override;
-
-        /** @brief backend 연결을 종료합니다. */
-        void close() override;
-
-        /**
-         * @brief gateway 내부 세션 ID를 반환합니다.
-         * @return backend 연결과 매핑된 세션 ID
-         */
-        const std::string& session_id() const override;
-        const std::string& backend_instance_id() const noexcept { return backend_instance_id_; }
-
-    private:
-        void do_connect(const std::string& host, std::uint16_t port);
-        void do_read();
-        void on_read(const boost::system::error_code& ec, std::size_t bytes_transferred);
-        void do_write();
-        void on_connect_timeout();
-
-        GatewayApp& app_;
-        std::string session_id_;
-        std::string client_id_;
-        std::string backend_instance_id_;
-        bool sticky_hit_{false};
-        std::weak_ptr<GatewayConnection> connection_;
-        boost::asio::ip::tcp::socket socket_;
-        boost::asio::steady_timer connect_timer_;
-        boost::asio::steady_timer retry_timer_;
-        std::array<std::uint8_t, 8192> buffer_;
-        std::atomic<bool> closed_{false};
-
-        std::string connect_host_;
-        std::uint16_t connect_port_{0};
-        std::uint32_t retry_attempt_{0};
-        
-        std::mutex send_mutex_;
-        std::deque<std::shared_ptr<std::vector<std::uint8_t>>> write_queue_;
-        std::size_t queued_bytes_{0};
-        std::size_t send_queue_max_bytes_{256 * 1024};
-        std::chrono::milliseconds connect_timeout_{5000};
-        bool connected_{false};
-        bool write_in_progress_{false};
-
-        bool schedule_connect_retry(const char* reason);
-        void close_socket_for_retry();
-    };
-    using BackendConnectionPtr = std::shared_ptr<BackendConnection>;
-
     GatewayApp();
     ~GatewayApp();
 
@@ -201,6 +75,47 @@ public:
 
     /** @brief gateway 전체 종료를 요청합니다. */
     void stop();
+
+ private:
+    enum class IngressAdmission {
+        kAccept = 0,
+        kRejectNotReady,
+        kRejectRateLimited,
+        kRejectSessionLimit,
+        kRejectCircuitOpen,
+    };
+
+    /** @brief 내부 backend 선택 결과와 sticky 적중 여부를 함께 들고 다니는 구현용 값 객체입니다. */
+    struct SelectedBackend {
+        server::core::discovery::InstanceRecord record;
+        bool sticky_hit{false};
+    };
+
+    using UdpBindTicket = server::core::realtime::DirectBindTicket;
+
+    /** @brief 생성된 backend 브리지 세션과 gateway 내부 식별자를 함께 반환하는 구현용 값 객체입니다. */
+    struct CreatedBackendSession {
+        TransportSessionPtr session;
+        std::string session_id;
+        std::string backend_instance_id;
+    };
+
+    friend class GatewayConnection;
+    friend class BackendConnection;
+
+    std::string gateway_id() const { return gateway_id_; }
+    bool allow_anonymous() const noexcept { return allow_anonymous_; }
+
+    boost::asio::io_context io_;
+    std::shared_ptr<server::core::net::Hive> hive_;
+    std::shared_ptr<server::core::net::TransportListener> listener_;
+    server::core::app::EngineRuntime engine_;
+    server::core::app::AppHost& app_host_;
+    std::shared_ptr<auth::IAuthenticator> authenticator_;
+    std::string gateway_id_;
+    std::string listen_host_;
+    std::uint16_t listen_port_{6000};
+    bool allow_anonymous_{true};
 
     void record_connection_accept() {
         (void)connections_total_.fetch_add(1, std::memory_order_relaxed);
@@ -245,74 +160,24 @@ public:
         (void)backend_retry_budget_exhausted_total_.fetch_add(1, std::memory_order_relaxed);
     }
 
-    /**
-     * @brief backend 연결을 생성하고 세션 상태에 등록합니다.
-     * @param client_id 클라이언트 식별자
-     * @param connection 연결 weak 포인터
-     * @return 생성된 backend 연결
-     *
-     * 생성과 등록을 한 단계로 묶는 이유는, edge 세션 상태와 backend 브리지 핸들을 따로
-     * 관리하기 시작하면 close/retry/cleanup 순서가 쉽게 엇갈리기 때문입니다.
-     */
-    BackendConnectionPtr create_backend_connection(const std::string& client_id,
-                                             std::weak_ptr<GatewayConnection> connection);
-
-    /**
-     * @brief session_id에 해당하는 backend 연결을 닫고 제거합니다.
-     * @param session_id gateway 내부 세션 ID
-     */
+    std::optional<CreatedBackendSession> create_backend_connection(
+        const std::string& client_id,
+        std::weak_ptr<GatewayConnection> connection);
     void close_backend_connection(const std::string& session_id);
-    
-    /**
-     * @brief Redis Registry에서 현재 가장 적절한 backend를 선택합니다.
-     * @param client_id sticky 조회에 사용할 클라이언트 식별자
-     * @return 선택된 backend 정보, 후보가 없으면 std::nullopt
-     *
-     * 현재 선택 규칙은 "유효한 sticky가 있으면 재사용하고, 없으면 least-connections로 고른다"는
-     * 형태입니다. 이 규칙을 한 함수에 모아 두면 edge 라우팅 정책을 중앙에서 바꾸기 쉽습니다.
-     */
     std::optional<SelectedBackend> select_best_server(const std::string& client_id = "");
     void register_resume_routing_key(const std::string& routing_key,
                                      const std::string& backend_instance_id);
-
-    /** @brief gateway 인스턴스 ID를 반환합니다. */
-    std::string gateway_id() const { return gateway_id_; }
-
-    /** @brief 익명 로그인 허용 여부를 반환합니다. */
-    bool allow_anonymous() const noexcept { return allow_anonymous_; }
-
-    /**
-     * @brief 세션용 UDP bind ticket을 발급하고 TCP 응답 프레임을 생성합니다.
-     * @param session_id gateway 내부 세션 ID
-     * @return 생성된 `MSG_UDP_BIND_RES` 프레임, 발급 불가 시 std::nullopt
-     *
-     * bind ticket을 TCP 응답으로 내려보내는 이유는, direct path를 열기 전에 이미 인증된
-     * 세션과 UDP endpoint를 연결해야 하기 때문입니다.
-     */
     std::optional<std::vector<std::uint8_t>> make_udp_bind_ticket_frame(const std::string& session_id);
     bool try_send_direct_client_frame(std::string_view session_id,
                                       std::uint16_t msg_id,
                                       std::span<const std::uint8_t> frame);
 
-    boost::asio::io_context io_;
-    std::shared_ptr<server::core::net::Hive> hive_;
-    std::shared_ptr<server::core::net::TransportListener> listener_;
-    server::core::app::EngineRuntime engine_;
-    server::core::app::AppHost& app_host_;
-    std::shared_ptr<auth::IAuthenticator> authenticator_;
-    std::string gateway_id_;
-    std::string listen_host_;
-    std::uint16_t listen_port_{6000};
-    bool allow_anonymous_{true};
-
- private:
     void on_backend_connected(const std::string& client_id,
                               const std::string& backend_instance_id,
                               bool sticky_hit);
     std::string make_resume_locator_key(std::string_view routing_key) const;
-    std::optional<ResumeLocatorHint> load_resume_locator_hint(std::string_view routing_key);
-    std::optional<server::core::discovery::InstanceSelector> make_resume_locator_selector(
-        const ResumeLocatorHint& hint) const;
+    std::optional<server::core::discovery::InstanceSelector> load_resume_locator_selector(
+        std::string_view routing_key);
     void persist_resume_locator_hint(std::string_view routing_key,
                                      const server::core::discovery::InstanceRecord& record);
     void configure_gateway();
@@ -352,26 +217,9 @@ public:
      void start_infrastructure_probe();
      void stop_infrastructure_probe();
 
-    /** @brief gateway 세션별 TCP/UDP/RUDP 바인딩 상태를 보관하는 내부 상태입니다. */
-    struct SessionState {
-        TransportSessionPtr session;              ///< backend 전송 세션 핸들
-        std::string client_id;                     ///< sticky 조회용 클라이언트 ID
-        std::string backend_instance_id;           ///< optimistic local load 추적용 backend ID
-        bool udp_bound{false};                     ///< UDP endpoint 바인딩 완료 여부
-        boost::asio::ip::udp::endpoint udp_endpoint; ///< 바인딩된 UDP endpoint
-        std::uint64_t udp_nonce{0};                ///< 마지막 발급 nonce
-        std::uint64_t udp_expires_unix_ms{0};      ///< bind ticket 만료 시각
-        std::uint64_t udp_ticket_issued_unix_ms{0}; ///< bind ticket 발급 시각
-        std::uint32_t udp_bind_fail_attempts{0};   ///< 최근 bind 실패 누적 횟수(backoff 계산용)
-        std::uint64_t udp_bind_retry_after_unix_ms{0}; ///< 다음 bind 재시도 허용 시각(Epoch ms)
-        std::string udp_token;                     ///< bind 검증 토큰
-        UdpSequencedMetrics udp_sequenced_metrics; ///< UDP 순서/품질 추적기
-        bool rudp_selected{false};                 ///< canary/게이트에 의해 RUDP가 선택된 세션 여부
-        bool rudp_fallback_to_tcp{false};          ///< RUDP 실패 후 TCP fallback 고정 여부
-        std::unique_ptr<server::core::net::rudp::RudpEngine> rudp_engine; ///< 세션별 RUDP 엔진 상태
-    };
+    struct SessionState;
     std::mutex session_mutex_;
-    std::unordered_map<std::string, SessionState> sessions_;
+    std::unordered_map<std::string, std::unique_ptr<SessionState>> sessions_;
 
     std::atomic<std::uint64_t> connections_total_{0};
     std::atomic<std::uint64_t> backend_resolve_fail_total_{0};
@@ -430,7 +278,7 @@ public:
     std::uint32_t udp_bind_retry_max_attempts_{6};
     std::unordered_set<std::uint16_t> udp_opcode_allowlist_{};
     RudpRolloutPolicy rudp_rollout_policy_{};
-    server::core::net::rudp::RudpConfig rudp_config_{};
+    std::unique_ptr<server::core::net::rudp::RudpConfig> rudp_config_;
     UdpBindAbuseGuard udp_bind_abuse_guard_;
     std::unique_ptr<boost::asio::ip::udp::socket> udp_socket_;
     boost::asio::ip::udp::endpoint udp_remote_endpoint_;

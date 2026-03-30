@@ -3,7 +3,7 @@
 GTest unit tests + small Python integration checks.
 
 ## C++ (GTest)
-- Definitions: `tests/CMakeLists.txt`
+- Definitions: `tests/CMakeLists.txt`, `tests/core/CMakeLists.txt`, `tests/gateway/CMakeLists.txt`, `tests/server/CMakeLists.txt`, `tests/contracts/CMakeLists.txt`, `tests/policy/CMakeLists.txt`
 - Key targets:
   - `core_general_tests`, `core_concurrency_tests`
   - `server_general_tests`, `server_state_tests`

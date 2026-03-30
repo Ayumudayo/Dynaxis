@@ -30,16 +30,24 @@
 #include <boost/asio/write.hpp>
 #include <boost/asio/ip/tcp.hpp>
 
+#include "gateway/auth/authenticator.hpp"
 #include "gateway/gateway_connection.hpp"
 #include "gateway/registry_backend_factory.hpp"
+#include "gateway/session_directory.hpp"
+#include "gateway/udp_sequenced_metrics.hpp"
+#include "gateway_backend_connection.hpp"
 #include "server/core/app/engine_builder.hpp"
+#include "server/core/net/hive.hpp"
+#include "server/core/net/listener.hpp"
 #include "server/core/net/queue_budget.hpp"
+#include "server/core/net/rudp/rudp_engine.hpp"
 #include "server/core/discovery/instance_registry.hpp"
 #include "server/core/discovery/world_lifecycle_policy.hpp"
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
 #include "server/core/runtime_metrics.hpp"
+#include "server/core/storage/redis/client.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/metrics/build_info.hpp"
 #include "server/core/metrics/metrics.hpp"
@@ -358,6 +366,15 @@ struct WorldPolicyBackendDecision {
     std::optional<std::string> world_id;
 };
 
+struct ResumeLocatorHint {
+    std::string backend_instance_id;
+    std::string world_id;
+    std::string role;
+    std::string game_mode;
+    std::string region;
+    std::string shard;
+};
+
 WorldPolicyBackendDecision evaluate_world_policy_backend(
     const server::core::discovery::InstanceRecord& record,
     const std::unordered_map<std::string, server::core::discovery::WorldLifecyclePolicy>& world_policy_index) {
@@ -380,7 +397,7 @@ WorldPolicyBackendDecision evaluate_world_policy_backend(
     return decision;
 }
 
-std::string serialize_resume_locator_hint(const GatewayApp::ResumeLocatorHint& hint) {
+std::string serialize_resume_locator_hint(const ResumeLocatorHint& hint) {
     std::ostringstream out;
     out << "backend=" << hint.backend_instance_id << '\n';
     out << "world_id=" << hint.world_id << '\n';
@@ -391,8 +408,8 @@ std::string serialize_resume_locator_hint(const GatewayApp::ResumeLocatorHint& h
     return out.str();
 }
 
-std::optional<GatewayApp::ResumeLocatorHint> parse_resume_locator_hint(std::string_view payload) {
-    GatewayApp::ResumeLocatorHint hint;
+std::optional<ResumeLocatorHint> parse_resume_locator_hint(std::string_view payload) {
+    ResumeLocatorHint hint;
     std::size_t offset = 0;
     while (offset <= payload.size()) {
         const std::size_t line_end = payload.find('\n', offset);
@@ -459,18 +476,18 @@ std::string udp_frame_summary(std::span<const std::uint8_t> frame) {
 
 } // namespace
 
-// `GatewayApp::BackendConnection` 구현부.
+// `BackendConnection` 구현부.
 // 엣지 보호 장치(connect timeout, retry budget, bounded send queue)를 bridge 클래스에 직접 둔다.
 // 이 보호 규칙이 상위 라우팅 코드에 흩어지면, 어떤 종료가 "선택 실패"이고 어떤 종료가 "브리지 중 장애"인지 분류하기 어려워진다.
 
-GatewayApp::BackendConnection::BackendConnection(GatewayApp& app,
-                                            std::string session_id,
-                                            std::string client_id,
-                                            std::string backend_instance_id,
-                                            bool sticky_hit,
-                                            std::weak_ptr<GatewayConnection> connection,
-                                            std::size_t send_queue_max_bytes,
-                                            std::chrono::milliseconds connect_timeout)
+BackendConnection::BackendConnection(GatewayApp& app,
+                                     std::string session_id,
+                                     std::string client_id,
+                                     std::string backend_instance_id,
+                                     bool sticky_hit,
+                                     std::weak_ptr<GatewayConnection> connection,
+                                     std::size_t send_queue_max_bytes,
+                                     std::chrono::milliseconds connect_timeout)
     : app_(app)
     , session_id_(std::move(session_id))
     , client_id_(std::move(client_id))
@@ -486,11 +503,11 @@ GatewayApp::BackendConnection::BackendConnection(GatewayApp& app,
                            : std::chrono::milliseconds{kDefaultBackendConnectTimeoutMs}) {
 }
 
-GatewayApp::BackendConnection::~BackendConnection() {
+BackendConnection::~BackendConnection() {
     close();
 }
 
-void GatewayApp::BackendConnection::connect(const std::string& host, std::uint16_t port) {
+void BackendConnection::connect(const std::string& host, std::uint16_t port) {
     if (closed_.load(std::memory_order_relaxed)) return;
 
     connect_host_ = host;
@@ -500,7 +517,7 @@ void GatewayApp::BackendConnection::connect(const std::string& host, std::uint16
     do_connect(host, port);
 }
 
-void GatewayApp::BackendConnection::do_connect(const std::string& host, std::uint16_t port) {
+void BackendConnection::do_connect(const std::string& host, std::uint16_t port) {
     close_socket_for_retry();
 
     auto self = shared_from_this();
@@ -578,7 +595,7 @@ void GatewayApp::BackendConnection::do_connect(const std::string& host, std::uin
         });
 }
 
-void GatewayApp::BackendConnection::close_socket_for_retry() {
+void BackendConnection::close_socket_for_retry() {
     boost::system::error_code ignored;
     if (socket_.is_open()) {
         socket_.cancel(ignored);
@@ -591,7 +608,7 @@ void GatewayApp::BackendConnection::close_socket_for_retry() {
     write_in_progress_ = false;
 }
 
-bool GatewayApp::BackendConnection::schedule_connect_retry(const char* reason) {
+bool BackendConnection::schedule_connect_retry(const char* reason) {
     if (!app_.consume_backend_retry_budget()) {
         app_.record_backend_retry_budget_exhausted();
         server::core::log::warn("BackendConnection retry budget exhausted: session=" + session_id_ + " reason=" + reason);
@@ -625,7 +642,7 @@ bool GatewayApp::BackendConnection::schedule_connect_retry(const char* reason) {
     return true;
 }
 
-void GatewayApp::BackendConnection::on_connect_timeout() {
+void BackendConnection::on_connect_timeout() {
     if (closed_.load(std::memory_order_relaxed)) {
         return;
     }
@@ -647,7 +664,7 @@ void GatewayApp::BackendConnection::on_connect_timeout() {
     }
 }
 
-void GatewayApp::BackendConnection::send(std::vector<std::uint8_t> payload) {
+void BackendConnection::send(std::vector<std::uint8_t> payload) {
     if (payload.empty()) {
         return;
     }
@@ -686,7 +703,7 @@ void GatewayApp::BackendConnection::send(std::vector<std::uint8_t> payload) {
     }
 }
 
-void GatewayApp::BackendConnection::send(const std::uint8_t* data, std::size_t length) {
+void BackendConnection::send(const std::uint8_t* data, std::size_t length) {
     if (!data || length == 0) {
         return;
     }
@@ -727,7 +744,7 @@ void GatewayApp::BackendConnection::send(const std::uint8_t* data, std::size_t l
     }
 }
 
-void GatewayApp::BackendConnection::do_write() {
+void BackendConnection::do_write() {
     if (write_queue_.empty()) {
         write_in_progress_ = false;
         return;
@@ -775,7 +792,7 @@ void GatewayApp::BackendConnection::do_write() {
         });
 }
 
-void GatewayApp::BackendConnection::do_read() {
+void BackendConnection::do_read() {
     auto self = shared_from_this();
     socket_.async_read_some(boost::asio::buffer(buffer_),
         [self, this](const boost::system::error_code& ec, std::size_t bytes_transferred) {
@@ -783,7 +800,7 @@ void GatewayApp::BackendConnection::do_read() {
         });
 }
 
-void GatewayApp::BackendConnection::on_read(const boost::system::error_code& ec, std::size_t bytes_transferred) {
+void BackendConnection::on_read(const boost::system::error_code& ec, std::size_t bytes_transferred) {
     if (ec) {
         if (ec != boost::asio::error::operation_aborted) {
             if (auto conn = connection_.lock()) {
@@ -803,7 +820,7 @@ void GatewayApp::BackendConnection::on_read(const boost::system::error_code& ec,
     }
 }
 
-void GatewayApp::BackendConnection::close() {
+void BackendConnection::close() {
     bool expected = false;
     if (!closed_.compare_exchange_strong(expected, true)) return;
 
@@ -825,17 +842,36 @@ void GatewayApp::BackendConnection::close() {
     }
 }
 
-const std::string& GatewayApp::BackendConnection::session_id() const {
+const std::string& BackendConnection::session_id() const {
     return session_id_;
 }
 
 // --- GatewayApp Implementation ---
 
+struct GatewayApp::SessionState {
+    TransportSessionPtr session;
+    std::string client_id;
+    std::string backend_instance_id;
+    bool udp_bound{false};
+    boost::asio::ip::udp::endpoint udp_endpoint;
+    std::uint64_t udp_nonce{0};
+    std::uint64_t udp_expires_unix_ms{0};
+    std::uint64_t udp_ticket_issued_unix_ms{0};
+    std::uint32_t udp_bind_fail_attempts{0};
+    std::uint64_t udp_bind_retry_after_unix_ms{0};
+    std::string udp_token;
+    UdpSequencedMetrics udp_sequenced_metrics;
+    bool rudp_selected{false};
+    bool rudp_fallback_to_tcp{false};
+    std::unique_ptr<server::core::net::rudp::RudpEngine> rudp_engine;
+};
+
 GatewayApp::GatewayApp()
     : hive_(std::make_shared<server::core::net::Hive>(io_))
     , engine_(server::core::app::EngineBuilder("gateway_app").build())
     , app_host_(engine_.host())
-    , authenticator_(std::make_shared<auth::NoopAuthenticator>()) {
+    , authenticator_(std::make_shared<auth::NoopAuthenticator>())
+    , rudp_config_(std::make_unique<server::core::net::rudp::RudpConfig>()) {
     server::core::runtime_metrics::set_liveness_state(
         server::core::runtime_metrics::LivenessState::kBootstrapping);
     configure_gateway();
@@ -1230,8 +1266,8 @@ void GatewayApp::stop() {
     {
         std::lock_guard<std::mutex> lock(session_mutex_);
         for (auto& [_, state] : sessions_) {
-            if (state.session) {
-                state.session->close();
+            if (state && state->session) {
+                state->session->close();
             }
         }
         sessions_.clear();
@@ -1381,17 +1417,18 @@ void GatewayApp::stop_infrastructure_probe() {
     }
 }
 
-GatewayApp::BackendConnectionPtr GatewayApp::create_backend_connection(const std::string& client_id,
-                                                                 std::weak_ptr<GatewayConnection> connection) {
+std::optional<GatewayApp::CreatedBackendSession> GatewayApp::create_backend_connection(
+    const std::string& client_id,
+    std::weak_ptr<GatewayConnection> connection) {
     if (!backend_circuit_allows_connect()) {
         server::core::log::warn("GatewayApp backend circuit open: rejecting new backend connect attempt");
-        return nullptr;
+        return std::nullopt;
     }
 
     auto selected = select_best_server(client_id);
     if (!selected) {
         server::core::log::error("GatewayApp: No available backend server found");
-        return nullptr;
+        return std::nullopt;
     }
 
     // 세션 ID는 gateway 로컬 상관관계 키 역할만 하면 된다.
@@ -1419,23 +1456,27 @@ GatewayApp::BackendConnectionPtr GatewayApp::create_backend_connection(const std
 
     {
         std::lock_guard<std::mutex> lock(session_mutex_);
-        SessionState state{};
-        state.session = session;
-        state.client_id = client_id;
-        state.backend_instance_id = selected->record.instance_id;
+        auto state = std::make_unique<SessionState>();
+        state->session = session;
+        state->client_id = client_id;
+        state->backend_instance_id = selected->record.instance_id;
         sessions_[session_id] = std::move(state);
     }
 
-    return session;
+    CreatedBackendSession created{};
+    created.session = session;
+    created.session_id = std::move(session_id);
+    created.backend_instance_id = selected->record.instance_id;
+    return created;
 }
 
 void GatewayApp::close_backend_connection(const std::string& session_id) {
-    GatewayApp::TransportSessionPtr session;
+    TransportSessionPtr session;
     {
         std::lock_guard<std::mutex> lock(session_mutex_);
         auto it = sessions_.find(session_id);
         if (it != sessions_.end()) {
-            session = it->second.session;
+            session = it->second ? it->second->session : nullptr;
             sessions_.erase(it);
         }
     }
@@ -1520,6 +1561,7 @@ std::optional<std::vector<std::uint8_t>> GatewayApp::make_udp_bind_ticket_frame(
         if (it == sessions_.end()) {
             return std::nullopt;
         }
+        auto& state = *it->second;
 
         std::random_device rd;
         const std::uint64_t nonce = (static_cast<std::uint64_t>(rd()) << 32) ^ static_cast<std::uint64_t>(rd());
@@ -1530,33 +1572,33 @@ std::optional<std::vector<std::uint8_t>> GatewayApp::make_udp_bind_ticket_frame(
             return std::nullopt;
         }
 
-        it->second.udp_nonce = nonce;
-        it->second.udp_expires_unix_ms = expires_unix_ms;
-        it->second.udp_ticket_issued_unix_ms = issued_unix_ms;
-        it->second.udp_bind_fail_attempts = 0;
-        it->second.udp_bind_retry_after_unix_ms = 0;
-        it->second.udp_token = token;
-        it->second.udp_bound = false;
-        it->second.udp_endpoint = {};
-        it->second.udp_sequenced_metrics.reset();
-        it->second.rudp_fallback_to_tcp = false;
+        state.udp_nonce = nonce;
+        state.udp_expires_unix_ms = expires_unix_ms;
+        state.udp_ticket_issued_unix_ms = issued_unix_ms;
+        state.udp_bind_fail_attempts = 0;
+        state.udp_bind_retry_after_unix_ms = 0;
+        state.udp_token = token;
+        state.udp_bound = false;
+        state.udp_endpoint = {};
+        state.udp_sequenced_metrics.reset();
+        state.rudp_fallback_to_tcp = false;
         const auto attach_decision = server::core::realtime::evaluate_direct_attach(
             rudp_rollout_policy_,
             session_id,
             nonce);
-        it->second.rudp_selected =
+        state.rudp_selected =
             attach_decision.mode == server::core::realtime::DirectAttachMode::kRudpCanary;
-        if (it->second.rudp_selected) {
-            it->second.rudp_engine = std::make_unique<server::core::net::rudp::RudpEngine>(rudp_config_);
+        if (state.rudp_selected) {
+            state.rudp_engine = std::make_unique<server::core::net::rudp::RudpEngine>(*rudp_config_);
         } else {
-            it->second.rudp_engine.reset();
+            state.rudp_engine.reset();
         }
 
         ticket.session_id = session_id;
         ticket.nonce = nonce;
         ticket.expires_unix_ms = expires_unix_ms;
         ticket.token = token;
-        rudp_selected = it->second.rudp_selected;
+        rudp_selected = state.rudp_selected;
     }
 
     (void)udp_bind_ticket_issued_total_.fetch_add(1, std::memory_order_relaxed);
@@ -1595,7 +1637,7 @@ std::uint16_t GatewayApp::apply_udp_bind_request(const ParsedUdpBindRequest& req
         return UNAUTHORIZED;
     }
 
-    auto& state = it->second;
+    auto& state = *it->second;
 
     const auto apply_retry_backoff = [&]() {
         const auto next_attempt = std::min<std::uint32_t>(state.udp_bind_fail_attempts + 1u,
@@ -1656,7 +1698,7 @@ std::uint16_t GatewayApp::apply_udp_bind_request(const ParsedUdpBindRequest& req
     state.udp_bind_retry_after_unix_ms = 0;
     state.rudp_fallback_to_tcp = false;
     if (state.rudp_selected && !state.rudp_engine) {
-        state.rudp_engine = std::make_unique<server::core::net::rudp::RudpEngine>(rudp_config_);
+        state.rudp_engine = std::make_unique<server::core::net::rudp::RudpEngine>(*rudp_config_);
     }
 
     if (state.udp_ticket_issued_unix_ms != 0 && now_ms >= state.udp_ticket_issued_unix_ms) {
@@ -1714,24 +1756,25 @@ bool GatewayApp::try_send_direct_client_frame(std::string_view session_id,
             (void)direct_state_delta_tcp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
+        auto& state = *it->second;
 
         const bool rudp_established =
-            it->second.rudp_engine != nullptr
-            && it->second.rudp_engine->state().lifecycle == server::core::net::rudp::LifecycleState::kEstablished;
+            state.rudp_engine != nullptr
+            && state.rudp_engine->state().lifecycle == server::core::net::rudp::LifecycleState::kEstablished;
         decision = evaluate_direct_egress(DirectEgressContext{
             .msg_id = msg_id,
-            .udp_bound = it->second.udp_bound,
-            .rudp_selected = it->second.rudp_selected,
-            .rudp_fallback_to_tcp = it->second.rudp_fallback_to_tcp,
+            .udp_bound = state.udp_bound,
+            .rudp_selected = state.rudp_selected,
+            .rudp_fallback_to_tcp = state.rudp_fallback_to_tcp,
             .rudp_established = rudp_established,
         });
-        endpoint = it->second.udp_endpoint;
+        endpoint = state.udp_endpoint;
 
         if (decision.route == DirectEgressRoute::kRudp) {
             std::vector<std::uint8_t> datagram;
             const auto channel = server::protocol::opcode_policy(msg_id).channel;
-            if (!it->second.rudp_engine->queue_unreliable_payload(frame, channel, unix_time_ms(), datagram)) {
-                it->second.rudp_fallback_to_tcp = true;
+            if (!state.rudp_engine->queue_unreliable_payload(frame, channel, unix_time_ms(), datagram)) {
+                state.rudp_fallback_to_tcp = true;
                 (void)rudp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
                 (void)direct_state_delta_tcp_fallback_total_.fetch_add(1, std::memory_order_relaxed);
                 return false;
@@ -1833,12 +1876,7 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
 
     std::optional<server::core::discovery::InstanceSelector> resume_locator_selector;
     if (is_resume_routing_key(client_id)) {
-        if (auto hint = load_resume_locator_hint(client_id)) {
-            (void)resume_locator_lookup_hit_total_.fetch_add(1, std::memory_order_relaxed);
-            resume_locator_selector = make_resume_locator_selector(*hint);
-        } else {
-            (void)resume_locator_lookup_miss_total_.fetch_add(1, std::memory_order_relaxed);
-        }
+        resume_locator_selector = load_resume_locator_selector(client_id);
     }
 
     // 2) 신규 선택:
@@ -1849,8 +1887,8 @@ std::optional<GatewayApp::SelectedBackend> GatewayApp::select_best_server(const 
         std::lock_guard<std::mutex> lock(session_mutex_);
         for (const auto& [session_id, state] : sessions_) {
             (void)session_id;
-            if (!state.backend_instance_id.empty()) {
-                ++local_backend_load[state.backend_instance_id];
+            if (state && !state->backend_instance_id.empty()) {
+                ++local_backend_load[state->backend_instance_id];
             }
         }
     }
@@ -1973,35 +2011,39 @@ std::string GatewayApp::make_resume_locator_key(std::string_view routing_key) co
     return key;
 }
 
-std::optional<GatewayApp::ResumeLocatorHint> GatewayApp::load_resume_locator_hint(std::string_view routing_key) {
+std::optional<server::core::discovery::InstanceSelector> GatewayApp::load_resume_locator_selector(
+    std::string_view routing_key) {
     if (!redis_client_ || routing_key.empty() || !is_resume_routing_key(routing_key)) {
         return std::nullopt;
     }
 
     const auto payload = redis_client_->get(make_resume_locator_key(routing_key));
     if (!payload.has_value() || payload->empty()) {
+        (void)resume_locator_lookup_miss_total_.fetch_add(1, std::memory_order_relaxed);
         return std::nullopt;
     }
-    return parse_resume_locator_hint(*payload);
-}
+    (void)resume_locator_lookup_hit_total_.fetch_add(1, std::memory_order_relaxed);
 
-std::optional<server::core::discovery::InstanceSelector> GatewayApp::make_resume_locator_selector(
-    const ResumeLocatorHint& hint) const {
+    const auto hint = parse_resume_locator_hint(*payload);
+    if (!hint.has_value()) {
+        return std::nullopt;
+    }
+
     server::core::discovery::InstanceSelector selector{};
-    if (!hint.world_id.empty()) {
-        selector.tags.push_back("world:" + hint.world_id);
+    if (!hint->world_id.empty()) {
+        selector.tags.push_back("world:" + hint->world_id);
     }
-    if (!hint.role.empty()) {
-        selector.roles.push_back(hint.role);
+    if (!hint->role.empty()) {
+        selector.roles.push_back(hint->role);
     }
-    if (!hint.game_mode.empty()) {
-        selector.game_modes.push_back(hint.game_mode);
+    if (!hint->game_mode.empty()) {
+        selector.game_modes.push_back(hint->game_mode);
     }
-    if (!hint.region.empty()) {
-        selector.regions.push_back(hint.region);
+    if (!hint->region.empty()) {
+        selector.regions.push_back(hint->region);
     }
-    if (!hint.shard.empty()) {
-        selector.shards.push_back(hint.shard);
+    if (!hint->shard.empty()) {
+        selector.shards.push_back(hint->shard);
     }
 
     if (selector.roles.empty()
@@ -2278,64 +2320,64 @@ void GatewayApp::configure_gateway() {
         rudp_rollout_policy_.opcode_allowlist.clear();
     }
 
-    rudp_config_.handshake_timeout_ms = parse_env_u32_bounded(
+    rudp_config_->handshake_timeout_ms = parse_env_u32_bounded(
         kEnvGatewayRudpHandshakeTimeoutMs,
         1500,
         100,
         60000,
         "GatewayApp invalid GATEWAY_RUDP_HANDSHAKE_TIMEOUT_MS; using default"
     );
-    rudp_config_.idle_timeout_ms = parse_env_u32_bounded(
+    rudp_config_->idle_timeout_ms = parse_env_u32_bounded(
         kEnvGatewayRudpIdleTimeoutMs,
         10000,
         1000,
         300000,
         "GatewayApp invalid GATEWAY_RUDP_IDLE_TIMEOUT_MS; using default"
     );
-    rudp_config_.ack_delay_ms = parse_env_u32_bounded(
+    rudp_config_->ack_delay_ms = parse_env_u32_bounded(
         kEnvGatewayRudpAckDelayMs,
         10,
         1,
         200,
         "GatewayApp invalid GATEWAY_RUDP_ACK_DELAY_MS; using default"
     );
-    rudp_config_.max_inflight_packets = parse_env_size_bounded(
+    rudp_config_->max_inflight_packets = parse_env_size_bounded(
         kEnvGatewayRudpMaxInflightPackets,
         256,
         1,
         4096,
         "GatewayApp invalid GATEWAY_RUDP_MAX_INFLIGHT_PACKETS; using default"
     );
-    rudp_config_.max_inflight_bytes = parse_env_size_bounded(
+    rudp_config_->max_inflight_bytes = parse_env_size_bounded(
         kEnvGatewayRudpMaxInflightBytes,
         256 * 1024,
         1024,
         16 * 1024 * 1024,
         "GatewayApp invalid GATEWAY_RUDP_MAX_INFLIGHT_BYTES; using default"
     );
-    rudp_config_.mtu_payload_bytes = parse_env_size_bounded(
+    rudp_config_->mtu_payload_bytes = parse_env_size_bounded(
         kEnvGatewayRudpMtuPayloadBytes,
         1200,
         256,
         1400,
         "GatewayApp invalid GATEWAY_RUDP_MTU_PAYLOAD_BYTES; using default"
     );
-    rudp_config_.rto_min_ms = parse_env_u32_bounded(
+    rudp_config_->rto_min_ms = parse_env_u32_bounded(
         kEnvGatewayRudpRtoMinMs,
         50,
         1,
         10000,
         "GatewayApp invalid GATEWAY_RUDP_RTO_MIN_MS; using default"
     );
-    rudp_config_.rto_max_ms = parse_env_u32_bounded(
+    rudp_config_->rto_max_ms = parse_env_u32_bounded(
         kEnvGatewayRudpRtoMaxMs,
         2000,
         1,
         60000,
         "GatewayApp invalid GATEWAY_RUDP_RTO_MAX_MS; using default"
     );
-    if (rudp_config_.rto_max_ms < rudp_config_.rto_min_ms) {
-        rudp_config_.rto_max_ms = rudp_config_.rto_min_ms;
+    if (rudp_config_->rto_max_ms < rudp_config_->rto_min_ms) {
+        rudp_config_->rto_max_ms = rudp_config_->rto_min_ms;
     }
 
     if (!rudp_rollout_policy_.enabled) {
@@ -2378,14 +2420,14 @@ void GatewayApp::configure_gateway() {
         + " rudp_enable=" + std::string(rudp_rollout_policy_.enabled ? "1" : "0")
         + " rudp_canary_percent=" + std::to_string(rudp_rollout_policy_.canary_percent)
         + " rudp_opcode_allowlist_size=" + std::to_string(rudp_rollout_policy_.opcode_allowlist.size())
-        + " rudp_handshake_timeout_ms=" + std::to_string(rudp_config_.handshake_timeout_ms)
-        + " rudp_idle_timeout_ms=" + std::to_string(rudp_config_.idle_timeout_ms)
-        + " rudp_ack_delay_ms=" + std::to_string(rudp_config_.ack_delay_ms)
-        + " rudp_rto_min_ms=" + std::to_string(rudp_config_.rto_min_ms)
-        + " rudp_rto_max_ms=" + std::to_string(rudp_config_.rto_max_ms)
-        + " rudp_max_inflight_packets=" + std::to_string(rudp_config_.max_inflight_packets)
-        + " rudp_max_inflight_bytes=" + std::to_string(rudp_config_.max_inflight_bytes)
-        + " rudp_mtu_payload_bytes=" + std::to_string(rudp_config_.mtu_payload_bytes));
+        + " rudp_handshake_timeout_ms=" + std::to_string(rudp_config_->handshake_timeout_ms)
+        + " rudp_idle_timeout_ms=" + std::to_string(rudp_config_->idle_timeout_ms)
+        + " rudp_ack_delay_ms=" + std::to_string(rudp_config_->ack_delay_ms)
+        + " rudp_rto_min_ms=" + std::to_string(rudp_config_->rto_min_ms)
+        + " rudp_rto_max_ms=" + std::to_string(rudp_config_->rto_max_ms)
+        + " rudp_max_inflight_packets=" + std::to_string(rudp_config_->max_inflight_packets)
+        + " rudp_max_inflight_bytes=" + std::to_string(rudp_config_->max_inflight_bytes)
+        + " rudp_mtu_payload_bytes=" + std::to_string(rudp_config_->mtu_payload_bytes));
 }
 
 void GatewayApp::configure_infrastructure() {
@@ -2580,13 +2622,13 @@ void GatewayApp::do_udp_receive() {
             if (server::core::net::rudp::looks_like_rudp(incoming_datagram)) {
                 (void)rudp_packets_total_.fetch_add(1, std::memory_order_relaxed);
 
-                GatewayApp::TransportSessionPtr bound_session;
+                TransportSessionPtr bound_session;
                 std::string bound_session_id;
                 {
                     std::lock_guard<std::mutex> lock(session_mutex_);
                     for (const auto& [sid, state] : sessions_) {
-                        if (state.udp_bound && state.udp_endpoint == udp_remote_endpoint_) {
-                            bound_session = state.session;
+                        if (state && state->udp_bound && state->udp_endpoint == udp_remote_endpoint_) {
+                            bound_session = state->session;
                             bound_session_id = sid;
                             break;
                         }
@@ -2610,11 +2652,12 @@ void GatewayApp::do_udp_receive() {
                     std::lock_guard<std::mutex> lock(session_mutex_);
                     auto it = sessions_.find(bound_session_id);
                     if (it == sessions_.end()
-                        || !it->second.udp_bound
-                        || it->second.udp_endpoint != udp_remote_endpoint_) {
+                        || !it->second
+                        || !it->second->udp_bound
+                        || it->second->udp_endpoint != udp_remote_endpoint_) {
                         fallback_required = true;
                     } else {
-                        auto& state = it->second;
+                        auto& state = *it->second;
                         if (!rudp_rollout_policy_.enabled
                             || !state.rudp_selected
                             || state.rudp_fallback_to_tcp
@@ -2715,8 +2758,8 @@ void GatewayApp::do_udp_receive() {
                         server::core::runtime_metrics::RudpFallbackReason::kProtocolError);
                     std::lock_guard<std::mutex> lock(session_mutex_);
                     auto it = sessions_.find(bound_session_id);
-                    if (it != sessions_.end()) {
-                        it->second.rudp_fallback_to_tcp = true;
+                    if (it != sessions_.end() && it->second) {
+                        it->second->rudp_fallback_to_tcp = true;
                     }
                 }
 
@@ -2848,13 +2891,13 @@ void GatewayApp::do_udp_receive() {
                 return;
             }
 
-            GatewayApp::TransportSessionPtr bound_session;
+            TransportSessionPtr bound_session;
             std::string bound_session_id;
             {
                 std::lock_guard<std::mutex> lock(session_mutex_);
                 for (auto& [sid, state] : sessions_) {
-                    if (state.udp_bound && state.udp_endpoint == udp_remote_endpoint_) {
-                        bound_session = state.session;
+                    if (state && state->udp_bound && state->udp_endpoint == udp_remote_endpoint_) {
+                        bound_session = state->session;
                         bound_session_id = sid;
                         break;
                     }
@@ -2937,9 +2980,10 @@ void GatewayApp::do_udp_receive() {
                     std::lock_guard<std::mutex> lock(session_mutex_);
                     auto it = sessions_.find(bound_session_id);
                     if (it != sessions_.end()
-                        && it->second.udp_bound
-                        && it->second.udp_endpoint == udp_remote_endpoint_) {
-                        update = it->second.udp_sequenced_metrics.on_packet(header.seq, now_ms);
+                        && it->second
+                        && it->second->udp_bound
+                        && it->second->udp_endpoint == udp_remote_endpoint_) {
+                        update = it->second->udp_sequenced_metrics.on_packet(header.seq, now_ms);
                     }
                 }
 

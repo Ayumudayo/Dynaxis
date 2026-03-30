@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 #include <server/chat/chat_service.hpp>
+#include "chat_service_private_access.hpp"
+#include <server/core/discovery/world_lifecycle_policy.hpp>
 #include <server/core/net/session.hpp>
 #include <server/core/net/dispatcher.hpp>
 #include <server/core/concurrent/job_queue.hpp>
@@ -9,11 +11,13 @@
 #include <server/core/config/options.hpp>
 #include <server/core/net/connection_runtime_state.hpp>
 #include <server/core/protocol/protocol_errors.hpp>
+#include <server/core/protocol/system_opcodes.hpp>
 #include <server/core/protocol/packet.hpp>
 #include <server/core/protocol/version.hpp>
 #include <server/core/runtime_metrics.hpp>
 #include <server/core/scripting/lua_runtime.hpp>
 #include <server/core/util/service_registry.hpp>
+#include <server/core/worlds/migration.hpp>
 #include <server/protocol/game_opcodes.hpp>
 #include "wire.pb.h"
 #include <boost/asio.hpp>
@@ -735,7 +739,7 @@ struct ChatServiceContinuityTester {
     };
 
     static std::optional<ResumeSnapshot> TryResume(ChatService& service, std::string_view token) {
-        const auto lease = service.try_resume_continuity_lease(token);
+        const auto lease = ChatServicePrivateAccess::try_resume_continuity_lease(service, token);
         if (!lease.has_value()) {
             return std::nullopt;
         }
@@ -753,15 +757,15 @@ struct ChatServiceContinuityTester {
     }
 
     static std::string WorldPolicyKey(ChatService& service, const std::string& world_id) {
-        return service.make_continuity_world_policy_key(world_id);
+        return ChatServicePrivateAccess::make_continuity_world_policy_key(service, world_id);
     }
 
     static std::string WorldOwnerKey(ChatService& service, const std::string& world_id) {
-        return service.make_continuity_world_owner_key(world_id);
+        return ChatServicePrivateAccess::make_continuity_world_owner_key(service, world_id);
     }
 
     static std::string WorldMigrationKey(ChatService& service, const std::string& world_id) {
-        return service.make_continuity_world_migration_key(world_id);
+        return ChatServicePrivateAccess::make_continuity_world_migration_key(service, world_id);
     }
 };
 

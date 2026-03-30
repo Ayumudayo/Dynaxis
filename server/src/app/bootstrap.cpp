@@ -27,6 +27,7 @@
 #include "server/app/metrics_server.hpp"
 #include "server/app/topology_runtime_assignment.hpp"
 #include "server/fps/fps_service.hpp"
+#include "server_runtime_state.hpp"
 
 #include "server/core/net/dispatcher.hpp"
 #include "server/core/security/admin_command_auth.hpp"
@@ -66,28 +67,6 @@ namespace server::app {
  * 부트스트랩 순서가 흔들리면 ready 판정, Redis fanout 구독, 관리자 제어면, 종료 drain 동작이
  * 서로 다른 수명주기를 보게 되어 운영 중 재현하기 어려운 부팅/종료 버그가 생깁니다.
  */
-// 전역 메트릭 변수는 부트스트랩 경로와 메트릭 렌더링 경로가 같은 카운터를 공유하도록 둔다.
-// 이를 각 모듈 로컬 static으로 흩어 두면 shutdown drain 같은 교차 단계 메트릭을 한곳에서 모으기 어렵다.
-std::atomic<std::uint64_t> g_subscribe_total{0};
-std::atomic<std::uint64_t> g_self_echo_drop_total{0};
-std::atomic<long long>     g_subscribe_last_lag_ms{0};
-std::atomic<std::uint64_t> g_admin_command_verify_ok_total{0};
-std::atomic<std::uint64_t> g_admin_command_verify_fail_total{0};
-std::atomic<std::uint64_t> g_admin_command_verify_replay_total{0};
-std::atomic<std::uint64_t> g_admin_command_verify_signature_mismatch_total{0};
-std::atomic<std::uint64_t> g_admin_command_verify_expired_total{0};
-std::atomic<std::uint64_t> g_admin_command_verify_future_total{0};
-std::atomic<std::uint64_t> g_admin_command_verify_missing_field_total{0};
-std::atomic<std::uint64_t> g_admin_command_verify_invalid_issued_at_total{0};
-std::atomic<std::uint64_t> g_admin_command_verify_secret_not_configured_total{0};
-std::atomic<std::uint64_t> g_admin_command_target_mismatch_total{0};
-std::atomic<std::uint64_t> g_shutdown_drain_completed_total{0};
-std::atomic<std::uint64_t> g_shutdown_drain_timeout_total{0};
-std::atomic<std::uint64_t> g_shutdown_drain_forced_close_total{0};
-std::atomic<std::uint64_t> g_shutdown_drain_remaining_connections{0};
-std::atomic<long long> g_shutdown_drain_elapsed_ms{0};
-std::atomic<long long> g_shutdown_drain_timeout_ms{0};
-
 namespace {
 
 std::string trim_ascii(std::string_view value) {
@@ -312,14 +291,7 @@ int run_server(int argc, char** argv) {
             return 1;
         }
 
-        g_shutdown_drain_completed_total.store(0, std::memory_order_relaxed);
-        g_shutdown_drain_timeout_total.store(0, std::memory_order_relaxed);
-        g_shutdown_drain_forced_close_total.store(0, std::memory_order_relaxed);
-        g_shutdown_drain_remaining_connections.store(0, std::memory_order_relaxed);
-        g_shutdown_drain_elapsed_ms.store(0, std::memory_order_relaxed);
-        g_shutdown_drain_timeout_ms.store(
-            static_cast<long long>(config.shutdown_drain_timeout_ms),
-            std::memory_order_relaxed);
+        reset_bootstrap_shutdown_drain_metrics(config.shutdown_drain_timeout_ms);
 
         // readiness는 "필수 의존성이 실제로 준비됐는가"를 뜻한다.
         // DB는 항상 필수이고, Redis는 구성된 경우에만 필수로 선언해 환경별 의미를 고정한다.
@@ -1100,7 +1072,7 @@ int run_server(int argc, char** argv) {
                         from = message.substr(3);
                     }
                     if (from == gwid) {
-                        // g_self_echo_drop_total++;
+                        // behavior remains unchanged; keep self-echo drops out of the counter until semantics are finalized.
                         return;
                     }
 
@@ -1123,7 +1095,7 @@ int run_server(int argc, char** argv) {
                         std::string room = channel.substr(room_prefix.size());
                         std::vector<std::uint8_t> body(payload.begin(), payload.end());
                         chat.broadcast_room(room, body, nullptr);
-                        g_subscribe_total++;
+                        record_bootstrap_subscribe();
                         return;
                     }
 
@@ -1147,36 +1119,10 @@ int run_server(int argc, char** argv) {
                     std::unordered_map<std::string, std::string> admin_fields;
                     if (*exact_match != ExactFanoutChannel::kWhisper) {
                         admin_fields = parse_kv_lines(payload);
-                        const admin_auth::VerifyResult verify_result = admin_command_verifier->verify(admin_fields);
+                        const admin_auth::VerifyResult verify_result =
+                            admin_command_verifier->verify(admin_fields);
+                        record_bootstrap_admin_verify_result(verify_result);
                         if (verify_result != admin_auth::VerifyResult::kOk) {
-                            g_admin_command_verify_fail_total.fetch_add(1, std::memory_order_relaxed);
-
-                            switch (verify_result) {
-                            case admin_auth::VerifyResult::kReplay:
-                                g_admin_command_verify_replay_total.fetch_add(1, std::memory_order_relaxed);
-                                break;
-                            case admin_auth::VerifyResult::kSignatureMismatch:
-                                g_admin_command_verify_signature_mismatch_total.fetch_add(1, std::memory_order_relaxed);
-                                break;
-                            case admin_auth::VerifyResult::kExpired:
-                                g_admin_command_verify_expired_total.fetch_add(1, std::memory_order_relaxed);
-                                break;
-                            case admin_auth::VerifyResult::kFuture:
-                                g_admin_command_verify_future_total.fetch_add(1, std::memory_order_relaxed);
-                                break;
-                            case admin_auth::VerifyResult::kMissingField:
-                                g_admin_command_verify_missing_field_total.fetch_add(1, std::memory_order_relaxed);
-                                break;
-                            case admin_auth::VerifyResult::kInvalidIssuedAt:
-                                g_admin_command_verify_invalid_issued_at_total.fetch_add(1, std::memory_order_relaxed);
-                                break;
-                            case admin_auth::VerifyResult::kSecretNotConfigured:
-                                g_admin_command_verify_secret_not_configured_total.fetch_add(1, std::memory_order_relaxed);
-                                break;
-                            case admin_auth::VerifyResult::kOk:
-                                break;
-                            }
-
                             const auto request_id_it = admin_fields.find("request_id");
                             const auto actor_it = admin_fields.find("actor");
                             const std::string request_id = request_id_it == admin_fields.end() ? std::string("unknown")
@@ -1191,8 +1137,6 @@ int run_server(int argc, char** argv) {
                             return;
                         }
 
-                        g_admin_command_verify_ok_total.fetch_add(1, std::memory_order_relaxed);
-
                         const AdminSelectorParseResult selector_parse = parse_admin_selector_fields(admin_fields);
                         if (selector_parse.selector_specified) {
                             bool target_match = false;
@@ -1203,7 +1147,7 @@ int run_server(int argc, char** argv) {
                             }
 
                             if (!target_match) {
-                                g_admin_command_target_mismatch_total.fetch_add(1, std::memory_order_relaxed);
+                                record_bootstrap_admin_target_mismatch();
                                 const auto request_id_it = admin_fields.find("request_id");
                                 const auto actor_it = admin_fields.find("actor");
                                 const std::string request_id = request_id_it == admin_fields.end()
@@ -1234,7 +1178,7 @@ int run_server(int argc, char** argv) {
                     case ExactFanoutChannel::kWhisper: {
                         std::vector<std::uint8_t> body(payload.begin(), payload.end());
                         chat.deliver_remote_whisper(body);
-                        g_subscribe_total++;
+                        record_bootstrap_subscribe();
                         return;
                     }
                     case ExactFanoutChannel::kAdminDisconnect: {
@@ -1256,7 +1200,7 @@ int run_server(int argc, char** argv) {
                         }
 
                         chat.admin_disconnect_users(users, reason);
-                        g_subscribe_total++;
+                        record_bootstrap_subscribe();
                         return;
                     }
                     case ExactFanoutChannel::kAdminAnnounce: {
@@ -1268,7 +1212,7 @@ int run_server(int argc, char** argv) {
                         }
 
                         chat.admin_broadcast_notice(text_it->second);
-                        g_subscribe_total++;
+                        record_bootstrap_subscribe();
                         return;
                     }
                     case ExactFanoutChannel::kAdminSettings: {
@@ -1281,7 +1225,7 @@ int run_server(int argc, char** argv) {
                         }
 
                         chat.admin_apply_runtime_setting(key_it->second, value_it->second);
-                        g_subscribe_total++;
+                        record_bootstrap_subscribe();
                         return;
                     }
                     case ExactFanoutChannel::kAdminModeration: {
@@ -1317,7 +1261,7 @@ int run_server(int argc, char** argv) {
                         }
 
                         chat.admin_apply_user_moderation(op_it->second, users, duration_sec, reason);
-                        g_subscribe_total++;
+                        record_bootstrap_subscribe();
                         return;
                     }
                     }
@@ -1332,10 +1276,7 @@ int run_server(int argc, char** argv) {
         // 11. metrics/admin HTTP 시작
         // 운영 면은 데이터 plane과 거의 같이 열어 두되, ready 판정은 AppHost가 따로 쥔다.
         // 그래야 관측은 일찍 가능하면서도 실제 트래픽 수용 시점은 엄격하게 제어할 수 있다.
-        engine.start_admin_http(
-            config.metrics_port,
-            []() { return render_metrics_text(); },
-            []() { return render_logs_text(); });
+        start_server_admin_http(engine, config.metrics_port);
 
         // 12. 종료 시그널 대기 및 shutdown 순서 등록
         // drain -> accept 중지 -> 워커/타이머 정리 순서를 명시해 새 연결 유입과 기존 연결 정리를 섞지 않는다.
@@ -1345,19 +1286,18 @@ int run_server(int argc, char** argv) {
             const std::uint64_t timeout_ms = config.shutdown_drain_timeout_ms;
             const std::uint64_t poll_ms = std::max<std::uint64_t>(1, config.shutdown_drain_poll_ms);
 
-            g_shutdown_drain_timeout_ms.store(static_cast<long long>(timeout_ms), std::memory_order_relaxed);
+            set_bootstrap_shutdown_drain_timeout(timeout_ms);
 
             const auto started_at = std::chrono::steady_clock::now();
             for (;;) {
                 const std::uint64_t remaining = core_internal::connection_count(state);
-                g_shutdown_drain_remaining_connections.store(remaining, std::memory_order_relaxed);
 
                 const auto now = std::chrono::steady_clock::now();
                 const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - started_at).count();
-                g_shutdown_drain_elapsed_ms.store(elapsed, std::memory_order_relaxed);
+                update_bootstrap_shutdown_drain_progress(remaining, elapsed);
 
                 if (remaining == 0) {
-                    g_shutdown_drain_completed_total.fetch_add(1, std::memory_order_relaxed);
+                    record_bootstrap_shutdown_drain_completed();
                     corelog::info("Shutdown drain completed within timeout");
                     break;
                 }
@@ -1365,8 +1305,7 @@ int run_server(int argc, char** argv) {
                 if (elapsed >= static_cast<long long>(timeout_ms)) {
                     // drain이 무한정 기다리면 orchestration 종료가 멈추므로,
                     // timeout 이후에는 남은 연결 수를 기록하고 상위 레이어가 다음 종료 단계로 넘어가게 한다.
-                    g_shutdown_drain_timeout_total.fetch_add(1, std::memory_order_relaxed);
-                    g_shutdown_drain_forced_close_total.fetch_add(remaining, std::memory_order_relaxed);
+                    record_bootstrap_shutdown_drain_timeout(remaining);
                     corelog::warn(
                         "Shutdown drain timeout reached; forcing close of remaining connections="
                         + std::to_string(remaining));

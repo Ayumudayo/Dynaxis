@@ -1,4 +1,5 @@
 #include "server/chat/chat_service.hpp"
+#include "chat_service_state.hpp"
 #include "server/protocol/game_opcodes.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/protocol/protocol_flags.hpp"
@@ -48,15 +49,15 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
         std::string logical_session_id;
         std::uint64_t logical_session_expires_unix_ms = 0;
         {
-            std::lock_guard<std::mutex> lk(state_.mu);
+            std::lock_guard<std::mutex> lk(impl_->state.mu);
             // 인증 여부 확인
-            if (!state_.authed.count(session_sp.get())) {
+            if (!impl_->state.authed.count(session_sp.get())) {
                 session_sp->send_error(proto::errc::UNAUTHORIZED, "unauthorized");
                 return;
             }
             // 현재 참여 중인 방 확인
-            auto itcr = state_.cur_room.find(session_sp.get());
-            if (itcr == state_.cur_room.end()) {
+            auto itcr = impl_->state.cur_room.find(session_sp.get());
+            if (itcr == impl_->state.cur_room.end()) {
                 session_sp->send_error(proto::errc::NO_ROOM, "no current room");
                 return;
             }
@@ -69,16 +70,16 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
             
             // 방에서 먼저 제거한 뒤 남은 참여자와 후속 owner/eject 처리를 계산한다.
             // 순서가 뒤바뀌면 떠나는 사용자가 여전히 대상 목록에 남아 자기 자신에게 퇴장 알림을 받게 될 수 있다.
-            auto itroom = state_.rooms.find(room_to_leave);
-            if (itroom != state_.rooms.end()) {
-                auto it2 = state_.user.find(session_sp.get());
-                sender_name = (it2 != state_.user.end()) ? it2->second : std::string("guest");
-                if (auto it_uuid = state_.user_uuid.find(session_sp.get()); it_uuid != state_.user_uuid.end()) { user_uuid = it_uuid->second; }
-                if (auto it_logical = state_.logical_session_id.find(session_sp.get()); it_logical != state_.logical_session_id.end()) {
+            auto itroom = impl_->state.rooms.find(room_to_leave);
+            if (itroom != impl_->state.rooms.end()) {
+                auto it2 = impl_->state.user.find(session_sp.get());
+                sender_name = (it2 != impl_->state.user.end()) ? it2->second : std::string("guest");
+                if (auto it_uuid = impl_->state.user_uuid.find(session_sp.get()); it_uuid != impl_->state.user_uuid.end()) { user_uuid = it_uuid->second; }
+                if (auto it_logical = impl_->state.logical_session_id.find(session_sp.get()); it_logical != impl_->state.logical_session_id.end()) {
                     logical_session_id = it_logical->second;
                 }
-                if (auto it_expires = state_.logical_session_expires_unix_ms.find(session_sp.get());
-                    it_expires != state_.logical_session_expires_unix_ms.end()) {
+                if (auto it_expires = impl_->state.logical_session_expires_unix_ms.find(session_sp.get());
+                    it_expires != impl_->state.logical_session_expires_unix_ms.end()) {
                     logical_session_expires_unix_ms = it_expires->second;
                 }
 
@@ -88,27 +89,27 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
 
                 const bool was_owner =
                     (room_to_leave != "lobby") &&
-                    (state_.room_owners.find(room_to_leave) != state_.room_owners.end()) &&
-                    (state_.room_owners[room_to_leave] == sender_name);
+                    (impl_->state.room_owners.find(room_to_leave) != impl_->state.room_owners.end()) &&
+                    (impl_->state.room_owners[room_to_leave] == sender_name);
                 itroom->second.erase(session_sp);
                 
                 // 퇴장 알림을 보낼 대상(방에 남은 사람들) 수집
-                auto itb = state_.rooms.find(room_to_leave);
-                if (itb != state_.rooms.end()) {
+                auto itb = impl_->state.rooms.find(room_to_leave);
+                if (itb != impl_->state.rooms.end()) {
                     auto& set = itb->second;
                     collect_room_sessions(set, targets);
                     // 방이 비었으면 방 정보와 비밀번호 삭제 (로비 제외)
                     if (set.empty() && room_to_leave != std::string("lobby")) { 
-                        state_.rooms.erase(itb); 
-                        state_.room_passwords.erase(room_to_leave);
-                        state_.room_owners.erase(room_to_leave);
-                        state_.room_invites.erase(room_to_leave);
+                        impl_->state.rooms.erase(itb); 
+                        impl_->state.room_passwords.erase(room_to_leave);
+                        impl_->state.room_owners.erase(room_to_leave);
+                        impl_->state.room_invites.erase(room_to_leave);
                     } else if (was_owner && room_to_leave != std::string("lobby")) {
                         std::string new_owner;
                         for (const auto& weak : set) {
                             if (auto candidate = weak.lock()) {
-                                auto user_it = state_.user.find(candidate.get());
-                                if (user_it != state_.user.end()) {
+                                auto user_it = impl_->state.user.find(candidate.get());
+                                if (user_it != impl_->state.user.end()) {
                                     new_owner = user_it->second;
                                     if (new_owner != "guest") {
                                         break;
@@ -117,7 +118,7 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
                             }
                         }
                         if (!new_owner.empty()) {
-                            state_.room_owners[room_to_leave] = new_owner;
+                            impl_->state.room_owners[room_to_leave] = new_owner;
                         }
                     }
                 }
@@ -125,13 +126,13 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
                 std::vector<std::shared_ptr<Session>> filtered_targets;
                 filtered_targets.reserve(targets.size());
                 for (auto& target : targets) {
-                    auto receiver_it = state_.user.find(target.get());
-                    if (receiver_it == state_.user.end()) {
+                    auto receiver_it = impl_->state.user.find(target.get());
+                    if (receiver_it == impl_->state.user.end()) {
                         continue;
                     }
                     const std::string& receiver = receiver_it->second;
-                    if (auto blk_it = state_.user_blacklists.find(receiver);
-                        blk_it != state_.user_blacklists.end() && blk_it->second.count(sender_name) > 0) {
+                    if (auto blk_it = impl_->state.user_blacklists.find(receiver);
+                        blk_it != impl_->state.user_blacklists.end() && blk_it->second.count(sender_name) > 0) {
                         continue;
                     }
                     filtered_targets.push_back(target);
@@ -140,8 +141,8 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
             }
             // leave 후 기본 위치를 로비로 고정해 "현재 방 없음" 상태를 길게 남기지 않는다.
             // 이 규칙이 있어야 refresh/continuity가 일관된 fallback room을 사용할 수 있다.
-            state_.cur_room[session_sp.get()] = std::string("lobby");
-            state_.rooms["lobby"].insert(session_sp);
+            impl_->state.cur_room[session_sp.get()] = std::string("lobby");
+            impl_->state.rooms["lobby"].insert(session_sp);
         }
         if (!logical_session_id.empty()) {
             persist_continuity_room(logical_session_id, next_room, logical_session_expires_unix_ms);
@@ -168,54 +169,54 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
 
         // Redis presence SET에서도 사용자를 제거해 TTL 기반 알림과 일치시킨다.
         // 메모리 상태만 갱신하고 presence를 남겨 두면 다른 런타임은 사용자가 아직 그 방에 있다고 본다.
-        if (redis_ && !room_to_leave.empty()) {
+        if (impl_->runtime.redis && !room_to_leave.empty()) {
             try {
                 std::string uid;
                 {
-                    std::lock_guard<std::mutex> lk(state_.mu);
-                    auto it = state_.user_uuid.find(session_sp.get());
-                    if (it != state_.user_uuid.end()) uid = it->second;
+                    std::lock_guard<std::mutex> lk(impl_->state.mu);
+                    auto it = impl_->state.user_uuid.find(session_sp.get());
+                    if (it != impl_->state.user_uuid.end()) uid = it->second;
                 }
                 if (!uid.empty()) {
                     auto rid = ensure_room_id_ci(room_to_leave);
                     room_uuid = rid;
                     if (!rid.empty()) {
-                        redis_->srem(make_presence_key("presence:room:", rid), uid);
+                        impl_->runtime.redis->srem(make_presence_key("presence:room:", rid), uid);
                         // 화면 표시용 닉네임 목록에서 제거
-                        redis_->srem("room:users:" + room_to_leave, sender_name);
+                        impl_->runtime.redis->srem("room:users:" + room_to_leave, sender_name);
                     }
                 } else {
                     // uid가 없더라도(게스트 등) room_uuid는 필요할 수 있음
                     room_uuid = ensure_room_id_ci(room_to_leave);
-                    redis_->srem("room:users:" + room_to_leave, sender_name);
+                    impl_->runtime.redis->srem("room:users:" + room_to_leave, sender_name);
                 }
                 
                 // 방이 비었는지 확인하고 활성 목록에서 제거한다.
                 if (room_to_leave != "lobby") {
                     std::size_t remaining = 1;
-                    (void)redis_->scard("room:users:" + room_to_leave, remaining);
+                    (void)impl_->runtime.redis->scard("room:users:" + room_to_leave, remaining);
                     
                     // 디버그 로그: 남은 인원 확인
 
                     if (remaining == 0) {
-                        redis_->srem("rooms:active", room_to_leave);
-                        redis_->del("room:password:" + room_to_leave);
+                        impl_->runtime.redis->srem("rooms:active", room_to_leave);
+                        impl_->runtime.redis->del("room:password:" + room_to_leave);
                         
                         // 방이 완전히 비었으므로 방을 비활성화(close) 처리한다.
                         // 이렇게 해야 다음에 같은 이름의 방을 만들더라도 새 UUID를 발급받아,
                         // 이전 채팅 내역이 섞이지 않는다. 이는 privacy와 audit 보존 모두에 중요하다.
-                        if (db_pool_ && !room_uuid.empty()) {
+                        if (impl_->runtime.db_pool && !room_uuid.empty()) {
                             try {
-                                auto uow = db_pool_->make_repository_unit_of_work();
+                                auto uow = impl_->runtime.db_pool->make_repository_unit_of_work();
                                 uow->rooms().close(room_uuid);
                                 uow->commit();
 
                                 // 로컬 캐시에서도 제거해 다음 방 생성 시 새로운 UUID를 발급받도록 한다.
                                 {
-                                    std::lock_guard<std::mutex> lk(state_.mu);
-                                    state_.room_ids.erase(room_to_leave);
-                                    state_.room_owners.erase(room_to_leave);
-                                    state_.room_invites.erase(room_to_leave);
+                                    std::lock_guard<std::mutex> lk(impl_->state.mu);
+                                    impl_->state.room_ids.erase(room_to_leave);
+                                    impl_->state.room_owners.erase(room_to_leave);
+                                    impl_->state.room_invites.erase(room_to_leave);
                                 }
                             } catch (const std::exception& e) {
                                 corelog::error("failed to close room: " + std::string(e.what()));
@@ -225,7 +226,7 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
                 }
                 
                 // 로비로 재입장하므로 Redis lobby에도 추가
-                redis_->sadd("room:users:lobby", sender_name);
+                impl_->runtime.redis->sadd("room:users:lobby", sender_name);
             } catch (...) {}
         }
 
@@ -233,9 +234,9 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
         std::vector<std::shared_ptr<Session>> t2;
         std::vector<std::uint8_t> body2;
         {
-            std::lock_guard<std::mutex> lk(state_.mu);
-            auto itb = state_.rooms.find("lobby");
-            if (itb != state_.rooms.end()) {
+            std::lock_guard<std::mutex> lk(impl_->state.mu);
+            auto itb = impl_->state.rooms.find("lobby");
+            if (itb != impl_->state.rooms.end()) {
                 auto& set = itb->second;
                 collect_room_sessions(set, t2);
             }
@@ -243,13 +244,13 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
             std::vector<std::shared_ptr<Session>> filtered_lobby_targets;
             filtered_lobby_targets.reserve(t2.size());
             for (auto& target : t2) {
-                auto receiver_it = state_.user.find(target.get());
-                if (receiver_it == state_.user.end()) {
+                auto receiver_it = impl_->state.user.find(target.get());
+                if (receiver_it == impl_->state.user.end()) {
                     continue;
                 }
                 const std::string& receiver = receiver_it->second;
-                if (auto blk_it = state_.user_blacklists.find(receiver);
-                    blk_it != state_.user_blacklists.end() && blk_it->second.count(sender_name) > 0) {
+                if (auto blk_it = impl_->state.user_blacklists.find(receiver);
+                    blk_it != impl_->state.user_blacklists.end() && blk_it->second.count(sender_name) > 0) {
                     continue;
                 }
                 filtered_lobby_targets.push_back(target);

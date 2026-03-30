@@ -36,7 +36,8 @@
 - **금지 사항**:
   - 코드 한 줄을 그대로 번역하는 과주석
   - 거짓 가정(확인되지 않은 동작)을 단정형으로 서술
-  - 생성 파일(`core/include/server/wire/codec.hpp` 등) 직접 주석 수정
+  - generated payload(`build/generated/include/server/generated/**`) 직접 수정
+  - tracked forwarding header(`core/include/server/wire/codec.hpp`, `core/include/server/protocol/game_opcodes.hpp` 등)에 generated body를 수동 반영
 
 예시:
 

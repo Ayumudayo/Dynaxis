@@ -3,9 +3,9 @@
 #include <boost/asio/io_context.hpp>
 
 #include "server/chat/chat_service.hpp"
+#include "chat_service_private_access.hpp"
 #include "server/core/concurrent/job_queue.hpp"
 #include "server/storage/redis/client.hpp"
-#include "wire.pb.h"
 
 #include <deque>
 #include <optional>
@@ -17,20 +17,19 @@
 namespace server::app::chat {
 struct ChatServiceHistoryTester {
     static void OverrideHistoryConfig(ChatService& svc, std::size_t limit, std::size_t max_list) {
-        svc.history_.recent_limit = limit;
-        svc.history_.max_list_len = max_list;
+        ChatServicePrivateAccess::override_history_config(svc, limit, max_list);
     }
 
     static bool Cache(ChatService& svc,
                       const std::string& room_id,
                       const server::wire::v1::StateSnapshot::SnapshotMessage& msg) {
-        return svc.cache_recent_message(room_id, msg);
+        return ChatServicePrivateAccess::cache_recent_message(svc, room_id, msg);
     }
 
     static bool Load(ChatService& svc,
                      const std::string& room_id,
                      std::vector<server::wire::v1::StateSnapshot::SnapshotMessage>& out) {
-        return svc.load_recent_messages_from_cache(room_id, out);
+        return ChatServicePrivateAccess::load_recent_messages_from_cache(svc, room_id, out);
     }
 };
 } // namespace server::app::chat

@@ -153,7 +153,7 @@ rollback 순서를 따로 적는 이유는 RUDP는 "부분 실패"가 흔한 계
 
 - `core/include/server/core/protocol/packet.hpp`
 - `core/include/server/core/protocol/opcode_policy.hpp`
-- `server/include/server/protocol/game_opcodes.hpp`
+- `core/include/server/protocol/game_opcodes.hpp`
 - `gateway/src/gateway_app.cpp`
 - `docs/ops/udp-rollout-rollback.md`
 

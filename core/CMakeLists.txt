@@ -99,7 +99,7 @@ if (NOT TARGET lz4::lz4)
     target_link_libraries(lz4::lz4 INTERFACE ${LZ4_LIBRARIES})
 endif()
 
-target_link_libraries(server_core PUBLIC OpenSSL::SSL OpenSSL::Crypto lz4::lz4)
+target_link_libraries(server_core PUBLIC OpenSSL::SSL OpenSSL::Crypto lz4::lz4 wire_proto)
 
 if (LUAJIT_VENDOR_TARGET)
     get_target_property(LUAJIT_VENDOR_LOCATION ${LUAJIT_VENDOR_TARGET} IMPORTED_LOCATION)
@@ -121,6 +121,7 @@ endif()
 
 target_include_directories(server_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${DYNAXIS_GENERATED_INCLUDE_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
@@ -144,14 +145,6 @@ if (MSVC)
     # headers consistently.
     target_compile_options(server_core PUBLIC /utf-8)
     target_compile_definitions(server_core PUBLIC _WIN32_WINNT=0x0602)
-endif()
-
-# opcode 헤더 생성에 의존 (가능한 경우)
-if (TARGET generate_opcodes)
-    add_dependencies(server_core generate_opcodes)
-endif()
-if (TARGET generate_wire_codec)
-    add_dependencies(server_core generate_wire_codec)
 endif()
 
 include(CMakePackageConfigHelpers)
@@ -198,5 +191,8 @@ if (LUAJIT_VENDOR_TARGET)
 endif()
 
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/"
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+        FILES_MATCHING PATTERN "*.hpp")
+install(DIRECTORY "${DYNAXIS_GENERATED_INCLUDE_DIR}/"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
         FILES_MATCHING PATTERN "*.hpp")

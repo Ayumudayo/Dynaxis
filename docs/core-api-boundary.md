@@ -13,7 +13,8 @@
 ## 표준 include 계약
 - 공개 소비자는 이 문서에서 `Stable`로 지정한 헤더만 포함해야 합니다.
 - 공개 include 형식은 `#include "server/core/..."`(또는 `<server/core/...>`)이며, 구현 경로 include는 금지합니다.
-- `core/include/server/core/protocol/system_opcodes.hpp`는 생성 파일이므로 헤더를 직접 수정하지 않고 JSON과 생성기를 수정합니다.
+- `core/include/server/core/protocol/system_opcodes.hpp`, `core/include/server/protocol/game_opcodes.hpp`, `core/include/server/wire/codec.hpp`는 tracked forwarding header입니다.
+- 실제 generated payload는 build/install tree의 `server/generated/**` 아래에 생성되므로, 헤더 본문을 직접 수정하지 않고 JSON과 생성기를 수정합니다.
 - `Internal`로 표시된 헤더는 샘플/공개 문서에서 사용 금지입니다.
 
 ## 헤더 인벤토리 및 분류
@@ -87,7 +88,7 @@
 | `server/core/trace/context.hpp` | Internal | 로그/상관관계 추적 컨텍스트의 구현 결합 helper |
 | `server/core/storage/connection_pool.hpp` | Internal | 실제 generic transaction/UoW factory와 health-check SPI 헤더. 안정된 소비 표면은 `server/core/storage_execution/connection_pool.hpp` |
 | `server/core/storage/db_worker_pool.hpp` | Internal | 실제 async DB execution helper 구현 헤더. 안정된 소비 표면은 `server/core/storage_execution/db_worker_pool.hpp` |
-| `server/core/storage/redis/client.hpp` | Internal | gateway, server, tools가 공유하는 Redis client 계약. concrete redis-plus-plus adapter와 factory는 여전히 server 소유 |
+| `server/core/storage/redis/client.hpp` | Internal | gateway, server, tools가 공유하는 Redis client 계약. concrete redis-plus-plus adapter package의 canonical ownership은 `infra/`에 있습니다. |
 | `server/core/storage/unit_of_work.hpp` | Internal | 실제 generic commit/rollback transaction 경계. 안정된 소비 표면은 `server/core/storage_execution/unit_of_work.hpp` |
 | `server/core/util/crash_handler.hpp` | Internal | 앱 엔트리포인트용 프로세스 레벨 크래시 훅 |
 | `server/core/util/log.hpp` | Stable | 모든 바이너리가 사용하는 공통 로깅 계약 |

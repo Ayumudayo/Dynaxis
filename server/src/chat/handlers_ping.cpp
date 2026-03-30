@@ -1,4 +1,5 @@
 #include "server/chat/chat_service.hpp"
+#include "chat_service_state.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
 #include "server/core/storage/redis/client.hpp"
 #include <cstdlib>
@@ -18,10 +19,10 @@ void ChatService::on_ping(ChatService::NetSession& s, std::span<const std::uint8
     try {
         std::string uid;
         {
-            std::lock_guard<std::mutex> lk(state_.mu);
-            if (!state_.authed.count(&s)) return;
-            auto it = state_.user_uuid.find(&s);
-            if (it != state_.user_uuid.end()) uid = it->second;
+            std::lock_guard<std::mutex> lk(impl_->state.mu);
+            if (!impl_->state.authed.count(&s)) return;
+            auto it = impl_->state.user_uuid.find(&s);
+            if (it != impl_->state.user_uuid.end()) uid = it->second;
         }
         if (uid.empty()) return;
         touch_user_presence(uid);

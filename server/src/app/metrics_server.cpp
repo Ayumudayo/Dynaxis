@@ -1,17 +1,15 @@
 #include "server/app/metrics_server.hpp"
+#include "server_runtime_state.hpp"
 
 #include "server/chat/chat_service.hpp"
-#include "server/core/app/app_host.hpp"
 #include "server/core/app/engine_runtime.hpp"
 #include "server/core/metrics/build_info.hpp"
 #include "server/core/metrics/metrics.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
 #include "server/core/runtime_metrics.hpp"
 #include "server/core/util/log.hpp"
-#include "server/core/util/service_registry.hpp"
 #include "server/protocol/game_opcodes.hpp"
 
-#include <atomic>
 #include <array>
 #include <iomanip>
 #include <sstream>
@@ -30,30 +28,6 @@
 namespace server::app {
 
 namespace corelog = server::core::log;
-namespace services = server::core::util::services;
-
-// 부트스트랩 경로에서 누적한 카운터를 그대로 읽어 와야,
-// 실행 순서/종료 drain 같은 cross-cutting 사건을 메트릭 렌더링 단계에서도 일관되게 보여 줄 수 있다.
-extern std::atomic<std::uint64_t> g_subscribe_total;
-extern std::atomic<std::uint64_t> g_self_echo_drop_total;
-extern std::atomic<long long>     g_subscribe_last_lag_ms;
-extern std::atomic<std::uint64_t> g_admin_command_verify_ok_total;
-extern std::atomic<std::uint64_t> g_admin_command_verify_fail_total;
-extern std::atomic<std::uint64_t> g_admin_command_verify_replay_total;
-extern std::atomic<std::uint64_t> g_admin_command_verify_signature_mismatch_total;
-extern std::atomic<std::uint64_t> g_admin_command_verify_expired_total;
-extern std::atomic<std::uint64_t> g_admin_command_verify_future_total;
-extern std::atomic<std::uint64_t> g_admin_command_verify_missing_field_total;
-extern std::atomic<std::uint64_t> g_admin_command_verify_invalid_issued_at_total;
-extern std::atomic<std::uint64_t> g_admin_command_verify_secret_not_configured_total;
-extern std::atomic<std::uint64_t> g_admin_command_target_mismatch_total;
-extern std::atomic<std::uint64_t> g_shutdown_drain_completed_total;
-extern std::atomic<std::uint64_t> g_shutdown_drain_timeout_total;
-extern std::atomic<std::uint64_t> g_shutdown_drain_forced_close_total;
-extern std::atomic<std::uint64_t> g_shutdown_drain_remaining_connections;
-extern std::atomic<long long> g_shutdown_drain_elapsed_ms;
-extern std::atomic<long long> g_shutdown_drain_timeout_ms;
-
 namespace {
 
 constexpr std::array<std::uint64_t, 12> kPluginHookDurationBucketUpperBoundsNs{{
@@ -70,25 +44,6 @@ constexpr std::array<std::uint64_t, 12> kPluginHookDurationBucketUpperBoundsNs{{
     2'500'000,  // 2.5ms
     5'000'000,  // 5ms
 }};
-
-bool health_ok() {
-    // health는 프로세스가 살아 있고 종료 중이 아닌가만 본다.
-    // dependency readiness까지 섞으면 "죽어 가는 프로세스"와 "외부 의존성이 늦는 프로세스"가 한 값에 섞여 해석이 어려워진다.
-    if (auto host = services::get<server::core::app::AppHost>()) {
-        return host->healthy() && !host->stop_requested();
-    }
-    return true;
-}
-
-bool ready_ok() {
-    // ready는 실제 트래픽 수용 가능 여부를 뜻하므로 host readiness를 우선 사용한다.
-    // AppHost가 아직 없을 때만 최소 폴백(fallback)으로 ChatService 존재 여부를 본다.
-    // fallback을 완전히 제거하면 부트스트랩 초기 관측이 너무 일찍 깨지고, 반대로 fallback만 쓰면 ready 의미가 지나치게 느슨해진다.
-    if (auto host = services::get<server::core::app::AppHost>()) {
-        return host->ready() && host->healthy() && !host->stop_requested();
-    }
-    return (services::get<server::app::chat::ChatService>() != nullptr);
-}
 
 std::string render_logs_impl() {
     auto logs = corelog::recent(200);
@@ -139,39 +94,40 @@ std::string render_metrics_impl() {
         stream << std::defaultfloat << std::setprecision(6);
     };
 
-    append_counter("chat_subscribe_total", g_subscribe_total.load());
-    append_counter("chat_self_echo_drop_total", g_self_echo_drop_total.load());
-    append_gauge("chat_subscribe_last_lag_ms", static_cast<long double>(g_subscribe_last_lag_ms.load()));
-    append_counter("chat_admin_command_verify_ok_total", g_admin_command_verify_ok_total.load());
-    append_counter("chat_admin_command_verify_fail_total", g_admin_command_verify_fail_total.load());
-    append_counter("chat_admin_command_verify_replay_total", g_admin_command_verify_replay_total.load());
+    const auto bootstrap_metrics = bootstrap_metrics_snapshot();
+    append_counter("chat_subscribe_total", bootstrap_metrics.subscribe_total);
+    append_counter("chat_self_echo_drop_total", bootstrap_metrics.self_echo_drop_total);
+    append_gauge("chat_subscribe_last_lag_ms", static_cast<long double>(bootstrap_metrics.subscribe_last_lag_ms));
+    append_counter("chat_admin_command_verify_ok_total", bootstrap_metrics.admin_command_verify_ok_total);
+    append_counter("chat_admin_command_verify_fail_total", bootstrap_metrics.admin_command_verify_fail_total);
+    append_counter("chat_admin_command_verify_replay_total", bootstrap_metrics.admin_command_verify_replay_total);
     append_counter(
         "chat_admin_command_verify_signature_mismatch_total",
-        g_admin_command_verify_signature_mismatch_total.load());
-    append_counter("chat_admin_command_verify_expired_total", g_admin_command_verify_expired_total.load());
-    append_counter("chat_admin_command_verify_future_total", g_admin_command_verify_future_total.load());
-    append_counter("chat_admin_command_verify_missing_field_total", g_admin_command_verify_missing_field_total.load());
+        bootstrap_metrics.admin_command_verify_signature_mismatch_total);
+    append_counter("chat_admin_command_verify_expired_total", bootstrap_metrics.admin_command_verify_expired_total);
+    append_counter("chat_admin_command_verify_future_total", bootstrap_metrics.admin_command_verify_future_total);
+    append_counter("chat_admin_command_verify_missing_field_total", bootstrap_metrics.admin_command_verify_missing_field_total);
     append_counter(
         "chat_admin_command_verify_invalid_issued_at_total",
-        g_admin_command_verify_invalid_issued_at_total.load());
+        bootstrap_metrics.admin_command_verify_invalid_issued_at_total);
     append_counter(
         "chat_admin_command_verify_secret_not_configured_total",
-        g_admin_command_verify_secret_not_configured_total.load());
+        bootstrap_metrics.admin_command_verify_secret_not_configured_total);
     append_counter(
         "chat_admin_command_target_mismatch_total",
-        g_admin_command_target_mismatch_total.load());
-    append_counter("chat_shutdown_drain_completed_total", g_shutdown_drain_completed_total.load());
-    append_counter("chat_shutdown_drain_timeout_total", g_shutdown_drain_timeout_total.load());
-    append_counter("chat_shutdown_drain_forced_close_total", g_shutdown_drain_forced_close_total.load());
+        bootstrap_metrics.admin_command_target_mismatch_total);
+    append_counter("chat_shutdown_drain_completed_total", bootstrap_metrics.shutdown_drain_completed_total);
+    append_counter("chat_shutdown_drain_timeout_total", bootstrap_metrics.shutdown_drain_timeout_total);
+    append_counter("chat_shutdown_drain_forced_close_total", bootstrap_metrics.shutdown_drain_forced_close_total);
     append_gauge(
         "chat_shutdown_drain_remaining_connections",
-        static_cast<long double>(g_shutdown_drain_remaining_connections.load()));
-    append_gauge("chat_shutdown_drain_elapsed_ms", static_cast<long double>(g_shutdown_drain_elapsed_ms.load()));
-    append_gauge("chat_shutdown_drain_timeout_ms", static_cast<long double>(g_shutdown_drain_timeout_ms.load()));
+        static_cast<long double>(bootstrap_metrics.shutdown_drain_remaining_connections));
+    append_gauge("chat_shutdown_drain_elapsed_ms", static_cast<long double>(bootstrap_metrics.shutdown_drain_elapsed_ms));
+    append_gauge("chat_shutdown_drain_timeout_ms", static_cast<long double>(bootstrap_metrics.shutdown_drain_timeout_ms));
 
-    server::app::chat::ChatService::ContinuityMetrics continuity_metrics{};
-    if (auto chat = services::get<server::app::chat::ChatService>()) {
-        continuity_metrics = chat->continuity_metrics();
+    server::app::chat::ContinuityMetrics continuity_metrics{};
+    if (const auto continuity_metrics_snapshot = server_chat_continuity_metrics()) {
+        continuity_metrics = *continuity_metrics_snapshot;
     }
     append_counter("chat_continuity_lease_issue_total", continuity_metrics.lease_issue_total);
     append_counter("chat_continuity_lease_issue_fail_total", continuity_metrics.lease_issue_fail_total);
@@ -420,10 +376,10 @@ std::string render_metrics_impl() {
             stream << name << '{' << labels << "} " << value << "\n";
         };
 
-        server::app::chat::ChatService::ChatHookPluginsMetrics pm;
+        server::app::chat::ChatHookPluginsMetrics pm;
         bool have_pm = false;
-        if (auto chat = services::get<server::app::chat::ChatService>()) {
-            pm = chat->chat_hook_plugins_metrics();
+        if (const auto hook_plugin_metrics = server_chat_hook_plugin_metrics()) {
+            pm = *hook_plugin_metrics;
             have_pm = true;
         } else {
             pm.enabled = false;
@@ -561,10 +517,10 @@ std::string render_metrics_impl() {
         stream << "# TYPE lua_instruction_limit_hits_total counter\n";
         stream << "# TYPE lua_memory_limit_hits_total counter\n";
 
-        server::app::chat::ChatService::LuaHooksMetrics lua_metrics;
+        server::app::chat::LuaHooksMetrics lua_metrics;
         bool have_lua_metrics = false;
-        if (auto chat = services::get<server::app::chat::ChatService>()) {
-            lua_metrics = chat->lua_hooks_metrics();
+        if (const auto lua_metrics_snapshot = server_chat_lua_hooks_metrics()) {
+            lua_metrics = *lua_metrics_snapshot;
             have_lua_metrics = true;
         }
 
@@ -603,32 +559,29 @@ std::string render_metrics_impl() {
         }
     }
 
-    if (const auto host = services::get<server::core::app::AppHost>()) {
-        stream << host->dependency_metrics_text();
-        stream << host->lifecycle_metrics_text();
-    }
-    if (const auto runtime = services::get<server::core::app::EngineRuntime>()) {
-        const auto runtime_snapshot = runtime->snapshot();
+    stream << server_dependency_metrics_text();
+    stream << server_lifecycle_metrics_text();
+    if (const auto runtime_snapshot = server_runtime_snapshot()) {
         append_gauge(
             "chat_runtime_context_service_count",
-            static_cast<long double>(runtime_snapshot.context_service_count));
+            static_cast<long double>(runtime_snapshot->context_service_count));
         append_gauge(
             "chat_runtime_compatibility_bridge_count",
-            static_cast<long double>(runtime_snapshot.compatibility_bridge_count));
+            static_cast<long double>(runtime_snapshot->compatibility_bridge_count));
         append_gauge(
             "chat_runtime_registered_module_count",
-            static_cast<long double>(runtime_snapshot.registered_module_count));
+            static_cast<long double>(runtime_snapshot->registered_module_count));
         append_gauge(
             "chat_runtime_started_module_count",
-            static_cast<long double>(runtime_snapshot.started_module_count));
+            static_cast<long double>(runtime_snapshot->started_module_count));
         append_gauge(
             "chat_runtime_module_watchdog_count",
-            static_cast<long double>(runtime_snapshot.watchdog_count));
+            static_cast<long double>(runtime_snapshot->watchdog_count));
         append_gauge(
             "chat_runtime_module_unhealthy_watchdog_count",
-            static_cast<long double>(runtime_snapshot.unhealthy_watchdog_count));
+            static_cast<long double>(runtime_snapshot->unhealthy_watchdog_count));
 
-        const auto modules = runtime->module_snapshot();
+        const auto modules = server_runtime_module_snapshot();
         if (!modules.empty()) {
             stream << "# TYPE chat_runtime_module_started gauge\n";
             stream << "# TYPE chat_runtime_module_watchdog_healthy gauge\n";
@@ -661,6 +614,13 @@ std::string render_logs_text() {
     return render_logs_impl();
 }
 
+void start_server_admin_http(server::core::app::EngineRuntime& runtime, unsigned short port) {
+    runtime.start_admin_http(
+        port,
+        []() { return render_metrics_text(); },
+        []() { return render_logs_text(); });
+}
+
 MetricsServer::MetricsServer(unsigned short port)
     : port_(port) {
 }
@@ -677,21 +637,11 @@ void MetricsServer::start() {
     http_server_ = std::make_unique<server::core::metrics::MetricsHttpServer>(
         port_,
         []() { return render_metrics_text(); },
-        []() { return health_ok(); },
-        []() { return ready_ok(); },
+        []() { return server_health_ok(); },
+        []() { return server_ready_ok(); },
         []() { return render_logs_text(); },
-        [](bool ok) {
-            if (const auto host = services::get<server::core::app::AppHost>()) {
-                return host->health_body(ok);
-            }
-            return ok ? std::string("ok\n") : std::string("unhealthy\n");
-        },
-        [](bool ok) {
-            if (const auto host = services::get<server::core::app::AppHost>()) {
-                return host->readiness_body(ok);
-            }
-            return ok ? std::string("ready\n") : std::string("not ready\n");
-        });
+        [](bool ok) { return server_health_body(ok); },
+        [](bool ok) { return server_readiness_body(ok); });
     http_server_->start();
 }
 

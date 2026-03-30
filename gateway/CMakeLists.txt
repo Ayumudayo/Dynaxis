@@ -9,7 +9,7 @@ add_library(gateway_backends STATIC
 )
 target_include_directories(gateway_backends PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(gateway_backends PUBLIC server_core)
-target_link_libraries(gateway_backends PRIVATE server_storage_redis_factory)
+target_link_libraries(gateway_backends PRIVATE infra_redis_factory)
 
 add_executable(gateway_app
     src/gateway_connection.cpp
@@ -26,7 +26,3 @@ target_link_libraries(gateway_app PRIVATE
     gateway_session_directory
     server_core
 )
-
-if (TARGET generate_game_opcodes)
-    add_dependencies(gateway_app generate_game_opcodes)
-endif()

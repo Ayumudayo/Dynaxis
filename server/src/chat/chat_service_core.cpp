@@ -1,4 +1,6 @@
 #include "server/chat/chat_service.hpp"
+#include "chat_service_private_access.hpp"
+#include "chat_service_state.hpp"
 #include "server/app/topology_runtime_assignment.hpp"
 #include "server/protocol/game_opcodes.hpp"
 #include "server/core/config/runtime_settings.hpp"
@@ -14,7 +16,6 @@
 #include "server/scripting/chat_lua_bindings.hpp"
 #include "server/wire/codec.hpp"
 #include "chat_hook_plugin_chain.hpp"
-#include "wire.pb.h"
 // 저장소 연동 헤더
 #include "server/storage/connection_pool.hpp"
 #include "server/core/storage/redis/client.hpp"
@@ -48,8 +49,8 @@ namespace services = server::core::util::services;
  */
 namespace server::app::chat {
 
-struct ChatService::HookPluginState {
-    explicit HookPluginState(ChatHookPluginChain::Config cfg)
+struct ChatServiceHookPluginState {
+    explicit ChatServiceHookPluginState(ChatHookPluginChain::Config cfg)
         : chain(std::move(cfg)) {}
     ChatHookPluginChain chain;
 };
@@ -58,6 +59,14 @@ namespace {
 
 constexpr std::string_view kRoomPasswordHashPrefix = "sha256:";
 constexpr std::string_view kAppMigrationPayloadRoomKind = "chat-room-v1";
+
+std::string make_recent_list_key(const std::string& room_id) {
+    return std::string("room:") + room_id + ":recent";
+}
+
+std::string make_recent_message_key(std::uint64_t message_id) {
+    return std::string("msg:") + std::to_string(message_id);
+}
 
 std::string legacy_hash_room_password(std::string_view password) {
     std::hash<std::string> hasher;
@@ -158,23 +167,27 @@ ChatService::ChatService(boost::asio::io_context& io,
                          server::core::JobQueue& job_queue,
     std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool,
     std::shared_ptr<server::core::storage::redis::IRedisClient> redis)
-    : io_(&io), job_queue_(job_queue), db_pool_(std::move(db_pool)), redis_(std::move(redis)) {
+    : impl_(std::make_unique<Impl>())
+    , io_(&io)
+    , job_queue_(job_queue) {
+    impl_->runtime.db_pool = std::move(db_pool);
+    impl_->runtime.redis = std::move(redis);
 
     // 명시 주입이 없으면 레지스트리 폴백(fallback)을 사용한다.
     // 부트스트랩은 간단해지지만, 어떤 의존성이 빠졌는지 추적 가능한 seam은 유지한다.
-    if (!db_pool_) {
-        db_pool_ = services::get<server::storage::IRepositoryConnectionPool>();
+    if (!impl_->runtime.db_pool) {
+        impl_->runtime.db_pool = services::get<server::storage::IRepositoryConnectionPool>();
     }
-    if (!redis_) {
-        redis_ = services::get<server::core::storage::redis::IRedisClient>();
+    if (!impl_->runtime.redis) {
+        impl_->runtime.redis = services::get<server::core::storage::redis::IRedisClient>();
     }
-    lua_runtime_ = services::get<server::core::scripting::LuaRuntime>();
-    lua_execution_strand_ = services::get<Strand>();
-    if (!lua_execution_strand_ && lua_runtime_ && io_) {
-        lua_execution_strand_ = std::make_shared<Strand>(boost::asio::make_strand(*io_));
+    impl_->runtime.lua_runtime = services::get<server::core::scripting::LuaRuntime>();
+    impl_->dispatch.lua_execution_strand = services::get<ChatStrand>();
+    if (!impl_->dispatch.lua_execution_strand && impl_->runtime.lua_runtime && io_) {
+        impl_->dispatch.lua_execution_strand = std::make_shared<ChatStrand>(boost::asio::make_strand(*io_));
     }
-    if (lua_runtime_) {
-        const auto bindings = server::app::scripting::register_chat_lua_bindings(*lua_runtime_, *this);
+    if (impl_->runtime.lua_runtime) {
+        const auto bindings = server::app::scripting::register_chat_lua_bindings(*impl_->runtime.lua_runtime, *this);
         corelog::info("Lua host bindings initialised attempted="
                       + std::to_string(bindings.attempted)
                       + " registered=" + std::to_string(bindings.registered));
@@ -183,27 +196,27 @@ ChatService::ChatService(boost::asio::io_context& io,
     // 게이트웨이 ID는 분산 전파(fan-out) 루프를 식별하는 최소 표식이다.
     // 이 값이 없으면 자기 자신이 보낸 메시지를 다시 받은 상황을 추적하기 어려워진다.
     if (const char* gw = std::getenv("GATEWAY_ID"); gw && *gw) {
-        gateway_id_ = gw;
+        impl_->runtime.gateway_id = gw;
     }
 
     // write-behind는 요청 지연시간과 영속화 내구성을 분리하는 선택지다.
     // 서버 요청 경로가 DB 지연에 직접 매달리지 않게 하되, 스트림 누락 여부는 별도 worker가 감시한다.
     if (const char* flag = std::getenv("WRITE_BEHIND_ENABLED"); flag && *flag && std::string(flag) != "0") {
-        write_behind_.enabled = true;
+        impl_->write_behind.enabled = true;
     }
     if (const char* key = std::getenv("REDIS_STREAM_KEY"); key && *key) {
-        write_behind_.stream_key = key;
+        impl_->write_behind.stream_key = key;
     }
     if (const char* maxlen = std::getenv("REDIS_STREAM_MAXLEN"); maxlen && *maxlen) {
         char* end = nullptr;
         unsigned long long value = std::strtoull(maxlen, &end, 10);
         if (end != maxlen && value > 0) {
-            write_behind_.maxlen = static_cast<std::size_t>(value);
+            impl_->write_behind.maxlen = static_cast<std::size_t>(value);
         }
     }
     if (const char* approx = std::getenv("REDIS_STREAM_APPROX"); approx && *approx) {
         if (std::string(approx) == "0") {
-            write_behind_.approximate = false;
+            impl_->write_behind.approximate = false;
         }
     }
 
@@ -212,34 +225,34 @@ ChatService::ChatService(boost::asio::io_context& io,
     if (const char* ttl = std::getenv("PRESENCE_TTL_SEC"); ttl && *ttl) {
         unsigned long t = std::strtoul(ttl, nullptr, 10);
         if (t > 0 && t < 3600) {
-            presence_.ttl = static_cast<unsigned int>(t);
+            impl_->presence.ttl = static_cast<unsigned int>(t);
         }
     }
     if (const char* prefix = std::getenv("REDIS_CHANNEL_PREFIX"); prefix && *prefix) {
-        presence_.prefix = prefix;
+        impl_->presence.prefix = prefix;
     }
 
     if (const char* enabled = std::getenv("SESSION_CONTINUITY_ENABLED"); enabled && *enabled) {
-        continuity_.enabled = (std::strcmp(enabled, "0") != 0);
+        impl_->continuity.enabled = (std::strcmp(enabled, "0") != 0);
     }
     if (const char* ttl = std::getenv("SESSION_CONTINUITY_LEASE_TTL_SEC"); ttl && *ttl) {
         unsigned long value = std::strtoul(ttl, nullptr, 10);
         if (value >= 30 && value <= 7 * 24 * 60 * 60) {
-            continuity_.lease_ttl_sec = static_cast<unsigned int>(value);
+            impl_->continuity.lease_ttl_sec = static_cast<unsigned int>(value);
         }
     }
     if (const char* prefix = std::getenv("SESSION_CONTINUITY_REDIS_PREFIX"); prefix && *prefix) {
-        continuity_.redis_prefix = prefix;
+        impl_->continuity.redis_prefix = prefix;
     } else {
-        continuity_.redis_prefix = presence_.prefix;
+        impl_->continuity.redis_prefix = impl_->presence.prefix;
     }
-    if (!continuity_.redis_prefix.empty() && continuity_.redis_prefix.back() != ':') {
-        continuity_.redis_prefix.push_back(':');
+    if (!impl_->continuity.redis_prefix.empty() && impl_->continuity.redis_prefix.back() != ':') {
+        impl_->continuity.redis_prefix.push_back(':');
     }
-    continuity_.redis_prefix += "continuity:";
+    impl_->continuity.redis_prefix += "continuity:";
 
     if (const char* use = std::getenv("USE_REDIS_PUBSUB"); use && std::strcmp(use, "0") != 0) {
-        redis_pubsub_enabled_ = true;
+        impl_->runtime.redis_pubsub_enabled = true;
     }
 
     // 환경 변수 읽기 헬퍼 함수
@@ -286,34 +299,34 @@ ChatService::ChatService(boost::asio::io_context& io,
     };
 
     if (const char* world_default = std::getenv("WORLD_ADMISSION_DEFAULT"); world_default && *world_default) {
-        continuity_.default_world_id = world_default;
+        impl_->continuity.default_world_id = world_default;
     } else if (const char* tags_env = std::getenv("SERVER_TAGS"); tags_env && *tags_env) {
         for (const auto& tag : split_csv(tags_env)) {
             if (auto world_id = extract_world_tag(tag); world_id.has_value()) {
-                continuity_.default_world_id = *world_id;
+                impl_->continuity.default_world_id = *world_id;
                 break;
             }
         }
     }
     if (const char* owner_id = std::getenv("SERVER_INSTANCE_ID"); owner_id && *owner_id) {
-        continuity_.current_owner_id = owner_id;
+        impl_->continuity.current_owner_id = owner_id;
     } else if (const char* owner_id = std::getenv("GATEWAY_ID"); owner_id && *owner_id) {
-        continuity_.current_owner_id = owner_id;
+        impl_->continuity.current_owner_id = owner_id;
     } else {
-        continuity_.current_owner_id = "server-owner-" + std::to_string(
+        impl_->continuity.current_owner_id = "server-owner-" + std::to_string(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count());
     }
     if (const char* assignment_key = std::getenv("TOPOLOGY_RUNTIME_ASSIGNMENT_KEY");
         assignment_key && *assignment_key) {
-        continuity_.topology_runtime_assignment_key = assignment_key;
+        impl_->continuity.topology_runtime_assignment_key = assignment_key;
     } else {
-        continuity_.topology_runtime_assignment_key = "dynaxis:topology:actuation:runtime-assignment";
+        impl_->continuity.topology_runtime_assignment_key = "dynaxis:topology:actuation:runtime-assignment";
     }
 
     if (const char* admins_env = read_env("CHAT_ADMIN_USERS", "ADMIN_USERS"); admins_env && *admins_env) {
         for (const auto& user : split_csv(admins_env)) {
-            admin_users_.insert(user);
+            impl_->runtime.admin_users.insert(user);
         }
     }
 
@@ -332,13 +345,13 @@ ChatService::ChatService(boost::asio::io_context& io,
         return static_cast<std::uint32_t>(parsed);
     };
 
-    spam_message_threshold_ = parse_u32_bounded(std::getenv("CHAT_SPAM_THRESHOLD"), 6, 3, 100);
-    spam_window_sec_ = parse_u32_bounded(std::getenv("CHAT_SPAM_WINDOW_SEC"), 5, 1, 120);
-    spam_mute_sec_ = parse_u32_bounded(std::getenv("CHAT_SPAM_MUTE_SEC"), 30, 5, 86400);
-    spam_ban_sec_ = parse_u32_bounded(std::getenv("CHAT_SPAM_BAN_SEC"), 600, 10, 604800);
-    spam_ban_violation_threshold_ = parse_u32_bounded(std::getenv("CHAT_SPAM_BAN_VIOLATIONS"), 3, 1, 20);
-    lua_auto_disable_threshold_ = parse_u32_bounded(std::getenv("LUA_AUTO_DISABLE_THRESHOLD"), 3, 1, 1'000'000);
-    lua_hook_warn_budget_us_ = parse_u32_bounded(std::getenv("LUA_HOOK_WARN_BUDGET_US"), 0, 0, 60'000'000);
+    impl_->runtime.spam_message_threshold = parse_u32_bounded(std::getenv("CHAT_SPAM_THRESHOLD"), 6, 3, 100);
+    impl_->runtime.spam_window_sec = parse_u32_bounded(std::getenv("CHAT_SPAM_WINDOW_SEC"), 5, 1, 120);
+    impl_->runtime.spam_mute_sec = parse_u32_bounded(std::getenv("CHAT_SPAM_MUTE_SEC"), 30, 5, 86400);
+    impl_->runtime.spam_ban_sec = parse_u32_bounded(std::getenv("CHAT_SPAM_BAN_SEC"), 600, 10, 604800);
+    impl_->runtime.spam_ban_violation_threshold = parse_u32_bounded(std::getenv("CHAT_SPAM_BAN_VIOLATIONS"), 3, 1, 20);
+    impl_->runtime.lua_auto_disable_threshold = parse_u32_bounded(std::getenv("LUA_AUTO_DISABLE_THRESHOLD"), 3, 1, 1'000'000);
+    impl_->runtime.lua_hook_warn_budget_us = parse_u32_bounded(std::getenv("LUA_HOOK_WARN_BUDGET_US"), 0, 0, 60'000'000);
     const std::uint32_t chat_hook_warn_budget_us = parse_u32_bounded(
         std::getenv("CHAT_HOOK_WARN_BUDGET_US"),
         0,
@@ -350,38 +363,38 @@ ChatService::ChatService(boost::asio::io_context& io,
         char* end = nullptr;
         unsigned long value = std::strtoul(limit_env, &end, 10);
         if (limit_env != end && value >= 5 && value <= 2000) {
-            history_.recent_limit = static_cast<std::size_t>(value);
+            impl_->history.recent_limit = static_cast<std::size_t>(value);
         }
     }
     if (const char* maxlen_env = std::getenv("ROOM_RECENT_MAXLEN"); maxlen_env && *maxlen_env) {
         char* end = nullptr;
         unsigned long value = std::strtoul(maxlen_env, &end, 10);
-        if (maxlen_env != end && value >= history_.recent_limit && value <= 5000) {
-            history_.max_list_len = static_cast<std::size_t>(value);
+        if (maxlen_env != end && value >= impl_->history.recent_limit && value <= 5000) {
+            impl_->history.max_list_len = static_cast<std::size_t>(value);
         }
     }
     if (const char* ttl_env = std::getenv("CACHE_TTL_RECENT_MSGS"); ttl_env && *ttl_env) {
         char* end = nullptr;
         unsigned long value = std::strtoul(ttl_env, &end, 10);
         if (ttl_env != end && value >= 60 && value <= 604800) {
-            history_.cache_ttl_sec = static_cast<unsigned int>(value);
+            impl_->history.cache_ttl_sec = static_cast<unsigned int>(value);
         }
     }
     if (const char* fetch_env = read_env("RECENT_HISTORY_FETCH_FACTOR", "SNAPSHOT_FETCH_FACTOR")) {
         char* end = nullptr;
         unsigned long value = std::strtoul(fetch_env, &end, 10);
         if (fetch_env != end && value >= 1 && value <= 10) {
-            history_.fetch_factor = static_cast<std::size_t>(value);
+            impl_->history.fetch_factor = static_cast<std::size_t>(value);
         }
     }
-    if (history_.max_list_len < history_.recent_limit) {
-        history_.max_list_len = history_.recent_limit;
+    if (impl_->history.max_list_len < impl_->history.recent_limit) {
+        impl_->history.max_list_len = impl_->history.recent_limit;
     }
 
-    if (write_behind_.enabled) {
-        corelog::info(std::string("Write-behind enabled: stream=") + write_behind_.stream_key +
-                      (write_behind_.maxlen ? (std::string(", maxlen=") + std::to_string(*write_behind_.maxlen)) : std::string(", maxlen=none")) +
-                      std::string(write_behind_.approximate ? ", approx=~" : ", approx=exact"));
+    if (impl_->write_behind.enabled) {
+        corelog::info(std::string("Write-behind enabled: stream=") + impl_->write_behind.stream_key +
+                      (impl_->write_behind.maxlen ? (std::string(", maxlen=") + std::to_string(*impl_->write_behind.maxlen)) : std::string(", maxlen=none")) +
+                      std::string(impl_->write_behind.approximate ? ", approx=~" : ", approx=exact"));
     } else {
         corelog::warn("Write-behind disabled (set WRITE_BEHIND_ENABLED=1 to enable)");
     }
@@ -478,8 +491,8 @@ ChatService::ChatService(boost::asio::io_context& io,
                 cfg.single_lock_path = lock;
             }
 
-            hook_plugin_ = std::make_unique<HookPluginState>(std::move(cfg));
-            hook_plugin_->chain.poll_reload();
+            impl_->runtime.hook_plugin = std::make_unique<ChatServiceHookPluginState>(std::move(cfg));
+            impl_->runtime.hook_plugin->chain.poll_reload();
 
             unsigned long interval_ms = 500;
             if (const char* interval = std::getenv("CHAT_HOOK_RELOAD_INTERVAL_MS"); interval && *interval) {
@@ -490,12 +503,12 @@ ChatService::ChatService(boost::asio::io_context& io,
                     server::core::concurrent::TaskScheduler::RepeatPolicy policy{};
                     policy.interval = std::chrono::milliseconds{static_cast<long long>(interval_ms)};
                     (void)scheduler->schedule_every_controlled([this](const server::core::concurrent::TaskScheduler::RepeatContext&) {
-                        if (!hook_plugin_) {
+                        if (!impl_->runtime.hook_plugin) {
                             return server::core::concurrent::TaskScheduler::RepeatDecision::kStop;
                         }
                         (void)job_queue_.TryPush([this]() {
-                            if (hook_plugin_) {
-                                hook_plugin_->chain.poll_reload();
+                            if (impl_->runtime.hook_plugin) {
+                                impl_->runtime.hook_plugin->chain.poll_reload();
                             }
                         });
                         return server::core::concurrent::TaskScheduler::RepeatDecision::kContinue;
@@ -508,15 +521,15 @@ ChatService::ChatService(boost::asio::io_context& io,
 
 ChatService::~ChatService() = default;
 
-ChatService::ChatHookPluginsMetrics ChatService::chat_hook_plugins_metrics() const {
+ChatHookPluginsMetrics ChatService::chat_hook_plugins_metrics() const {
     ChatHookPluginsMetrics out{};
-    if (!hook_plugin_) {
+    if (!impl_->runtime.hook_plugin) {
         out.enabled = false;
         out.mode = "none";
         return out;
     }
 
-    const auto snap = hook_plugin_->chain.metrics_snapshot();
+    const auto snap = impl_->runtime.hook_plugin->chain.metrics_snapshot();
     out.enabled = snap.configured;
     out.mode = snap.mode;
     out.plugins.reserve(snap.plugins.size());
@@ -545,16 +558,16 @@ ChatService::ChatHookPluginsMetrics ChatService::chat_hook_plugins_metrics() con
     return out;
 }
 
-ChatService::LuaHooksMetrics ChatService::lua_hooks_metrics() const {
+LuaHooksMetrics ChatService::lua_hooks_metrics() const {
     LuaHooksMetrics out{};
-    out.enabled = static_cast<bool>(lua_runtime_);
-    out.auto_disable_threshold = lua_auto_disable_threshold_;
+    out.enabled = static_cast<bool>(impl_->runtime.lua_runtime);
+    out.auto_disable_threshold = impl_->runtime.lua_auto_disable_threshold;
 
-    if (!lua_runtime_) {
+    if (!impl_->runtime.lua_runtime) {
         return out;
     }
 
-    const auto runtime_snapshot = lua_runtime_->metrics_snapshot();
+    const auto runtime_snapshot = impl_->runtime.lua_runtime->metrics_snapshot();
     out.reload_epoch = runtime_snapshot.reload_epoch;
     out.loaded_scripts = runtime_snapshot.loaded_scripts;
     out.memory_used_bytes = runtime_snapshot.memory_used_bytes;
@@ -563,15 +576,15 @@ ChatService::LuaHooksMetrics ChatService::lua_hooks_metrics() const {
     out.instruction_limit_hits = runtime_snapshot.instruction_limit_hits;
     out.memory_limit_hits = runtime_snapshot.memory_limit_hits;
 
-    std::lock_guard<std::mutex> lock(lua_hook_metrics_mu_);
+    std::lock_guard<std::mutex> lock(impl_->lua_metrics.mu);
     out.hooks.reserve(
-        lua_hook_consecutive_failures_.size()
-        + lua_hook_auto_disable_total_.size()
-        + lua_hook_calls_total_.size()
-        + lua_hook_errors_total_.size()
-        + lua_hook_instruction_limit_hits_.size()
-        + lua_hook_memory_limit_hits_.size()
-        + lua_hook_disabled_.size());
+        impl_->lua_metrics.consecutive_failures.size()
+        + impl_->lua_metrics.auto_disable_total.size()
+        + impl_->lua_metrics.calls_total.size()
+        + impl_->lua_metrics.errors_total.size()
+        + impl_->lua_metrics.instruction_limit_hits.size()
+        + impl_->lua_metrics.memory_limit_hits.size()
+        + impl_->lua_metrics.disabled.size());
 
     auto append_or_get = [&](const std::string& hook_name) -> LuaHookMetric& {
         for (auto& metric : out.hooks) {
@@ -583,37 +596,37 @@ ChatService::LuaHooksMetrics ChatService::lua_hooks_metrics() const {
         return out.hooks.back();
     };
 
-    for (const auto& [hook_name, failures] : lua_hook_consecutive_failures_) {
+    for (const auto& [hook_name, failures] : impl_->lua_metrics.consecutive_failures) {
         auto& metric = append_or_get(hook_name);
         metric.consecutive_failures = failures;
     }
 
-    for (const auto& [hook_name, total] : lua_hook_auto_disable_total_) {
+    for (const auto& [hook_name, total] : impl_->lua_metrics.auto_disable_total) {
         auto& metric = append_or_get(hook_name);
         metric.auto_disable_total = total;
     }
 
-    for (const auto& [hook_name, total] : lua_hook_calls_total_) {
+    for (const auto& [hook_name, total] : impl_->lua_metrics.calls_total) {
         auto& metric = append_or_get(hook_name);
         metric.calls_total = total;
     }
 
-    for (const auto& [hook_name, total] : lua_hook_errors_total_) {
+    for (const auto& [hook_name, total] : impl_->lua_metrics.errors_total) {
         auto& metric = append_or_get(hook_name);
         metric.errors_total = total;
     }
 
-    for (const auto& [hook_name, total] : lua_hook_instruction_limit_hits_) {
+    for (const auto& [hook_name, total] : impl_->lua_metrics.instruction_limit_hits) {
         auto& metric = append_or_get(hook_name);
         metric.instruction_limit_hits = total;
     }
 
-    for (const auto& [hook_name, total] : lua_hook_memory_limit_hits_) {
+    for (const auto& [hook_name, total] : impl_->lua_metrics.memory_limit_hits) {
         auto& metric = append_or_get(hook_name);
         metric.memory_limit_hits = total;
     }
 
-    for (const auto& hook_name : lua_hook_disabled_) {
+    for (const auto& hook_name : impl_->lua_metrics.disabled) {
         auto& metric = append_or_get(hook_name);
         metric.disabled = true;
     }
@@ -629,14 +642,14 @@ ChatService::LuaHooksMetrics ChatService::lua_hooks_metrics() const {
         return out.script_calls.back();
     };
 
-    for (const auto& [hook_name, script_map] : lua_hook_script_calls_total_) {
+    for (const auto& [hook_name, script_map] : impl_->lua_metrics.script_calls_total) {
         for (const auto& [script_name, total] : script_map) {
             auto& metric = append_or_get_script_metric(hook_name, script_name);
             metric.calls_total = total;
         }
     }
 
-    for (const auto& [hook_name, script_map] : lua_hook_script_errors_total_) {
+    for (const auto& [hook_name, script_map] : impl_->lua_metrics.script_errors_total) {
         for (const auto& [script_name, total] : script_map) {
             auto& metric = append_or_get_script_metric(hook_name, script_name);
             metric.errors_total = total;
@@ -657,70 +670,58 @@ ChatService::LuaHooksMetrics ChatService::lua_hooks_metrics() const {
     return out;
 }
 
-ChatService::ContinuityMetrics ChatService::continuity_metrics() const {
+ContinuityMetrics ChatService::continuity_metrics() const {
     ContinuityMetrics out{};
-    out.lease_issue_total = continuity_lease_issue_total_.load(std::memory_order_relaxed);
-    out.lease_issue_fail_total = continuity_lease_issue_fail_total_.load(std::memory_order_relaxed);
-    out.lease_resume_total = continuity_lease_resume_total_.load(std::memory_order_relaxed);
-    out.lease_resume_fail_total = continuity_lease_resume_fail_total_.load(std::memory_order_relaxed);
-    out.state_write_total = continuity_state_write_total_.load(std::memory_order_relaxed);
-    out.state_write_fail_total = continuity_state_write_fail_total_.load(std::memory_order_relaxed);
-    out.state_restore_total = continuity_state_restore_total_.load(std::memory_order_relaxed);
-    out.state_restore_fallback_total = continuity_state_restore_fallback_total_.load(std::memory_order_relaxed);
-    out.world_write_total = continuity_world_write_total_.load(std::memory_order_relaxed);
-    out.world_write_fail_total = continuity_world_write_fail_total_.load(std::memory_order_relaxed);
-    out.world_restore_total = continuity_world_restore_total_.load(std::memory_order_relaxed);
-    out.world_restore_fallback_total = continuity_world_restore_fallback_total_.load(std::memory_order_relaxed);
+    out.lease_issue_total = impl_->continuity_metrics.lease_issue_total.load(std::memory_order_relaxed);
+    out.lease_issue_fail_total = impl_->continuity_metrics.lease_issue_fail_total.load(std::memory_order_relaxed);
+    out.lease_resume_total = impl_->continuity_metrics.lease_resume_total.load(std::memory_order_relaxed);
+    out.lease_resume_fail_total = impl_->continuity_metrics.lease_resume_fail_total.load(std::memory_order_relaxed);
+    out.state_write_total = impl_->continuity_metrics.state_write_total.load(std::memory_order_relaxed);
+    out.state_write_fail_total = impl_->continuity_metrics.state_write_fail_total.load(std::memory_order_relaxed);
+    out.state_restore_total = impl_->continuity_metrics.state_restore_total.load(std::memory_order_relaxed);
+    out.state_restore_fallback_total = impl_->continuity_metrics.state_restore_fallback_total.load(std::memory_order_relaxed);
+    out.world_write_total = impl_->continuity_metrics.world_write_total.load(std::memory_order_relaxed);
+    out.world_write_fail_total = impl_->continuity_metrics.world_write_fail_total.load(std::memory_order_relaxed);
+    out.world_restore_total = impl_->continuity_metrics.world_restore_total.load(std::memory_order_relaxed);
+    out.world_restore_fallback_total = impl_->continuity_metrics.world_restore_fallback_total.load(std::memory_order_relaxed);
     out.world_restore_fallback_missing_world_total =
-        continuity_world_restore_fallback_missing_world_total_.load(std::memory_order_relaxed);
+        impl_->continuity_metrics.world_restore_fallback_missing_world_total.load(std::memory_order_relaxed);
     out.world_restore_fallback_missing_owner_total =
-        continuity_world_restore_fallback_missing_owner_total_.load(std::memory_order_relaxed);
+        impl_->continuity_metrics.world_restore_fallback_missing_owner_total.load(std::memory_order_relaxed);
     out.world_restore_fallback_owner_mismatch_total =
-        continuity_world_restore_fallback_owner_mismatch_total_.load(std::memory_order_relaxed);
+        impl_->continuity_metrics.world_restore_fallback_owner_mismatch_total.load(std::memory_order_relaxed);
     out.world_restore_fallback_draining_replacement_unhonored_total =
-        continuity_world_restore_fallback_draining_replacement_unhonored_total_.load(std::memory_order_relaxed);
-    out.world_owner_write_total = continuity_world_owner_write_total_.load(std::memory_order_relaxed);
-    out.world_owner_write_fail_total = continuity_world_owner_write_fail_total_.load(std::memory_order_relaxed);
-    out.world_owner_restore_total = continuity_world_owner_restore_total_.load(std::memory_order_relaxed);
-    out.world_owner_restore_fallback_total = continuity_world_owner_restore_fallback_total_.load(std::memory_order_relaxed);
-    out.world_migration_restore_total = continuity_world_migration_restore_total_.load(std::memory_order_relaxed);
+        impl_->continuity_metrics.world_restore_fallback_draining_replacement_unhonored_total.load(std::memory_order_relaxed);
+    out.world_owner_write_total = impl_->continuity_metrics.world_owner_write_total.load(std::memory_order_relaxed);
+    out.world_owner_write_fail_total = impl_->continuity_metrics.world_owner_write_fail_total.load(std::memory_order_relaxed);
+    out.world_owner_restore_total = impl_->continuity_metrics.world_owner_restore_total.load(std::memory_order_relaxed);
+    out.world_owner_restore_fallback_total = impl_->continuity_metrics.world_owner_restore_fallback_total.load(std::memory_order_relaxed);
+    out.world_migration_restore_total = impl_->continuity_metrics.world_migration_restore_total.load(std::memory_order_relaxed);
     out.world_migration_restore_fallback_total =
-        continuity_world_migration_restore_fallback_total_.load(std::memory_order_relaxed);
+        impl_->continuity_metrics.world_migration_restore_fallback_total.load(std::memory_order_relaxed);
     out.world_migration_restore_fallback_target_world_missing_total =
-        continuity_world_migration_restore_fallback_target_world_missing_total_.load(std::memory_order_relaxed);
+        impl_->continuity_metrics.world_migration_restore_fallback_target_world_missing_total.load(std::memory_order_relaxed);
     out.world_migration_restore_fallback_target_owner_missing_total =
-        continuity_world_migration_restore_fallback_target_owner_missing_total_.load(std::memory_order_relaxed);
+        impl_->continuity_metrics.world_migration_restore_fallback_target_owner_missing_total.load(std::memory_order_relaxed);
     out.world_migration_restore_fallback_target_owner_not_ready_total =
-        continuity_world_migration_restore_fallback_target_owner_not_ready_total_.load(std::memory_order_relaxed);
+        impl_->continuity_metrics.world_migration_restore_fallback_target_owner_not_ready_total.load(std::memory_order_relaxed);
     out.world_migration_restore_fallback_target_owner_mismatch_total =
-        continuity_world_migration_restore_fallback_target_owner_mismatch_total_.load(std::memory_order_relaxed);
+        impl_->continuity_metrics.world_migration_restore_fallback_target_owner_mismatch_total.load(std::memory_order_relaxed);
     out.world_migration_restore_fallback_source_not_draining_total =
-        continuity_world_migration_restore_fallback_source_not_draining_total_.load(std::memory_order_relaxed);
+        impl_->continuity_metrics.world_migration_restore_fallback_source_not_draining_total.load(std::memory_order_relaxed);
     out.world_migration_payload_room_handoff_total =
-        continuity_world_migration_payload_room_handoff_total_.load(std::memory_order_relaxed);
+        impl_->continuity_metrics.world_migration_payload_room_handoff_total.load(std::memory_order_relaxed);
     out.world_migration_payload_room_handoff_fallback_total =
-        continuity_world_migration_payload_room_handoff_fallback_total_.load(std::memory_order_relaxed);
+        impl_->continuity_metrics.world_migration_payload_room_handoff_fallback_total.load(std::memory_order_relaxed);
     return out;
 }
 
-// 방별 Strand(직렬화된 실행 컨텍스트)를 반환합니다.
-// 동일한 방에 대한 작업은 동일한 스레드에서 순차적으로 실행됨을 보장합니다.
-// 이는 멀티스레드 환경에서 방 상태(참여자 목록 등)의 동시성 문제를 해결하는 핵심 메커니즘입니다.
-// Mutex를 직접 사용하는 것보다 데드락 위험이 적고 코드가 간결해집니다.
-ChatService::Strand& ChatService::strand_for(const std::string& room) {
-    auto it = room_strands_.find(room);
-    if (it == room_strands_.end()) {
-        it = room_strands_.emplace(room, std::make_shared<Strand>(io_->get_executor())).first;
-    }
-    return *it->second;
-}
-
 bool ChatService::write_behind_enabled() const {
-    return write_behind_.enabled && static_cast<bool>(redis_);
+    return impl_->write_behind.enabled && static_cast<bool>(impl_->runtime.redis);
 }
 
 bool ChatService::pubsub_enabled() {
-    return redis_pubsub_enabled_;
+    return impl_->runtime.redis_pubsub_enabled;
 }
 
 // UUID v4 생성 (난수 기반)
@@ -746,11 +747,11 @@ std::string ChatService::generate_uuid_v4() {
 
 // 세션별 고유 UUID를 조회하거나 생성합니다.
 std::string ChatService::get_or_create_session_uuid(Session& s) {
-    std::lock_guard<std::mutex> lk(state_.mu);
-    auto it = state_.session_uuid.find(&s);
-    if (it != state_.session_uuid.end() && !it->second.empty()) return it->second;
+    std::lock_guard<std::mutex> lk(impl_->state.mu);
+    auto it = impl_->state.session_uuid.find(&s);
+    if (it != impl_->state.session_uuid.end() && !it->second.empty()) return it->second;
     std::string id = generate_uuid_v4();
-    state_.session_uuid[&s] = id;
+    impl_->state.session_uuid[&s] = id;
     return id;
 }
 
@@ -777,8 +778,8 @@ void ChatService::emit_write_behind_event(const std::string& type,
     if (room_id && !room_id->empty()) {
         fields.emplace_back("room_id", *room_id);
     }
-    if (!gateway_id_.empty()) {
-        fields.emplace_back("gateway_id", gateway_id_);
+    if (!impl_->runtime.gateway_id.empty()) {
+        fields.emplace_back("gateway_id", impl_->runtime.gateway_id);
     }
 
     if (const auto trace_id = server::core::trace::current_trace_id(); !trace_id.empty()) {
@@ -799,7 +800,7 @@ void ChatService::emit_write_behind_event(const std::string& type,
         corelog::debug("span_start component=server span=redis_xadd");
     }
 
-    const bool xadd_ok = redis_->xadd(write_behind_.stream_key, fields, nullptr, write_behind_.maxlen, write_behind_.approximate);
+    const bool xadd_ok = impl_->runtime.redis->xadd(impl_->write_behind.stream_key, fields, nullptr, impl_->write_behind.maxlen, impl_->write_behind.approximate);
 
     if (server::core::trace::current_sampled()) {
         corelog::debug(std::string("span_end component=server span=redis_xadd success=") + (xadd_ok ? "true" : "false"));
@@ -810,53 +811,66 @@ void ChatService::emit_write_behind_event(const std::string& type,
     }
 }
 
-// WeakPtr로 관리되는 세션 목록에서 유효한 세션만 수집합니다.
-void ChatService::collect_room_sessions(RoomSet& set, std::vector<std::shared_ptr<Session>>& out) {
-    for (auto it = set.begin(); it != set.end(); ) {
-        if (auto session_sp = it->lock()) {
-            out.emplace_back(std::move(session_sp));
-            ++it;
-        } else {
-            it = set.erase(it);
-        }
-    }
-}
-
 unsigned int ChatService::presence_ttl() const {
-    return presence_.ttl;
+    return impl_->presence.ttl;
 }
 
 std::string ChatService::make_presence_key(std::string_view category, const std::string& id) const {
     std::string key;
-    key.reserve(presence_.prefix.size() + category.size() + id.size());
-    key.append(presence_.prefix);
+    key.reserve(impl_->presence.prefix.size() + category.size() + id.size());
+    key.append(impl_->presence.prefix);
     key.append(category);
     key.append(id);
     return key;
 }
 
 std::string ChatService::make_continuity_room_key(const std::string& logical_session_id) const {
-    return continuity_.redis_prefix + "room:" + logical_session_id;
+    return impl_->continuity.redis_prefix + "room:" + logical_session_id;
 }
 
 std::string ChatService::make_continuity_world_key(const std::string& logical_session_id) const {
-    return continuity_.redis_prefix + "world:" + logical_session_id;
+    return impl_->continuity.redis_prefix + "world:" + logical_session_id;
 }
 
 std::string ChatService::make_continuity_world_owner_key(const std::string& world_id) const {
-    return continuity_.redis_prefix + "world-owner:" + world_id;
+    return impl_->continuity.redis_prefix + "world-owner:" + world_id;
 }
 
 std::string ChatService::make_continuity_world_policy_key(const std::string& world_id) const {
-    return continuity_.redis_prefix + "world-policy:" + world_id;
+    return impl_->continuity.redis_prefix + "world-policy:" + world_id;
 }
 
 std::string ChatService::make_continuity_world_migration_key(const std::string& world_id) const {
-    return continuity_.redis_prefix + "world-migration:" + world_id;
+    return impl_->continuity.redis_prefix + "world-migration:" + world_id;
+}
+
+std::string ChatServicePrivateAccess::make_continuity_world_owner_key(
+    const ChatService& service,
+    const std::string& world_id) {
+    return service.make_continuity_world_owner_key(world_id);
+}
+
+std::string ChatServicePrivateAccess::make_continuity_world_policy_key(
+    const ChatService& service,
+    const std::string& world_id) {
+    return service.make_continuity_world_policy_key(world_id);
+}
+
+std::string ChatServicePrivateAccess::make_continuity_world_migration_key(
+    const ChatService& service,
+    const std::string& world_id) {
+    return service.make_continuity_world_migration_key(world_id);
 }
 
 bool ChatService::continuity_enabled() const {
-    return continuity_.enabled && static_cast<bool>(db_pool_);
+    return impl_->continuity.enabled && static_cast<bool>(impl_->runtime.db_pool);
+}
+
+void ChatServicePrivateAccess::override_history_config(ChatService& service,
+                                                       std::size_t recent_limit,
+                                                       std::size_t max_list_len) {
+    service.impl_->history.recent_limit = recent_limit;
+    service.impl_->history.max_list_len = max_list_len;
 }
 
 std::optional<std::string> ChatService::extract_resume_token(std::string_view token) const {
@@ -873,33 +887,33 @@ std::optional<std::string> ChatService::extract_resume_token(std::string_view to
 }
 
 std::optional<std::string> ChatService::load_continuity_room(const std::string& logical_session_id) {
-    if (!redis_ || logical_session_id.empty()) {
+    if (!impl_->runtime.redis || logical_session_id.empty()) {
         return std::nullopt;
     }
-    return redis_->get(make_continuity_room_key(logical_session_id));
+    return impl_->runtime.redis->get(make_continuity_room_key(logical_session_id));
 }
 
 std::optional<std::string> ChatService::load_continuity_world(const std::string& logical_session_id) {
-    if (!redis_ || logical_session_id.empty()) {
+    if (!impl_->runtime.redis || logical_session_id.empty()) {
         return std::nullopt;
     }
-    return redis_->get(make_continuity_world_key(logical_session_id));
+    return impl_->runtime.redis->get(make_continuity_world_key(logical_session_id));
 }
 
 std::optional<std::string> ChatService::load_continuity_world_owner(const std::string& world_id) {
-    if (!redis_ || world_id.empty()) {
+    if (!impl_->runtime.redis || world_id.empty()) {
         return std::nullopt;
     }
-    return redis_->get(make_continuity_world_owner_key(world_id));
+    return impl_->runtime.redis->get(make_continuity_world_owner_key(world_id));
 }
 
 std::optional<server::core::discovery::WorldLifecyclePolicy>
-ChatService::load_continuity_world_policy(const std::string& world_id) {
-    if (!redis_ || world_id.empty()) {
+ChatServicePrivateAccess::load_continuity_world_policy(ChatService& service, const std::string& world_id) {
+    if (!service.impl_->runtime.redis || world_id.empty()) {
         return std::nullopt;
     }
 
-    const auto payload = redis_->get(make_continuity_world_policy_key(world_id));
+    const auto payload = service.impl_->runtime.redis->get(service.make_continuity_world_policy_key(world_id));
     if (!payload.has_value() || payload->empty()) {
         return std::nullopt;
     }
@@ -907,12 +921,12 @@ ChatService::load_continuity_world_policy(const std::string& world_id) {
 }
 
 std::optional<server::core::worlds::WorldMigrationEnvelope>
-ChatService::load_continuity_world_migration(const std::string& world_id) {
-    if (!redis_ || world_id.empty()) {
+ChatServicePrivateAccess::load_continuity_world_migration(ChatService& service, const std::string& world_id) {
+    if (!service.impl_->runtime.redis || world_id.empty()) {
         return std::nullopt;
     }
 
-    const auto payload = redis_->get(make_continuity_world_migration_key(world_id));
+    const auto payload = service.impl_->runtime.redis->get(service.make_continuity_world_migration_key(world_id));
     if (!payload.has_value() || payload->empty()) {
         return std::nullopt;
     }
@@ -920,13 +934,15 @@ ChatService::load_continuity_world_migration(const std::string& world_id) {
 }
 
 std::optional<server::core::worlds::TopologyActuationRuntimeAssignmentItem>
-ChatService::load_topology_runtime_assignment() const {
-    if (!redis_ || continuity_.topology_runtime_assignment_key.empty() || continuity_.current_owner_id.empty()) {
+ChatServicePrivateAccess::load_topology_runtime_assignment(const ChatService& service) {
+    if (!service.impl_->runtime.redis
+        || service.impl_->continuity.topology_runtime_assignment_key.empty()
+        || service.impl_->continuity.current_owner_id.empty()) {
         return std::nullopt;
     }
 
     try {
-        const auto payload = redis_->get(continuity_.topology_runtime_assignment_key);
+        const auto payload = service.impl_->runtime.redis->get(service.impl_->continuity.topology_runtime_assignment_key);
         if (!payload.has_value() || payload->empty()) {
             return std::nullopt;
         }
@@ -938,7 +954,7 @@ ChatService::load_topology_runtime_assignment() const {
 
         return server::app::find_topology_actuation_runtime_assignment_for_instance(
             *document,
-            continuity_.current_owner_id);
+            service.impl_->continuity.current_owner_id);
     } catch (...) {
         return std::nullopt;
     }
@@ -946,17 +962,17 @@ ChatService::load_topology_runtime_assignment() const {
 
 std::string ChatService::current_runtime_default_world_id() const {
     const std::string fallback_world_id =
-        continuity_.default_world_id.empty() ? std::string("default") : continuity_.default_world_id;
-    const auto assignment = load_topology_runtime_assignment();
+        impl_->continuity.default_world_id.empty() ? std::string("default") : impl_->continuity.default_world_id;
+    const auto assignment = ChatServicePrivateAccess::load_topology_runtime_assignment(*this);
     const auto resolved =
         server::app::resolve_topology_runtime_assignment_world_id(fallback_world_id, assignment);
     return resolved.empty() ? std::string("default") : resolved;
 }
 
-ChatService::AppMigrationRoomHandoff
-ChatService::resolve_app_world_migration_room_handoff(
-    const server::core::worlds::WorldMigrationEnvelope& migration) const {
-    AppMigrationRoomHandoff handoff{};
+ChatServiceAppMigrationRoomHandoff
+ChatServicePrivateAccess::resolve_app_world_migration_room_handoff(
+    const server::core::worlds::WorldMigrationEnvelope& migration) {
+    ChatServiceAppMigrationRoomHandoff handoff{};
     if (migration.payload_kind != kAppMigrationPayloadRoomKind) {
         return handoff;
     }
@@ -969,72 +985,72 @@ ChatService::resolve_app_world_migration_room_handoff(
 void ChatService::persist_continuity_room(const std::string& logical_session_id,
                                           const std::string& room,
                                           std::uint64_t expires_unix_ms) {
-    if (!redis_ || logical_session_id.empty() || room.empty() || expires_unix_ms == 0) {
-        (void)continuity_state_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+    if (!impl_->runtime.redis || logical_session_id.empty() || room.empty() || expires_unix_ms == 0) {
+        (void)impl_->continuity_metrics.state_write_fail_total.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
     const auto now_ms = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
     if (expires_unix_ms <= now_ms) {
-        (void)redis_->del(make_continuity_room_key(logical_session_id));
+        (void)impl_->runtime.redis->del(make_continuity_room_key(logical_session_id));
         return;
     }
 
     const auto ttl_ms = expires_unix_ms - now_ms;
     const auto ttl_sec = static_cast<unsigned int>(std::max<std::uint64_t>(1, (ttl_ms + 999) / 1000));
-    if (redis_->setex(make_continuity_room_key(logical_session_id), room, ttl_sec)) {
-        (void)continuity_state_write_total_.fetch_add(1, std::memory_order_relaxed);
+    if (impl_->runtime.redis->setex(make_continuity_room_key(logical_session_id), room, ttl_sec)) {
+        (void)impl_->continuity_metrics.state_write_total.fetch_add(1, std::memory_order_relaxed);
     } else {
-        (void)continuity_state_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+        (void)impl_->continuity_metrics.state_write_fail_total.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
 void ChatService::persist_continuity_world(const std::string& logical_session_id,
                                            const std::string& world_id,
                                            std::uint64_t expires_unix_ms) {
-    if (!redis_ || logical_session_id.empty() || world_id.empty() || expires_unix_ms == 0) {
-        (void)continuity_world_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+    if (!impl_->runtime.redis || logical_session_id.empty() || world_id.empty() || expires_unix_ms == 0) {
+        (void)impl_->continuity_metrics.world_write_fail_total.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
     const auto now_ms = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
     if (expires_unix_ms <= now_ms) {
-        (void)redis_->del(make_continuity_world_key(logical_session_id));
+        (void)impl_->runtime.redis->del(make_continuity_world_key(logical_session_id));
         return;
     }
 
     const auto ttl_ms = expires_unix_ms - now_ms;
     const auto ttl_sec = static_cast<unsigned int>(std::max<std::uint64_t>(1, (ttl_ms + 999) / 1000));
-    if (redis_->setex(make_continuity_world_key(logical_session_id), world_id, ttl_sec)) {
-        (void)continuity_world_write_total_.fetch_add(1, std::memory_order_relaxed);
+    if (impl_->runtime.redis->setex(make_continuity_world_key(logical_session_id), world_id, ttl_sec)) {
+        (void)impl_->continuity_metrics.world_write_total.fetch_add(1, std::memory_order_relaxed);
     } else {
-        (void)continuity_world_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+        (void)impl_->continuity_metrics.world_write_fail_total.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
 void ChatService::persist_continuity_world_owner(const std::string& world_id,
                                                  const std::string& owner_id,
                                                  std::uint64_t expires_unix_ms) {
-    if (!redis_ || world_id.empty() || owner_id.empty() || expires_unix_ms == 0) {
-        (void)continuity_world_owner_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+    if (!impl_->runtime.redis || world_id.empty() || owner_id.empty() || expires_unix_ms == 0) {
+        (void)impl_->continuity_metrics.world_owner_write_fail_total.fetch_add(1, std::memory_order_relaxed);
         return;
     }
 
     const auto now_ms = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
     if (expires_unix_ms <= now_ms) {
-        (void)redis_->del(make_continuity_world_owner_key(world_id));
+        (void)impl_->runtime.redis->del(make_continuity_world_owner_key(world_id));
         return;
     }
 
     const auto ttl_ms = expires_unix_ms - now_ms;
     const auto ttl_sec = static_cast<unsigned int>(std::max<std::uint64_t>(1, (ttl_ms + 999) / 1000));
-    if (redis_->setex(make_continuity_world_owner_key(world_id), owner_id, ttl_sec)) {
-        (void)continuity_world_owner_write_total_.fetch_add(1, std::memory_order_relaxed);
+    if (impl_->runtime.redis->setex(make_continuity_world_owner_key(world_id), owner_id, ttl_sec)) {
+        (void)impl_->continuity_metrics.world_owner_write_total.fetch_add(1, std::memory_order_relaxed);
     } else {
-        (void)continuity_world_owner_write_fail_total_.fetch_add(1, std::memory_order_relaxed);
+        (void)impl_->continuity_metrics.world_owner_write_fail_total.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -1050,28 +1066,28 @@ std::optional<ChatService::ContinuityLease> ChatService::try_resume_continuity_l
 
     const std::string token_hash = sha256_hex(*raw_token);
     if (token_hash.empty()) {
-        (void)continuity_lease_resume_fail_total_.fetch_add(1, std::memory_order_relaxed);
+        (void)impl_->continuity_metrics.lease_resume_fail_total.fetch_add(1, std::memory_order_relaxed);
         return std::nullopt;
     }
 
     try {
-        auto uow = db_pool_->make_repository_unit_of_work();
+        auto uow = impl_->runtime.db_pool->make_repository_unit_of_work();
         auto session = uow->sessions().find_by_token_hash(token_hash);
         if (!session.has_value() || session->revoked_at_ms.has_value()) {
-            (void)continuity_lease_resume_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            (void)impl_->continuity_metrics.lease_resume_fail_total.fetch_add(1, std::memory_order_relaxed);
             return std::nullopt;
         }
 
         const auto now_ms = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
         if (session->expires_at_ms <= static_cast<std::int64_t>(now_ms)) {
-            (void)continuity_lease_resume_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            (void)impl_->continuity_metrics.lease_resume_fail_total.fetch_add(1, std::memory_order_relaxed);
             return std::nullopt;
         }
 
         auto user = uow->users().find_by_id(session->user_id);
         if (!user.has_value() || user->name.empty()) {
-            (void)continuity_lease_resume_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            (void)impl_->continuity_metrics.lease_resume_fail_total.fetch_add(1, std::memory_order_relaxed);
             return std::nullopt;
         }
 
@@ -1086,75 +1102,79 @@ std::optional<ChatService::ContinuityLease> ChatService::try_resume_continuity_l
         std::optional<std::string> migration_payload_room;
         const auto continuity_world = load_continuity_world(session->id);
         if (continuity_world.has_value() && !continuity_world->empty()) {
-            const auto continuity_world_policy = load_continuity_world_policy(*continuity_world);
+            const auto continuity_world_policy =
+                ChatServicePrivateAccess::load_continuity_world_policy(*this, *continuity_world);
             const bool world_draining =
                 continuity_world_policy.has_value() && continuity_world_policy->draining;
             const bool replacement_owner_matches_current =
                 continuity_world_policy.has_value()
-                && continuity_world_policy->replacement_owner_instance_id == continuity_.current_owner_id;
+                && continuity_world_policy->replacement_owner_instance_id == impl_->continuity.current_owner_id;
             const auto continuity_world_owner = load_continuity_world_owner(*continuity_world);
             const bool owner_present =
                 continuity_world_owner.has_value() && !continuity_world_owner->empty();
             const bool owner_matches_current = continuity_world_owner.has_value()
                 && !continuity_world_owner->empty()
-                && *continuity_world_owner == continuity_.current_owner_id;
+                && *continuity_world_owner == impl_->continuity.current_owner_id;
             if (owner_matches_current && (!world_draining || replacement_owner_matches_current)) {
                 lease.world_id = *continuity_world;
                 world_restore_ok = true;
                 preserve_room_on_restore = true;
-                (void)continuity_world_restore_total_.fetch_add(1, std::memory_order_relaxed);
-                (void)continuity_world_owner_restore_total_.fetch_add(1, std::memory_order_relaxed);
+                (void)impl_->continuity_metrics.world_restore_total.fetch_add(1, std::memory_order_relaxed);
+                (void)impl_->continuity_metrics.world_owner_restore_total.fetch_add(1, std::memory_order_relaxed);
             } else {
                 bool migration_restored = false;
-                if (const auto migration = load_continuity_world_migration(*continuity_world); migration.has_value()) {
+                if (const auto migration =
+                        ChatServicePrivateAccess::load_continuity_world_migration(*this, *continuity_world);
+                    migration.has_value()) {
                     const bool source_draining_for_migration = world_draining;
                     const bool target_owner_matches_current =
-                        migration->target_owner_instance_id == continuity_.current_owner_id;
+                        migration->target_owner_instance_id == impl_->continuity.current_owner_id;
                     const bool current_backend_hosts_target_world =
                         current_runtime_default_world_id() == migration->target_world_id;
                     const auto target_world_owner = load_continuity_world_owner(migration->target_world_id);
                     const bool target_world_owner_matches_current =
                         target_world_owner.has_value()
                         && !target_world_owner->empty()
-                        && *target_world_owner == continuity_.current_owner_id;
+                        && *target_world_owner == impl_->continuity.current_owner_id;
 
                     if (!source_draining_for_migration) {
-                        (void)continuity_world_migration_restore_fallback_total_.fetch_add(
+                        (void)impl_->continuity_metrics.world_migration_restore_fallback_total.fetch_add(
                             1,
                             std::memory_order_relaxed);
-                        (void)continuity_world_migration_restore_fallback_source_not_draining_total_.fetch_add(
+                        (void)impl_->continuity_metrics.world_migration_restore_fallback_source_not_draining_total.fetch_add(
                             1,
                             std::memory_order_relaxed);
                     } else if (!target_owner_matches_current) {
-                        (void)continuity_world_migration_restore_fallback_total_.fetch_add(
+                        (void)impl_->continuity_metrics.world_migration_restore_fallback_total.fetch_add(
                             1,
                             std::memory_order_relaxed);
-                        (void)continuity_world_migration_restore_fallback_target_owner_mismatch_total_.fetch_add(
+                        (void)impl_->continuity_metrics.world_migration_restore_fallback_target_owner_mismatch_total.fetch_add(
                             1,
                             std::memory_order_relaxed);
                     } else if (!current_backend_hosts_target_world && !target_world_owner_matches_current) {
-                        (void)continuity_world_migration_restore_fallback_total_.fetch_add(
+                        (void)impl_->continuity_metrics.world_migration_restore_fallback_total.fetch_add(
                             1,
                             std::memory_order_relaxed);
-                        (void)continuity_world_migration_restore_fallback_target_world_missing_total_.fetch_add(
+                        (void)impl_->continuity_metrics.world_migration_restore_fallback_target_world_missing_total.fetch_add(
                             1,
                             std::memory_order_relaxed);
                     } else {
                         lease.world_id = migration->target_world_id;
                         world_restore_ok = true;
                         preserve_room_on_restore = migration->preserve_room;
-                        const auto room_handoff = resolve_app_world_migration_room_handoff(*migration);
+                        const auto room_handoff =
+                            ChatServicePrivateAccess::resolve_app_world_migration_room_handoff(*migration);
                         if (room_handoff.recognized) {
                             if (!room_handoff.room.empty()) {
                                 migration_payload_room = room_handoff.room;
                             } else {
-                                (void)continuity_world_migration_payload_room_handoff_fallback_total_.fetch_add(
+                                (void)impl_->continuity_metrics.world_migration_payload_room_handoff_fallback_total.fetch_add(
                                     1,
                                     std::memory_order_relaxed);
                             }
                         }
                         migration_restored = true;
-                        (void)continuity_world_migration_restore_total_.fetch_add(
+                        (void)impl_->continuity_metrics.world_migration_restore_total.fetch_add(
                             1,
                             std::memory_order_relaxed);
                     }
@@ -1162,28 +1182,28 @@ std::optional<ChatService::ContinuityLease> ChatService::try_resume_continuity_l
 
                 if (!migration_restored) {
                     lease.world_id = fallback_world_id;
-                    (void)continuity_world_restore_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+                    (void)impl_->continuity_metrics.world_restore_fallback_total.fetch_add(1, std::memory_order_relaxed);
                     if (world_draining && !replacement_owner_matches_current) {
-                        (void)continuity_world_restore_fallback_draining_replacement_unhonored_total_.fetch_add(
+                        (void)impl_->continuity_metrics.world_restore_fallback_draining_replacement_unhonored_total.fetch_add(
                             1,
                             std::memory_order_relaxed);
                     } else if (!owner_present) {
-                        (void)continuity_world_restore_fallback_missing_owner_total_.fetch_add(
+                        (void)impl_->continuity_metrics.world_restore_fallback_missing_owner_total.fetch_add(
                             1,
                             std::memory_order_relaxed);
-                        (void)continuity_world_owner_restore_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+                        (void)impl_->continuity_metrics.world_owner_restore_fallback_total.fetch_add(1, std::memory_order_relaxed);
                     } else if (!owner_matches_current) {
-                        (void)continuity_world_restore_fallback_owner_mismatch_total_.fetch_add(
+                        (void)impl_->continuity_metrics.world_restore_fallback_owner_mismatch_total.fetch_add(
                             1,
                             std::memory_order_relaxed);
-                        (void)continuity_world_owner_restore_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+                        (void)impl_->continuity_metrics.world_owner_restore_fallback_total.fetch_add(1, std::memory_order_relaxed);
                     }
                 }
             }
         } else {
             lease.world_id = fallback_world_id;
-            (void)continuity_world_restore_fallback_total_.fetch_add(1, std::memory_order_relaxed);
-            (void)continuity_world_restore_fallback_missing_world_total_.fetch_add(
+            (void)impl_->continuity_metrics.world_restore_fallback_total.fetch_add(1, std::memory_order_relaxed);
+            (void)impl_->continuity_metrics.world_restore_fallback_missing_world_total.fetch_add(
                 1,
                 std::memory_order_relaxed);
         }
@@ -1191,7 +1211,7 @@ std::optional<ChatService::ContinuityLease> ChatService::try_resume_continuity_l
         const auto continuity_room = load_continuity_room(session->id);
         if (world_restore_ok && migration_payload_room.has_value() && !migration_payload_room->empty()) {
             lease.room = *migration_payload_room;
-            (void)continuity_world_migration_payload_room_handoff_total_.fetch_add(
+            (void)impl_->continuity_metrics.world_migration_payload_room_handoff_total.fetch_add(
                 1,
                 std::memory_order_relaxed);
         } else if (world_restore_ok
@@ -1199,23 +1219,29 @@ std::optional<ChatService::ContinuityLease> ChatService::try_resume_continuity_l
                    && continuity_room.has_value()
                    && !continuity_room->empty()) {
             lease.room = *continuity_room;
-            (void)continuity_state_restore_total_.fetch_add(1, std::memory_order_relaxed);
+            (void)impl_->continuity_metrics.state_restore_total.fetch_add(1, std::memory_order_relaxed);
         } else {
             lease.room = "lobby";
-            (void)continuity_state_restore_fallback_total_.fetch_add(1, std::memory_order_relaxed);
+            (void)impl_->continuity_metrics.state_restore_fallback_total.fetch_add(1, std::memory_order_relaxed);
         }
         lease.expires_unix_ms = static_cast<std::uint64_t>(session->expires_at_ms);
         lease.resumed = true;
-        (void)continuity_lease_resume_total_.fetch_add(1, std::memory_order_relaxed);
+        (void)impl_->continuity_metrics.lease_resume_total.fetch_add(1, std::memory_order_relaxed);
         return lease;
     } catch (const std::exception& ex) {
-        (void)continuity_lease_resume_fail_total_.fetch_add(1, std::memory_order_relaxed);
+        (void)impl_->continuity_metrics.lease_resume_fail_total.fetch_add(1, std::memory_order_relaxed);
         corelog::warn(std::string("continuity resume lookup failed: ") + ex.what());
     } catch (...) {
-        (void)continuity_lease_resume_fail_total_.fetch_add(1, std::memory_order_relaxed);
+        (void)impl_->continuity_metrics.lease_resume_fail_total.fetch_add(1, std::memory_order_relaxed);
         corelog::warn("continuity resume lookup failed: unknown");
     }
     return std::nullopt;
+}
+
+std::optional<ChatService::ContinuityLease> ChatServicePrivateAccess::try_resume_continuity_lease(
+    ChatService& service,
+    std::string_view token) {
+    return service.try_resume_continuity_lease(token);
 }
 
 std::optional<ChatService::ContinuityLease> ChatService::issue_continuity_lease(const std::string& user_id,
@@ -1231,13 +1257,13 @@ std::optional<ChatService::ContinuityLease> ChatService::issue_continuity_lease(
         const std::string raw_token = generate_uuid_v4();
         const std::string token_hash = sha256_hex(raw_token);
         if (token_hash.empty()) {
-            (void)continuity_lease_issue_fail_total_.fetch_add(1, std::memory_order_relaxed);
+            (void)impl_->continuity_metrics.lease_issue_fail_total.fetch_add(1, std::memory_order_relaxed);
             return std::nullopt;
         }
 
         const auto expires_at =
-            std::chrono::system_clock::now() + std::chrono::seconds(continuity_.lease_ttl_sec);
-        auto uow = db_pool_->make_repository_unit_of_work();
+            std::chrono::system_clock::now() + std::chrono::seconds(impl_->continuity.lease_ttl_sec);
+        auto uow = impl_->runtime.db_pool->make_repository_unit_of_work();
         auto session = uow->sessions().create(user_id, expires_at, client_ip, std::nullopt, token_hash);
         uow->commit();
 
@@ -1251,15 +1277,15 @@ std::optional<ChatService::ContinuityLease> ChatService::issue_continuity_lease(
         lease.expires_unix_ms = static_cast<std::uint64_t>(session.expires_at_ms);
         lease.resumed = false;
         persist_continuity_world(lease.logical_session_id, lease.world_id, lease.expires_unix_ms);
-        persist_continuity_world_owner(lease.world_id, continuity_.current_owner_id, lease.expires_unix_ms);
+        persist_continuity_world_owner(lease.world_id, impl_->continuity.current_owner_id, lease.expires_unix_ms);
         persist_continuity_room(lease.logical_session_id, lease.room, lease.expires_unix_ms);
-        (void)continuity_lease_issue_total_.fetch_add(1, std::memory_order_relaxed);
+        (void)impl_->continuity_metrics.lease_issue_total.fetch_add(1, std::memory_order_relaxed);
         return lease;
     } catch (const std::exception& ex) {
-        (void)continuity_lease_issue_fail_total_.fetch_add(1, std::memory_order_relaxed);
+        (void)impl_->continuity_metrics.lease_issue_fail_total.fetch_add(1, std::memory_order_relaxed);
         corelog::warn(std::string("continuity lease issue failed: ") + ex.what());
     } catch (...) {
-        (void)continuity_lease_issue_fail_total_.fetch_add(1, std::memory_order_relaxed);
+        (void)impl_->continuity_metrics.lease_issue_fail_total.fetch_add(1, std::memory_order_relaxed);
         corelog::warn("continuity lease issue failed: unknown");
     }
     return std::nullopt;
@@ -1267,10 +1293,10 @@ std::optional<ChatService::ContinuityLease> ChatService::issue_continuity_lease(
 
 // 사용자의 접속 상태(Presence)를 갱신합니다. (Redis SETEX)
 void ChatService::touch_user_presence(const std::string& uid) {
-    if (!redis_ || uid.empty()) {
+    if (!impl_->runtime.redis || uid.empty()) {
         return;
     }
-    redis_->setex(make_presence_key("presence:user:", uid), "1", presence_ttl());
+    impl_->runtime.redis->setex(make_presence_key("presence:user:", uid), "1", presence_ttl());
 }
 
 // 임시 닉네임 생성 (UUID 기반 8자리)
@@ -1284,10 +1310,10 @@ std::string ChatService::gen_temp_name_uuid8() {
 // desired가 비어있거나 "guest"인 경우 고유한 임시 닉네임을 생성하여 반환합니다.
 // 이미 사용 중인 닉네임인 경우 에러를 전송하고 빈 문자열을 반환합니다.
 std::string ChatService::ensure_unique_or_error(Session& s, const std::string& desired) {
-    std::lock_guard<std::mutex> lk(state_.mu);
+    std::lock_guard<std::mutex> lk(impl_->state.mu);
     if (!desired.empty() && desired != "guest") {
-        auto itset = state_.by_user.find(desired);
-        if (itset != state_.by_user.end()) {
+        auto itset = impl_->state.by_user.find(desired);
+        if (itset != impl_->state.by_user.end()) {
             bool taken = false;
             for (auto wit = itset->second.begin(); wit != itset->second.end(); ) {
                 if (auto p = wit->lock()) { taken = true; break; }
@@ -1303,7 +1329,7 @@ std::string ChatService::ensure_unique_or_error(Session& s, const std::string& d
     // 임시 닉네임은 UUID의 앞 8자를 잘라 32비트 난수 근사로 사용한다.
     for (int i=0;i<4;++i) {
         std::string cand = gen_temp_name_uuid8();
-        if (!state_.by_user.count(cand) || state_.by_user[cand].empty()) return cand;
+        if (!impl_->state.by_user.count(cand) || impl_->state.by_user[cand].empty()) return cand;
     }
     return gen_temp_name_uuid8();
 }
@@ -1323,10 +1349,10 @@ void ChatService::send_rooms_list(Session& s) {
     std::vector<RoomInfo> redis_rooms;
     bool redis_available = false;
 
-    if (redis_) {
+    if (impl_->runtime.redis) {
         redis_available = true;
         std::vector<std::string> redis_rooms_list;
-        redis_->smembers("rooms:active", redis_rooms_list);
+        impl_->runtime.redis->smembers("rooms:active", redis_rooms_list);
 
         std::vector<std::string> password_keys;
         std::vector<std::string> user_count_keys;
@@ -1339,12 +1365,12 @@ void ChatService::send_rooms_list(Session& s) {
 
         std::vector<std::optional<std::string>> password_values;
         const bool password_batch_loaded = !password_keys.empty()
-            && redis_->mget(password_keys, password_values)
+            && impl_->runtime.redis->mget(password_keys, password_values)
             && password_values.size() == password_keys.size();
 
         std::vector<std::size_t> user_counts;
         const bool users_count_batch_loaded = !user_count_keys.empty()
-            && redis_->scard_many(user_count_keys, user_counts)
+            && impl_->runtime.redis->scard_many(user_count_keys, user_counts)
             && user_counts.size() == user_count_keys.size();
         
         bool lobby_found = false;
@@ -1358,9 +1384,9 @@ void ChatService::send_rooms_list(Session& s) {
                 users_count = user_counts[i];
             } else {
                 const auto& users_key = user_count_keys[i];
-                if (!redis_->scard(users_key, users_count)) {
+                if (!impl_->runtime.redis->scard(users_key, users_count)) {
                     std::vector<std::string> users;
-                    redis_->smembers(users_key, users);
+                    impl_->runtime.redis->smembers(users_key, users);
                     users_count = users.size();
                 }
             }
@@ -1369,7 +1395,7 @@ void ChatService::send_rooms_list(Session& s) {
             if (password_batch_loaded) {
                 locked = password_values[i].has_value();
             } else {
-                auto pw = redis_->get("room:password:" + r);
+                auto pw = impl_->runtime.redis->get("room:password:" + r);
                 locked = pw.has_value();
             }
             
@@ -1378,9 +1404,9 @@ void ChatService::send_rooms_list(Session& s) {
         
         if (!lobby_found) {
             std::size_t users_count = 0;
-            if (!redis_->scard("room:users:lobby", users_count)) {
+            if (!impl_->runtime.redis->scard("room:users:lobby", users_count)) {
                 std::vector<std::string> users;
-                redis_->smembers("room:users:lobby", users);
+                impl_->runtime.redis->smembers("room:users:lobby", users);
                 users_count = users.size();
             }
             redis_rooms.push_back({"lobby", users_count, false});
@@ -1389,16 +1415,16 @@ void ChatService::send_rooms_list(Session& s) {
 
     {
         // 2. 로컬 상태 처리 (Lock 필요)
-        std::lock_guard<std::mutex> lk(state_.mu);
+        std::lock_guard<std::mutex> lk(impl_->state.mu);
 
         // 로컬 방 정리
         std::vector<std::string> to_remove;
-        for (auto it = state_.rooms.begin(); it != state_.rooms.end(); ++it) {
+        for (auto it = impl_->state.rooms.begin(); it != impl_->state.rooms.end(); ++it) {
             std::size_t alive = 0;
             for (auto wit = it->second.begin(); wit != it->second.end(); ) { if (auto p = wit->lock()) { ++alive; ++wit; } else { wit = it->second.erase(wit); } }
             if (alive == 0 && it->first != std::string("lobby")) { to_remove.push_back(it->first); continue; }
         }
-        for (auto& name : to_remove) { state_.rooms.erase(name); state_.room_passwords.erase(name); }
+        for (auto& name : to_remove) { impl_->state.rooms.erase(name); impl_->state.room_passwords.erase(name); }
 
         if (redis_available) {
             // Redis 데이터 기반으로 메시지 구성
@@ -1407,7 +1433,7 @@ void ChatService::send_rooms_list(Session& s) {
                 bool is_locked = info.is_locked;
 
                 // Redis에 잠금 정보가 없어도 로컬에 있을 수 있음
-                if (!is_locked && state_.room_passwords.count(info.name)) {
+                if (!is_locked && impl_->state.room_passwords.count(info.name)) {
                     is_locked = true;
                 }
 
@@ -1418,10 +1444,10 @@ void ChatService::send_rooms_list(Session& s) {
             }
         } else {
             // Fallback to local state
-            for (auto it = state_.rooms.begin(); it != state_.rooms.end(); ++it) {
+            for (auto it = impl_->state.rooms.begin(); it != impl_->state.rooms.end(); ++it) {
                 std::size_t alive = it->second.size();
                 std::string display_name = it->first;
-                if (state_.room_passwords.count(it->first)) {
+                if (impl_->state.room_passwords.count(it->first)) {
                     display_name = "🔒" + display_name;
                 }
                 msg += " " + display_name + "(" + std::to_string(alive) + ")";
@@ -1449,9 +1475,9 @@ void ChatService::broadcast_refresh_local(const std::string& room) {
     std::vector<std::uint8_t> empty_body;
     std::vector<std::shared_ptr<Session>> targets;
     {
-        std::lock_guard<std::mutex> lk(state_.mu);
-        auto it = state_.rooms.find(room);
-        if (it != state_.rooms.end()) {
+        std::lock_guard<std::mutex> lk(impl_->state.mu);
+        auto it = impl_->state.rooms.find(room);
+        if (it != impl_->state.rooms.end()) {
             collect_room_sessions(it->second, targets);
         }
     }
@@ -1468,13 +1494,13 @@ void ChatService::broadcast_refresh(const std::string& room) {
     broadcast_refresh_local(room);
 
     // 2. Redis Pub/Sub으로 다른 서버에 전파
-    if (redis_ && pubsub_enabled()) {
+    if (impl_->runtime.redis && pubsub_enabled()) {
         try {
             // fanout:refresh:<room> 채널 사용
-            std::string channel = presence_.prefix + std::string("fanout:refresh:") + room;
+            std::string channel = impl_->presence.prefix + std::string("fanout:refresh:") + room;
             // Payload는 gwid만 있으면 됨 (self-echo 방지용)
-            std::string message = "gw=" + gateway_id_;
-            redis_->publish(channel, std::move(message));
+            std::string message = "gw=" + impl_->runtime.gateway_id;
+            impl_->runtime.redis->publish(channel, std::move(message));
         } catch (...) {}
     }
 }
@@ -1487,13 +1513,13 @@ void ChatService::send_room_users(Session& s, const std::string& target) {
     std::string viewer;
 
     {
-        std::lock_guard<std::mutex> lk(state_.mu);
-        auto itroom = state_.rooms.find(target);
-        bool is_locked = state_.room_passwords.count(target) > 0;
+        std::lock_guard<std::mutex> lk(impl_->state.mu);
+        auto itroom = impl_->state.rooms.find(target);
+        bool is_locked = impl_->state.room_passwords.count(target) > 0;
         bool is_member = false;
 
         // 로컬 세션에서 멤버 여부 확인
-        if (itroom != state_.rooms.end()) {
+        if (itroom != impl_->state.rooms.end()) {
             for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) {
                 if (auto p = wit->lock()) {
                     if (p.get() == &s) {
@@ -1511,7 +1537,7 @@ void ChatService::send_room_users(Session& s, const std::string& target) {
             allow = false;
         }
 
-        if (auto viewer_it = state_.user.find(&s); viewer_it != state_.user.end()) {
+        if (auto viewer_it = impl_->state.user.find(&s); viewer_it != impl_->state.user.end()) {
             viewer = viewer_it->second;
         }
     }
@@ -1522,22 +1548,22 @@ void ChatService::send_room_users(Session& s, const std::string& target) {
     }
 
     // Redis에서 전체 사용자 목록 조회 (분산 환경 지원)
-    if (redis_) {
+    if (impl_->runtime.redis) {
         std::vector<std::string> redis_users;
-        if (redis_->smembers("room:users:" + target, redis_users)) {
+        if (impl_->runtime.redis->smembers("room:users:" + target, redis_users)) {
             names = std::move(redis_users);
         }
     }
 
     // Redis가 없거나 실패한 경우 로컬 상태를 fallback으로 사용
     if (names.empty()) {
-        std::lock_guard<std::mutex> lk(state_.mu);
-        auto itroom = state_.rooms.find(target);
-        if (itroom != state_.rooms.end()) {
+        std::lock_guard<std::mutex> lk(impl_->state.mu);
+        auto itroom = impl_->state.rooms.find(target);
+        if (itroom != impl_->state.rooms.end()) {
             for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) {
                 if (auto p = wit->lock()) {
-                    auto itu = state_.user.find(p.get());
-                    std::string name = (itu != state_.user.end()) ? itu->second : std::string("guest");
+                    auto itu = impl_->state.user.find(p.get());
+                    std::string name = (itu != impl_->state.user.end()) ? itu->second : std::string("guest");
                     names.push_back(std::move(name));
                     ++wit;
                 } else {
@@ -1551,8 +1577,8 @@ void ChatService::send_room_users(Session& s, const std::string& target) {
     pb.set_room(target);
     std::unordered_set<std::string> blocked;
     {
-        std::lock_guard<std::mutex> lk(state_.mu);
-        if (auto it = state_.user_blacklists.find(viewer); it != state_.user_blacklists.end()) {
+        std::lock_guard<std::mutex> lk(impl_->state.mu);
+        if (auto it = impl_->state.user_blacklists.find(viewer); it != impl_->state.user_blacklists.end()) {
             blocked = it->second;
         }
     }
@@ -1584,10 +1610,10 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
     std::vector<RoomInfo> redis_rooms;
     bool redis_available = false;
 
-    if (redis_) {
+    if (impl_->runtime.redis) {
         redis_available = true;
         std::vector<std::string> active_rooms;
-        redis_->smembers("rooms:active", active_rooms);
+        impl_->runtime.redis->smembers("rooms:active", active_rooms);
 
         std::vector<std::string> password_keys;
         std::vector<std::string> user_count_keys;
@@ -1600,12 +1626,12 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
 
         std::vector<std::optional<std::string>> password_values;
         const bool password_batch_loaded = !password_keys.empty()
-            && redis_->mget(password_keys, password_values)
+            && impl_->runtime.redis->mget(password_keys, password_values)
             && password_values.size() == password_keys.size();
 
         std::vector<std::size_t> user_counts;
         const bool users_count_batch_loaded = !user_count_keys.empty()
-            && redis_->scard_many(user_count_keys, user_counts)
+            && impl_->runtime.redis->scard_many(user_count_keys, user_counts)
             && user_counts.size() == user_count_keys.size();
 
         bool lobby_found = false;
@@ -1618,9 +1644,9 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
                 users_count = user_counts[i];
             } else {
                 const auto& users_key = user_count_keys[i];
-                if (!redis_->scard(users_key, users_count)) {
+                if (!impl_->runtime.redis->scard(users_key, users_count)) {
                     std::vector<std::string> users;
-                    redis_->smembers(users_key, users);
+                    impl_->runtime.redis->smembers(users_key, users);
                     users_count = users.size();
                 }
             }
@@ -1629,7 +1655,7 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
             if (password_batch_loaded) {
                 locked = password_values[i].has_value();
             } else {
-                auto pw = redis_->get("room:password:" + r);
+                auto pw = impl_->runtime.redis->get("room:password:" + r);
                 locked = pw.has_value();
             }
             
@@ -1638,9 +1664,9 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
         
         if (!lobby_found) {
             std::size_t users_count = 0;
-            if (!redis_->scard("room:users:lobby", users_count)) {
+            if (!impl_->runtime.redis->scard("room:users:lobby", users_count)) {
                 std::vector<std::string> users;
-                redis_->smembers("room:users:lobby", users);
+                impl_->runtime.redis->smembers("room:users:lobby", users);
                 users_count = users.size();
             }
             redis_rooms.push_back({"lobby", users_count, false});
@@ -1649,15 +1675,15 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
 
     {
         // 2. 로컬 상태 처리 (Lock 필요)
-        std::lock_guard<std::mutex> lk(state_.mu);
+        std::lock_guard<std::mutex> lk(impl_->state.mu);
 
         // 로컬 방 정리
         std::vector<std::string> to_remove;
-        for (auto it = state_.rooms.begin(); it != state_.rooms.end(); ++it) {
+        for (auto it = impl_->state.rooms.begin(); it != impl_->state.rooms.end(); ++it) {
             std::uint32_t alive = 0; for (auto wit = it->second.begin(); wit != it->second.end(); ) { if (auto p = wit->lock()) { ++alive; ++wit; } else { wit = it->second.erase(wit); } }
             if (alive == 0 && it->first != std::string("lobby")) { to_remove.push_back(it->first); continue; }
         }
-        for (auto& name : to_remove) { state_.rooms.erase(name); state_.room_passwords.erase(name); }
+        for (auto& name : to_remove) { impl_->state.rooms.erase(name); impl_->state.room_passwords.erase(name); }
 
         if (redis_available) {
             // Redis 데이터 기반으로 메시지 구성
@@ -1667,16 +1693,16 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
                 ri->set_members(info.count);
 
                 bool locked = info.is_locked;
-                if (!locked && state_.room_passwords.count(info.name)) {
+                if (!locked && impl_->state.room_passwords.count(info.name)) {
                     locked = true;
                 }
                 ri->set_locked(locked);
             }
         } else {
             // Fallback to local state
-            for (auto it = state_.rooms.begin(); it != state_.rooms.end(); ++it) {
+            for (auto it = impl_->state.rooms.begin(); it != impl_->state.rooms.end(); ++it) {
                 std::size_t alive = it->second.size();
-                auto* ri = pb.add_rooms(); ri->set_name(it->first); ri->set_members(alive); ri->set_locked(state_.room_passwords.count(it->first) > 0);
+                auto* ri = pb.add_rooms(); ri->set_name(it->first); ri->set_members(alive); ri->set_locked(impl_->state.room_passwords.count(it->first) > 0);
             }
         }
     }
@@ -1684,10 +1710,10 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
     std::string viewer_name;
     std::unordered_set<std::string> viewer_blocked;
     {
-        std::lock_guard<std::mutex> lk(state_.mu);
-        if (auto it = state_.user.find(&s); it != state_.user.end()) {
+        std::lock_guard<std::mutex> lk(impl_->state.mu);
+        if (auto it = impl_->state.user.find(&s); it != impl_->state.user.end()) {
             viewer_name = it->second;
-            if (auto blk_it = state_.user_blacklists.find(viewer_name); blk_it != state_.user_blacklists.end()) {
+            if (auto blk_it = impl_->state.user_blacklists.find(viewer_name); blk_it != impl_->state.user_blacklists.end()) {
                 viewer_blocked = blk_it->second;
             }
         }
@@ -1698,8 +1724,8 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
         std::vector<std::string> user_list;
         bool loaded_from_redis = false;
 
-        if (redis_) {
-            if (redis_->smembers("room:users:" + current, user_list)) {
+        if (impl_->runtime.redis) {
+            if (impl_->runtime.redis->smembers("room:users:" + current, user_list)) {
                 loaded_from_redis = true;
             }
         }
@@ -1713,13 +1739,13 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
             }
         } else {
             // Fallback to local state
-            std::lock_guard<std::mutex> lk(state_.mu);
-            auto itroom = state_.rooms.find(current);
-            if (itroom != state_.rooms.end()) {
+            std::lock_guard<std::mutex> lk(impl_->state.mu);
+            auto itroom = impl_->state.rooms.find(current);
+            if (itroom != impl_->state.rooms.end()) {
                 for (auto wit = itroom->second.begin(); wit != itroom->second.end(); ) {
                     if (auto p = wit->lock()) {
-                        auto itu = state_.user.find(p.get());
-                        std::string name = (itu != state_.user.end()) ? itu->second : std::string("guest");
+                        auto itu = impl_->state.user.find(p.get());
+                        std::string name = (itu != impl_->state.user.end()) ? itu->second : std::string("guest");
                         if (viewer_blocked.count(name) > 0) {
                             ++wit;
                             continue;
@@ -1735,22 +1761,22 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
     // 이렇게 해야 평소에는 빠르고, 캐시가 비었거나 일부만 있을 때도 기능은 유지된다.
     std::string rid;
     {
-        std::lock_guard<std::mutex> lk(state_.mu);
-        auto it = state_.room_ids.find(current);
-        if (it != state_.room_ids.end()) {
+        std::lock_guard<std::mutex> lk(impl_->state.mu);
+        auto it = impl_->state.room_ids.find(current);
+        if (it != impl_->state.room_ids.end()) {
             rid = it->second;
         }
     }
-    if (rid.empty() && db_pool_) {
+    if (rid.empty() && impl_->runtime.db_pool) {
         rid = ensure_room_id_ci(current);
     }
 
     std::unordered_set<std::uint64_t> added_ids;
     bool loaded_from_cache = false;
     std::size_t cached_messages = 0;
-    if (redis_ && !rid.empty()) {
+    if (impl_->runtime.redis && !rid.empty()) {
         std::vector<server::wire::v1::StateSnapshot::SnapshotMessage> cached;
-        if (load_recent_messages_from_cache(rid, cached)) {
+        if (ChatServicePrivateAccess::load_recent_messages_from_cache(*this, rid, cached)) {
             for (auto& message : cached) {
                 if (added_ids.count(message.id())) continue; // 중복 제거
                 auto* sm = pb.add_messages();
@@ -1758,22 +1784,22 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
                 added_ids.insert(message.id());
             }
             cached_messages = cached.size();
-            loaded_from_cache = (cached_messages >= history_.recent_limit);
+            loaded_from_cache = (cached_messages >= impl_->history.recent_limit);
         }
     }
 
     std::uint64_t last_seen_value = 0;
     bool last_seen_loaded = false;
-    if (db_pool_ && !rid.empty()) {
+    if (impl_->runtime.db_pool && !rid.empty()) {
         try {
             std::string uid;
             {
-                std::lock_guard<std::mutex> lk(state_.mu);
-                auto itu = state_.user_uuid.find(&s);
-                if (itu != state_.user_uuid.end()) uid = itu->second;
+                std::lock_guard<std::mutex> lk(impl_->state.mu);
+                auto itu = impl_->state.user_uuid.find(&s);
+                if (itu != impl_->state.user_uuid.end()) uid = itu->second;
             }
 
-            auto uow = db_pool_->make_repository_unit_of_work();
+            auto uow = impl_->runtime.db_pool->make_repository_unit_of_work();
             if (!uid.empty()) {
                 auto opt = uow->memberships().get_last_seen(uid, rid);
                 last_seen_value = opt.value_or(0);
@@ -1782,11 +1808,11 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
             pb.set_last_seen_id(last_seen_value);
 
             // 캐시된 메시지가 부족하면 DB에서 추가로 조회합니다.
-            if (!loaded_from_cache || cached_messages < history_.recent_limit) {
-                const std::size_t limit = history_.recent_limit;
-                const std::size_t fetch_factor = history_.fetch_factor;
+            if (!loaded_from_cache || cached_messages < impl_->history.recent_limit) {
+                const std::size_t limit = impl_->history.recent_limit;
+                const std::size_t fetch_factor = impl_->history.fetch_factor;
                 const std::size_t fetch_span = limit * fetch_factor;
-                const std::size_t fetch_count = std::min(history_.max_list_len, std::max(limit, fetch_span));
+                const std::size_t fetch_count = std::min(impl_->history.max_list_len, std::max(limit, fetch_span));
 
                 auto last_id = uow->messages().get_last_id(rid);
                 std::uint64_t since_id = 0;
@@ -1842,8 +1868,8 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
                     sm->set_text(m.content);
                     sm->set_ts_ms(static_cast<std::uint64_t>(m.created_at_ms));
                     // DB에서 가져온 메시지를 Redis 캐시에 채워넣습니다 (Read-Repair).
-                    if (redis_) {
-                        cache_recent_message(rid, *sm);
+                    if (impl_->runtime.redis) {
+                        ChatServicePrivateAccess::cache_recent_message(*this, rid, *sm);
                     }
                     added_ids.insert(m.id);
                 }
@@ -1861,9 +1887,9 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
     // 현재 세션의 이름(닉네임)을 클라이언트에게 알려줌 (Guest 식별용)
     std::string my_name;
     {
-        std::lock_guard<std::mutex> lk(state_.mu);
-        auto it = state_.user.find(&s);
-        if (it != state_.user.end()) my_name = it->second;
+        std::lock_guard<std::mutex> lk(impl_->state.mu);
+        auto it = impl_->state.user.find(&s);
+        if (it != impl_->state.user.end()) my_name = it->second;
     }
     if (!my_name.empty()) {
         pb.set_your_name(my_name);
@@ -1889,9 +1915,9 @@ void ChatService::broadcast_room(const std::string& room, const std::vector<std:
 
     std::vector<std::shared_ptr<Session>> targets;
     {
-        std::lock_guard<std::mutex> lk(state_.mu);
-        auto it = state_.rooms.find(room);
-        if (it != state_.rooms.end()) {
+        std::lock_guard<std::mutex> lk(impl_->state.mu);
+        auto it = impl_->state.rooms.find(room);
+        if (it != impl_->state.rooms.end()) {
             collect_room_sessions(it->second, targets);
         }
 
@@ -1899,13 +1925,13 @@ void ChatService::broadcast_room(const std::string& room, const std::vector<std:
             std::vector<std::shared_ptr<Session>> filtered_targets;
             filtered_targets.reserve(targets.size());
             for (auto& target : targets) {
-                auto receiver_it = state_.user.find(target.get());
-                if (receiver_it == state_.user.end()) {
+                auto receiver_it = impl_->state.user.find(target.get());
+                if (receiver_it == impl_->state.user.end()) {
                     continue;
                 }
                 const std::string& receiver = receiver_it->second;
-                if (auto blk_it = state_.user_blacklists.find(receiver);
-                    blk_it != state_.user_blacklists.end() && blk_it->second.count(sender) > 0) {
+                if (auto blk_it = impl_->state.user_blacklists.find(receiver);
+                    blk_it != impl_->state.user_blacklists.end() && blk_it->second.count(sender) > 0) {
                     continue;
                 }
                 filtered_targets.push_back(target);
@@ -1939,35 +1965,33 @@ ChatService::LuaColdHookOutcome ChatService::invoke_lua_cold_hook(
     std::string_view hook_name,
     const server::core::scripting::LuaHookContext& context) {
     LuaColdHookOutcome outcome{};
-    if (!lua_runtime_) {
+    if (!impl_->runtime.lua_runtime) {
         return outcome;
     }
 
-    const auto runtime_metrics = lua_runtime_->metrics_snapshot();
+    const auto runtime_metrics = impl_->runtime.lua_runtime->metrics_snapshot();
     {
-        std::lock_guard<std::mutex> lock(lua_hook_metrics_mu_);
-        if (runtime_metrics.reload_epoch != lua_reload_epoch_) {
-            lua_reload_epoch_ = runtime_metrics.reload_epoch;
-            lua_hook_consecutive_failures_.clear();
-            lua_hook_disabled_.clear();
-            corelog::info("lua cold hook state reset after script reload epoch=" + std::to_string(lua_reload_epoch_));
+        std::lock_guard<std::mutex> lock(impl_->lua_metrics.mu);
+        if (runtime_metrics.reload_epoch != impl_->lua_metrics.reload_epoch) {
+            impl_->lua_metrics.reload_epoch = runtime_metrics.reload_epoch;
+            impl_->lua_metrics.consecutive_failures.clear();
+            impl_->lua_metrics.disabled.clear();
+            corelog::info("lua cold hook state reset after script reload epoch=" + std::to_string(impl_->lua_metrics.reload_epoch));
         }
 
-        if (lua_hook_disabled_.count(std::string(hook_name)) > 0) {
+        if (impl_->lua_metrics.disabled.count(std::string(hook_name)) > 0) {
             return outcome;
         }
     }
 
     const auto call_started_at = std::chrono::steady_clock::now();
     server::core::scripting::LuaRuntime::CallAllResult call_result{};
-    if (lua_execution_strand_ && !lua_execution_strand_->running_in_this_thread()) {
+    if (impl_->dispatch.lua_execution_strand && !impl_->dispatch.lua_execution_strand->running_in_this_thread()) {
         auto promise = std::make_shared<std::promise<server::core::scripting::LuaRuntime::CallAllResult>>();
         auto future = promise->get_future();
-        asio::post(*lua_execution_strand_, [this,
-                                            hook = std::string(hook_name),
-                                            context,
-                                            promise]() mutable {
-            promise->set_value(lua_runtime_->call_all(hook, context));
+        asio::post(*impl_->dispatch.lua_execution_strand,
+                   [this, hook = std::string(hook_name), context, promise]() mutable {
+            promise->set_value(impl_->runtime.lua_runtime->call_all(hook, context));
         });
         while (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
             if (io_ == nullptr || io_->poll_one() == 0) {
@@ -1976,7 +2000,7 @@ ChatService::LuaColdHookOutcome ChatService::invoke_lua_cold_hook(
         }
         call_result = future.get();
     } else {
-        call_result = lua_runtime_->call_all(std::string(hook_name), context);
+        call_result = impl_->runtime.lua_runtime->call_all(std::string(hook_name), context);
     }
     const auto call_elapsed_ns = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1985,17 +2009,17 @@ ChatService::LuaColdHookOutcome ChatService::invoke_lua_cold_hook(
 
     const bool call_failed = (!call_result.error.empty() || call_result.failed != 0);
     {
-        std::lock_guard<std::mutex> lock(lua_hook_metrics_mu_);
+        std::lock_guard<std::mutex> lock(impl_->lua_metrics.mu);
         const std::string hook_key(hook_name);
-        lua_hook_calls_total_[hook_key] += call_result.attempted;
-        lua_hook_errors_total_[hook_key] += call_result.failed;
+        impl_->lua_metrics.calls_total[hook_key] += call_result.attempted;
+        impl_->lua_metrics.errors_total[hook_key] += call_result.failed;
 
         if (call_result.failed == 0 && !call_result.error.empty()) {
-            ++lua_hook_errors_total_[hook_key];
+            ++impl_->lua_metrics.errors_total[hook_key];
         }
 
-        auto& script_calls = lua_hook_script_calls_total_[hook_key];
-        auto& script_errors = lua_hook_script_errors_total_[hook_key];
+        auto& script_calls = impl_->lua_metrics.script_calls_total[hook_key];
+        auto& script_errors = impl_->lua_metrics.script_errors_total[hook_key];
         for (const auto& script_result : call_result.script_results) {
             const std::string script_name = script_result.env_name.empty()
                 ? std::string("(unknown)")
@@ -2007,10 +2031,10 @@ ChatService::LuaColdHookOutcome ChatService::invoke_lua_cold_hook(
 
             switch (script_result.failure_kind) {
             case server::core::scripting::LuaRuntime::ScriptFailureKind::kInstructionLimit:
-                ++lua_hook_instruction_limit_hits_[hook_key];
+                ++impl_->lua_metrics.instruction_limit_hits[hook_key];
                 break;
             case server::core::scripting::LuaRuntime::ScriptFailureKind::kMemoryLimit:
-                ++lua_hook_memory_limit_hits_[hook_key];
+                ++impl_->lua_metrics.memory_limit_hits[hook_key];
                 break;
             case server::core::scripting::LuaRuntime::ScriptFailureKind::kNone:
             case server::core::scripting::LuaRuntime::ScriptFailureKind::kOther:
@@ -2019,18 +2043,18 @@ ChatService::LuaColdHookOutcome ChatService::invoke_lua_cold_hook(
             }
         }
 
-        auto& consecutive = lua_hook_consecutive_failures_[hook_key];
+        auto& consecutive = impl_->lua_metrics.consecutive_failures[hook_key];
         if (call_failed) {
             ++consecutive;
-            if (lua_auto_disable_threshold_ > 0
-                && consecutive >= lua_auto_disable_threshold_
-                && lua_hook_disabled_.count(hook_key) == 0) {
-                lua_hook_disabled_.insert(hook_key);
-                ++lua_hook_auto_disable_total_[hook_key];
+            if (impl_->runtime.lua_auto_disable_threshold > 0
+                && consecutive >= impl_->runtime.lua_auto_disable_threshold
+                && impl_->lua_metrics.disabled.count(hook_key) == 0) {
+                impl_->lua_metrics.disabled.insert(hook_key);
+                ++impl_->lua_metrics.auto_disable_total[hook_key];
                 corelog::warn(
                     "lua cold hook auto-disabled hook=" + hook_key
                     + " consecutive_failures=" + std::to_string(consecutive)
-                    + " threshold=" + std::to_string(lua_auto_disable_threshold_));
+                    + " threshold=" + std::to_string(impl_->runtime.lua_auto_disable_threshold));
             }
         } else {
             consecutive = 0;
@@ -2049,11 +2073,11 @@ ChatService::LuaColdHookOutcome ChatService::invoke_lua_cold_hook(
             + " failed=" + std::to_string(call_result.failed));
     }
 
-    if (lua_hook_warn_budget_us_ > 0 && call_elapsed_ns > lua_hook_warn_budget_us_ * 1'000ULL) {
+    if (impl_->runtime.lua_hook_warn_budget_us > 0 && call_elapsed_ns > impl_->runtime.lua_hook_warn_budget_us * 1'000ULL) {
         corelog::warn(
             "lua cold hook latency budget exceeded hook=" + std::string(hook_name)
             + " elapsed_us=" + std::to_string(call_elapsed_ns / 1'000ULL)
-            + " budget_us=" + std::to_string(lua_hook_warn_budget_us_));
+            + " budget_us=" + std::to_string(impl_->runtime.lua_hook_warn_budget_us));
     }
 
     outcome.notices = call_result.notices;
@@ -2080,11 +2104,11 @@ bool ChatService::maybe_handle_chat_hook_plugin(Session& s,
                                                 const std::string& room,
                                                 const std::string& sender,
                                                 std::string& text) {
-    if (!hook_plugin_) {
+    if (!impl_->runtime.hook_plugin) {
         return false;
     }
 
-    auto out = hook_plugin_->chain.on_chat_send(s.session_id(), room, sender, text);
+    auto out = impl_->runtime.hook_plugin->chain.on_chat_send(s.session_id(), room, sender, text);
     for (const auto& notice : out.notices) {
         if (!notice.empty()) {
             send_system_notice(s, notice);
@@ -2098,7 +2122,7 @@ bool ChatService::maybe_handle_login_hook(Session& s, const std::string& user) {
     ctx.session_id = s.session_id();
     ctx.user = user;
 
-    if (!hook_plugin_) {
+    if (!impl_->runtime.hook_plugin) {
         const auto lua_out = invoke_lua_cold_hook("on_login", ctx);
         for (const auto& notice : lua_out.notices) {
             if (!notice.empty()) {
@@ -2114,7 +2138,7 @@ bool ChatService::maybe_handle_login_hook(Session& s, const std::string& user) {
         return true;
     }
 
-    const auto out = hook_plugin_->chain.on_login(s.session_id(), user);
+    const auto out = impl_->runtime.hook_plugin->chain.on_login(s.session_id(), user);
     for (const auto& notice : out.notices) {
         if (!notice.empty()) {
             send_system_notice(s, notice);
@@ -2148,7 +2172,7 @@ bool ChatService::maybe_handle_join_hook(Session& s, const std::string& user, co
     ctx.user = user;
     ctx.room = room;
 
-    if (!hook_plugin_) {
+    if (!impl_->runtime.hook_plugin) {
         const auto lua_out = invoke_lua_cold_hook("on_join", ctx);
         for (const auto& notice : lua_out.notices) {
             if (!notice.empty()) {
@@ -2164,7 +2188,7 @@ bool ChatService::maybe_handle_join_hook(Session& s, const std::string& user, co
         return true;
     }
 
-    const auto out = hook_plugin_->chain.on_join(s.session_id(), user, room);
+    const auto out = impl_->runtime.hook_plugin->chain.on_join(s.session_id(), user, room);
     for (const auto& notice : out.notices) {
         if (!notice.empty()) {
             send_system_notice(s, notice);
@@ -2198,7 +2222,7 @@ bool ChatService::maybe_handle_leave_hook(Session& s, const std::string& user, c
     ctx.user = user;
     ctx.room = room;
 
-    if (!hook_plugin_) {
+    if (!impl_->runtime.hook_plugin) {
         const auto lua_out = invoke_lua_cold_hook("on_leave", ctx);
         for (const auto& notice : lua_out.notices) {
             if (!notice.empty()) {
@@ -2214,7 +2238,7 @@ bool ChatService::maybe_handle_leave_hook(Session& s, const std::string& user, c
         return true;
     }
 
-    const auto out = hook_plugin_->chain.on_leave(s.session_id(), user, room);
+    const auto out = impl_->runtime.hook_plugin->chain.on_leave(s.session_id(), user, room);
     for (const auto& notice : out.notices) {
         if (!notice.empty()) {
             send_system_notice(s, notice);
@@ -2252,7 +2276,7 @@ void ChatService::notify_session_event_hook(std::uint32_t session_id,
     ctx.reason = reason;
     ctx.event = lua_session_event_name(kind);
 
-    if (!hook_plugin_) {
+    if (!impl_->runtime.hook_plugin) {
         const auto lua_out = invoke_lua_cold_hook("on_session_event", ctx);
         for (const auto& notice : lua_out.notices) {
             if (!notice.empty()) {
@@ -2265,7 +2289,7 @@ void ChatService::notify_session_event_hook(std::uint32_t session_id,
         return;
     }
 
-    const auto out = hook_plugin_->chain.on_session_event(session_id, kind, user, reason);
+    const auto out = impl_->runtime.hook_plugin->chain.on_session_event(session_id, kind, user, reason);
     for (const auto& notice : out.notices) {
         if (!notice.empty()) {
             corelog::info("chat_hook session_event notice: " + notice);
@@ -2299,7 +2323,7 @@ bool ChatService::maybe_handle_admin_command_hook(std::string_view command,
     ctx.payload_json = std::string(payload_json);
     ctx.args = std::string(args);
 
-    if (!hook_plugin_) {
+    if (!impl_->runtime.hook_plugin) {
         const auto lua_out = invoke_lua_cold_hook("on_admin_command", ctx);
         for (const auto& notice : lua_out.notices) {
             if (!notice.empty()) {
@@ -2314,7 +2338,7 @@ bool ChatService::maybe_handle_admin_command_hook(std::string_view command,
         return true;
     }
 
-    const auto out = hook_plugin_->chain.on_admin_command(command, issuer, payload_json);
+    const auto out = impl_->runtime.hook_plugin->chain.on_admin_command(command, issuer, payload_json);
     for (const auto& notice : out.notices) {
         if (!notice.empty()) {
             corelog::info("chat_hook admin notice: " + notice);
@@ -2376,16 +2400,16 @@ void ChatService::admin_disconnect_users(const std::vector<std::string>& users, 
         std::unordered_set<Session*> seen;
 
         {
-            std::lock_guard<std::mutex> lk(state_.mu);
+            std::lock_guard<std::mutex> lk(impl_->state.mu);
             for (const auto& user : targets) {
-                auto itset = state_.by_user.find(user);
-                if (itset == state_.by_user.end()) {
+                auto itset = impl_->state.by_user.find(user);
+                if (itset == impl_->state.by_user.end()) {
                     continue;
                 }
 
                 for (auto wit = itset->second.begin(); wit != itset->second.end();) {
                     if (auto session = wit->lock()) {
-                        if (!state_.authed.count(session.get()) || state_.guest.count(session.get())) {
+                        if (!impl_->state.authed.count(session.get()) || impl_->state.guest.count(session.get())) {
                             ++wit;
                             continue;
                         }
@@ -2435,11 +2459,11 @@ void ChatService::admin_broadcast_notice(const std::string& text) {
         std::unordered_set<Session*> seen;
 
         {
-            std::lock_guard<std::mutex> lk(state_.mu);
-            for (auto& [_, room_set] : state_.rooms) {
+            std::lock_guard<std::mutex> lk(impl_->state.mu);
+            for (auto& [_, room_set] : impl_->state.rooms) {
                 for (auto wit = room_set.begin(); wit != room_set.end();) {
                     if (auto session = wit->lock()) {
-                        if (!state_.authed.count(session.get()) || state_.guest.count(session.get())) {
+                        if (!impl_->state.authed.count(session.get()) || impl_->state.guest.count(session.get())) {
                             ++wit;
                             continue;
                         }
@@ -2555,7 +2579,7 @@ void ChatService::admin_apply_runtime_setting(const std::string& key, const std:
 
         std::uint32_t min_allowed = setting_rule->min_value;
         if (setting_rule->key_id == server::core::config::RuntimeSettingKey::kRoomRecentMaxlen) {
-            min_allowed = std::max(min_allowed, static_cast<std::uint32_t>(history_.recent_limit));
+            min_allowed = std::max(min_allowed, static_cast<std::uint32_t>(impl_->history.recent_limit));
         }
 
         if (*parsed < min_allowed || *parsed > setting_rule->max_value) {
@@ -2565,31 +2589,31 @@ void ChatService::admin_apply_runtime_setting(const std::string& key, const std:
 
         switch (setting_rule->key_id) {
         case server::core::config::RuntimeSettingKey::kPresenceTtlSec:
-            presence_.ttl = *parsed;
+            impl_->presence.ttl = *parsed;
             break;
         case server::core::config::RuntimeSettingKey::kRecentHistoryLimit:
-            history_.recent_limit = static_cast<std::size_t>(*parsed);
-            if (history_.max_list_len < history_.recent_limit) {
-                history_.max_list_len = history_.recent_limit;
+            impl_->history.recent_limit = static_cast<std::size_t>(*parsed);
+            if (impl_->history.max_list_len < impl_->history.recent_limit) {
+                impl_->history.max_list_len = impl_->history.recent_limit;
             }
             break;
         case server::core::config::RuntimeSettingKey::kRoomRecentMaxlen:
-            history_.max_list_len = static_cast<std::size_t>(*parsed);
+            impl_->history.max_list_len = static_cast<std::size_t>(*parsed);
             break;
         case server::core::config::RuntimeSettingKey::kChatSpamThreshold:
-            spam_message_threshold_ = static_cast<std::size_t>(*parsed);
+            impl_->runtime.spam_message_threshold = static_cast<std::size_t>(*parsed);
             break;
         case server::core::config::RuntimeSettingKey::kChatSpamWindowSec:
-            spam_window_sec_ = *parsed;
+            impl_->runtime.spam_window_sec = *parsed;
             break;
         case server::core::config::RuntimeSettingKey::kChatSpamMuteSec:
-            spam_mute_sec_ = *parsed;
+            impl_->runtime.spam_mute_sec = *parsed;
             break;
         case server::core::config::RuntimeSettingKey::kChatSpamBanSec:
-            spam_ban_sec_ = *parsed;
+            impl_->runtime.spam_ban_sec = *parsed;
             break;
         case server::core::config::RuntimeSettingKey::kChatSpamBanViolations:
-            spam_ban_violation_threshold_ = *parsed;
+            impl_->runtime.spam_ban_violation_threshold = *parsed;
             break;
         }
 
@@ -2669,8 +2693,8 @@ void ChatService::admin_apply_user_moderation(const std::string& op,
         std::unordered_set<Session*> seen;
 
         auto add_user_sessions = [&](const std::string& user) {
-            auto itset = state_.by_user.find(user);
-            if (itset == state_.by_user.end()) {
+            auto itset = impl_->state.by_user.find(user);
+            if (itset == impl_->state.by_user.end()) {
                 return;
             }
             for (auto wit = itset->second.begin(); wit != itset->second.end();) {
@@ -2686,34 +2710,34 @@ void ChatService::admin_apply_user_moderation(const std::string& op,
         };
 
         {
-            std::lock_guard<std::mutex> lk(state_.mu);
+            std::lock_guard<std::mutex> lk(impl_->state.mu);
             for (const auto& user : targets) {
                 if (normalized_op == "mute") {
-                    const std::uint32_t seconds = duration_sec > 0 ? duration_sec : spam_mute_sec_;
+                    const std::uint32_t seconds = duration_sec > 0 ? duration_sec : impl_->runtime.spam_mute_sec;
                     const std::string applied_reason = normalized_reason.empty() ? "muted by administrator" : normalized_reason;
-                    state_.muted_users[user] = {now + std::chrono::seconds(seconds), applied_reason};
+                    impl_->state.muted_users[user] = {now + std::chrono::seconds(seconds), applied_reason};
                 } else if (normalized_op == "unmute") {
-                    state_.muted_users.erase(user);
+                    impl_->state.muted_users.erase(user);
                 } else if (normalized_op == "ban") {
-                    const std::uint32_t seconds = duration_sec > 0 ? duration_sec : spam_ban_sec_;
+                    const std::uint32_t seconds = duration_sec > 0 ? duration_sec : impl_->runtime.spam_ban_sec;
                     const auto expires_at = now + std::chrono::seconds(seconds);
                     const std::string applied_reason = normalized_reason.empty() ? "banned by administrator" : normalized_reason;
-                    state_.banned_users[user] = {expires_at, applied_reason};
+                    impl_->state.banned_users[user] = {expires_at, applied_reason};
 
-                    if (auto ip_it = state_.user_last_ip.find(user); ip_it != state_.user_last_ip.end() && !ip_it->second.empty()) {
-                        state_.banned_ips[ip_it->second] = expires_at;
+                    if (auto ip_it = impl_->state.user_last_ip.find(user); ip_it != impl_->state.user_last_ip.end() && !ip_it->second.empty()) {
+                        impl_->state.banned_ips[ip_it->second] = expires_at;
                     }
-                    if (auto hwid_it = state_.user_last_hwid_hash.find(user); hwid_it != state_.user_last_hwid_hash.end() && !hwid_it->second.empty()) {
-                        state_.banned_hwid_hashes[hwid_it->second] = expires_at;
+                    if (auto hwid_it = impl_->state.user_last_hwid_hash.find(user); hwid_it != impl_->state.user_last_hwid_hash.end() && !hwid_it->second.empty()) {
+                        impl_->state.banned_hwid_hashes[hwid_it->second] = expires_at;
                     }
                     add_user_sessions(user);
                 } else if (normalized_op == "unban") {
-                    state_.banned_users.erase(user);
-                    if (auto ip_it = state_.user_last_ip.find(user); ip_it != state_.user_last_ip.end() && !ip_it->second.empty()) {
-                        state_.banned_ips.erase(ip_it->second);
+                    impl_->state.banned_users.erase(user);
+                    if (auto ip_it = impl_->state.user_last_ip.find(user); ip_it != impl_->state.user_last_ip.end() && !ip_it->second.empty()) {
+                        impl_->state.banned_ips.erase(ip_it->second);
                     }
-                    if (auto hwid_it = state_.user_last_hwid_hash.find(user); hwid_it != state_.user_last_hwid_hash.end() && !hwid_it->second.empty()) {
-                        state_.banned_hwid_hashes.erase(hwid_it->second);
+                    if (auto hwid_it = impl_->state.user_last_hwid_hash.find(user); hwid_it != impl_->state.user_last_hwid_hash.end() && !hwid_it->second.empty()) {
+                        impl_->state.banned_hwid_hashes.erase(hwid_it->second);
                     }
                 } else if (normalized_op == "kick") {
                     add_user_sessions(user);
@@ -2744,14 +2768,14 @@ std::shared_ptr<ChatService::Session> ChatService::find_session_by_id_locked(std
         return {};
     }
 
-    const auto it = state_.by_session_id.find(session_id);
-    if (it == state_.by_session_id.end()) {
+    const auto it = impl_->state.by_session_id.find(session_id);
+    if (it == impl_->state.by_session_id.end()) {
         return {};
     }
 
     auto session = it->second.lock();
     if (!session) {
-        state_.by_session_id.erase(it);
+        impl_->state.by_session_id.erase(it);
     }
     return session;
 }
@@ -2781,11 +2805,11 @@ bool ChatService::broadcast_notice_to_all_sessions(std::string notice) {
         std::unordered_set<Session*> seen;
 
         {
-            std::lock_guard<std::mutex> lk(state_.mu);
-            for (auto& [_, room_set] : state_.rooms) {
+            std::lock_guard<std::mutex> lk(impl_->state.mu);
+            for (auto& [_, room_set] : impl_->state.rooms) {
                 for (auto it = room_set.begin(); it != room_set.end();) {
                     if (auto session = it->lock()) {
-                        if (!state_.authed.count(session.get()) || state_.guest.count(session.get())) {
+                        if (!impl_->state.authed.count(session.get()) || impl_->state.guest.count(session.get())) {
                             ++it;
                             continue;
                         }
@@ -2863,8 +2887,8 @@ bool ChatService::apply_user_moderation_without_hook(const std::string& op,
         std::unordered_set<Session*> seen;
 
         auto add_user_sessions = [&](const std::string& user) {
-            auto itset = state_.by_user.find(user);
-            if (itset == state_.by_user.end()) {
+            auto itset = impl_->state.by_user.find(user);
+            if (itset == impl_->state.by_user.end()) {
                 return;
             }
             for (auto wit = itset->second.begin(); wit != itset->second.end();) {
@@ -2880,34 +2904,34 @@ bool ChatService::apply_user_moderation_without_hook(const std::string& op,
         };
 
         {
-            std::lock_guard<std::mutex> lk(state_.mu);
+            std::lock_guard<std::mutex> lk(impl_->state.mu);
             for (const auto& user : targets) {
                 if (normalized_op == "mute") {
-                    const std::uint32_t seconds = duration_sec > 0 ? duration_sec : spam_mute_sec_;
+                    const std::uint32_t seconds = duration_sec > 0 ? duration_sec : impl_->runtime.spam_mute_sec;
                     const std::string applied_reason = normalized_reason.empty() ? "muted by administrator" : normalized_reason;
-                    state_.muted_users[user] = {now + std::chrono::seconds(seconds), applied_reason};
+                    impl_->state.muted_users[user] = {now + std::chrono::seconds(seconds), applied_reason};
                 } else if (normalized_op == "unmute") {
-                    state_.muted_users.erase(user);
+                    impl_->state.muted_users.erase(user);
                 } else if (normalized_op == "ban") {
-                    const std::uint32_t seconds = duration_sec > 0 ? duration_sec : spam_ban_sec_;
+                    const std::uint32_t seconds = duration_sec > 0 ? duration_sec : impl_->runtime.spam_ban_sec;
                     const auto expires_at = now + std::chrono::seconds(seconds);
                     const std::string applied_reason = normalized_reason.empty() ? "banned by administrator" : normalized_reason;
-                    state_.banned_users[user] = {expires_at, applied_reason};
+                    impl_->state.banned_users[user] = {expires_at, applied_reason};
 
-                    if (auto ip_it = state_.user_last_ip.find(user); ip_it != state_.user_last_ip.end() && !ip_it->second.empty()) {
-                        state_.banned_ips[ip_it->second] = expires_at;
+                    if (auto ip_it = impl_->state.user_last_ip.find(user); ip_it != impl_->state.user_last_ip.end() && !ip_it->second.empty()) {
+                        impl_->state.banned_ips[ip_it->second] = expires_at;
                     }
-                    if (auto hwid_it = state_.user_last_hwid_hash.find(user); hwid_it != state_.user_last_hwid_hash.end() && !hwid_it->second.empty()) {
-                        state_.banned_hwid_hashes[hwid_it->second] = expires_at;
+                    if (auto hwid_it = impl_->state.user_last_hwid_hash.find(user); hwid_it != impl_->state.user_last_hwid_hash.end() && !hwid_it->second.empty()) {
+                        impl_->state.banned_hwid_hashes[hwid_it->second] = expires_at;
                     }
                     add_user_sessions(user);
                 } else if (normalized_op == "unban") {
-                    state_.banned_users.erase(user);
-                    if (auto ip_it = state_.user_last_ip.find(user); ip_it != state_.user_last_ip.end() && !ip_it->second.empty()) {
-                        state_.banned_ips.erase(ip_it->second);
+                    impl_->state.banned_users.erase(user);
+                    if (auto ip_it = impl_->state.user_last_ip.find(user); ip_it != impl_->state.user_last_ip.end() && !ip_it->second.empty()) {
+                        impl_->state.banned_ips.erase(ip_it->second);
                     }
-                    if (auto hwid_it = state_.user_last_hwid_hash.find(user); hwid_it != state_.user_last_hwid_hash.end() && !hwid_it->second.empty()) {
-                        state_.banned_hwid_hashes.erase(hwid_it->second);
+                    if (auto hwid_it = impl_->state.user_last_hwid_hash.find(user); hwid_it != impl_->state.user_last_hwid_hash.end() && !hwid_it->second.empty()) {
+                        impl_->state.banned_hwid_hashes.erase(hwid_it->second);
                     }
                 } else if (normalized_op == "kick") {
                     add_user_sessions(user);
@@ -2932,28 +2956,28 @@ bool ChatService::apply_user_moderation_without_hook(const std::string& op,
 }
 
 std::optional<std::string> ChatService::lua_get_user_name(std::uint32_t session_id) {
-    std::lock_guard<std::mutex> lk(state_.mu);
+    std::lock_guard<std::mutex> lk(impl_->state.mu);
     auto session = find_session_by_id_locked(session_id);
     if (!session) {
         return std::nullopt;
     }
 
-    const auto it = state_.user.find(session.get());
-    if (it == state_.user.end()) {
+    const auto it = impl_->state.user.find(session.get());
+    if (it == impl_->state.user.end()) {
         return std::nullopt;
     }
     return it->second;
 }
 
 std::optional<std::string> ChatService::lua_get_user_room(std::uint32_t session_id) {
-    std::lock_guard<std::mutex> lk(state_.mu);
+    std::lock_guard<std::mutex> lk(impl_->state.mu);
     auto session = find_session_by_id_locked(session_id);
     if (!session) {
         return std::nullopt;
     }
 
-    const auto it = state_.cur_room.find(session.get());
-    if (it == state_.cur_room.end()) {
+    const auto it = impl_->state.cur_room.find(session.get());
+    if (it == impl_->state.cur_room.end()) {
         return std::nullopt;
     }
     return it->second;
@@ -2965,16 +2989,16 @@ std::vector<std::string> ChatService::lua_get_room_users(std::string_view room_n
         return users;
     }
 
-    std::lock_guard<std::mutex> lk(state_.mu);
-    const auto it = state_.rooms.find(std::string(room_name));
-    if (it == state_.rooms.end()) {
+    std::lock_guard<std::mutex> lk(impl_->state.mu);
+    const auto it = impl_->state.rooms.find(std::string(room_name));
+    if (it == impl_->state.rooms.end()) {
         return users;
     }
 
     for (auto wit = it->second.begin(); wit != it->second.end();) {
         if (auto session = wit->lock()) {
-            if (state_.authed.count(session.get()) > 0 && state_.guest.count(session.get()) == 0) {
-                if (const auto user_it = state_.user.find(session.get()); user_it != state_.user.end()) {
+            if (impl_->state.authed.count(session.get()) > 0 && impl_->state.guest.count(session.get()) == 0) {
+                if (const auto user_it = impl_->state.user.find(session.get()); user_it != impl_->state.user.end()) {
                     users.push_back(user_it->second);
                 }
             }
@@ -2991,9 +3015,9 @@ std::vector<std::string> ChatService::lua_get_room_users(std::string_view room_n
 
 std::vector<std::string> ChatService::lua_get_room_list() {
     std::vector<std::string> rooms;
-    std::lock_guard<std::mutex> lk(state_.mu);
-    rooms.reserve(state_.rooms.size());
-    for (const auto& [room_name, _] : state_.rooms) {
+    std::lock_guard<std::mutex> lk(impl_->state.mu);
+    rooms.reserve(impl_->state.rooms.size());
+    for (const auto& [room_name, _] : impl_->state.rooms) {
         rooms.push_back(room_name);
     }
     std::sort(rooms.begin(), rooms.end());
@@ -3005,9 +3029,9 @@ std::optional<std::string> ChatService::lua_get_room_owner(std::string_view room
         return std::nullopt;
     }
 
-    std::lock_guard<std::mutex> lk(state_.mu);
-    const auto it = state_.room_owners.find(std::string(room_name));
-    if (it == state_.room_owners.end()) {
+    std::lock_guard<std::mutex> lk(impl_->state.mu);
+    const auto it = impl_->state.room_owners.find(std::string(room_name));
+    if (it == impl_->state.room_owners.end()) {
         return std::nullopt;
     }
     return it->second;
@@ -3019,13 +3043,13 @@ bool ChatService::lua_is_user_muted(std::string_view nickname) {
     }
 
     const auto now = std::chrono::steady_clock::now();
-    std::lock_guard<std::mutex> lk(state_.mu);
-    const auto it = state_.muted_users.find(std::string(nickname));
-    if (it == state_.muted_users.end()) {
+    std::lock_guard<std::mutex> lk(impl_->state.mu);
+    const auto it = impl_->state.muted_users.find(std::string(nickname));
+    if (it == impl_->state.muted_users.end()) {
         return false;
     }
     if (it->second.expires_at <= now) {
-        state_.muted_users.erase(it);
+        impl_->state.muted_users.erase(it);
         return false;
     }
     return true;
@@ -3037,13 +3061,13 @@ bool ChatService::lua_is_user_banned(std::string_view nickname) {
     }
 
     const auto now = std::chrono::steady_clock::now();
-    std::lock_guard<std::mutex> lk(state_.mu);
-    const auto it = state_.banned_users.find(std::string(nickname));
-    if (it == state_.banned_users.end()) {
+    std::lock_guard<std::mutex> lk(impl_->state.mu);
+    const auto it = impl_->state.banned_users.find(std::string(nickname));
+    if (it == impl_->state.banned_users.end()) {
         return false;
     }
     if (it->second.expires_at <= now) {
-        state_.banned_users.erase(it);
+        impl_->state.banned_users.erase(it);
         return false;
     }
     return true;
@@ -3051,9 +3075,9 @@ bool ChatService::lua_is_user_banned(std::string_view nickname) {
 
 std::size_t ChatService::lua_get_online_count() {
     std::unordered_set<std::string> names;
-    std::lock_guard<std::mutex> lk(state_.mu);
-    for (const auto& [session, user] : state_.user) {
-        if (state_.authed.count(session) == 0 || state_.guest.count(session) > 0) {
+    std::lock_guard<std::mutex> lk(impl_->state.mu);
+    for (const auto& [session, user] : impl_->state.user) {
+        if (impl_->state.authed.count(session) == 0 || impl_->state.guest.count(session) > 0) {
             continue;
         }
         if (!user.empty()) {
@@ -3064,8 +3088,8 @@ std::size_t ChatService::lua_get_online_count() {
 }
 
 std::size_t ChatService::lua_get_room_count() {
-    std::lock_guard<std::mutex> lk(state_.mu);
-    return state_.rooms.size();
+    std::lock_guard<std::mutex> lk(impl_->state.mu);
+    return impl_->state.rooms.size();
 }
 
 bool ChatService::lua_send_notice(std::uint32_t session_id, std::string_view text) {
@@ -3075,7 +3099,7 @@ bool ChatService::lua_send_notice(std::uint32_t session_id, std::string_view tex
 
     std::shared_ptr<Session> session;
     {
-        std::lock_guard<std::mutex> lk(state_.mu);
+        std::lock_guard<std::mutex> lk(impl_->state.mu);
         session = find_session_by_id_locked(session_id);
     }
     if (!session) {
@@ -3092,8 +3116,8 @@ bool ChatService::lua_broadcast_room(std::string_view room_name, std::string_vie
     }
 
     {
-        std::lock_guard<std::mutex> lk(state_.mu);
-        if (state_.rooms.find(std::string(room_name)) == state_.rooms.end()) {
+        std::lock_guard<std::mutex> lk(impl_->state.mu);
+        if (impl_->state.rooms.find(std::string(room_name)) == impl_->state.rooms.end()) {
             return false;
         }
     }
@@ -3117,7 +3141,7 @@ bool ChatService::lua_kick_user(std::uint32_t session_id, std::string_view reaso
 
     std::shared_ptr<Session> session;
     {
-        std::lock_guard<std::mutex> lk(state_.mu);
+        std::lock_guard<std::mutex> lk(impl_->state.mu);
         session = find_session_by_id_locked(session_id);
     }
     if (!session) {
@@ -3190,16 +3214,16 @@ void ChatService::deliver_remote_whisper(const std::vector<std::uint8_t>& body) 
 
     std::vector<std::shared_ptr<Session>> targets;
     {
-        std::lock_guard<std::mutex> lk(state_.mu);
-        if (auto blk_it = state_.user_blacklists.find(notice.recipient());
-            blk_it != state_.user_blacklists.end() && blk_it->second.count(notice.sender()) > 0) {
+        std::lock_guard<std::mutex> lk(impl_->state.mu);
+        if (auto blk_it = impl_->state.user_blacklists.find(notice.recipient());
+            blk_it != impl_->state.user_blacklists.end() && blk_it->second.count(notice.sender()) > 0) {
             return;
         }
-        auto itset = state_.by_user.find(notice.recipient());
-        if (itset != state_.by_user.end()) {
+        auto itset = impl_->state.by_user.find(notice.recipient());
+        if (itset != impl_->state.by_user.end()) {
             for (auto wit = itset->second.begin(); wit != itset->second.end(); ) {
                 if (auto p = wit->lock()) {
-                    if (!state_.authed.count(p.get()) || state_.guest.count(p.get())) {
+                    if (!impl_->state.authed.count(p.get()) || impl_->state.guest.count(p.get())) {
                         ++wit;
                         continue;
                     }
@@ -3242,8 +3266,8 @@ void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const st
     }
 
     {
-        std::lock_guard<std::mutex> lk(state_.mu);
-        if (!state_.authed.count(session_sp.get())) {
+        std::lock_guard<std::mutex> lk(impl_->state.mu);
+        if (!impl_->state.authed.count(session_sp.get())) {
             session_sp->send_error(proto::errc::UNAUTHORIZED, "unauthorized");
             return;
         }
@@ -3252,10 +3276,10 @@ void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const st
     std::string sender;
     bool sender_is_guest = false;
     {
-        std::lock_guard<std::mutex> lk(state_.mu);
-        auto it_sender = state_.user.find(session_sp.get());
-        sender = (it_sender != state_.user.end()) ? it_sender->second : std::string("guest");
-        sender_is_guest = state_.guest.count(session_sp.get()) > 0;
+        std::lock_guard<std::mutex> lk(impl_->state.mu);
+        auto it_sender = impl_->state.user.find(session_sp.get());
+        sender = (it_sender != impl_->state.user.end()) ? it_sender->second : std::string("guest");
+        sender_is_guest = impl_->state.guest.count(session_sp.get()) > 0;
     }
     if (sender == "guest" || sender_is_guest) {
         send_system_notice(*session_sp, "login required for whisper");
@@ -3276,13 +3300,13 @@ void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const st
     bool blocked_by_sender = false;
     bool blocked_by_target = false;
     {
-        std::lock_guard<std::mutex> lk(state_.mu);
-        if (auto sender_blk_it = state_.user_blacklists.find(sender);
-            sender_blk_it != state_.user_blacklists.end() && sender_blk_it->second.count(target_user) > 0) {
+        std::lock_guard<std::mutex> lk(impl_->state.mu);
+        if (auto sender_blk_it = impl_->state.user_blacklists.find(sender);
+            sender_blk_it != impl_->state.user_blacklists.end() && sender_blk_it->second.count(target_user) > 0) {
             blocked_by_sender = true;
         }
-        if (auto target_blk_it = state_.user_blacklists.find(target_user);
-            target_blk_it != state_.user_blacklists.end() && target_blk_it->second.count(sender) > 0) {
+        if (auto target_blk_it = impl_->state.user_blacklists.find(target_user);
+            target_blk_it != impl_->state.user_blacklists.end() && target_blk_it->second.count(sender) > 0) {
             blocked_by_target = true;
         }
 
@@ -3291,15 +3315,15 @@ void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const st
             ineligible_found = true;
         }
 
-        auto itset = state_.by_user.find(target_user);
-        if (itset != state_.by_user.end()) {
+        auto itset = impl_->state.by_user.find(target_user);
+        if (itset != impl_->state.by_user.end()) {
             for (auto wit = itset->second.begin(); wit != itset->second.end(); ) {
                 if (auto p = wit->lock()) {
                     if (p.get() == session_sp.get()) {
                         ++wit;
                         continue;
                     }
-                    if (!state_.authed.count(p.get()) || state_.guest.count(p.get())) {
+                    if (!impl_->state.authed.count(p.get()) || impl_->state.guest.count(p.get())) {
                         ineligible_found = true;
                         ++wit;
                         continue;
@@ -3352,18 +3376,18 @@ void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const st
 
     if (targets.empty()) {
         bool routed_remote = false;
-        if (redis_ && pubsub_enabled()) {
+        if (impl_->runtime.redis && pubsub_enabled()) {
             try {
                 notice.set_outgoing(false);
                 std::string incoming_bytes;
                 if (notice.SerializeToString(&incoming_bytes)) {
                     std::string message;
-                    message.reserve(3 + gateway_id_.size() + 1 + incoming_bytes.size());
-                    message.append("gw=").append(gateway_id_);
+                    message.reserve(3 + impl_->runtime.gateway_id.size() + 1 + incoming_bytes.size());
+                    message.append("gw=").append(impl_->runtime.gateway_id);
                     message.push_back('\n');
                     message.append(incoming_bytes);
-                    const std::string channel = presence_.prefix + std::string("fanout:whisper");
-                    routed_remote = redis_->publish(channel, std::move(message));
+                    const std::string channel = impl_->presence.prefix + std::string("fanout:whisper");
+                    routed_remote = impl_->runtime.redis->publish(channel, std::move(message));
                 }
             } catch (...) {}
         }
@@ -3433,15 +3457,15 @@ bool ChatService::is_modern_room_password_hash(const std::string& stored_hash) c
 
 // 방 이름으로 Room ID(UUID)를 조회하거나 생성합니다. (Case-Insensitive)
 std::string ChatService::ensure_room_id_ci(const std::string& room_name) {
-    if (!db_pool_) return std::string();
+    if (!impl_->runtime.db_pool) return std::string();
     // 캐시 확인
     {
-        std::lock_guard<std::mutex> lk(state_.mu);
-        auto it = state_.room_ids.find(room_name);
-        if (it != state_.room_ids.end()) return it->second;
+        std::lock_guard<std::mutex> lk(impl_->state.mu);
+        auto it = impl_->state.room_ids.find(room_name);
+        if (it != impl_->state.room_ids.end()) return it->second;
     }
     try {
-        auto uow = db_pool_->make_repository_unit_of_work();
+        auto uow = impl_->runtime.db_pool->make_repository_unit_of_work();
         auto found = uow->rooms().find_by_name_exact_ci(room_name);
         std::string id;
         if (found) {
@@ -3451,8 +3475,8 @@ std::string ChatService::ensure_room_id_ci(const std::string& room_name) {
             id = created.id;
         }
         uow->commit();
-        std::lock_guard<std::mutex> lk2(state_.mu);
-        state_.room_ids.emplace(room_name, id);
+        std::lock_guard<std::mutex> lk2(impl_->state.mu);
+        impl_->state.room_ids.emplace(room_name, id);
         return id;
     } catch (const std::exception& e) {
         corelog::error(std::string("ensure_room_id_ci failed: ") + e.what());
@@ -3461,45 +3485,47 @@ std::string ChatService::ensure_room_id_ci(const std::string& room_name) {
 }
 
 
-std::string ChatService::make_recent_list_key(const std::string& room_id) const {
-    return std::string("room:") + room_id + ":recent";
-}
-
-std::string ChatService::make_recent_message_key(std::uint64_t message_id) const {
-    return std::string("msg:") + std::to_string(message_id);
-}
-
 // 최근 메시지를 Redis 캐시에 저장합니다. (LIST + Key-Value)
-bool ChatService::cache_recent_message(
+bool ChatServicePrivateAccess::cache_recent_message(
+    ChatService& service,
     const std::string& room_id,
     const server::wire::v1::StateSnapshot::SnapshotMessage& message) {
-    if (!redis_ || room_id.empty() || message.id() == 0) {
+    if (!service.impl_->runtime.redis || room_id.empty() || message.id() == 0) {
         return false;
     }
     std::string payload;
     if (!message.SerializeToString(&payload)) {
         return false;
     }
-    if (!redis_->setex(make_recent_message_key(message.id()), payload, history_.cache_ttl_sec)) {
+    if (!service.impl_->runtime.redis->setex(
+            make_recent_message_key(message.id()),
+            payload,
+            service.impl_->history.cache_ttl_sec)) {
         return false;
     }
-    return redis_->lpush_trim(make_recent_list_key(room_id),
-                              std::to_string(message.id()),
-                              history_.max_list_len);
+    return service.impl_->runtime.redis->lpush_trim(
+        make_recent_list_key(room_id),
+        std::to_string(message.id()),
+        service.impl_->history.max_list_len);
 }
 
 // Redis 캐시에서 최근 메시지 목록을 로드합니다.
-bool ChatService::load_recent_messages_from_cache(
+bool ChatServicePrivateAccess::load_recent_messages_from_cache(
+    ChatService& service,
     const std::string& room_id,
     std::vector<server::wire::v1::StateSnapshot::SnapshotMessage>& out) {
-    if (!redis_ || room_id.empty() || history_.recent_limit == 0) {
+    if (!service.impl_->runtime.redis || room_id.empty() || service.impl_->history.recent_limit == 0) {
         return false;
     }
     std::vector<std::string> ids;
     // LPUSH를 사용하므로 리스트의 앞부분(0)이 가장 최신 메시지입니다.
     // 따라서 최신 N개를 가져오려면 0부터 N-1까지 읽어야 합니다.
     // (기존 코드는 -limit ~ -1로 읽어서 가장 오래된 메시지를 가져오는 버그가 있었음)
-    if (!redis_->lrange(make_recent_list_key(room_id), 0, static_cast<long long>(history_.recent_limit) - 1, ids)) {
+    if (!service.impl_->runtime.redis->lrange(
+            make_recent_list_key(room_id),
+            0,
+            static_cast<long long>(service.impl_->history.recent_limit) - 1,
+            ids)) {
         return false;
     }
     if (ids.empty()) {
@@ -3537,7 +3563,7 @@ bool ChatService::load_recent_messages_from_cache(
         }
 
         std::vector<std::optional<std::string>> payloads;
-        if (redis_->mget(keys, payloads) && payloads.size() == keys.size()) {
+        if (service.impl_->runtime.redis->mget(keys, payloads) && payloads.size() == keys.size()) {
             batch_loaded = true;
             for (std::size_t i = 0; i < payloads.size(); ++i) {
                 if (!payloads[i].has_value()) {
@@ -3557,7 +3583,7 @@ bool ChatService::load_recent_messages_from_cache(
 
     if (!batch_loaded) {
         for (const auto id : valid_ids) {
-            auto payload = redis_->get(make_recent_message_key(id));
+            auto payload = service.impl_->runtime.redis->get(make_recent_message_key(id));
             if (!payload) {
                 partial_hit = true;
                 continue;

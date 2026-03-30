@@ -177,8 +177,8 @@ void GatewayConnection::handle_backend_payload(std::vector<std::uint8_t> payload
             if (const auto resume_token = parse_resume_token_from_login_res(body);
                 resume_token.has_value() && !resume_token->empty()) {
                 const std::string routing_key = make_resume_routing_key(*resume_token);
-                if (!routing_key.empty()) {
-                    app_.register_resume_routing_key(routing_key, backend_connection_->backend_instance_id());
+                if (!routing_key.empty() && !backend_instance_id_.empty()) {
+                    app_.register_resume_routing_key(routing_key, backend_instance_id_);
                 }
             }
         }
@@ -470,14 +470,16 @@ void GatewayConnection::open_backend_connection() {
 
     auto self = std::static_pointer_cast<GatewayConnection>(shared_from_this());
     std::weak_ptr<GatewayConnection> weak_self = self;
-    backend_connection_ = app_.create_backend_connection(client_id_, weak_self);
-    if (!backend_connection_) {
+    auto created_backend = app_.create_backend_connection(client_id_, weak_self);
+    if (!created_backend.has_value() || !created_backend->session) {
         server::core::log::error("GatewayConnection failed to create backend connection");
         stop();
         return;
     }
 
-    session_id_ = backend_connection_->session_id();
+    backend_connection_ = std::move(created_backend->session);
+    session_id_ = std::move(created_backend->session_id);
+    backend_instance_id_ = std::move(created_backend->backend_instance_id);
 }
 
 void GatewayConnection::send_to_backend(std::vector<std::uint8_t> payload) {
@@ -521,8 +523,8 @@ void GatewayConnection::inspect_backend_payload(std::span<const std::uint8_t> pa
             if (const auto resume_token = parse_resume_token_from_login_res(body);
                 resume_token.has_value() && !resume_token->empty()) {
                 const std::string routing_key = make_resume_routing_key(*resume_token);
-                if (!routing_key.empty()) {
-                    app_.register_resume_routing_key(routing_key, backend_connection_->backend_instance_id());
+                if (!routing_key.empty() && !backend_instance_id_.empty()) {
+                    app_.register_resume_routing_key(routing_key, backend_instance_id_);
                 }
             }
         }

@@ -3,7 +3,7 @@
 #include <memory>
 #include <string>
 
-#include "server/storage/redis/factory.hpp"
+#include "server/core/storage/redis/client.hpp"
 
 namespace server::storage::redis {
 using server::core::storage::redis::Options;

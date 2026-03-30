@@ -1,4 +1,6 @@
 #include "server/chat/chat_service.hpp"
+#include "chat_service_state.hpp"
+#include "server/chat/chat_hook_plugin_abi.hpp"
 #include "server/protocol/game_opcodes.hpp"
 #include "wire.pb.h"
 #include <cstdlib>
@@ -32,8 +34,8 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
 
         std::string user_for_hook;
         {
-            std::lock_guard<std::mutex> lk(state_.mu);
-            if (auto itname = state_.user.find(s.get()); itname != state_.user.end()) {
+            std::lock_guard<std::mutex> lk(impl_->state.mu);
+            if (auto itname = impl_->state.user.find(s.get()); itname != impl_->state.user.end()) {
                 user_for_hook = itname->second;
             }
         }
@@ -43,37 +45,37 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
                                   "connection_closed");
 
         {
-            std::lock_guard<std::mutex> lk(state_.mu);
-            state_.by_session_id.erase(s->session_id());
-            if (auto itname = state_.user.find(s.get()); itname != state_.user.end()) {
+            std::lock_guard<std::mutex> lk(impl_->state.mu);
+            impl_->state.by_session_id.erase(s->session_id());
+            if (auto itname = impl_->state.user.find(s.get()); itname != impl_->state.user.end()) {
                 name = itname->second;
             } else {
                 name = "guest";
             }
-            state_.authed.erase(s.get());
-            state_.guest.erase(s.get());
-            if (auto it_uuid = state_.user_uuid.find(s.get()); it_uuid != state_.user_uuid.end()) { user_uuid = it_uuid->second; }
+            impl_->state.authed.erase(s.get());
+            impl_->state.guest.erase(s.get());
+            if (auto it_uuid = impl_->state.user_uuid.find(s.get()); it_uuid != impl_->state.user_uuid.end()) { user_uuid = it_uuid->second; }
             if (!name.empty()) {
-                auto itset = state_.by_user.find(name);
-                if (itset != state_.by_user.end()) { itset->second.erase(s); }
+                auto itset = impl_->state.by_user.find(name);
+                if (itset != impl_->state.by_user.end()) { itset->second.erase(s); }
             }
-            state_.user.erase(s.get());
+            impl_->state.user.erase(s.get());
             // 세션 UUID 캐시도 더 이상 필요 없으므로 제거한다.
-            state_.session_uuid.erase(s.get());
-            state_.logical_session_id.erase(s.get());
-            state_.logical_session_expires_unix_ms.erase(s.get());
-            state_.cur_world.erase(s.get());
-            state_.session_ip.erase(s.get());
-            state_.session_hwid_hash.erase(s.get());
-            auto itcr = state_.cur_room.find(s.get());
-            if (itcr != state_.cur_room.end()) {
+            impl_->state.session_uuid.erase(s.get());
+            impl_->state.logical_session_id.erase(s.get());
+            impl_->state.logical_session_expires_unix_ms.erase(s.get());
+            impl_->state.cur_world.erase(s.get());
+            impl_->state.session_ip.erase(s.get());
+            impl_->state.session_hwid_hash.erase(s.get());
+            auto itcr = impl_->state.cur_room.find(s.get());
+            if (itcr != impl_->state.cur_room.end()) {
                 room_left = itcr->second;
-                auto itroom = state_.rooms.find(room_left);
-                if (itroom != state_.rooms.end()) {
+                auto itroom = impl_->state.rooms.find(room_left);
+                if (itroom != impl_->state.rooms.end()) {
                     const bool was_owner =
                         (room_left != "lobby") &&
-                        (state_.room_owners.find(room_left) != state_.room_owners.end()) &&
-                        (state_.room_owners[room_left] == name);
+                        (impl_->state.room_owners.find(room_left) != impl_->state.room_owners.end()) &&
+                        (impl_->state.room_owners[room_left] == name);
                     itroom->second.erase(s);
                     server::wire::v1::ChatBroadcast pb;
                     pb.set_room(room_left);
@@ -85,21 +87,21 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
                     pb.set_ts_ms(static_cast<std::uint64_t>(now64));
                     std::string bytes; pb.SerializeToString(&bytes);
                     body.assign(bytes.begin(), bytes.end());
-                    auto itb = state_.rooms.find(room_left);
-                    if (itb != state_.rooms.end()) {
+                    auto itb = impl_->state.rooms.find(room_left);
+                    if (itb != impl_->state.rooms.end()) {
                         auto& set = itb->second;
                         collect_room_sessions(set, targets);
                         if (set.empty() && room_left != std::string("lobby")) {
-                            state_.rooms.erase(itb);
-                            state_.room_passwords.erase(room_left);
-                            state_.room_owners.erase(room_left);
-                            state_.room_invites.erase(room_left);
+                            impl_->state.rooms.erase(itb);
+                            impl_->state.room_passwords.erase(room_left);
+                            impl_->state.room_owners.erase(room_left);
+                            impl_->state.room_invites.erase(room_left);
                         } else if (was_owner && room_left != std::string("lobby")) {
                             std::string new_owner;
                             for (const auto& weak : set) {
                                 if (auto candidate = weak.lock()) {
-                                    auto user_it = state_.user.find(candidate.get());
-                                    if (user_it != state_.user.end()) {
+                                    auto user_it = impl_->state.user.find(candidate.get());
+                                    if (user_it != impl_->state.user.end()) {
                                         new_owner = user_it->second;
                                         if (new_owner != "guest") {
                                             break;
@@ -108,7 +110,7 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
                                 }
                             }
                             if (!new_owner.empty()) {
-                                state_.room_owners[room_left] = new_owner;
+                                impl_->state.room_owners[room_left] = new_owner;
                             }
                         }
                     }
@@ -116,53 +118,53 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
                     std::vector<std::shared_ptr<Session>> filtered_targets;
                     filtered_targets.reserve(targets.size());
                     for (auto& target : targets) {
-                        auto receiver_it = state_.user.find(target.get());
-                        if (receiver_it == state_.user.end()) {
+                        auto receiver_it = impl_->state.user.find(target.get());
+                        if (receiver_it == impl_->state.user.end()) {
                             continue;
                         }
                         const std::string& receiver = receiver_it->second;
-                        if (auto blk_it = state_.user_blacklists.find(receiver);
-                            blk_it != state_.user_blacklists.end() && blk_it->second.count(name) > 0) {
+                        if (auto blk_it = impl_->state.user_blacklists.find(receiver);
+                            blk_it != impl_->state.user_blacklists.end() && blk_it->second.count(name) > 0) {
                             continue;
                         }
                         filtered_targets.push_back(target);
                     }
                     targets = std::move(filtered_targets);
                 }
-                state_.cur_room.erase(itcr);
+                impl_->state.cur_room.erase(itcr);
             }
         }
         for (auto& t : targets) { t->async_send(game_proto::MSG_CHAT_BROADCAST, body, 0); }
         // Redis 프레즌스 SET에서 사용자를 제거한다.
-        if (redis_ && !room_left.empty()) {
+        if (impl_->runtime.redis && !room_left.empty()) {
             try {
                 std::string uid;
                 {
-                    std::lock_guard<std::mutex> lk(state_.mu);
-                    auto it = state_.user_uuid.find(s.get());
-                    if (it != state_.user_uuid.end()) uid = it->second;
+                    std::lock_guard<std::mutex> lk(impl_->state.mu);
+                    auto it = impl_->state.user_uuid.find(s.get());
+                    if (it != impl_->state.user_uuid.end()) uid = it->second;
                 }
                 if (!uid.empty()) {
                     auto rid = ensure_room_id_ci(room_left);
                     room_uuid = rid;
                     if (!rid.empty()) {
-                        redis_->srem(make_presence_key("presence:room:", rid), uid);
+                        impl_->runtime.redis->srem(make_presence_key("presence:room:", rid), uid);
                     }
                 }
                 // 화면 표시용 닉네임 목록에서 제거
-                redis_->srem("room:users:" + room_left, name);
+                impl_->runtime.redis->srem("room:users:" + room_left, name);
                 
                 // 연결 끊김 정리 중에는 잠깐 로비로 이동한 것으로 간주한다.
                 // 실제로는 곧 완전히 끊기지만, 정리 중 다른 사용자 화면이 급격히 흔들리지 않게 하는 타협이다.
                 if (room_left != "lobby") {
-                    redis_->sadd("room:users:lobby", name);
+                    impl_->runtime.redis->sadd("room:users:lobby", name);
                 }
 
                 // 방이 비었는지 확인하고 활성 목록에서 제거한다.
                 if (room_left != "lobby") {
                     std::size_t remaining = 1;
-                    if (redis_->scard("room:users:" + room_left, remaining) && remaining == 0) {
-                        redis_->srem("rooms:active", room_left);
+                    if (impl_->runtime.redis->scard("room:users:" + room_left, remaining) && remaining == 0) {
+                        impl_->runtime.redis->srem("rooms:active", room_left);
                     }
                 }
             } catch (...) {}

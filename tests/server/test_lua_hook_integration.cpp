@@ -8,6 +8,7 @@
 #include <server/core/net/session.hpp>
 #include <server/core/protocol/packet.hpp>
 #include <server/core/protocol/protocol_errors.hpp>
+#include <server/core/protocol/system_opcodes.hpp>
 #include <server/core/scripting/lua_runtime.hpp>
 #include <server/storage/connection_pool.hpp>
 #include <server/storage/unit_of_work.hpp>

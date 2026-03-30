@@ -19,7 +19,7 @@ def _tests_dir(build_dir: Path) -> Path:
 
 def _collect_discovery_failures(tests_dir: Path) -> list[str]:
     failures: list[str] = []
-    for include_path in sorted(tests_dir.glob(f"*{INCLUDE_FILE_SUFFIX}")):
+    for include_path in sorted(tests_dir.rglob(f"*{INCLUDE_FILE_SUFFIX}")):
         referenced_path: Path | None = None
         for raw_line in include_path.read_text(encoding="utf-8").splitlines():
             match = EXISTS_PATTERN.match(raw_line.strip())

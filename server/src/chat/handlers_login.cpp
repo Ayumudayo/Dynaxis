@@ -1,4 +1,5 @@
 #include "server/chat/chat_service.hpp"
+#include "chat_service_state.hpp"
 #include "server/core/protocol/opcode_policy.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/protocol/version.hpp"
@@ -81,8 +82,8 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         corelog::info("LOGIN_REQ handling started (worker thread)");
 
         {
-            std::lock_guard<std::mutex> lk(state_.mu);
-            state_.by_session_id[session_sp->session_id()] = session_sp;
+            std::lock_guard<std::mutex> lk(impl_->state.mu);
+            impl_->state.by_session_id[session_sp->session_id()] = session_sp;
         }
 
         const auto requested_resume_token = extract_resume_token(token);
@@ -120,20 +121,20 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         const auto now = std::chrono::steady_clock::now();
         std::string deny_reason;
         {
-            std::lock_guard<std::mutex> lk(state_.mu);
+            std::lock_guard<std::mutex> lk(impl_->state.mu);
 
-            if (auto it = state_.banned_users.find(new_user); it != state_.banned_users.end()) {
+            if (auto it = impl_->state.banned_users.find(new_user); it != impl_->state.banned_users.end()) {
                 if (it->second.expires_at <= now) {
-                    state_.banned_users.erase(it);
+                    impl_->state.banned_users.erase(it);
                 } else {
                     deny_reason = it->second.reason.empty() ? "temporarily banned" : it->second.reason;
                 }
             }
 
             if (deny_reason.empty() && !login_ip.empty()) {
-                if (auto it = state_.banned_ips.find(login_ip); it != state_.banned_ips.end()) {
+                if (auto it = impl_->state.banned_ips.find(login_ip); it != impl_->state.banned_ips.end()) {
                     if (it->second <= now) {
-                        state_.banned_ips.erase(it);
+                        impl_->state.banned_ips.erase(it);
                     } else {
                         deny_reason = "temporarily banned (ip)";
                     }
@@ -141,9 +142,9 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             }
 
             if (deny_reason.empty() && !hwid_hash.empty()) {
-                if (auto it = state_.banned_hwid_hashes.find(hwid_hash); it != state_.banned_hwid_hashes.end()) {
+                if (auto it = impl_->state.banned_hwid_hashes.find(hwid_hash); it != impl_->state.banned_hwid_hashes.end()) {
                     if (it->second <= now) {
-                        state_.banned_hwid_hashes.erase(it);
+                        impl_->state.banned_hwid_hashes.erase(it);
                     } else {
                         deny_reason = "temporarily banned (device)";
                     }
@@ -157,63 +158,63 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         }
 
         {
-            std::lock_guard<std::mutex> lk(state_.mu);
+            std::lock_guard<std::mutex> lk(impl_->state.mu);
             // 동일 세션이 이전에 사용했던 이름/guest 상태를 정리하고 새 사용자 맵을 구성한다.
             // 이 정리를 빼먹으면 같은 세션이 by_user에 두 이름으로 남아 귓속말/중복 로그인 판정이 흔들린다.
-            if (auto itold = state_.user.find(session_sp.get()); itold != state_.user.end()) {
-                auto itset = state_.by_user.find(itold->second);
-                if (itset != state_.by_user.end()) {
+            if (auto itold = impl_->state.user.find(session_sp.get()); itold != impl_->state.user.end()) {
+                auto itset = impl_->state.by_user.find(itold->second);
+                if (itset != impl_->state.by_user.end()) {
                     itset->second.erase(session_sp);
                 }
             }
-            state_.user[session_sp.get()] = new_user;
-            state_.by_user[new_user].insert(session_sp);
-            state_.authed.insert(session_sp.get());
+            impl_->state.user[session_sp.get()] = new_user;
+            impl_->state.by_user[new_user].insert(session_sp);
+            impl_->state.authed.insert(session_sp.get());
             if (guest_mode) {
-                state_.guest.insert(session_sp.get());
+                impl_->state.guest.insert(session_sp.get());
             } else {
-                state_.guest.erase(session_sp.get());
+                impl_->state.guest.erase(session_sp.get());
             }
-            state_.session_ip[session_sp.get()] = login_ip;
-            state_.session_hwid_hash[session_sp.get()] = hwid_hash;
+            impl_->state.session_ip[session_sp.get()] = login_ip;
+            impl_->state.session_hwid_hash[session_sp.get()] = hwid_hash;
             if (!login_ip.empty()) {
-                state_.user_last_ip[new_user] = login_ip;
+                impl_->state.user_last_ip[new_user] = login_ip;
             }
             if (!hwid_hash.empty()) {
-                state_.user_last_hwid_hash[new_user] = hwid_hash;
+                impl_->state.user_last_hwid_hash[new_user] = hwid_hash;
             }
             if (!tracked_user_uuid.empty()) {
-                state_.user_uuid[session_sp.get()] = tracked_user_uuid;
+                impl_->state.user_uuid[session_sp.get()] = tracked_user_uuid;
             }
             if (!continuity_session_id.empty()) {
-                state_.logical_session_id[session_sp.get()] = continuity_session_id;
-                state_.logical_session_expires_unix_ms[session_sp.get()] = continuity_expires_unix_ms;
+                impl_->state.logical_session_id[session_sp.get()] = continuity_session_id;
+                impl_->state.logical_session_expires_unix_ms[session_sp.get()] = continuity_expires_unix_ms;
             }
-            state_.cur_world[session_sp.get()] = current_world;
+            impl_->state.cur_world[session_sp.get()] = current_world;
             // 기본적으로 로비에 입장시키고, continuity resume이면 마지막 방을 복원한다.
             // fallback room을 먼저 정하지 않으면 로그인 직후 "현재 방 없음" 상태가 길게 남아 refresh와 제재 경로가 흔들린다.
             std::string room = current_room.empty() ? std::string("lobby") : current_room;
             current_room = room;
-            state_.cur_room[session_sp.get()] = room;
-            state_.rooms[room].insert(session_sp);
+            impl_->state.cur_room[session_sp.get()] = room;
+            impl_->state.rooms[room].insert(session_sp);
         }
 
         // 게스트와 로그인 사용자를 모두 UUID로 일관되게 식별하고 IP/로그를 남긴다.
-        if (db_pool_) {
+        if (impl_->runtime.db_pool) {
             try {
                 // UUID가 없으면 게스트 사용자 레코드를 생성한다.
                 std::string uid;
                 {
-                    std::lock_guard<std::mutex> lk(state_.mu);
-                    auto it = state_.user_uuid.find(session_sp.get());
-                    if (it != state_.user_uuid.end()) uid = it->second;
+                    std::lock_guard<std::mutex> lk(impl_->state.mu);
+                    auto it = impl_->state.user_uuid.find(session_sp.get());
+                    if (it != impl_->state.user_uuid.end()) uid = it->second;
                 }
                 if (uid.empty()) {
                     try {
                         // 1. 먼저 이름으로 기존 사용자가 있는지 검색합니다.
                         // 이미 존재하는 사용자라면 새로 만들지 않고 ID를 재사용합니다.
                         {
-                            auto uow_find = db_pool_->make_repository_unit_of_work();
+                            auto uow_find = impl_->runtime.db_pool->make_repository_unit_of_work();
                             auto existing = uow_find->users().find_by_name_ci(new_user, 1);
                             if (!existing.empty()) {
                                 uid = existing[0].id;
@@ -223,7 +224,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                         // 2. 기존 사용자가 없다면 새로 생성을 시도합니다.
                         // find 후 create는 완전한 원자 연산은 아니므로, 아래 재조회 경로가 함께 필요합니다.
                         if (uid.empty()) {
-                            auto uow_create = db_pool_->make_repository_unit_of_work();
+                            auto uow_create = impl_->runtime.db_pool->make_repository_unit_of_work();
                             try {
                                 auto u = uow_create->users().create_guest(new_user);
                                 uid = u.id;
@@ -232,7 +233,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                                 // 3. 생성에 실패했다면(동시성 문제로 그 사이 누군가 만들었을 수 있음),
                                 // 다시 한 번 검색해서 ID를 가져옵니다.
                                 // 이 보정이 없으면 같은 닉네임에 대해 요청 타이밍에 따라 로그인 성공/실패가 흔들립니다.
-                                auto uow_retry = db_pool_->make_repository_unit_of_work();
+                                auto uow_retry = impl_->runtime.db_pool->make_repository_unit_of_work();
                                 auto existing = uow_retry->users().find_by_name_ci(new_user, 1);
                                 if (!existing.empty()) {
                                     uid = existing[0].id;
@@ -244,8 +245,8 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                     }
 
                     if (!uid.empty()) {
-                        std::lock_guard<std::mutex> lk(state_.mu);
-                        state_.user_uuid[session_sp.get()] = uid;
+                        std::lock_guard<std::mutex> lk(impl_->state.mu);
+                        impl_->state.user_uuid[session_sp.get()] = uid;
                     } else {
                         corelog::error("Failed to obtain UID for user: " + new_user);
                     }
@@ -259,7 +260,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 // users 테이블에 마지막 로그인 IP와 시각을 기록한다.
                 {
                     auto ip = login_ip;
-                    auto uow3 = db_pool_->make_repository_unit_of_work();
+                    auto uow3 = impl_->runtime.db_pool->make_repository_unit_of_work();
                     uow3->users().update_last_login(uid, ip);
                     uow3->commit();
                 }
@@ -268,7 +269,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 if (!rid.empty()) {
                     lobby_room_id = rid; // write-behind 이벤트에 활용한다.
                     auto ip = login_ip;
-                    auto uow2 = db_pool_->make_repository_unit_of_work();
+                    auto uow2 = impl_->runtime.db_pool->make_repository_unit_of_work();
                     std::string sys = std::string("(login ip=") + ip + ")";
                     (void)uow2->messages().create(rid, current_room, std::nullopt, sys);
                     uow2->commit();
@@ -291,14 +292,14 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 continuity_expires_unix_ms = lease->expires_unix_ms;
                 current_world = lease->world_id;
                 current_room = lease->room;
-                std::lock_guard<std::mutex> lk(state_.mu);
-                state_.logical_session_id[session_sp.get()] = continuity_session_id;
-                state_.logical_session_expires_unix_ms[session_sp.get()] = continuity_expires_unix_ms;
-                state_.cur_world[session_sp.get()] = current_world;
+                std::lock_guard<std::mutex> lk(impl_->state.mu);
+                impl_->state.logical_session_id[session_sp.get()] = continuity_session_id;
+                impl_->state.logical_session_expires_unix_ms[session_sp.get()] = continuity_expires_unix_ms;
+                impl_->state.cur_world[session_sp.get()] = current_world;
             }
         } else if (!continuity_session_id.empty()) {
             persist_continuity_world(continuity_session_id, current_world, continuity_expires_unix_ms);
-            persist_continuity_world_owner(current_world, continuity_.current_owner_id, continuity_expires_unix_ms);
+            persist_continuity_world_owner(current_world, impl_->continuity.current_owner_id, continuity_expires_unix_ms);
             persist_continuity_room(continuity_session_id, current_room, continuity_expires_unix_ms);
         }
 
@@ -306,7 +307,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         pb.set_effective_user(new_user);
         pb.set_session_id(session_sp->session_id());
         pb.set_message(resumed_login ? "resumed" : "ok");
-        pb.set_is_admin(admin_users_.count(new_user) > 0);
+        pb.set_is_admin(impl_->runtime.admin_users.count(new_user) > 0);
         pb.set_resumed(resumed_login);
         if (!continuity_session_id.empty()) {
             pb.set_logical_session_id(continuity_session_id);
@@ -329,29 +330,29 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         
         // presence:user:{uid} 키의 TTL을 갱신해 온라인 리스트를 유지한다.
         // 로그인 직후 이 값을 놓치면 사용자는 실제로 붙어 있는데도 다른 런타임에서는 offline처럼 보일 수 있다.
-        if (redis_) {
+        if (impl_->runtime.redis) {
             try {
                 std::string uid;
                 {
-                    std::lock_guard<std::mutex> lk(state_.mu);
-                    auto it = state_.user_uuid.find(session_sp.get());
-                    if (it != state_.user_uuid.end()) {
+                    std::lock_guard<std::mutex> lk(impl_->state.mu);
+                    auto it = impl_->state.user_uuid.find(session_sp.get());
+                    if (it != impl_->state.user_uuid.end()) {
                         uid = it->second;
                     }
                 }
                 touch_user_presence(uid);
                 if (!continuity_session_id.empty()) {
                     persist_continuity_world(continuity_session_id, current_world, continuity_expires_unix_ms);
-                    persist_continuity_world_owner(current_world, continuity_.current_owner_id, continuity_expires_unix_ms);
+                    persist_continuity_world_owner(current_world, impl_->continuity.current_owner_id, continuity_expires_unix_ms);
                     persist_continuity_room(continuity_session_id, current_room, continuity_expires_unix_ms);
                 }
                 
                 // 초기 입장 방을 표시용 사용자 목록에 반영한다.
                 if (current_room != "lobby") {
-                    redis_->srem("room:users:lobby", new_user);
-                    redis_->sadd("rooms:active", current_room);
+                    impl_->runtime.redis->srem("room:users:lobby", new_user);
+                    impl_->runtime.redis->sadd("rooms:active", current_room);
                 }
-                redis_->sadd("room:users:" + current_room, new_user);
+                impl_->runtime.redis->sadd("room:users:" + current_room, new_user);
                 
                 // 초기 입장 방에 있는 다른 유저들에게 갱신 알림 전송
                 // 로그인 직후 refresh를 보내 두어야 분산 환경에서도 사용자 목록이 빨리 수렴한다.

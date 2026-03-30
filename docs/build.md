@@ -7,7 +7,12 @@ Windows는 개발/디버깅(빌드/클라이언트) 용도로 유지한다.
 - CMake 3.21+ (`CMakePresets.json` 사용)
 - C++20 컴파일러
 - Conan 2 (`scripts/build.ps1`는 Conan-generated toolchain만 지원)
-- Python 3 (선택: opcodes/wire codegen 자동 실행)
+- Python 3 (`opcodes`/`wire` generated public header를 configure 단계에서 생성하므로 필수)
+
+빌드 ownership은 top-level에서 모두 직접 선언하지 않는다.
+- runtime/library 진입: root `CMakeLists.txt`
+- tool 진입: `tools/CMakeLists.txt`
+- test 진입: `tests/CMakeLists.txt` + domain manifests
 
 ## 로컬 사전 검증
 
@@ -32,6 +37,12 @@ pwsh scripts/build.ps1 -Config Debug -Target server_app
 
 `scripts/build.ps1`는 Conan 출력/toolchain을 자동으로 사용한다. `conan` 실행 파일이 보이지 않으면 먼저 Conan 2 설치 상태를 확인한다.
 
+도구 실행 파일은 `tools/CMakeLists.txt`가 소유한다.
+- write-behind: `wb_worker`, `wb_emit`, `wb_check`, `wb_dlq_replayer`
+- control plane: `admin_app`
+- schema: `migrations_runner`
+- loadgen: `stack_loadgen`
+
 ### 2) 테스트
 ```powershell
 pwsh scripts/build.ps1 -Config Release
@@ -47,8 +58,9 @@ ctest --preset windows-test --parallel 8 --output-on-failure
 
 ## 팩토리 패키지 설치 스모크
 
-`server_storage_pg_factory`와 `server_storage_redis_factory`는 install/export/package-consumer smoke를 지원한다.
-첫 단계의 package-first extraction surface이며, app-local helper target은 여전히 패키지 대상이 아니다.
+`server_storage_pg_factory`와 `infra_redis_factory`는 install/export/package-consumer smoke를 지원한다.
+Redis 쪽의 legacy package name `server_storage_redis_factory`는 1개 release cycle 동안 compatibility alias/config로 유지한다.
+app-local helper target은 여전히 패키지 대상이 아니다.
 
 ```powershell
 cmake --install build-windows --config Debug --prefix build-windows/install-smoke
@@ -63,7 +75,7 @@ cmake -S tests/package/factory_pg_consumer -B build-windows/factory-pg-consumer/
 cmake --build build-windows/factory-pg-consumer/build --config Debug
 ```
 
-Redis factory consumer 예시:
+Redis factory consumer 예시(canonical package 우선):
 
 ```powershell
 cmake -S tests/package/factory_redis_consumer -B build-windows/factory-redis-consumer/build --fresh `
@@ -76,7 +88,7 @@ cmake --build build-windows/factory-redis-consumer/build --config Debug
 
 ## 팩토리 패키지 배포 번들
 
-first milestone publish automation은 `server_storage_pg_factory`와 `server_storage_redis_factory`를 별도 package manager publish가 아니라
+first milestone publish automation은 `server_storage_pg_factory`와 `infra_redis_factory`를 별도 package manager publish가 아니라
 하나의 Release install-prefix bundle로 배포한다.
 
 로컬 생성:
@@ -94,6 +106,9 @@ pwsh scripts/publish_factory_packages.ps1 -BuildDir build-windows -OutputRoot ar
 이 bundle에는 다음 package surface가 포함된다.
 - `server_core`
 - `server_storage_pg_factory`
+- `infra_redis_factory`
+
+호환성 alias/config package도 함께 staged된다.
 - `server_storage_redis_factory`
 
 다음 항목은 의도적으로 포함되지 않는다.
