@@ -68,6 +68,7 @@ private:
     void send_to_backend(std::vector<std::uint8_t> payload);
     void send_to_backend(const std::uint8_t* data, std::size_t length);
     void inspect_backend_payload(std::span<const std::uint8_t> payload);
+    void inspect_login_response_payload(std::span<const std::uint8_t> payload);
 
     std::shared_ptr<auth::IAuthenticator> authenticator_;
     GatewayApp& app_;

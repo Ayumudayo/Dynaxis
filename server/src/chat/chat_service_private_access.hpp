@@ -7,11 +7,20 @@
 #include "server/core/worlds/topology.hpp"
 #include "wire.pb.h"
 
+#include <memory>
+#include <string_view>
+#include <vector>
+
 namespace server::app::chat {
 
 struct ChatServiceAppMigrationRoomHandoff {
     bool recognized{false};
     std::string room;
+};
+
+struct ChatServicePersistedMessage {
+    std::string room_id;
+    std::uint64_t message_id{0};
 };
 
 /**
@@ -34,6 +43,36 @@ struct ChatServicePrivateAccess {
         ChatService& service,
         const std::string& room_id,
         std::vector<server::wire::v1::StateSnapshot::SnapshotMessage>& out);
+
+    static std::vector<std::shared_ptr<server::core::net::Session>> collect_chat_broadcast_targets(
+        ChatService& service,
+        std::string_view room_name,
+        std::string_view sender);
+
+    static std::optional<std::string> lookup_user_uuid(
+        ChatService& service,
+        const server::core::net::Session& session);
+
+    static ChatServicePersistedMessage persist_room_message(
+        ChatService& service,
+        const server::core::net::Session& session,
+        const std::string& room_name,
+        const std::string& text);
+
+    static bool touch_session_presence(
+        ChatService& service,
+        const server::core::net::Session& session);
+
+    static bool publish_room_fanout(
+        ChatService& service,
+        const std::string& room_name,
+        std::string_view serialized_payload);
+
+    static bool update_membership_last_seen(
+        ChatService& service,
+        const server::core::net::Session& session,
+        const std::string& room_id,
+        std::uint64_t message_id);
 
     static std::optional<ChatService::ContinuityLease> try_resume_continuity_lease(
         ChatService& service,

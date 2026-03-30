@@ -8,6 +8,7 @@
 #include <openssl/sha.h>
 
 #include "gateway_app_access.hpp"
+#include "gateway_backend_frame_inspector.hpp"
 #include "server/core/util/log.hpp"
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
@@ -151,49 +152,16 @@ void GatewayConnection::handle_backend_payload(std::vector<std::uint8_t> payload
         return;
     }
 
-    constexpr std::size_t kMaxInspectableBytes = 256 * 1024;
-    if (backend_prebuffer_.size() + payload.size() > kMaxInspectableBytes) {
-        backend_prebuffer_.clear();
-    }
-
-    backend_prebuffer_.insert(backend_prebuffer_.end(), payload.begin(), payload.end());
-
-    std::vector<std::uint8_t> tcp_payload;
-    while (backend_prebuffer_.size() >= core_proto::k_header_bytes) {
-        core_proto::PacketHeader header{};
-        core_proto::decode_header(backend_prebuffer_.data(), header);
-        const std::size_t frame_bytes =
-            core_proto::k_header_bytes + static_cast<std::size_t>(header.length);
-        if (backend_prebuffer_.size() < frame_bytes) {
-            break;
-        }
-
-        const auto frame_span = std::span<const std::uint8_t>(backend_prebuffer_.data(), frame_bytes);
-        const auto body = std::span<const std::uint8_t>(
-            backend_prebuffer_.data() + core_proto::k_header_bytes,
-            static_cast<std::size_t>(header.length));
-
-        if (header.msg_id == game_proto::MSG_LOGIN_RES && backend_connection_) {
-            if (const auto resume_token = parse_resume_token_from_login_res(body);
-                resume_token.has_value() && !resume_token->empty()) {
-                const std::string routing_key = make_resume_routing_key(*resume_token);
-                if (!routing_key.empty() && !backend_instance_id_.empty()) {
-                    GatewayAppAccess::register_resume_routing_key(app_, routing_key, backend_instance_id_);
-                }
-            }
-        }
-
-        const bool delivered_direct =
-            !session_id_.empty()
-            && GatewayAppAccess::try_send_direct_client_frame(app_, session_id_, header.msg_id, frame_span);
-        if (!delivered_direct) {
-            tcp_payload.insert(tcp_payload.end(), frame_span.begin(), frame_span.end());
-        }
-
-        backend_prebuffer_.erase(
-            backend_prebuffer_.begin(),
-            backend_prebuffer_.begin() + static_cast<std::ptrdiff_t>(frame_bytes));
-    }
+    std::vector<std::uint8_t> tcp_payload = inspect_backend_frames(
+        backend_prebuffer_,
+        payload,
+        [this](std::span<const std::uint8_t> body) {
+            inspect_login_response_payload(body);
+        },
+        [this](std::uint16_t msg_id, std::span<const std::uint8_t> frame) {
+            return !session_id_.empty()
+                && GatewayAppAccess::try_send_direct_client_frame(app_, session_id_, msg_id, frame);
+        });
 
     if (!tcp_payload.empty()) {
         async_send(std::move(tcp_payload));
@@ -497,43 +465,28 @@ void GatewayConnection::send_to_backend(const std::uint8_t* data, std::size_t le
     backend_connection_->send(data, length);
 }
 
-void GatewayConnection::inspect_backend_payload(std::span<const std::uint8_t> payload) {
-    if (payload.empty()) {
+void GatewayConnection::inspect_login_response_payload(std::span<const std::uint8_t> payload) {
+    if (!backend_connection_) {
         return;
     }
 
-    constexpr std::size_t kMaxInspectableBytes = 256 * 1024;
-    if (backend_prebuffer_.size() + payload.size() > kMaxInspectableBytes) {
-        backend_prebuffer_.clear();
-    }
-
-    backend_prebuffer_.insert(backend_prebuffer_.end(), payload.begin(), payload.end());
-    while (backend_prebuffer_.size() >= core_proto::k_header_bytes) {
-        core_proto::PacketHeader header{};
-        core_proto::decode_header(backend_prebuffer_.data(), header);
-        const std::size_t frame_bytes =
-            core_proto::k_header_bytes + static_cast<std::size_t>(header.length);
-        if (backend_prebuffer_.size() < frame_bytes) {
-            return;
+    if (const auto resume_token = parse_resume_token_from_login_res(payload);
+        resume_token.has_value() && !resume_token->empty()) {
+        const std::string routing_key = make_resume_routing_key(*resume_token);
+        if (!routing_key.empty() && !backend_instance_id_.empty()) {
+            GatewayAppAccess::register_resume_routing_key(app_, routing_key, backend_instance_id_);
         }
-
-        if (header.msg_id == game_proto::MSG_LOGIN_RES && backend_connection_) {
-            const auto body = std::span<const std::uint8_t>(
-                backend_prebuffer_.data() + core_proto::k_header_bytes,
-                static_cast<std::size_t>(header.length));
-            if (const auto resume_token = parse_resume_token_from_login_res(body);
-                resume_token.has_value() && !resume_token->empty()) {
-                const std::string routing_key = make_resume_routing_key(*resume_token);
-                if (!routing_key.empty() && !backend_instance_id_.empty()) {
-                    GatewayAppAccess::register_resume_routing_key(app_, routing_key, backend_instance_id_);
-                }
-            }
-        }
-
-        backend_prebuffer_.erase(
-            backend_prebuffer_.begin(),
-            backend_prebuffer_.begin() + static_cast<std::ptrdiff_t>(frame_bytes));
     }
+}
+
+void GatewayConnection::inspect_backend_payload(std::span<const std::uint8_t> payload) {
+    (void)inspect_backend_frames(
+        backend_prebuffer_,
+        payload,
+        [this](std::span<const std::uint8_t> body) {
+            inspect_login_response_payload(body);
+        },
+        {});
 }
 
 } // namespace gateway

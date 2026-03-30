@@ -382,6 +382,13 @@ private:
     std::string hash_hwid_token(std::string_view token) const;
     void send_whisper_result(Session& s, bool ok, const std::string& reason);
     std::string ensure_room_id_ci(const std::string& room_name);
+    bool try_handle_slash_command(std::shared_ptr<Session> session,
+                                  const std::string& current_room,
+                                  const std::string& text);
+    void dispatch_room_message(std::shared_ptr<Session> session,
+                               const std::string& current_room,
+                               const std::string& sender,
+                               const std::string& text);
 
     /** @brief persisted logical session lease 한 건의 복원/발급 결과입니다. */
     struct ContinuityLease {

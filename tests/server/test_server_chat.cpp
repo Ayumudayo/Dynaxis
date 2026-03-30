@@ -157,11 +157,25 @@ std::string lower_ascii_copy(std::string_view value) {
 struct MockStorageState {
     std::unordered_map<std::string, server::storage::User> users_by_id;
     std::unordered_map<std::string, std::string> user_id_by_name_ci;
+    std::unordered_map<std::string, server::storage::Room> rooms_by_id;
+    std::unordered_map<std::string, std::string> room_id_by_name_ci;
+    std::unordered_map<std::string, std::vector<server::storage::Message>> messages_by_room_id;
+    std::unordered_map<std::string, server::storage::Membership> memberships_by_key;
     std::unordered_map<std::string, server::storage::Session> sessions_by_id;
     std::unordered_map<std::string, std::string> session_id_by_token_hash;
     std::uint64_t next_user_id{1};
+    std::uint64_t next_room_id{1};
+    std::uint64_t next_message_id{1};
     std::uint64_t next_session_id{1};
+    std::optional<server::storage::Room> last_created_room;
+    std::optional<server::storage::Message> last_created_message;
+    std::optional<server::storage::Membership> last_membership_join;
+    std::optional<server::storage::Membership> last_membership_last_seen;
 };
+
+std::string make_membership_key(std::string_view user_id, std::string_view room_id) {
+    return std::string(user_id) + "|" + std::string(room_id);
+}
 
 } // namespace
 
@@ -216,30 +230,193 @@ private:
 
 class MockRoomRepository : public IRoomRepository {
 public:
-    MockRoomRepository() = default;
-    std::optional<Room> find_by_id(const std::string&) override { return std::nullopt; }
-    std::vector<Room> search_by_name_ci(const std::string&, std::size_t) override { return {}; }
-    std::optional<Room> find_by_name_exact_ci(const std::string&) override { return std::nullopt; }
-    Room create(const std::string&, bool) override { return {}; }
-    void close(const std::string&) override {}
+    explicit MockRoomRepository(std::shared_ptr<MockStorageState> state)
+        : state_(std::move(state)) {}
+
+    std::optional<Room> find_by_id(const std::string& room_id) override {
+        if (const auto it = state_->rooms_by_id.find(room_id); it != state_->rooms_by_id.end()) {
+            return it->second;
+        }
+        return std::nullopt;
+    }
+
+    std::vector<Room> search_by_name_ci(const std::string& query, std::size_t limit) override {
+        std::vector<Room> out;
+        const auto lowered = lower_ascii_copy(query);
+        for (const auto& [room_name_ci, room_id] : state_->room_id_by_name_ci) {
+            if (room_name_ci.find(lowered) == std::string::npos) {
+                continue;
+            }
+            if (const auto room_it = state_->rooms_by_id.find(room_id); room_it != state_->rooms_by_id.end()) {
+                out.push_back(room_it->second);
+            }
+            if (out.size() >= limit) {
+                break;
+            }
+        }
+        return out;
+    }
+
+    std::optional<Room> find_by_name_exact_ci(const std::string& name) override {
+        const auto lowered = lower_ascii_copy(name);
+        if (const auto it = state_->room_id_by_name_ci.find(lowered); it != state_->room_id_by_name_ci.end()) {
+            return state_->rooms_by_id.at(it->second);
+        }
+        return std::nullopt;
+    }
+
+    Room create(const std::string& name, bool is_public) override {
+        const auto lowered = lower_ascii_copy(name);
+        if (const auto it = state_->room_id_by_name_ci.find(lowered); it != state_->room_id_by_name_ci.end()) {
+            return state_->rooms_by_id.at(it->second);
+        }
+
+        Room room{};
+        room.id = "room-" + std::to_string(state_->next_room_id++);
+        room.name = name;
+        room.is_public = is_public;
+        room.is_active = true;
+        room.created_at_ms = static_cast<std::int64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+        state_->room_id_by_name_ci[lowered] = room.id;
+        state_->rooms_by_id[room.id] = room;
+        state_->last_created_room = room;
+        return room;
+    }
+
+    void close(const std::string& room_id) override {
+        if (auto it = state_->rooms_by_id.find(room_id); it != state_->rooms_by_id.end()) {
+            it->second.is_active = false;
+            it->second.closed_at_ms = static_cast<std::int64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count());
+        }
+    }
+
+private:
+    std::shared_ptr<MockStorageState> state_;
 };
 
 class MockMessageRepository : public IMessageRepository {
 public:
-    MockMessageRepository() = default;
-    std::vector<Message> fetch_recent_by_room(const std::string&, std::uint64_t, std::size_t) override { return {}; }
-    Message create(const std::string&, const std::string&, const std::optional<std::string>&, const std::string&) override { return {}; }
-    std::uint64_t get_last_id(const std::string&) override { return 0; }
-    void delete_by_room(const std::string&) override {}
+    explicit MockMessageRepository(std::shared_ptr<MockStorageState> state)
+        : state_(std::move(state)) {}
+
+    std::vector<Message> fetch_recent_by_room(const std::string& room_id,
+                                              std::uint64_t since_id,
+                                              std::size_t limit) override {
+        std::vector<Message> out;
+        if (const auto it = state_->messages_by_room_id.find(room_id); it != state_->messages_by_room_id.end()) {
+            for (const auto& message : it->second) {
+                if (message.id > since_id) {
+                    out.push_back(message);
+                }
+            }
+        }
+        if (out.size() > limit) {
+            out.erase(out.begin(), out.end() - static_cast<std::ptrdiff_t>(limit));
+        }
+        return out;
+    }
+
+    Message create(const std::string& room_id,
+                   const std::string& room_name,
+                   const std::optional<std::string>& user_id,
+                   const std::string& content) override {
+        Message message{};
+        message.id = state_->next_message_id++;
+        message.room_id = room_id;
+        message.room_name = room_name;
+        message.user_id = user_id;
+        message.content = content;
+        message.created_at_ms = static_cast<std::int64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+        state_->messages_by_room_id[room_id].push_back(message);
+        state_->last_created_message = message;
+        return message;
+    }
+
+    std::uint64_t get_last_id(const std::string& room_id) override {
+        if (const auto it = state_->messages_by_room_id.find(room_id);
+            it != state_->messages_by_room_id.end() && !it->second.empty()) {
+            return it->second.back().id;
+        }
+        return 0;
+    }
+
+    void delete_by_room(const std::string& room_id) override {
+        state_->messages_by_room_id.erase(room_id);
+    }
+
+private:
+    std::shared_ptr<MockStorageState> state_;
 };
 
 class MockMembershipRepository : public IMembershipRepository {
 public:
-    MockMembershipRepository() = default;
-    void upsert_join(const std::string&, const std::string&, const std::string&) override {}
-    void update_last_seen(const std::string&, const std::string&, std::uint64_t) override {}
-    void leave(const std::string&, const std::string&) override {}
-    std::optional<std::uint64_t> get_last_seen(const std::string&, const std::string&) override { return std::nullopt; }
+    explicit MockMembershipRepository(std::shared_ptr<MockStorageState> state)
+        : state_(std::move(state)) {}
+
+    void upsert_join(const std::string& user_id,
+                     const std::string& room_id,
+                     const std::string& role) override {
+        Membership membership{};
+        const auto key = make_membership_key(user_id, room_id);
+        if (const auto it = state_->memberships_by_key.find(key); it != state_->memberships_by_key.end()) {
+            membership = it->second;
+        }
+        membership.user_id = user_id;
+        membership.room_id = room_id;
+        membership.role = role;
+        membership.joined_at_ms = static_cast<std::int64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+        membership.left_at_ms.reset();
+        membership.is_member = true;
+        state_->memberships_by_key[key] = membership;
+        state_->last_membership_join = membership;
+    }
+
+    void update_last_seen(const std::string& user_id,
+                          const std::string& room_id,
+                          std::uint64_t last_seen_msg_id) override {
+        const auto key = make_membership_key(user_id, room_id);
+        Membership membership{};
+        if (const auto it = state_->memberships_by_key.find(key); it != state_->memberships_by_key.end()) {
+            membership = it->second;
+        }
+        membership.user_id = user_id;
+        membership.room_id = room_id;
+        membership.last_seen_msg_id = last_seen_msg_id;
+        membership.is_member = true;
+        state_->memberships_by_key[key] = membership;
+        state_->last_membership_last_seen = membership;
+    }
+
+    void leave(const std::string& user_id, const std::string& room_id) override {
+        const auto key = make_membership_key(user_id, room_id);
+        if (auto it = state_->memberships_by_key.find(key); it != state_->memberships_by_key.end()) {
+            it->second.is_member = false;
+            it->second.left_at_ms = static_cast<std::int64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count());
+        }
+    }
+
+    std::optional<std::uint64_t> get_last_seen(const std::string& user_id,
+                                               const std::string& room_id) override {
+        const auto key = make_membership_key(user_id, room_id);
+        if (const auto it = state_->memberships_by_key.find(key);
+            it != state_->memberships_by_key.end()) {
+            return it->second.last_seen_msg_id;
+        }
+        return std::nullopt;
+    }
+
+private:
+    std::shared_ptr<MockStorageState> state_;
 };
 
 class MockSessionRepository : public ISessionRepository {
@@ -291,6 +468,9 @@ class MockUnitOfWork : public IRepositoryUnitOfWork {
 public:
     explicit MockUnitOfWork(std::shared_ptr<MockStorageState> state)
         : user_repo(state),
+          room_repo(state),
+          msg_repo(state),
+          membership_repo(state),
           session_repo(std::move(state)) {}
 
     MockUserRepository user_repo;
@@ -319,6 +499,10 @@ public:
     }
     bool health_check() override { return true; }
 
+    const std::shared_ptr<MockStorageState>& state() const {
+        return state_;
+    }
+
 private:
     std::shared_ptr<MockStorageState> state_;
 };
@@ -331,10 +515,18 @@ public:
     std::string last_publish_message;
     std::unordered_map<std::string, std::string> kv_store;
     std::unordered_map<std::string, std::unordered_set<std::string>> set_store;
+    std::unordered_map<std::string, std::vector<std::string>> list_store;
     
     // IRedisClient Interface Implementation
     bool health_check() override { return true; }
-    bool lpush_trim(const std::string&, const std::string&, std::size_t) override { return true; }
+    bool lpush_trim(const std::string& key, const std::string& value, std::size_t max_len) override {
+        auto& list = list_store[key];
+        list.insert(list.begin(), value);
+        if (list.size() > max_len) {
+            list.resize(max_len);
+        }
+        return true;
+    }
     
     bool sadd(const std::string& key, const std::string& member) override {
         sadd_called = true;
@@ -439,6 +631,12 @@ public:
         last_publish_channel = channel;
         last_publish_message = message;
         return true;
+    }
+
+    void reset_publish_trace() {
+        publish_called = false;
+        last_publish_channel.clear();
+        last_publish_message.clear();
     }
     
     bool start_psubscribe(const std::string&, std::function<void(const std::string&, const std::string&)>) override { return true; }
@@ -1022,6 +1220,42 @@ TEST_F(ChatServiceTest, ChatSend) {
 
     // 검증: 메시지 브로드캐스트가 나에게도 옴
     EXPECT_TRUE(WaitForData()) << "Chat message broadcast should be received by peer";
+}
+
+TEST_F(ChatServiceTest, ChatSendPersistsMembershipStateAndPublishesRoomFanout) {
+    ScopedEnvVar pubsub_env("USE_REDIS_PUBSUB", "1");
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+
+    LoginAs("persist_user", "persist_token");
+    ASSERT_TRUE(WaitForData());
+
+    JoinRoom("persist_room");
+    ASSERT_TRUE(WaitForData());
+
+    const auto storage = db_pool_->state();
+    storage->last_created_message.reset();
+    storage->last_membership_last_seen.reset();
+    redis_->reset_publish_trace();
+
+    SendChat("persist_room", "persist me");
+
+    EXPECT_TRUE(WaitForBroadcastText("persist me")) << "chat broadcast should still reach the sender";
+    ASSERT_TRUE(storage->last_created_message.has_value());
+    EXPECT_EQ(storage->last_created_message->room_name, "persist_room");
+    EXPECT_EQ(storage->last_created_message->content, "persist me");
+    ASSERT_TRUE(storage->last_created_message->user_id.has_value());
+
+    ASSERT_TRUE(storage->last_membership_last_seen.has_value());
+    EXPECT_EQ(storage->last_membership_last_seen->room_id, storage->last_created_message->room_id);
+    ASSERT_TRUE(storage->last_membership_last_seen->last_seen_msg_id.has_value());
+    EXPECT_EQ(*storage->last_membership_last_seen->last_seen_msg_id, storage->last_created_message->id);
+
+    EXPECT_TRUE(redis_->publish_called);
+    EXPECT_EQ(redis_->last_publish_channel, "fanout:room:persist_room");
+    EXPECT_TRUE(redis_->last_publish_message.rfind("gw=", 0) == 0);
+    const auto payload_offset = redis_->last_publish_message.find('\n');
+    ASSERT_NE(payload_offset, std::string::npos);
+    EXPECT_GT(redis_->last_publish_message.size(), payload_offset + 1);
 }
 
 // 귓속말 테스트

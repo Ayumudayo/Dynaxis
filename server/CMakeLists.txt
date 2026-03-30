@@ -26,6 +26,8 @@ target_link_libraries(server_app_backends PRIVATE server_storage_pg_factory infr
 add_library(server_chat_runtime STATIC
     src/chat/chat_blacklist_state.cpp
     src/chat/chat_command_authorization.cpp
+    src/chat/chat_message_delivery.cpp
+    src/chat/chat_slash_commands.cpp
     src/chat/chat_spam_moderation.cpp
     src/chat/chat_service_core.cpp
     src/chat/chat_room_state.cpp
@@ -56,8 +58,12 @@ target_link_libraries(server_fps_runtime PUBLIC server_core wire_proto)
 
 add_executable(server_app
     src/main.cpp
+    src/app/admin_fanout_subscription.cpp
     src/app/bootstrap.cpp
+    src/app/chat_metrics_text.cpp
     src/app/metrics_server.cpp
+    src/app/runtime_metrics_text.cpp
+    src/app/server_shutdown.cpp
     src/app/server_runtime_state.cpp
     src/app/router.cpp
 )

@@ -14,6 +14,7 @@ target_link_libraries(gateway_backends PRIVATE infra_redis_factory)
 add_executable(gateway_app
     src/gateway_connection.cpp
     src/gateway_backend_connection.cpp
+    src/gateway_backend_frame_inspector.cpp
     src/gateway_udp_ingress.cpp
     src/gateway_routing_policy.cpp
     src/gateway_configuration.cpp

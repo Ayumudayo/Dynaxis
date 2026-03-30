@@ -17,6 +17,7 @@ from verify_worlds_kubernetes_kind_control_plane import (
     PortForward,
     load_json_http,
     request_json_http,
+    wait_for_json_ready,
     wait_for_port_forward,
 )
 from verify_worlds_kubernetes_kind_redis_outage import http_text, read_metric, wait_for_metric_value
@@ -114,7 +115,11 @@ def main() -> int:
                 if status != 200 or body != "ready":
                     raise RuntimeError(f"admin readyz mismatch before outage: status={status} body={body!r}")
 
-                worker_before = load_json_http(base_url, "/api/v1/worker/write-behind")
+                worker_before = wait_for_json_ready(
+                    base_url,
+                    "/api/v1/worker/write-behind",
+                    timeout_seconds=30.0,
+                )
                 before_available = read_metric(base_url, "admin_worker_metrics_available")
                 before_dep = read_metric(
                     base_url,
@@ -158,17 +163,21 @@ def main() -> int:
                     base_url,
                     "admin_worker_metrics_available",
                     lambda value: value == 1.0,
-                    timeout_seconds=60.0,
+                    timeout_seconds=float(args.wait_timeout_seconds),
                 )
                 recovered_dep = wait_for_metric_value(
                     base_url,
                     "runtime_dependency_ready",
                     lambda value: value == 1.0,
                     labels={"name": "wb_metrics", "required": "false"},
-                    timeout_seconds=60.0,
+                    timeout_seconds=float(args.wait_timeout_seconds),
                 )
                 recovered_deps_ok = read_metric(base_url, "runtime_dependencies_ok")
-                worker_after = load_json_http(base_url, "/api/v1/worker/write-behind")
+                worker_after = wait_for_json_ready(
+                    base_url,
+                    "/api/v1/worker/write-behind",
+                    timeout_seconds=float(args.wait_timeout_seconds),
+                )
 
                 status, body = http_text(base_url, "/readyz")
                 if status != 200 or body != "ready":
