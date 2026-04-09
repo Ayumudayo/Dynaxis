@@ -239,9 +239,30 @@ jobs:
         run: |
           python3 tests/python/verify_admin_control_plane_e2e.py
 
+      - name: Prepare Isolated Same-World Proof Topology
+        run: |
+          mkdir -p build/ci
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          source = Path("docker/stack/topologies/mmorpg-same-world-proof.json")
+          target = Path("build/ci/mmorpg-same-world-proof.json")
+          topology = json.loads(source.read_text(encoding="utf-8"))
+          run_id = int(os.environ.get("GITHUB_RUN_ID", "0"))
+          server3_metrics_port = 43100 + (run_id % 400)
+          for server in topology.get("servers", []):
+              if server.get("instance_id") == "server-3":
+                  server["metrics_host_port"] = server3_metrics_port
+                  break
+          target.write_text(json.dumps(topology, indent=2) + "\n", encoding="utf-8")
+          print(f"Prepared isolated same-world topology at {target} with server-3 metrics port {server3_metrics_port}")
+          PY
+
       - name: Smoke Test (MMORPG Phase 3 Acceptance)
         run: |
-          python3 tests/python/verify_mmorpg_runtime_matrix.py --scenario phase3-acceptance --no-build
+          python3 tests/python/verify_mmorpg_runtime_matrix.py --scenario phase3-acceptance --no-build --same-world-topology build/ci/mmorpg-same-world-proof.json
 
       - name: Smoke Test (Continuity Recovery Baseline)
         run: |

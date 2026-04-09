@@ -57,7 +57,7 @@ jobs:
             dynaxis-base:latest \
             bash -lc "set -e; apt-get update && apt-get install -y ninja-build libgtest-dev; \
             cmake --preset linux-asan -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=OFF; \
-            cmake --build --preset linux-asan --target server_app protocol_fuzz_harness --parallel; \
+            cmake --build --preset linux-asan --target server_app --parallel; \
             cmake --preset linux -DBUILD_GTEST_TESTS=ON -DBUILD_CONTRACT_TESTS=OFF; \
             cmake --build --preset linux-debug --target core_plugin_runtime_tests --parallel; \
             ctest --test-dir build-linux -R 'LuaRuntimeTest|LuaSandboxTest' --output-on-failure --no-tests=error"
@@ -69,7 +69,10 @@ jobs:
             -w /app \
             -e FUZZ_ITERATIONS=200000 \
             dynaxis-base:latest \
-            bash -lc "./build-linux/tests/protocol_fuzz_harness"
+            bash -lc "set -e; apt-get update && apt-get install -y ninja-build; \
+            cmake --preset linux-asan -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=OFF; \
+            cmake --build --preset linux-asan --target protocol_fuzz_harness --parallel; \
+            ctest --test-dir build-linux -R 'ProtocolFuzzHarness' --output-on-failure --no-tests=error"
 
       - name: Start Stack (Detached, Runtime On)
         shell: pwsh

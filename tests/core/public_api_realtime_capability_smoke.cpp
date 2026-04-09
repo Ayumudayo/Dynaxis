@@ -6,6 +6,7 @@
 #include "server/core/api/version.hpp"
 #include "server/core/realtime/direct_bind.hpp"
 #include "server/core/realtime/direct_delivery.hpp"
+#include "server/core/realtime/simulation_phase.hpp"
 #include "server/core/realtime/transport_quality.hpp"
 #include "server/core/realtime/runtime.hpp"
 #include "server/core/realtime/transport_policy.hpp"
@@ -20,10 +21,28 @@ bool require_true(bool condition, const char* message) {
     return true;
 }
 
+class SmokePhaseObserver final : public server::core::realtime::ISimulationPhaseObserver {
+public:
+    void on_simulation_phase(server::core::realtime::SimulationPhase,
+                             const server::core::realtime::SimulationPhaseContext&) override {
+        ++event_count;
+    }
+
+    std::size_t event_count{0};
+};
+
 } // namespace
 
 int main() {
     (void)server::core::api::version_string();
+    server::core::realtime::SimulationPhaseContext phase_context{
+        .server_tick = 1,
+        .actor_count = 0,
+        .viewer_count = 0,
+        .staged_input_count = 0,
+        .replication_update_count = 0,
+    };
+    (void)phase_context;
 
     server::core::realtime::FixedStepDriver driver(30, 4);
     if (!require_true(
@@ -35,6 +54,8 @@ int main() {
     server::core::realtime::WorldRuntime runtime(server::core::realtime::RuntimeConfig{
         .max_delta_actors_per_tick = 1,
     });
+    SmokePhaseObserver observer;
+    runtime.set_simulation_phase_observer(&observer);
 
     const auto staged_1 = runtime.stage_input(1, server::core::realtime::InputCommand{
         .input_seq = 1,
@@ -207,6 +228,9 @@ int main() {
         return 1;
     }
     if (!require_true(snapshot.stale_input_reject_total > 0, "runtime snapshot should record stale input rejects")) {
+        return 1;
+    }
+    if (!require_true(observer.event_count == 10, "simulation phase observer should see five phases per tick")) {
         return 1;
     }
 

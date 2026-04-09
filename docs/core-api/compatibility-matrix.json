@@ -1,5 +1,5 @@
 {
-  "api_version": "3.4.1",
+  "api_version": "3.5.0",
   "stable_headers": [
     {
       "path": "server/core/api/version.hpp",
@@ -35,6 +35,10 @@
     },
     {
       "path": "server/core/realtime/direct_delivery.hpp",
+      "compatibility": "stable"
+    },
+    {
+      "path": "server/core/realtime/simulation_phase.hpp",
       "compatibility": "stable"
     },
     {

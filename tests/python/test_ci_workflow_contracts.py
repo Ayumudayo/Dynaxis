@@ -152,6 +152,29 @@ class CiWorkflowContractsTests(unittest.TestCase):
             "Sanitizer, Fuzz, and Soak Checks (Linux)",
             self._job(workflow, "linux-hardening")["name"],
         )
+        run_scripts = "\n".join(
+            step["run"] for step in self._job(workflow, "linux-hardening")["steps"] if "run" in step
+        )
+        self.assertNotIn("./build-linux/tests/protocol_fuzz_harness", run_scripts)
+        self.assertIn(
+            "ctest --test-dir build-linux -R 'ProtocolFuzzHarness' --output-on-failure --no-tests=error",
+            run_scripts,
+        )
+
+    def test_stack_integration_isolates_same_world_topology_ports_for_ci(self):
+        workflow = self._load_workflow("ci-stack.yml")
+
+        self.assertIn(
+            "Prepare Isolated Same-World Proof Topology",
+            self._step_names(workflow, "linux-docker-stack"),
+        )
+        phase3_step = next(
+            step
+            for step in self._job(workflow, "linux-docker-stack")["steps"]
+            if step.get("name") == "Smoke Test (MMORPG Phase 3 Acceptance)"
+        )
+        self.assertIn("--same-world-topology", phase3_step["run"])
+        self.assertIn("build/ci/mmorpg-same-world-proof.json", phase3_step["run"])
 
     def test_support_probe_and_release_job_names_are_reclassified(self):
         prewarm = self._load_workflow("ci-prewarm.yml")

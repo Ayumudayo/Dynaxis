@@ -30,6 +30,7 @@
 | `server/core/build_info.hpp` | Stable | 모든 바이너리가 사용하는 빌드 메타데이터 계약 |
 | `server/core/realtime/direct_bind.hpp` | Stable | direct UDP bind 요청과 응답 payload, bind ticket 데이터 계약을 정의하는 기준 realtime ingress 표면 |
 | `server/core/realtime/direct_delivery.hpp` | Stable | direct UDP/RUDP delta 전달 경로 선택 정책을 app-local opcode 판별과 분리해 노출하는 기준 realtime 전송 정책 표면 |
+| `server/core/realtime/simulation_phase.hpp` | Stable | fixed-step authoritative tick 내부의 결정론적 phase 어휘와 관측용 observer 계약을 노출하는 기준 realtime orchestration 표면 |
 | `server/core/realtime/transport_quality.hpp` | Stable | direct UDP sequenced ingress의 loss, jitter, reorder, duplicate 품질 신호 계약을 노출하는 기준 realtime 전송 품질 표면 |
 | `server/core/realtime/transport_policy.hpp` | Stable | direct UDP/RUDP rollout 활성화, canary 선택, opcode allowlist 해석을 정의하는 기준 realtime 전송 정책 표면 |
 | `server/core/realtime/runtime.hpp` | Stable | 고정 주기 authoritative tick, 공용 snapshot/delta shaping, 거친 관심 범위, rewind/history 조회를 제공하는 기준 realtime 엔진 능력 표면 |

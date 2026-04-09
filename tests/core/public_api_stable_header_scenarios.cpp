@@ -23,6 +23,7 @@
 #include "server/core/plugin/shared_library.hpp"
 #include "server/core/realtime/direct_bind.hpp"
 #include "server/core/realtime/direct_delivery.hpp"
+#include "server/core/realtime/simulation_phase.hpp"
 #include "server/core/realtime/transport_quality.hpp"
 #include "server/core/realtime/transport_policy.hpp"
 #include "server/core/realtime/runtime.hpp"
@@ -198,6 +199,14 @@ void scenario_metrics_and_runtime() {
         std::chrono::milliseconds(2),
         std::chrono::milliseconds(1),
         "stable-header-freeze");
+    server::core::realtime::SimulationPhaseContext phase_context{
+        .server_tick = 1,
+        .actor_count = 0,
+        .viewer_count = 0,
+        .staged_input_count = 0,
+        .replication_update_count = 0,
+    };
+    (void)phase_context;
     (void)server::core::runtime_metrics::watchdog_snapshot();
     (void)server::core::runtime_metrics::detailed_telemetry_snapshot();
     server::core::realtime::WorldRuntime fps_runtime(server::core::realtime::RuntimeConfig{

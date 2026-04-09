@@ -23,6 +23,7 @@
 #include "server/core/plugin/shared_library.hpp"
 #include "server/core/realtime/direct_bind.hpp"
 #include "server/core/realtime/direct_delivery.hpp"
+#include "server/core/realtime/simulation_phase.hpp"
 #include "server/core/realtime/transport_quality.hpp"
 #include "server/core/realtime/transport_policy.hpp"
 #include "server/core/realtime/runtime.hpp"
@@ -178,6 +179,14 @@ int main() {
     runtime.run_shutdown();
     runtime.mark_stopped();
     (void)runtime.module_snapshot();
+    server::core::realtime::SimulationPhaseContext phase_context{
+        .server_tick = 1,
+        .actor_count = 0,
+        .viewer_count = 0,
+        .staged_input_count = 0,
+        .replication_update_count = 0,
+    };
+    (void)phase_context;
     server::core::realtime::WorldRuntime fps_runtime;
     (void)fps_runtime.stage_input(1, server::core::realtime::InputCommand{.input_seq = 1});
     (void)fps_runtime.tick();

@@ -8,6 +8,7 @@
 - 기준 공개 헤더:
   - `server/core/realtime/direct_bind.hpp`
   - `server/core/realtime/direct_delivery.hpp`
+  - `server/core/realtime/simulation_phase.hpp`
   - `server/core/realtime/transport_quality.hpp`
   - `server/core/realtime/transport_policy.hpp`
   - `server/core/realtime/runtime.hpp`
@@ -37,6 +38,7 @@
   - authoritative actor transform 전진
   - 거친 관심 범위 선택
   - actor별 history 보존
+  - authoritative tick 내부 phase의 결정론적 관측 어휘
 
 ### 복제 경계
 
@@ -62,6 +64,7 @@
 - 더러운 visible actor 수가 구성된 delta budget을 넘으면, runtime은 그 viewer에 대해 delta fanout 대신 snapshot 복구로 되돌아간다.
 - actor history는 "해당 tick 이하에서 가장 최근 샘플"을 찾기 위한 bounded ring buffer로 유지한다.
 - lag compensation, rewind hit validation, combat, shooter gameplay rule은 범위 밖이다.
+- simulation phase observer는 관측 계약일 뿐이며, respawn/combat/objective 같은 gameplay manager를 core에 승격하는 근거가 아니다.
 
 ## 현재 검증 표면
 

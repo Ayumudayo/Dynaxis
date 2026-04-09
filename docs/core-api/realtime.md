@@ -6,6 +6,7 @@
 |---|---|
 | `server/core/realtime/direct_bind.hpp` | `[Stable]` |
 | `server/core/realtime/direct_delivery.hpp` | `[Stable]` |
+| `server/core/realtime/simulation_phase.hpp` | `[Stable]` |
 | `server/core/realtime/transport_quality.hpp` | `[Stable]` |
 | `server/core/realtime/transport_policy.hpp` | `[Stable]` |
 | `server/core/realtime/runtime.hpp` | `[Stable]` |
@@ -21,6 +22,7 @@
 ## 범위
 
 - engine-neutral fixed-step runtime substrate
+- deterministic simulation phase vocabulary
 - direct bind payload contract
 - rollout/canary/allowlist policy
 - direct delivery route policy
@@ -58,6 +60,8 @@
   - 메시지가 direct path를 탈 수 있는지, `tcp fallback`, `udp`, `rudp` 중 무엇을 써야 하는지 판단한다.
 - `UdpSequencedMetrics`
   - direct UDP ingress 품질 신호를 추적한다.
+- `SimulationPhase`, `SimulationPhaseContext`, `ISimulationPhaseObserver`
+  - fixed-step runtime 내부 phase를 gameplay rule 없이 관측 가능한 vocabulary로 고정한다.
 - `FixedStepDriver`
   - 고정 틱(fixed-step)에서 catch-up work 상한을 가진다.
 - `WorldRuntime`
@@ -85,6 +89,9 @@
   - `kSnapshot`은 전체 상태를 다시 맞추는 경로다.
   - `kDelta`는 dirty actor와 removed actor만 담는 경로다.
   - delta budget을 넘기면 snapshot fallback으로 전환한다.
+- `ISimulationPhaseObserver::on_simulation_phase()`
+  - runtime이 authoritative tick 내부 phase를 끝낼 때 경량 count snapshot과 함께 알린다.
+  - phase observer는 관측용 contract이며, 게임 규칙 관리자나 mutable runtime 내부 접근 contract가 아니다.
 - `rewind_at_or_before()`
   - lag compensation이나 history query에서 특정 tick 이하의 가장 가까운 authoritative sample을 찾는다.
 
