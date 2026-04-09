@@ -9,6 +9,7 @@
 ## 미출시(Unreleased)
 
 ### 변경됨(Changed)
+- `server/core/realtime/simulation_phase.hpp`를 stable public surface로 추가해 fixed-step authoritative tick 내부의 결정론적 phase vocabulary(`SimulationPhase`, `SimulationPhaseContext`, `ISimulationPhaseObserver`)를 gameplay rule 없이 관측할 수 있게 했습니다.
 - `server/core/net/transport_router.hpp`를 stable public surface로 추가해 `Connection`/`Listener` 위에서 동작하는 domain-neutral transport-session routing seam(`ITransportSession`, `TransportRouter`)을 제공하고, repo-owned public consumer proof를 packet `Session` 직접 의존 없이 이 seam으로 옮겼습니다.
 - `server/core/runtime_metrics.hpp`에 process-wide liveness state, named watchdog snapshot, freeze suspicion, threshold-triggered detailed telemetry window surface를 추가하고, core/runtime exporters가 이 aggregate를 Prometheus text로 노출하도록 확장했습니다.
 - `server/core/concurrent/task_scheduler.hpp`에 cancel token/group, `schedule_controlled()`, `schedule_every_controlled()`, `reschedule()`, `update_repeat_policy()`, repeat context/validator/policy surface를 추가해 caller-owned `poll()` 모델은 유지하면서도 runtime-owned periodic work를 덜 open-code 하도록 확장했습니다.

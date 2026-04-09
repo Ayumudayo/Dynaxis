@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <tuple>
+#include <vector>
+
+#include "server/core/realtime/simulation_phase.hpp"
 #include "server/core/realtime/runtime.hpp"
 
 namespace {
@@ -10,7 +14,19 @@ using server::core::realtime::ReplicationKind;
 using server::core::realtime::RewindQuery;
 using server::core::realtime::RuntimeConfig;
 using server::core::realtime::StageInputDisposition;
+using server::core::realtime::SimulationPhase;
+using server::core::realtime::SimulationPhaseContext;
+using server::core::realtime::ISimulationPhaseObserver;
 using server::core::realtime::WorldRuntime;
+
+class RecordingPhaseObserver final : public ISimulationPhaseObserver {
+public:
+    void on_simulation_phase(SimulationPhase phase, const SimulationPhaseContext& context) override {
+        events.emplace_back(phase, context.server_tick, context.replication_update_count);
+    }
+
+    std::vector<std::tuple<SimulationPhase, std::uint32_t, std::size_t>> events;
+};
 
 TEST(FixedStepDriverTest, BoundsCatchUpSteps) {
     FixedStepDriver driver(30, 4);
@@ -133,6 +149,25 @@ TEST(FpsWorldRuntimeTest, DeltaBudgetFallsBackToSnapshot) {
     EXPECT_EQ(second_tick[0].kind, ReplicationKind::kSnapshot);
     EXPECT_EQ(second_tick[1].kind, ReplicationKind::kSnapshot);
     EXPECT_GT(runtime.snapshot().delta_budget_snapshot_total, 0u);
+}
+
+TEST(FpsWorldRuntimeTest, EmitsSimulationPhasesInDeterministicOrder) {
+    RecordingPhaseObserver observer;
+    WorldRuntime runtime(RuntimeConfig{});
+    runtime.set_simulation_phase_observer(&observer);
+
+    EXPECT_EQ(runtime.stage_input(1, InputCommand{.input_seq = 1, .move_x_mm = 100}).disposition, StageInputDisposition::kAccepted);
+
+    const auto updates = runtime.tick();
+    ASSERT_FALSE(updates.empty());
+    ASSERT_EQ(observer.events.size(), 5u);
+    EXPECT_EQ(std::get<0>(observer.events[0]), SimulationPhase::kTickBegin);
+    EXPECT_EQ(std::get<0>(observer.events[1]), SimulationPhase::kInputsApplied);
+    EXPECT_EQ(std::get<0>(observer.events[2]), SimulationPhase::kActorsAdvanced);
+    EXPECT_EQ(std::get<0>(observer.events[3]), SimulationPhase::kReplicationComputed);
+    EXPECT_EQ(std::get<0>(observer.events[4]), SimulationPhase::kTickEnd);
+    EXPECT_EQ(std::get<1>(observer.events[0]), 1u);
+    EXPECT_EQ(std::get<2>(observer.events[3]), updates.size());
 }
 
 } // namespace

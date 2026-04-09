@@ -9,6 +9,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "server/core/realtime/simulation_phase.hpp"
+
 namespace server::core::realtime {
 
 /** @brief authoritative engine tick의 catch-up 작업량을 상한 안에 묶는 fixed-step 누산기입니다. */
@@ -121,6 +123,14 @@ class WorldRuntime {
 public:
     explicit WorldRuntime(RuntimeConfig config = {});
 
+    /**
+     * @brief fixed-step phase 진행을 관측할 optional observer를 설정합니다.
+     *
+     * observer lifetime은 caller가 관리합니다. observer를 파기하기 전에 `nullptr`로
+     * 되돌리거나, 더 이상 `tick()`이 실행되지 않는 시점에만 등록을 해제해야 합니다.
+     */
+    void set_simulation_phase_observer(ISimulationPhaseObserver* observer) noexcept;
+
     StageInputResult stage_input(std::uint32_t session_id, const InputCommand& input);
     void remove_session(std::uint32_t session_id);
     std::vector<ReplicationUpdate> tick();
@@ -177,6 +187,7 @@ private:
     std::unordered_map<std::uint32_t, ActorState> actors_;
     std::unordered_map<std::uint32_t, ViewerState> viewers_;
     std::set<std::uint32_t> removed_actor_ids_;
+    ISimulationPhaseObserver* simulation_phase_observer_{nullptr};
 };
 
 } // namespace server::core::realtime
