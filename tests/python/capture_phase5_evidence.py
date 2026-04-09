@@ -36,6 +36,7 @@ STACK_HAPROXY_HOST = "haproxy"
 STACK_GATEWAY_HOST = "gateway-1"
 LINUX_CONTAINER_REPO_ROOT = "/workspace"
 LINUX_LOADGEN_BUILD_DIR = "build-linux-loadgen"
+LINUX_LOADGEN_PATH_MARKER = ".stack_loadgen_path"
 
 
 def default_run_id() -> str:
@@ -190,7 +191,7 @@ def ensure_loadgen_built(log_path: Path) -> Path:
 
 
 def ensure_linux_loadgen_built(log_path: Path, *, require_host_visibility: bool = True) -> Path:
-    loadgen_path = REPO_ROOT / LINUX_LOADGEN_BUILD_DIR / "stack_loadgen"
+    marker_path = REPO_ROOT / LINUX_LOADGEN_BUILD_DIR / LINUX_LOADGEN_PATH_MARKER
     run_command(
         [
             "docker",
@@ -206,15 +207,35 @@ def ensure_linux_loadgen_built(log_path: Path, *, require_host_visibility: bool 
             # Use a dedicated loadgen build tree so Phase 5 evidence capture does
             # not inherit an earlier `build-linux` cache that was configured from
             # a different container mount path.
-            f"rm -rf {LINUX_LOADGEN_BUILD_DIR} && "
-            f"cmake --preset linux-release -B {LINUX_LOADGEN_BUILD_DIR} "
-            "-DBUILD_SERVER_TESTS=OFF -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=OFF >/tmp/loadgen-configure.log && "
-            f"cmake --build {LINUX_LOADGEN_BUILD_DIR} --target stack_loadgen >/tmp/loadgen-build.log && "
-            f"test -x ./{LINUX_LOADGEN_BUILD_DIR}/stack_loadgen",
+            "set -euo pipefail; "
+            f"rm -rf {LINUX_LOADGEN_BUILD_DIR}; "
+            f"if ! cmake --preset linux-release -B {LINUX_LOADGEN_BUILD_DIR} "
+            "-DBUILD_SERVER_TESTS=OFF -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=OFF "
+            ">/tmp/loadgen-configure.log 2>&1; then cat /tmp/loadgen-configure.log; exit 1; fi; "
+            f"if ! cmake --build {LINUX_LOADGEN_BUILD_DIR} --target stack_loadgen "
+            ">/tmp/loadgen-build.log 2>&1; then cat /tmp/loadgen-build.log; exit 1; fi; "
+            f"loadgen_rel=$(find {LINUX_LOADGEN_BUILD_DIR} -maxdepth 3 -type f -name stack_loadgen | sort | head -n 1); "
+            "if [ -z \"$loadgen_rel\" ]; then "
+            "echo 'stack_loadgen executable not found after linux build'; "
+            f"find {LINUX_LOADGEN_BUILD_DIR} -maxdepth 3 -type f | sort; "
+            "exit 1; "
+            "fi; "
+            "if [ ! -x \"$loadgen_rel\" ]; then "
+            "echo \"linux stack_loadgen candidate is not executable: $loadgen_rel\"; "
+            "ls -l \"$loadgen_rel\"; "
+            "exit 1; "
+            "fi; "
+            f"printf '%s' \"$loadgen_rel\" > {LINUX_LOADGEN_BUILD_DIR}/{LINUX_LOADGEN_PATH_MARKER}",
         ],
         label="build:stack_loadgen_linux",
         log_path=log_path,
     )
+    if not marker_path.exists():
+        raise RuntimeError(f"linux stack_loadgen path marker not found after build: {marker_path}")
+    relative_path = marker_path.read_text(encoding="utf-8").strip()
+    if not relative_path:
+        raise RuntimeError(f"linux stack_loadgen path marker was empty after build: {marker_path}")
+    loadgen_path = REPO_ROOT / Path(relative_path)
     if require_host_visibility and not loadgen_path.exists():
         raise RuntimeError(f"linux stack_loadgen executable not found after build: {loadgen_path}")
     return loadgen_path
@@ -286,6 +307,7 @@ def run_loadgen_capture(
 
 
 def run_container_loadgen_capture(
+    loadgen_path: Path,
     scenario_path: Path,
     report_path: Path,
     log_path: Path,
@@ -297,6 +319,7 @@ def run_container_loadgen_capture(
 ) -> dict[str, object]:
     scenario_rel = scenario_path.relative_to(REPO_ROOT).as_posix()
     report_rel = report_path.relative_to(REPO_ROOT).as_posix()
+    loadgen_rel = loadgen_path.relative_to(REPO_ROOT).as_posix()
     command = [
         "docker",
         "run",
@@ -315,7 +338,7 @@ def run_container_loadgen_capture(
         "dynaxis-base:latest",
         "bash",
         "-lc",
-        f"./{LINUX_LOADGEN_BUILD_DIR}/stack_loadgen --host {host} --port {port}"
+        f"./{loadgen_rel} --host {host} --port {port}"
         + (f" --udp-port {udp_port}" if udp_port is not None else "")
         + f" --scenario {scenario_rel} --report {report_rel}",
         ]
@@ -358,6 +381,7 @@ def run_loadgen_group(
         if spec.get("containerized"):
             reports.append(
                 run_container_loadgen_capture(
+                    loadgen_path,
                     spec["scenario_path"],
                     spec["report_path"],
                     log_root / spec["log_name"],
