@@ -142,13 +142,23 @@ def main() -> int:
         choices=("phase3-acceptance", "matrix", "default-closure", "same-world-closure"),
         default="phase3-acceptance",
     )
+    parser.add_argument(
+        "--default-topology",
+        type=Path,
+        default=DEFAULT_TOPOLOGY,
+    )
+    parser.add_argument(
+        "--same-world-topology",
+        type=Path,
+        default=SAME_WORLD_TOPOLOGY,
+    )
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--stack-ready-timeout-sec", type=float, default=90.0)
     args = parser.parse_args()
 
     stage_map = {
         "default-closure": (
-            DEFAULT_TOPOLOGY,
+            args.default_topology,
             [
                 [str(ADMIN_API_SCRIPT)],
                 [str(ADMIN_AUTH_SCRIPT)],
@@ -160,7 +170,7 @@ def main() -> int:
             ],
         ),
         "same-world-closure": (
-            SAME_WORLD_TOPOLOGY,
+            args.same_world_topology,
             [
                 [str(CONTINUITY_SCRIPT), "--scenario", "world-owner-transfer-commit"],
                 [str(CONTINUITY_SCRIPT), "--scenario", "world-drain-transfer-closure"],

@@ -23,6 +23,7 @@ STABLE_HEADERS = {
     "server/core/realtime/direct_delivery.hpp",
     "server/core/realtime/transport_quality.hpp",
     "server/core/realtime/transport_policy.hpp",
+    "server/core/realtime/simulation_phase.hpp",
     "server/core/realtime/runtime.hpp",
     "server/core/discovery/instance_registry.hpp",
     "server/core/discovery/world_lifecycle_policy.hpp",
