@@ -189,7 +189,7 @@ def ensure_loadgen_built(log_path: Path) -> Path:
     return loadgen_path
 
 
-def ensure_linux_loadgen_built(log_path: Path) -> Path:
+def ensure_linux_loadgen_built(log_path: Path, *, require_host_visibility: bool = True) -> Path:
     loadgen_path = REPO_ROOT / LINUX_LOADGEN_BUILD_DIR / "stack_loadgen"
     run_command(
         [
@@ -209,12 +209,13 @@ def ensure_linux_loadgen_built(log_path: Path) -> Path:
             f"rm -rf {LINUX_LOADGEN_BUILD_DIR} && "
             f"cmake --preset linux-release -B {LINUX_LOADGEN_BUILD_DIR} "
             "-DBUILD_SERVER_TESTS=OFF -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=OFF >/tmp/loadgen-configure.log && "
-            f"cmake --build {LINUX_LOADGEN_BUILD_DIR} --target stack_loadgen >/tmp/loadgen-build.log",
+            f"cmake --build {LINUX_LOADGEN_BUILD_DIR} --target stack_loadgen >/tmp/loadgen-build.log && "
+            f"test -x ./{LINUX_LOADGEN_BUILD_DIR}/stack_loadgen",
         ],
         label="build:stack_loadgen_linux",
         log_path=log_path,
     )
-    if not loadgen_path.exists():
+    if require_host_visibility and not loadgen_path.exists():
         raise RuntimeError(f"linux stack_loadgen executable not found after build: {loadgen_path}")
     return loadgen_path
 
@@ -451,7 +452,10 @@ def main() -> int:
 
         if not args.skip_loadgen:
             if execution_mode in ("container", "hostnet-container"):
-                loadgen_path = ensure_linux_loadgen_built(loadgen_root / "build-stack-loadgen-linux.log")
+                loadgen_path = ensure_linux_loadgen_built(
+                    loadgen_root / "build-stack-loadgen-linux.log",
+                    require_host_visibility=False,
+                )
             else:
                 loadgen_path = ensure_loadgen_built(loadgen_root / "build-stack-loadgen.log")
             loadgen_report_root = REPO_ROOT / "build" / "loadgen"
