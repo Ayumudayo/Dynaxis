@@ -1,5 +1,7 @@
 # 구성 가이드
 
+인증 모드와 자격 발급은 [인증된 MSA 채팅 실행](ops/authenticated-chat.md)을 따른다. 독립 gateway/server는 기본 signed 모드에서 key 없이는 시작하지 않고, 로컬 Docker compose는 development 모드를 명시한다.
+
 Dynaxis 프로젝트는 실행 환경에서 주입되는 **환경 변수**를 사용해 구성 요소를 설정한다. `.env` 파일은 예시/편의 용도로만 제공되며, 실제 로딩은 Docker Compose의 `env_file`, Kubernetes ConfigMap/Secret, 시스템 서비스 설정 등을 통해 수행하는 것을 전제로 한다.
 
 ## 1. 구성 로딩 순서
@@ -256,6 +258,9 @@ Docker 스택 검증용 설정은 `docker/stack/haproxy/haproxy.cfg` 를 참고�
 - `.env`에 민감한 정보(DB 비밀번호 등)가 포함될 경우 운영 환경에서는 별도 비밀 관리(예: Azure Key Vault, AWS Secrets Manager)를 사용한다.
 
 ## 5. 참고 문서
+
+- `FPS_ENABLED`: 기본 `0`. `1` 또는 `true`일 때만 FPS sample의 route와 tick loop를 구성한다. MSA 채팅 기능에는 필요하지 않다.
+- `SOAK_MAX_ERROR_RATE`: 검증 스크립트의 요청 오류 허용 비율, 기본 `0`, 유효 범위 `0..1`. 서버 런타임 설정은 아니다.
 - 서버 구조 개요: `README.md`, `docs/core-design.md`, `docs/ops/gateway-and-lb.md`
 - Gateway & Load Balancer 운영: `docs/ops/gateway-and-lb.md`
 - 문서 진입점: `docs/README.md`

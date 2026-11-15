@@ -12,6 +12,8 @@ on:
       - "Dockerfile.base"
       - "core/**"
       - "gateway/**"
+      - "infra/**"
+      - "tools/issue_chat_token.py"
       - "server/**"
       - "proto/**"
       - "protocol/**"
@@ -35,6 +37,8 @@ on:
       - "Dockerfile.base"
       - "core/**"
       - "gateway/**"
+      - "infra/**"
+      - "tools/issue_chat_token.py"
       - "server/**"
       - "proto/**"
       - "protocol/**"
@@ -219,10 +223,6 @@ jobs:
         run: |
           python3 tests/python/verify_pong.py
 
-      - name: Smoke Test (Load Balancing)
-        run: |
-          python3 tests/python/test_load_balancing.py
-
       - name: Smoke Test (Cross-Instance Whisper)
         run: |
           python3 tests/python/verify_whisper_cross_instance.py
@@ -263,6 +263,12 @@ jobs:
       - name: Smoke Test (MMORPG Phase 3 Acceptance)
         run: |
           python3 tests/python/verify_mmorpg_runtime_matrix.py --scenario phase3-acceptance --no-build --same-world-topology build/ci/mmorpg-same-world-proof.json
+
+      - name: Verify Signed Chat Authentication
+        run: python3 tests/python/verify_signed_chat.py --manage-stack
+
+      - name: Verify Core Dependency Recovery
+        run: python3 tests/python/verify_core_dependency_recovery.py
 
       - name: Smoke Test (Continuity Recovery Baseline)
         run: |

@@ -8,6 +8,7 @@ GTest unit tests + small Python integration checks.
   - `core_general_tests`, `core_concurrency_tests`
   - `server_general_tests`, `server_state_tests`
   - `chat_history_tests`, `storage_basic_tests`
+  - `admin_http_client_tests` (`tests/admin/`, admin HTTP probe 실패 경계)
 
 Build (recommended on Windows):
 ```powershell
@@ -23,9 +24,10 @@ ctest --preset windows-test
 Note: `ctest` does not rebuild binaries. If a test executable fails to start with an error like "entry point not found" (often after vcpkg updates or branch switches), rebuild the affected test target(s) or do a clean rebuild of `build-windows/`.
 
 ## Python
+- `tests/python/verify_signed_chat.py --manage-stack`: signed identity, direct-backend rejection, cross-node delivery and resume binding; restores original deployment environment.
+- `tests/python/verify_core_dependency_recovery.py`: real Postgres/Redis outages and readiness/persistence/fanout recovery without app restart (local development stack only).
 - `tests/python/verify_chat.py`
 - `tests/python/verify_pong.py`
-- `tests/python/test_load_balancing.py`
 - `tests/python/verify_whisper_cross_instance.py`
 - `tests/python/verify_admin_api.py`
 - `tests/python/verify_admin_auth.py`

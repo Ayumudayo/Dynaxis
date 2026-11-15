@@ -54,6 +54,17 @@ private:
 
 } // namespace
 
+TEST(ServerConfigTest, FpsSampleRequiresExplicitEnablement) {
+    for (const char* value : {static_cast<const char*>(nullptr), "0", "1", "true"}) {
+        ScopedEnvVar enabled("FPS_ENABLED", value);
+        server::app::ServerConfig config;
+        char app_name[] = "server_app";
+        char* args[] = {app_name};
+        ASSERT_TRUE(config.load(1, args));
+        EXPECT_EQ(config.fps_enabled, value && (std::string(value) == "1" || std::string(value) == "true"));
+    }
+}
+
 TEST(ServerConfigTest, LuaDefaultsAppliedWhenEnvironmentIsUnset) {
     ScopedEnvVar enabled("LUA_ENABLED", nullptr);
     ScopedEnvVar scripts_dir("LUA_SCRIPTS_DIR", nullptr);

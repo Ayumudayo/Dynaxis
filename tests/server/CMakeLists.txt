@@ -1,4 +1,8 @@
 if (BUILD_GTEST_TESTS)
+    add_executable(chat_auth_tests test_session_token.cpp)
+    target_include_directories(chat_auth_tests PRIVATE ${CMAKE_SOURCE_DIR}/gateway/include ${CMAKE_SOURCE_DIR}/gateway/src)
+    target_link_libraries(chat_auth_tests PRIVATE chat_auth GTest::gtest_main nlohmann_json::nlohmann_json)
+    discover_labeled_gtests(chat_auth_tests "server;authentication")
     add_executable(chat_history_tests
         ../chat_history_tests.cpp
     )
@@ -14,6 +18,8 @@ if (BUILD_GTEST_TESTS)
     add_executable(server_general_tests
         test_server_chat.cpp
         test_server_config.cpp
+        test_server_routes.cpp
+        ${CMAKE_SOURCE_DIR}/server/src/app/router.cpp
         test_chat_lua_bindings.cpp
         test_lua_hook_integration.cpp
         test_hook_auto_disable.cpp
@@ -25,6 +31,7 @@ if (BUILD_GTEST_TESTS)
         GTest::gtest_main
         server_app_config
         server_chat_runtime
+        server_fps_runtime
         server_core
         ${CMAKE_DL_LIBS}
     )

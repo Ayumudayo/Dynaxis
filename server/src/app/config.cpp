@@ -235,6 +235,9 @@ bool ServerConfig::load(int argc, char** argv) {
     }
 
     // 8. FPS runtime 설정
+    if (const char* val = std::getenv("FPS_ENABLED"); val && *val) {
+        fps_enabled = std::strcmp(val, "1") == 0 || std::strcmp(val, "true") == 0;
+    }
     if (const char* val = std::getenv("FPS_TICK_RATE_HZ"); val && *val) {
         const auto parsed = std::strtoul(val, nullptr, 10);
         if (parsed > 0 && parsed <= 240) {

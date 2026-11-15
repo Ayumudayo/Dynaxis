@@ -1,6 +1,8 @@
 #pragma once
 
 #include "server/chat/chat_service.hpp"
+#include "server/core/concurrent/task_scheduler.hpp"
+#include "server/auth/session_token.hpp"
 
 #include <chrono>
 #include <atomic>
@@ -123,6 +125,10 @@ struct ChatServiceRuntimeState {
     std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool{};
     std::shared_ptr<server::core::storage::redis::IRedisClient> redis{};
     std::shared_ptr<server::core::scripting::LuaRuntime> lua_runtime{};
+    std::shared_ptr<server::core::concurrent::TaskScheduler> scheduler;
+    server::core::concurrent::TaskScheduler::ScheduleHandle reload_task;
+    std::shared_ptr<int> callback_lifetime{std::make_shared<int>(0)};
+    server::auth::Config auth;
     std::string gateway_id{"gw-default"};
     bool redis_pubsub_enabled{false};
     std::unordered_set<std::string> admin_users{};

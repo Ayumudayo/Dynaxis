@@ -47,6 +47,8 @@
   - 관측성 설정과 대시보드
 - `docs/ops/gateway-and-lb.md`
   - gateway와 load balancer 운영
+- `docs/ops/authenticated-chat.md`
+  - 서명 인증, 신원과 재접속 자격, 핵심 장애·복구 검증
 - `docs/ops/runbook.md`
   - 운영 체크리스트와 장애 대응
 - `docs/ops/architecture-diagrams.md`

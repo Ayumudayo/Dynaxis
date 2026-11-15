@@ -4,7 +4,7 @@
 #include "chat_service_state.hpp"
 #include "server/app/topology_runtime_assignment.hpp"
 #include "server/protocol/game_opcodes.hpp"
-#include "server/core/config/runtime_settings.hpp"
+#include "server/config/runtime_settings.hpp"
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/runtime_metrics.hpp"
@@ -171,24 +171,22 @@ std::optional<std::string> extract_world_tag(std::string_view value) {
 // 이후 핸들러는 "무엇이 켜져 있는가"를 매번 다시 해석하지 않고 공용 상태만 보면 된다.
 ChatService::ChatService(boost::asio::io_context& io,
                          server::core::JobQueue& job_queue,
-    std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool,
-    std::shared_ptr<server::core::storage::redis::IRedisClient> redis)
-    : impl_(std::make_unique<Impl>())
-    , io_(&io)
-    , job_queue_(job_queue) {
-    impl_->runtime.db_pool = std::move(db_pool);
-    impl_->runtime.redis = std::move(redis);
+                         std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool,
+                         std::shared_ptr<server::core::storage::redis::IRedisClient> redis)
+    : ChatService(io, job_queue, Dependencies{
+        db_pool ? std::move(db_pool) : services::get<server::storage::IRepositoryConnectionPool>(),
+        redis ? std::move(redis) : services::get<server::core::storage::redis::IRedisClient>(),
+        services::get<server::core::scripting::LuaRuntime>(), services::get<ChatStrand>(),
+        services::get<server::core::concurrent::TaskScheduler>(), {}}) {}
 
-    // 명시 주입이 없으면 레지스트리 폴백(fallback)을 사용한다.
-    // 부트스트랩은 간단해지지만, 어떤 의존성이 빠졌는지 추적 가능한 seam은 유지한다.
-    if (!impl_->runtime.db_pool) {
-        impl_->runtime.db_pool = services::get<server::storage::IRepositoryConnectionPool>();
-    }
-    if (!impl_->runtime.redis) {
-        impl_->runtime.redis = services::get<server::core::storage::redis::IRedisClient>();
-    }
-    impl_->runtime.lua_runtime = services::get<server::core::scripting::LuaRuntime>();
-    impl_->dispatch.lua_execution_strand = services::get<ChatStrand>();
+ChatService::ChatService(boost::asio::io_context& io, server::core::JobQueue& job_queue, Dependencies dependencies)
+    : impl_(std::make_unique<Impl>()), io_(&io), job_queue_(job_queue) {
+    impl_->runtime.db_pool = std::move(dependencies.db_pool);
+    impl_->runtime.redis = std::move(dependencies.redis);
+    impl_->runtime.lua_runtime = std::move(dependencies.lua);
+    impl_->dispatch.lua_execution_strand = std::move(dependencies.lua_strand);
+    impl_->runtime.scheduler = std::move(dependencies.scheduler);
+    impl_->runtime.auth = {dependencies.require_auth, std::move(dependencies.auth_signing_secret)};
     if (!impl_->dispatch.lua_execution_strand && impl_->runtime.lua_runtime && io_) {
         impl_->dispatch.lua_execution_strand = std::make_shared<ChatStrand>(boost::asio::make_strand(*io_));
     }
@@ -505,14 +503,17 @@ ChatService::ChatService(boost::asio::io_context& io,
                 interval_ms = std::strtoul(interval, nullptr, 10);
             }
             if (interval_ms > 0) {
-                if (auto scheduler = services::get<server::core::concurrent::TaskScheduler>()) {
+                if (auto scheduler = impl_->runtime.scheduler) {
                     server::core::concurrent::TaskScheduler::RepeatPolicy policy{};
                     policy.interval = std::chrono::milliseconds{static_cast<long long>(interval_ms)};
-                    (void)scheduler->schedule_every_controlled([this](const server::core::concurrent::TaskScheduler::RepeatContext&) {
+                    std::weak_ptr<int> alive = impl_->runtime.callback_lifetime;
+                    impl_->runtime.reload_task = scheduler->schedule_every_controlled([this, alive](const server::core::concurrent::TaskScheduler::RepeatContext&) {
+                        if (alive.expired()) { return server::core::concurrent::TaskScheduler::RepeatDecision::kStop; }
                         if (!impl_->runtime.hook_plugin) {
                             return server::core::concurrent::TaskScheduler::RepeatDecision::kStop;
                         }
-                        (void)job_queue_.TryPush([this]() {
+                        (void)job_queue_.TryPush([this, alive]() {
+                            if (alive.expired()) { return; }
                             if (impl_->runtime.hook_plugin) {
                                 impl_->runtime.hook_plugin->chain.poll_reload();
                             }
@@ -525,7 +526,12 @@ ChatService::ChatService(boost::asio::io_context& io,
     }
 }
 
-ChatService::~ChatService() = default;
+ChatService::~ChatService() {
+    impl_->runtime.callback_lifetime.reset();
+    if (impl_->runtime.scheduler && impl_->runtime.reload_task) {
+        impl_->runtime.scheduler->cancel(impl_->runtime.reload_task.cancel_token);
+    }
+}
 
 ChatHookPluginsMetrics ChatService::chat_hook_plugins_metrics() const {
     ChatHookPluginsMetrics out{};
@@ -2493,14 +2499,14 @@ void ChatService::admin_apply_runtime_setting(const std::string& key, const std:
             return;
         }
 
-        const auto* setting_rule = server::core::config::find_runtime_setting_rule(normalized_key);
+        const auto* setting_rule = server::config::find_runtime_setting_rule(normalized_key);
         if (setting_rule == nullptr) {
             finalize_failure("unsupported_key", normalized_key);
             return;
         }
 
         std::uint32_t min_allowed = setting_rule->min_value;
-        if (setting_rule->key_id == server::core::config::RuntimeSettingKey::kRoomRecentMaxlen) {
+        if (setting_rule->key_id == server::config::RuntimeSettingKey::kRoomRecentMaxlen) {
             min_allowed = std::max(min_allowed, static_cast<std::uint32_t>(impl_->history.recent_limit));
         }
 
@@ -2510,31 +2516,31 @@ void ChatService::admin_apply_runtime_setting(const std::string& key, const std:
         }
 
         switch (setting_rule->key_id) {
-        case server::core::config::RuntimeSettingKey::kPresenceTtlSec:
+        case server::config::RuntimeSettingKey::kPresenceTtlSec:
             impl_->presence.ttl = *parsed;
             break;
-        case server::core::config::RuntimeSettingKey::kRecentHistoryLimit:
+        case server::config::RuntimeSettingKey::kRecentHistoryLimit:
             impl_->history.recent_limit = static_cast<std::size_t>(*parsed);
             if (impl_->history.max_list_len < impl_->history.recent_limit) {
                 impl_->history.max_list_len = impl_->history.recent_limit;
             }
             break;
-        case server::core::config::RuntimeSettingKey::kRoomRecentMaxlen:
+        case server::config::RuntimeSettingKey::kRoomRecentMaxlen:
             impl_->history.max_list_len = static_cast<std::size_t>(*parsed);
             break;
-        case server::core::config::RuntimeSettingKey::kChatSpamThreshold:
+        case server::config::RuntimeSettingKey::kChatSpamThreshold:
             impl_->runtime.spam_message_threshold = static_cast<std::size_t>(*parsed);
             break;
-        case server::core::config::RuntimeSettingKey::kChatSpamWindowSec:
+        case server::config::RuntimeSettingKey::kChatSpamWindowSec:
             impl_->runtime.spam_window_sec = *parsed;
             break;
-        case server::core::config::RuntimeSettingKey::kChatSpamMuteSec:
+        case server::config::RuntimeSettingKey::kChatSpamMuteSec:
             impl_->runtime.spam_mute_sec = *parsed;
             break;
-        case server::core::config::RuntimeSettingKey::kChatSpamBanSec:
+        case server::config::RuntimeSettingKey::kChatSpamBanSec:
             impl_->runtime.spam_ban_sec = *parsed;
             break;
-        case server::core::config::RuntimeSettingKey::kChatSpamBanViolations:
+        case server::config::RuntimeSettingKey::kChatSpamBanViolations:
             impl_->runtime.spam_ban_violation_threshold = *parsed;
             break;
         }

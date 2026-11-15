@@ -214,6 +214,8 @@ void GuiManager::render_login_modal() {
         ImGui::InputText("Host", state_.host_buffer, sizeof(state_.host_buffer));
         ImGui::InputInt("Port", &state_.port);
         ImGui::InputText("Username", state_.username_buffer, sizeof(state_.username_buffer));
+        ImGui::InputText("Access token", state_.access_token_buffer, sizeof(state_.access_token_buffer), ImGuiInputTextFlags_Password);
+        ImGui::Checkbox("Resume previous session", &state_.resume_session);
         ImGui::Separator();
 
         if (ImGui::Button("Connect", ImVec2(120, 0))) {
@@ -221,7 +223,7 @@ void GuiManager::render_login_modal() {
                 // 연결 시도 성공 시 모달 닫기
                 ImGui::CloseCurrentPopup();
                 // 로그인 요청 전송
-                app_.login(state_.username_buffer);
+                app_.login(state_.username_buffer, state_.access_token_buffer, state_.resume_session);
             } else {
                 // 연결 실패 시 로그는 ClientApp 콜백에서 처리되지만, 여기서도 간단히 알림 가능
                 // 현재는 ClientApp에 의존

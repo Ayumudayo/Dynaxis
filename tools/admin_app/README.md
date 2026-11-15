@@ -4,6 +4,8 @@
 
 현재 구현된 API, 권한, 운영 표면의 기준 문서는 이 README다.
 
+전체 서비스 catalog와 운영 작업 통합은 [관리 도구 설계안](../../docs/architecture/service-control-plane.md)을 따른다. 제안 API는 아직 제공하지 않는다. 현재 HTTP 관측 조회는 `http_client.{hpp,cpp}`에서 단일 deadline 1.5초, 헤더 16KiB, decoding 후 본문 1MiB로 제한한다. 느리거나 상한을 넘는 응답은 조회 실패로 처리한다.
+
 이 프로세스를 별도로 두는 이유는 중요하다. 운영 읽기와 쓰기 액션을 `server_app` 본체 안에 섞어 두면, 제어면 문제와 데이터면(data plane) 문제를 분리하기 어렵다. `admin_app`을 따로 두면 다음이 쉬워진다.
 
 - 운영 조회를 본체 트래픽과 분리한다

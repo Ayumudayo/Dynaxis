@@ -34,4 +34,5 @@ target_link_libraries(gateway_app PRIVATE
     gateway_backends
     gateway_session_directory
     server_core
+    chat_auth
 )

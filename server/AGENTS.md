@@ -18,7 +18,7 @@ Chat logic node. Owns room/user state, storage access, and Redis instance regist
 - `server/src/app/metrics_server.cpp`: Prometheus `/metrics` endpoint (port via `METRICS_PORT`).
 
 ## Flow
-- Bootstrap: `server::app::run_server()` loads `ServerConfig`, installs crash handler, and wires DI via `ServiceRegistry`.
+- Bootstrap: `server::app::run_server()` loads `ServerConfig`, installs crash handler, and wires explicit dependencies through instance context and `ChatService::Dependencies`.
 - Core runtime: `asio::io_context`, `JobQueue`, `ThreadManager`, `BufferManager`, `Dispatcher`, `SessionOptions`, `ConnectionRuntimeState`.
 - Storage:
   - Postgres pool: `server::storage::postgres::make_connection_pool()` + periodic health checks.

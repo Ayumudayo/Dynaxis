@@ -95,3 +95,41 @@ TEST(ThreadManagerTests, StopIsIdempotent) {
     manager.Stop();
     SUCCEED();
 }
+
+TEST(ThreadManagerTests, StopDrainsAlreadyAcceptedJobs) {
+    JobQueue queue;
+    ThreadManager manager(queue);
+    std::atomic<int> completed{0};
+    for (int i = 0; i < 100; ++i) { queue.Push([&] { ++completed; }); }
+    manager.Start(2);
+    manager.Stop();
+    EXPECT_EQ(completed.load(), 100);
+    EXPECT_FALSE(queue.TryPush([] {}));
+}
+
+TEST(ThreadManagerTests, ThrowingJobsDoNotKillWorkerOrLoseFollowingWork) {
+    JobQueue queue;
+    ThreadManager manager(queue);
+    std::atomic<int> completed{0};
+    queue.Push([] { throw std::runtime_error("job failure"); });
+    queue.Push([] { throw 7; });
+    queue.Push([&] { ++completed; });
+    manager.Start(1);
+    manager.Stop();
+    EXPECT_EQ(completed.load(), 1);
+}
+
+TEST(ThreadManagerTests, SelfStopIsRejectedBeforeChangingLifecycle) {
+    JobQueue queue;
+    ThreadManager manager(queue);
+    std::atomic<bool> rejected{false};
+    std::atomic<bool> following{false};
+    queue.Push([&] {
+        try { manager.Stop(); } catch (const std::logic_error&) { rejected = true; }
+    });
+    queue.Push([&] { following = true; });
+    manager.Start(1);
+    manager.Stop();
+    EXPECT_TRUE(rejected.load());
+    EXPECT_TRUE(following.load());
+}

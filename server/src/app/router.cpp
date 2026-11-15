@@ -24,7 +24,7 @@ namespace server::app {
 // 세부 비즈니스 규칙까지 이 파일로 끌어오면 opcode 표가 곧 서비스 구현이 되어 버려 유지보수가 급격히 나빠진다.
 void register_routes(server::core::Dispatcher& dispatcher,
                      server::app::chat::ChatService& chat,
-                     server::app::fps::FpsService& fps) {
+                     server::app::fps::FpsService* fps) {
     using NetSession = server::app::chat::ChatService::NetSession;
     using server::core::protocol::TransportMask;
     using server::core::protocol::MSG_PING;
@@ -87,8 +87,10 @@ void register_routes(server::core::Dispatcher& dispatcher,
     register_game(MSG_REFRESH_REQ,
         [&chat](NetSession& s, std::span<const std::uint8_t> payload) { chat.on_refresh_request(s, payload); });
 
-    register_game(MSG_FPS_INPUT,
-        [&fps](NetSession& s, std::span<const std::uint8_t> payload) { fps.on_input(s, payload); });
+    if (fps) {
+        register_game(MSG_FPS_INPUT,
+            [fps](NetSession& s, std::span<const std::uint8_t> payload) { fps->on_input(s, payload); });
+    }
 }
 
 } // namespace server::app

@@ -28,7 +28,9 @@ cmake --build build-windows-client --config Release --target client_gui
 ### 1. 연결 및 로그인
 앱 실행 시 **로그인 모달**이 나타납니다.
 -   **Host**: 서버 주소 (기본값: `127.0.0.1`)
--   **Port**: 서버 포트 (기본값: `36000` - 게이트웨이 포트)
+-   **Port**: 서버 포트 (기본값: `6000` - 로컬 Docker 스택의 HAProxy 진입점)
+-   **Access token**: signed 모드의 발급 자격. 개발 모드에서는 비워 둔다. [인증 계약](../docs/ops/authenticated-chat.md)을 따른다.
+-   **Resume previous session**: 마지막 로그인에서 받은 재접속 자격으로 상태 복원을 요청한다.
 -   **Username**: 사용할 닉네임
 
 ### 2. 채팅 및 명령어

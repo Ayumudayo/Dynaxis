@@ -1,5 +1,7 @@
 # 코어 라이브러리(server_core)
 
+필수 runtime와 MSA 선택 기능의 빌드 경계는 [core/MSA 계층 문서](../docs/architecture/core-and-msa.md)를 따른다. 기본 전체 구성은 기존 공개 API를 유지하며, `BUILD_CORE_EXTENSIONS=OFF`인 core-engine 프리셋은 Boost 기반 runtime만 빌드·설치한다. 최소 구성에서도 TCP/설치 소비자 검증을 실행한다.
+
 `core`는 Dynaxis의 공용 실행 플랫폼이다. `server_app`, `gateway_app`, 각종 tools가 공통으로 써야 하는 runtime host, transport substrate, bounded execution primitive, observability substrate, 그리고 domain-neutral contract를 모아 둔 C++20 라이브러리다.
 
 ## 읽기 순서

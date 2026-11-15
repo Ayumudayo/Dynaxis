@@ -24,7 +24,7 @@ gateway/
 - Boost.Asio Hive 위에서 다수의 TCP 세션을 처리합니다.
 - 각 클라이언트 세션은 backend(`server_app`) 연결(`BackendConnection`)과 1:1로 매칭되어 payload를 중계합니다.
 - 브리지 경로(client -> backend)는 raw-byte enqueue 경로를 사용해 불필요한 임시 `std::vector<std::uint8_t>` 생성을 줄였습니다.
-- 인증은 `auth::IAuthenticator` 를 구현해 확장할 수 있습니다 (`ALLOW_ANONYMOUS`, `AUTH_PROVIDER`, `AUTH_ENDPOINT`).
+- 인증 연동 경계는 `auth::IAuthenticator`입니다. 독립 실행 기본 signed 모드는 credential을 검증하고, 명시적 development 모드에서만 `NoopAuthenticator`를 사용합니다. `ALLOW_ANONYMOUS=0`은 서명 검증을 대신하지 않습니다.
 - Redis SessionDirectory(`gateway/session/<client_id>`)로 sticky routing을 수행하고, Redis Instance Registry의 `active_sessions`를 기준으로 least-connections 방식으로 backend를 선택합니다.
 - ingress rate limit, active session 상한, circuit breaker, retry budget을 통해 과부하와 downstream 장애를 앞단에서 감쇠합니다.
 - exact backend sticky binding이 사라진 경우를 대비해 resume locator hint로 continuity fallback 범위를 좁힙니다.
@@ -35,19 +35,9 @@ gateway/
 - 현재 방식은 "이미 유효한 바인딩은 재사용(Sticky)"하고, 바인딩이 없거나 만료된 경우에만 "가장 한가한 서버 선택(Least Connections)"을 적용해
   사용자 경험과 분산 효율을 동시에 맞춥니다.
 
-### 인증(Auth) 확장 예시
-```cpp
-class TokenAuthenticator : public gateway::auth::IAuthenticator {
- public:
-  gateway::auth::AuthResult authenticate(const AuthRequest& req) override {
-    if (req.token == "secret") {
-      return {true, req.client_id.empty() ? "token-user" : req.client_id, {}};
-    }
-    return {false, {}, "invalid token"};
-  }
-};
-```
-`gateway_app` 초기화 시 `set_authenticator(std::make_shared<TokenAuthenticator>())` 로 주입합니다.
+### 인증
+
+독립 gateway/server의 기본 모드는 `CHAT_AUTH_MODE=signed`다. 32..4096 byte의 `CHAT_AUTH_SIGNING_SECRET`이 없으면 시작을 거절한다. gateway와 server가 각각 credential을 검증하고 검증된 subject를 identity로 사용한다. 로컬 Docker compose는 기존 시나리오를 위해 `development`를 명시한다. 자세한 발급/재접속 계약은 [인증된 MSA 채팅 실행](../docs/ops/authenticated-chat.md)을 따른다.
 
 ## 환경 변수
 | 이름 | 설명 | 기본값 |
@@ -83,7 +73,6 @@ class TokenAuthenticator : public gateway::auth::IAuthenticator {
 | `GATEWAY_RUDP_CANARY_PERCENT` | 신규 세션 RUDP canary 비율(0~100) | `0` |
 | `GATEWAY_RUDP_OPCODE_ALLOWLIST` | RUDP 허용 opcode CSV(빈 값이면 비활성) | (empty) |
 | `ALLOW_ANONYMOUS` | 익명 로그인 허용(1/0), `0`이면 토큰 없는/anonymous 로그인 거부 | `1` |
-| `AUTH_PROVIDER` / `AUTH_ENDPOINT` | 외부 인증 연동(옵션) | 빈 값 |
 
 주요 gateway 메트릭:
 - `gateway_sessions_active`, `gateway_connections_total`

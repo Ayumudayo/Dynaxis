@@ -276,6 +276,10 @@ void NetClient::handle_packet(const proto::PacketHeader& hh, std::span<const std
     if (hh.msg_id == game_proto::MSG_LOGIN_RES) {
         server::wire::v1::LoginRes pb;
         if (server::wire::codec::Decode(in.data(), in.size(), pb)) {
+            if (on_session_info_) {
+                on_session_info_({pb.principal_id(), pb.auth_session_id(), pb.display_name(),
+                    pb.logical_session_id(), pb.resume_token(), pb.world_id(), pb.resume_expires_unix_ms(), pb.resumed()});
+            }
             if (on_login_) on_login_(pb.effective_user(), pb.session_id(), pb.is_admin());
         } else {
             // Protobuf 디코딩 실패 시 레거시 포맷 파싱 시도 (하위 호환성)

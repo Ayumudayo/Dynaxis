@@ -17,6 +17,7 @@
 enum class SessionEventKindV2 : std::uint32_t;
 
 namespace server::core { class JobQueue; }
+namespace server::core::concurrent { class TaskScheduler; }
 namespace server::core::scripting {
 class LuaRuntime;
 struct LuaHookContext;
@@ -57,6 +58,25 @@ struct ChatServicePrivateAccess;
 class ChatService : private server::app::scripting::ChatLuaHost {
 public:
     using NetSession = server::core::net::Session;
+
+    /** @brief 실제 앱은 명시적 의존성으로 구성하며 null을 전역 Registry로 대체하지 않습니다. */
+    struct Dependencies {
+        std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool;
+        std::shared_ptr<server::core::storage::redis::IRedisClient> redis;
+        std::shared_ptr<server::core::scripting::LuaRuntime> lua;
+        std::shared_ptr<boost::asio::strand<boost::asio::io_context::executor_type>> lua_strand;
+        std::shared_ptr<server::core::concurrent::TaskScheduler> scheduler;
+        bool require_auth{false};
+        std::string auth_signing_secret;
+    };
+
+    /**
+     * @brief 의존성을 명시해 다른 runtime의 전역 서비스와 격리합니다. 종료 전 worker를 drain해야 합니다.
+     * @param io 앱 I/O 실행 문맥
+     * @param job_queue 이 서비스의 작업 큐
+     * @param dependencies 명시적 의존성과 인증 설정
+     */
+    ChatService(boost::asio::io_context& io, server::core::JobQueue& job_queue, Dependencies dependencies);
 
     /**
      * @brief 채팅 서비스가 의존하는 런타임 자원을 묶어 초기화합니다.

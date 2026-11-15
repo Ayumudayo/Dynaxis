@@ -353,7 +353,7 @@ int main() {
     auto pooled = buffers.Acquire();
     (void)pooled;
 
-    server::core::net::TransportRouter transport_router;
+    server::core::net::TransportRouter transport_router(nullptr);
     auto transport_session = std::make_shared<PublicCompileTransportSession>();
     transport_router.register_handler(
         server::core::protocol::MSG_PING,

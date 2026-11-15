@@ -79,15 +79,19 @@
       "name": "windows-core-engine",
       "inherits": "windows-base",
       "displayName": "Windows Core Engine (VS2022)",
-      "description": "Standalone server_core-only profile (no server/gateway/tools/tests)",
+      "description": "Minimal runtime and independent tests; no MSA apps, GUI or extension dependencies",
       "binaryDir": "${sourceDir}/build-windows-core-engine",
       "toolchainFile": "${sourceDir}/build-windows-core-engine/conan/build/generators/conan_toolchain.cmake",
       "cacheVariables": {
+        "BUILD_CORE_EXTENSIONS": "OFF",
+        "BUILD_CLIENT_GUI": "OFF",
         "BUILD_SERVER_STACK": "OFF",
         "BUILD_GATEWAY_APP": "OFF",
-        "BUILD_SERVER_TESTS": "OFF",
+        "BUILD_SERVER_TESTS": "ON",
         "BUILD_WRITE_BEHIND_TOOLS": "OFF",
-        "BUILD_ADMIN_APP": "OFF"
+        "BUILD_LOADGEN_TOOLS": "OFF",
+        "BUILD_ADMIN_APP": "OFF",
+        "BUILD_MIGRATIONS_RUNNER": "OFF"
       }
     },
     {
@@ -103,7 +107,8 @@
         "BUILD_SERVER_TESTS": "OFF",
         "BUILD_WRITE_BEHIND_TOOLS": "OFF",
         "BUILD_ADMIN_APP": "OFF",
-        "BUILD_MIGRATIONS_RUNNER": "OFF"
+        "BUILD_MIGRATIONS_RUNNER": "OFF",
+        "BUILD_LOADGEN_TOOLS": "OFF"
       }
     },
     {
@@ -191,7 +196,8 @@
         "BUILD_SERVER_TESTS": "OFF",
         "BUILD_WRITE_BEHIND_TOOLS": "OFF",
         "BUILD_ADMIN_APP": "OFF",
-        "BUILD_MIGRATIONS_RUNNER": "OFF"
+        "BUILD_MIGRATIONS_RUNNER": "OFF",
+        "BUILD_LOADGEN_TOOLS": "OFF"
       }
     },
     {
@@ -231,6 +237,22 @@
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO": "Release",
         "CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL": "Release"
+      }
+    },
+    {
+      "name": "linux-core-engine",
+      "inherits": "linux-base",
+      "binaryDir": "${sourceDir}/build-linux-core-engine",
+      "cacheVariables": {
+        "BUILD_CORE_EXTENSIONS": "OFF",
+        "BUILD_CLIENT_GUI": "OFF",
+        "BUILD_SERVER_STACK": "OFF",
+        "BUILD_GATEWAY_APP": "OFF",
+        "BUILD_SERVER_TESTS": "ON",
+        "BUILD_WRITE_BEHIND_TOOLS": "OFF",
+        "BUILD_LOADGEN_TOOLS": "OFF",
+        "BUILD_ADMIN_APP": "OFF",
+        "BUILD_MIGRATIONS_RUNNER": "OFF"
       }
     }
   ],
@@ -324,6 +346,10 @@
       "configurePreset": "linux-conan-release",
       "configuration": "Release",
       "displayName": "Linux Conan2 Release"
+    },
+    {
+      "name": "linux-core-engine-debug",
+      "configurePreset": "linux-core-engine"
     }
   ],
   "testPresets": [
@@ -378,6 +404,29 @@
       },
       "output": {
         "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-core-engine-test",
+      "configurePreset": "windows-core-engine",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      },
+      "configuration": "Debug"
+    },
+    {
+      "name": "linux-core-engine-test",
+      "configurePreset": "linux-core-engine",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
       }
     }
   ]

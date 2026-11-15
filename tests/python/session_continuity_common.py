@@ -67,6 +67,7 @@ def parse_login_res(payload: bytes) -> dict:
         "resume_expires_unix_ms": 0,
         "resumed": False,
         "world_id": "",
+        "principal_id": "", "auth_session_id": "", "display_name": "",
     }
     offset = 0
     while offset < len(payload):
@@ -74,7 +75,7 @@ def parse_login_res(payload: bytes) -> dict:
         field_number = tag >> 3
         wire_type = tag & 0x07
 
-        if wire_type == 2 and field_number in {1, 3, 5, 6, 9}:
+        if wire_type == 2 and field_number in {1, 3, 5, 6, 9, 10, 11, 12}:
             length, offset = read_varint(payload, offset)
             raw = payload[offset:offset + length]
             offset += length
@@ -87,6 +88,8 @@ def parse_login_res(payload: bytes) -> dict:
                 result["logical_session_id"] = value
             elif field_number == 6:
                 result["resume_token"] = value
+            elif field_number in {10, 11, 12}:
+                result[{10: "principal_id", 11: "auth_session_id", 12: "display_name"}[field_number]] = value
             elif field_number == 9:
                 result["world_id"] = value
             continue
@@ -238,3 +241,7 @@ class ChatClient:
             message_len = int.from_bytes(payload[2:4], byteorder="big", signed=False)
             message = payload[4:4 + message_len].decode("utf-8")
             return code, message
+
+
+def safe_login_summary(login: dict) -> dict:
+    return {key: value for key, value in login.items() if key != "resume_token"}

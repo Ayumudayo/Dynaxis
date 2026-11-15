@@ -29,6 +29,7 @@ struct AppData {
     bool is_connected = false;
     bool is_logged_in = false;
     bool is_admin = false;
+    NetClient::SessionInfo session_info;
     
     std::string current_room = "lobby";
     std::vector<std::string> user_list;
@@ -118,7 +119,7 @@ public:
     void disconnect();
 
     // 로그인
-    void login(const std::string& username);
+    void login(const std::string& username, const std::string& access_token = {}, bool resume = false);
 
     // 채팅 메시지 또는 명령어 처리
     // 예: "/join room" 또는 "hello world"

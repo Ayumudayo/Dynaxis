@@ -844,7 +844,7 @@ int main() {
     server::core::BufferManager buffers(128, 2);
     (void)buffers.Acquire();
 
-    server::core::net::TransportRouter transport_router;
+    server::core::net::TransportRouter transport_router(nullptr);
     auto transport_session = std::make_shared<InstalledConsumerTransportSession>();
     bool transport_handler_called = false;
     transport_router.register_handler(

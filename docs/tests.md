@@ -1,5 +1,13 @@
 # 테스트 가이드
 
+## 최소 core와 MSA 검증
+
+`ctest --preset windows-core-engine-test` 또는 `ctest --preset linux-core-engine-test`는 server/gateway와 독립된 runtime 테스트를 실행한다. `CoreRuntimeSmoke`는 실제 TCP echo와 종료를, `CoreRuntimeInstalledConsumer`는 최소 package 설치 후 같은 실행을 검증한다. `BUILD_GTEST_TESTS=OFF`에서도 두 계약 검증은 유지된다.
+
+전체 MSA는 기존 Windows/stack 검증 경로를 유지한다. suite를 선택할 때는 `--no-tests=error`를 사용한다. GTest 라벨은 discovery 이후 test list에 부착하므로 `core-behavior`, `server-behavior`, `shared-state`, `extensibility` 등 복수 라벨을 함께 선택할 수 있다.
+
+`verify_soak_perf_gate.py`의 기본 요청 오류 허용 비율은 0이다. 장애 실험에서 오류를 허용할 경우 `SOAK_MAX_ERROR_RATE`에 0..1 값을 명시한다. 이 검사는 connect/HELLO 부하 gate이며 장시간 안정성 전체를 증명하지 않는다.
+
 이 문서는 Dynaxis 저장소의 현재 검증 진입점이다.
 세부 시나리오 카탈로그는 각 도구 문서가 기준 문서를 가진다. 특히 loadgen transport proof 형태는 `tools/loadgen/README.md`를 따른다.
 
@@ -10,6 +18,7 @@
 - core targets: `tests/core/CMakeLists.txt`
 - gateway targets: `tests/gateway/CMakeLists.txt`
 - server targets: `tests/server/CMakeLists.txt`
+- admin targets: `tests/admin/CMakeLists.txt` (`BUILD_ADMIN_APP=ON`, `BUILD_GTEST_TESTS=ON`)
 - contract/policy lanes: `tests/contracts/CMakeLists.txt`, `tests/policy/CMakeLists.txt`
 
 ## 기본 로컬 게이트
@@ -32,6 +41,7 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
 
 ## 단위 및 계약 테스트
 
+- 관리 HTTP 실패 경계: `ctest --test-dir build-windows -C Debug -R AdminHttpClientTest --output-on-failure --no-tests=error`. 실제 loopback peer로 timeout, chunked/Content-Length, oversized/malformed 응답을 검증한다.
 - 스토리지 기본 검증:
   - `pwsh scripts/build.ps1 -Config Debug -Target storage_basic_tests`
   - `build-windows/tests/Debug/storage_basic_tests.exe`
@@ -316,3 +326,7 @@ python tools/check_core_api_contracts.py --check-stable-governance-fixtures
 - `KubernetesWorldsKindMultiFaultImpairmentCheck`
   - optional live `kind` multi-fault impairment ctest for the topology-driven Kubernetes worlds harness
   - proves required Redis loss plus `gateway-2` pod churn block resume until both recover, then restores the same logical session afterward; skips with return code `77` when prerequisites are unavailable
+
+## MSA 핵심 인증과 복구
+
+[인증된 MSA 채팅 실행](ops/authenticated-chat.md)의 signed-mode 증명과 dependency recovery 검사를 사용한다. `verify_signed_chat.py --manage-stack`은 표준 deploy 진입점으로 signed 구성을 검증하고 환경을 복구한다. `verify_core_dependency_recovery.py`는 로컬 기본 개발 스택의 DB/Redis를 중지하므로 독립적으로 실행한다. soak connect gate는 현재 14-byte header와 전체 HELLO payload를 소비하며 성공 요청의 latency뿐 아니라 오류율도 검사한다.

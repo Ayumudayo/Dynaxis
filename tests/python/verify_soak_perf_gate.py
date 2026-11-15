@@ -1,3 +1,4 @@
+import math
 import os
 import socket
 import struct
@@ -17,11 +18,13 @@ P95_MAX_MS = float(os.getenv("PERF_P95_MAX_MS", "250"))
 P99_MAX_MS = float(os.getenv("PERF_P99_MAX_MS", "500"))
 MIN_THROUGHPUT_RPS = float(os.getenv("PERF_MIN_THROUGHPUT_RPS", "8"))
 
+MAX_ERROR_RATE = float(os.getenv("SOAK_MAX_ERROR_RATE", "0"))
+
 MAX_JOB_QUEUE_DEPTH = int(os.getenv("SOAK_MAX_JOB_QUEUE_DEPTH", "8192"))
 MAX_ACTIVE_SESSIONS_AFTER = int(os.getenv("SOAK_MAX_ACTIVE_SESSIONS_AFTER", "64"))
 
-HEADER_BYTES = 12
-MSG_ERR = 0x0000
+HEADER_BYTES = 14
+MSG_ERR = 0x0004
 MSG_HELLO = 0x0001
 
 
@@ -39,7 +42,7 @@ def _read_exact(sock: socket.socket, n: int) -> bytes:
 
 def _read_frame(sock: socket.socket) -> tuple[int, bytes]:
     header = _read_exact(sock, HEADER_BYTES)
-    payload_len, msg_id, _flags, _seq, _timestamp = struct.unpack(">HHHHI", header)
+    payload_len, msg_id, _flags, _seq, _timestamp = struct.unpack(">HHHII", header)
     payload = _read_exact(sock, payload_len) if payload_len > 0 else b""
     return msg_id, payload
 
@@ -48,11 +51,13 @@ def _single_connect_roundtrip(_worker_id: int, _idx: int) -> float:
     started = time.perf_counter()
     with socket.create_connection((HOST, PORT), timeout=3.0) as sock:
         sock.settimeout(3.0)
-        msg_id, _payload = _read_frame(sock)
+        msg_id, payload = _read_frame(sock)
         if msg_id != MSG_HELLO:
             if msg_id == MSG_ERR:
                 raise RuntimeError("received MSG_ERR on connect path")
             raise RuntimeError(f"unexpected first frame msg_id={msg_id}")
+        if len(payload) != 12 or int.from_bytes(payload[:2], "big") != 1:
+            raise RuntimeError("invalid HELLO payload")
 
     elapsed_ms = (time.perf_counter() - started) * 1000.0
     return elapsed_ms
@@ -82,6 +87,9 @@ def _fetch_metrics() -> str:
 
 
 def main() -> int:
+    if WORKERS <= 0 or REQUESTS_PER_WORKER <= 0 or not math.isfinite(MAX_ERROR_RATE) or not 0 <= MAX_ERROR_RATE <= 1:
+        print("FAIL: invalid workload or SOAK_MAX_ERROR_RATE (expected 0..1)")
+        return 1
     started = time.perf_counter()
     latencies: list[float] = []
     errors = 0
@@ -113,6 +121,11 @@ def main() -> int:
         f"elapsed_sec={elapsed:.2f} throughput_rps={throughput:.2f} "
         f"p95_ms={p95:.2f} p99_ms={p99:.2f}"
     )
+
+    error_rate = errors / total
+    if error_rate > MAX_ERROR_RATE:
+        print(f"FAIL: request error rate ({error_rate:.3f} > {MAX_ERROR_RATE:.3f})")
+        return 1
 
     if success == 0:
         print("FAIL: no successful roundtrips")

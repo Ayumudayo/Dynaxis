@@ -16,8 +16,10 @@ struct GLFWwindow;
 struct GuiState {
     // 로그인 입력값
     char host_buffer[128] = "127.0.0.1";
-    int port = 36000;
+    int port = 6000;
     char username_buffer[128] = "guest";
+    char access_token_buffer[4096] = "";
+    bool resume_session = false;
     
     // 채팅 입력값
     char chat_input[256] = "";

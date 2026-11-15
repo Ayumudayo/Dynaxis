@@ -1,3 +1,5 @@
+#include "http_client.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -35,7 +37,7 @@
 
 #include "redis_client_factory.hpp"
 #include "server/core/app/engine_builder.hpp"
-#include "server/core/config/runtime_settings.hpp"
+#include "server/config/runtime_settings.hpp"
 #include "server/core/metrics/build_info.hpp"
 #include "server/core/worlds/migration.hpp"
 #include "server/core/worlds/topology.hpp"
@@ -156,16 +158,10 @@ std::string load_admin_ui_html() {
     return std::string(kAdminUiFallbackHtml);
 }
 
-struct HttpUrl {
-    std::string host;
-    std::uint16_t port{80};
-    std::string target{"/"};
-};
-
-struct HttpResponse {
-    std::uint32_t status_code{0};
-    std::string body;
-};
+using admin_app::HttpUrl;
+using admin_app::http_get_response;
+using admin_app::http_get_text;
+using admin_app::parse_http_url;
 
 struct SplitTarget {
     std::string path;
@@ -2036,7 +2032,7 @@ static constexpr std::array<ExactRoute, 30> kExactRoutes{{
     return "unknown";
 }
 
-std::string runtime_setting_range_error_message(const server::core::config::RuntimeSettingRule& rule) {
+std::string runtime_setting_range_error_message(const server::config::RuntimeSettingRule& rule) {
     return std::string(rule.key_name) + " must be " +
            std::to_string(rule.min_value) + ".." + std::to_string(rule.max_value);
 }
@@ -2049,113 +2045,6 @@ std::string ensure_trailing_slash(std::string value) {
         value.push_back('/');
     }
     return value;
-}
-
-std::optional<HttpUrl> parse_http_url(std::string_view raw) {
-    constexpr std::string_view kPrefix = "http://";
-    if (!raw.starts_with(kPrefix)) {
-        return std::nullopt;
-    }
-
-    std::string_view rest = raw.substr(kPrefix.size());
-    if (rest.empty()) {
-        return std::nullopt;
-    }
-
-    std::string_view host_port = rest;
-    std::string_view target = "/";
-    if (const auto slash = rest.find('/'); slash != std::string_view::npos) {
-        host_port = rest.substr(0, slash);
-        target = rest.substr(slash);
-    }
-
-    if (host_port.empty()) {
-        return std::nullopt;
-    }
-
-    std::string host;
-    std::uint16_t port = 80;
-    if (const auto colon = host_port.rfind(':'); colon != std::string_view::npos) {
-        host = std::string(host_port.substr(0, colon));
-        const auto port_part = host_port.substr(colon + 1);
-        if (host.empty() || port_part.empty()) {
-            return std::nullopt;
-        }
-        try {
-            const auto parsed = std::stoul(std::string(port_part));
-            if (parsed == 0 || parsed > 65535) {
-                return std::nullopt;
-            }
-            port = static_cast<std::uint16_t>(parsed);
-        } catch (...) {
-            return std::nullopt;
-        }
-    } else {
-        host = std::string(host_port);
-    }
-
-    HttpUrl url;
-    url.host = std::move(host);
-    url.port = port;
-    url.target = target.empty() ? "/" : std::string(target);
-    return url;
-}
-
-std::optional<HttpResponse> http_get_response(const HttpUrl& url) {
-    try {
-        asio::io_context io;
-        tcp::resolver resolver(io);
-        auto endpoints = resolver.resolve(url.host, std::to_string(url.port));
-
-        tcp::socket socket(io);
-        asio::connect(socket, endpoints);
-
-        const std::string request =
-            "GET " + url.target + " HTTP/1.1\r\n"
-            "Host: " + url.host + "\r\n"
-            "Connection: close\r\n"
-            "Accept: text/plain\r\n\r\n";
-        asio::write(socket, asio::buffer(request));
-
-        asio::streambuf response_buf;
-        boost::system::error_code ec;
-        while (asio::read(socket, response_buf, asio::transfer_at_least(1), ec)) {
-        }
-        if (ec != asio::error::eof) {
-            return std::nullopt;
-        }
-
-        const std::string raw(asio::buffers_begin(response_buf.data()), asio::buffers_end(response_buf.data()));
-        const auto header_end = raw.find("\r\n\r\n");
-        const auto status_end = raw.find("\r\n");
-        if (header_end == std::string::npos || status_end == std::string::npos) {
-            return std::nullopt;
-        }
-
-        const std::string_view status_line(raw.data(), status_end);
-        std::istringstream status_stream{std::string(status_line)};
-        std::string http_version;
-        std::uint32_t status_code = 0;
-        status_stream >> http_version >> status_code;
-        if (status_code == 0) {
-            return std::nullopt;
-        }
-
-        HttpResponse http_response;
-        http_response.status_code = status_code;
-        http_response.body = raw.substr(header_end + 4);
-        return http_response;
-    } catch (...) {
-        return std::nullopt;
-    }
-}
-
-std::optional<std::string> http_get_text(const HttpUrl& url) {
-    const auto response = http_get_response(url);
-    if (!response || response->status_code != 200) {
-        return std::nullopt;
-    }
-    return response->body;
 }
 
 std::optional<std::uint64_t> parse_prom_u64(std::string_view metrics_text, std::string_view metric_name) {
@@ -10249,7 +10138,7 @@ private:
                 json_details("value", value));
         }
 
-        const auto* setting_rule = server::core::config::find_runtime_setting_rule(key);
+        const auto* setting_rule = server::config::find_runtime_setting_rule(key);
         if (setting_rule == nullptr) {
             http_errors_total_.fetch_add(1, std::memory_order_relaxed);
             return json_error(request_id, "400 Bad Request", "BAD_REQUEST", "unsupported setting key");

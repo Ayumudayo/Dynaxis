@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <utility>
+#include <limits>
 
 /**
  * @brief Connection 기본 템플릿 메서드(on_connect/on_read/on_write) 구현입니다.
@@ -10,6 +11,17 @@
  * 파생 클래스는 프로토콜별 동작만 오버라이드하도록 책임을 분리합니다.
  */
 namespace server::core::net {
+
+// 버퍼의 마지막 소유자가 사라질 때 예약량을 반환한다. close 중에도 진행 중인 write가
+// buffer를 소유하므로, 큐를 비웠다는 이유만으로 아직 사용 중인 메모리를 예산에서 빼지 않는다.
+struct Connection::PendingWrite {
+    std::vector<std::uint8_t> data;
+    std::shared_ptr<std::atomic<std::size_t>> budget;
+
+    PendingWrite(std::vector<std::uint8_t> payload, std::shared_ptr<std::atomic<std::size_t>> reserved)
+        : data(std::move(payload)), budget(std::move(reserved)) {}
+    ~PendingWrite() { budget->fetch_sub(data.size(), std::memory_order_acq_rel); }
+};
 
 Connection::Connection(std::shared_ptr<Hive> hive,
                        std::size_t send_queue_max_bytes)
@@ -72,7 +84,6 @@ void Connection::finalize_stop() {
     }
 
     write_queue_.clear();
-    queued_bytes_ = 0;
     on_disconnect();
 }
 
@@ -81,35 +92,49 @@ bool Connection::is_stopped() const {
 }
 
 void Connection::async_send(std::vector<std::uint8_t> data) {
-    if (is_stopped()) {
+    if (data.empty() || is_stopped() || send_overflow_.load(std::memory_order_acquire)) {
         return;
     }
 
-    // asio::post를 사용하여 I/O 스레드(strand)로 작업을 넘깁니다.
-    // 이는 멀티스레드 환경에서 write_queue_에 대한 동시 접근을 막아줍니다.
-    boost::asio::post(strand_, [self = shared_from_this(), payload = std::move(data)]() mutable {
+    auto self = shared_from_this();
+    const auto payload_size = data.size();
+    const auto limit = send_queue_max_bytes_ == 0
+        ? std::numeric_limits<std::size_t>::max() : send_queue_max_bytes_;
+    auto pending = pending_bytes_->load(std::memory_order_relaxed);
+    for (;;) {
+        if (payload_size > limit - std::min(limit, pending)) {
+            // reject notification 자체도 한 번만 게시해 과부하에서 executor가 다시 무한히 커지지 않게 한다.
+            if (!send_overflow_.exchange(true, std::memory_order_acq_rel)) {
+                boost::asio::dispatch(strand_, [self]() {
+                    if (self->is_stopped()) {
+                        return;
+                    }
+                    self->on_error(boost::asio::error::make_error_code(boost::asio::error::no_buffer_space));
+                    self->stop();
+                });
+            }
+            return;
+        }
+        if (pending_bytes_->compare_exchange_weak(pending, pending + payload_size,
+                                                  std::memory_order_acq_rel)) {
+            break;
+        }
+    }
+
+    std::shared_ptr<PendingWrite> buffer;
+    try {
+        buffer = std::make_shared<PendingWrite>(std::move(data), pending_bytes_);
+    } catch (...) {
+        pending_bytes_->fetch_sub(payload_size, std::memory_order_acq_rel);
+        throw;
+    }
+    boost::asio::post(strand_, [self, buffer = std::move(buffer)]() {
         if (self->is_stopped()) {
             return;
         }
-
-        auto buffer = std::make_shared<std::vector<std::uint8_t>>(std::move(payload));
-        const auto payload_size = buffer->size();
-        if (self->send_queue_max_bytes_ > 0) {
-            const auto remaining = self->send_queue_max_bytes_ - std::min(self->send_queue_max_bytes_, self->queued_bytes_);
-            if (payload_size > remaining) {
-                self->on_error(boost::asio::error::make_error_code(boost::asio::error::no_buffer_space));
-                self->stop();
-                return;
-            }
-        }
-
         const bool idle = self->write_queue_.empty();
-        self->queued_bytes_ += payload_size;
-        self->write_queue_.push_back(std::move(buffer));
+        self->write_queue_.push_back(buffer);
         if (idle) {
-            // 기존 write 작업이 없을 때만 do_write를 시작해 순서를 보장합니다.
-            // 만약 이미 전송 중이라면, 전송 완료 핸들러에서 큐를 확인하고 계속 전송할 것입니다.
-            // 이를 통해 한 번에 하나의 비동기 쓰기 작업만 수행되도록 보장합니다.
             self->do_write();
         }
     });
@@ -161,13 +186,8 @@ void Connection::handle_write(const boost::system::error_code& ec,
         return;
     }
 
+    (void)packet_size;
     on_write(bytes_transferred);
-
-    if (queued_bytes_ >= packet_size) {
-        queued_bytes_ -= packet_size;
-    } else {
-        queued_bytes_ = 0;
-    }
 
     if (!write_queue_.empty()) {
         write_queue_.pop_front();
@@ -193,9 +213,9 @@ void Connection::do_write() {
         }
         return;
     }
-    const auto packet_size = buffer->size();
+    const auto packet_size = buffer->data.size();
     boost::asio::async_write(socket_,
-        boost::asio::buffer(*buffer),
+        boost::asio::buffer(buffer->data),
         boost::asio::bind_executor(self->strand_, [self, buffer, packet_size](const boost::system::error_code& ec, std::size_t bytes_transferred) {
             self->handle_write(ec, bytes_transferred, packet_size);
         }));

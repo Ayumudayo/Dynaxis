@@ -7,7 +7,28 @@ Windows는 개발/디버깅(빌드/클라이언트) 용도로 유지한다.
 - CMake 3.21+ (`CMakePresets.json` 사용)
 - C++20 컴파일러
 - Conan 2 (`scripts/build.ps1`는 Conan-generated toolchain만 지원)
-- Python 3 (`opcodes`/`wire` generated public header를 configure 단계에서 생성하므로 필수)
+- Python 3 (전체 구성의 `opcodes`/`wire` generated public header 생성에 필수; 최소 runtime에는 필수가 아님)
+
+## 최소 코어 구성
+
+MSA 전체 구성은 기존 명령을 유지한다. 최소 구성은 [계층 경계](architecture/core-and-msa.md)에 따라 앱/GUI와 선택 기능 의존성을 제외하고 독립 검증한다.
+
+```bash
+cmake --preset linux-core-engine
+cmake --build --preset linux-core-engine-debug --parallel 4
+ctest --preset linux-core-engine-test --no-tests=error
+```
+
+Windows에서는 먼저 Conan 개발 의존성을 준비한 뒤 같은 runtime 프로파일을 사용한다. 이 준비 단계의 기존 Conan `windows-dev` recipe는 전체 개발 의존성을 설치하지만, 최소 CMake target은 그 라이브러리들을 링크하지 않는다.
+
+```powershell
+pwsh scripts/setup_conan.ps1 -Config Debug -BuildDir build-windows-core-engine
+cmake --preset windows-core-engine -DCMAKE_CONFIGURATION_TYPES=Debug
+cmake --build --preset windows-core-engine-debug --parallel 4
+ctest --preset windows-core-engine-test --no-tests=error
+```
+
+GTest 없이 TCP/설치 소비자만 검증하려면 configure 시 `-DBUILD_GTEST_TESTS=OFF`를 추가한다. 최소 프로파일의 `BUILD_CORE_EXTENSIONS=OFF`는 전체 Stable API를 제공한다는 뜻이 아니며, 기본 MSA 구성과 별도 build/install 디렉터리를 사용한다.
 
 빌드 ownership은 top-level에서 모두 직접 선언하지 않는다.
 - runtime/library 진입: root `CMakeLists.txt`

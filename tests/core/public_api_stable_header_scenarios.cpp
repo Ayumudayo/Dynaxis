@@ -593,7 +593,7 @@ void scenario_net_and_utils() {
     auto runtime = server::core::app::EngineBuilder("stable_header_scenarios_net").build();
     auto peer_runtime = server::core::app::EngineBuilder("stable_header_scenarios_net_peer").build();
 
-    server::core::net::TransportRouter transport_router;
+    server::core::net::TransportRouter transport_router(nullptr);
     auto transport_session = std::make_shared<StableScenarioTransportSession>();
     transport_router.register_handler(
         server::core::protocol::MSG_PING,

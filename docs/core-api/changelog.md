@@ -9,6 +9,11 @@
 ## 미출시(Unreleased)
 
 ### 변경됨(Changed)
+- 3.6.1: `ThreadManager`는 작업 예외를 기록하고 나머지 작업을 계속 처리합니다. `Stop()`은 이미 접수한 큐를 drain하며 자기 worker에서의 Stop은 lifecycle을 바꾸기 전에 거절합니다. lifecycle 호출은 외부 소유자가 직렬화해야 합니다.
+- 3.6.1: `PooledBuffer`가 pool을 공유 소유해 `BufferManager` 파괴 후 I/O callback의 버퍼 반환에서도 해제된 pool을 참조하지 않게 했습니다. `BufferManager`의 private layout 변경으로 소비자는 다시 빌드해야 합니다.
+- 3.6.0: `TransportRouter`와 `Dispatcher`에 `std::shared_ptr<JobQueue>` 생성자를 추가했습니다. 주입한 queue만 사용하며 null/full/stopped 상태에서 전역 queue로 우회하지 않습니다. 기본 생성자의 Registry 조회는 기존 소비자를 위한 호환 경로로 유지합니다. server bootstrap은 명시적 주입으로 전환했습니다. private layout이 변경되므로 소비자는 다시 빌드해야 합니다.
+- 3.5.1: 최소 runtime build profile(`BUILD_CORE_EXTENSIONS=OFF`)을 추가했습니다. 기본 전체 MSA 구성의 Stable API 목록은 유지하며, 최소 설치는 제공하는 runtime 헤더만 포함합니다.
+- 3.5.1: `Connection`의 바이트 예산에 executor 대기와 진행 중 write를 포함하고, `TaskScheduler::poll()`은 작업/validator 예외 시 해당 작업만 취소합니다. `MemoryPool`은 중복 반환과 전체 크기 overflow를 검사합니다. 공개 클래스의 private layout 변경이 있으므로 소비자는 다시 빌드해야 합니다.
 - `server/core/realtime/simulation_phase.hpp`를 stable public surface로 추가해 fixed-step authoritative tick 내부의 결정론적 phase vocabulary(`SimulationPhase`, `SimulationPhaseContext`, `ISimulationPhaseObserver`)를 gameplay rule 없이 관측할 수 있게 했습니다.
 - `server/core/net/transport_router.hpp`를 stable public surface로 추가해 `Connection`/`Listener` 위에서 동작하는 domain-neutral transport-session routing seam(`ITransportSession`, `TransportRouter`)을 제공하고, repo-owned public consumer proof를 packet `Session` 직접 의존 없이 이 seam으로 옮겼습니다.
 - `server/core/runtime_metrics.hpp`에 process-wide liveness state, named watchdog snapshot, freeze suspicion, threshold-triggered detailed telemetry window surface를 추가하고, core/runtime exporters가 이 aggregate를 Prometheus text로 노출하도록 확장했습니다.

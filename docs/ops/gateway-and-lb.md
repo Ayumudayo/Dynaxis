@@ -56,7 +56,7 @@ server 역할 요약:
 | `GATEWAY_INGRESS_TOKENS_PER_SEC` | ingress token bucket 초당 토큰 | `200` |
 | `GATEWAY_INGRESS_BURST_TOKENS` | ingress token bucket burst | `400` |
 | `GATEWAY_INGRESS_MAX_ACTIVE_SESSIONS` | 동시 backend 세션 상한 | `50000` |
-| `ALLOW_ANONYMOUS`, `AUTH_PROVIDER` | 인증 정책 | `1`, 빈 값 |
+| `ALLOW_ANONYMOUS` | development 모드의 빈 토큰/anonymous 허용 정책. signed 인증 설정은 `docs/ops/authenticated-chat.md` 참고 | `1` |
 
 이 표는 단순 옵션 목록이 아니라 보호 장치 목록에 가깝다. connect timeout, send queue 상한, circuit breaker, retry budget이 왜 필요한지를 이해해야 gateway 장애를 "네트워크 문제"와 "과부하 제어 문제"로 나눠 볼 수 있다.
 

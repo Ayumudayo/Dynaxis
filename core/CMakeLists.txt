@@ -3,17 +3,10 @@ add_library(server_core
     src/app/engine_builder.cpp
     src/app/engine_context.cpp
     src/app/engine_runtime.cpp
-    src/realtime/runtime.cpp
-    src/net/acceptor.cpp
-    src/net/session.cpp
-    src/net/dispatcher.cpp
     src/net/hive.cpp
     src/net/connection.cpp
     src/net/listener.cpp
     src/net/transport_router.cpp
-    src/net/rudp/ack_window.cpp
-    src/net/rudp/retransmission_queue.cpp
-    src/net/rudp/rudp_engine.cpp
     src/util/log.cpp
     src/trace/context.cpp
     src/metrics/metrics.cpp
@@ -26,22 +19,35 @@ add_library(server_core
     src/util/service_registry.cpp
     src/util/paths.cpp
     src/util/crash_handler.cpp
-    src/state/instance_registry.cpp
-    src/state/redis_instance_registry.cpp
-    src/state/redis_backend_factory.cpp
-    src/storage/db_worker_pool.cpp
-    src/security/cipher.cpp
-    src/security/admin_command_auth.cpp
-    src/compression/compressor.cpp
-    src/plugin/shared_library.cpp
-    src/scripting/lua_sandbox.cpp
-    src/scripting/script_watcher.cpp
-    src/scripting/lua_runtime.cpp
 )
+if (BUILD_CORE_EXTENSIONS)
+    target_sources(server_core PRIVATE
+        src/realtime/runtime.cpp
+        src/net/acceptor.cpp
+        src/net/session.cpp
+        src/net/dispatcher.cpp
+        src/net/rudp/ack_window.cpp
+        src/net/rudp/retransmission_queue.cpp
+        src/net/rudp/rudp_engine.cpp
+        src/state/instance_registry.cpp
+        src/state/redis_instance_registry.cpp
+        src/state/redis_backend_factory.cpp
+        src/storage/db_worker_pool.cpp
+        src/security/cipher.cpp
+        src/security/admin_command_auth.cpp
+        src/compression/compressor.cpp
+        src/plugin/shared_library.cpp
+        src/scripting/lua_sandbox.cpp
+        src/scripting/script_watcher.cpp
+        src/scripting/lua_runtime.cpp
+    )
+endif()
 add_library(server_core::server_core ALIAS server_core)
 
-configure_luajit_submodule(LUAJIT_VENDOR_TARGET)
-configure_sol2_submodule(SOL2_VENDOR_TARGET)
+if (BUILD_CORE_EXTENSIONS)
+    configure_luajit_submodule(LUAJIT_VENDOR_TARGET)
+    configure_sol2_submodule(SOL2_VENDOR_TARGET)
+endif()
 include(GNUInstallDirs)
 
 # -----------------------------------------------------------------------------
@@ -89,17 +95,19 @@ target_compile_definitions(server_core PUBLIC
     BUILD_TIME_UTC="${BUILD_TIME_UTC}"
 )
 
-find_package(OpenSSL REQUIRED)
-find_package(lz4 CONFIG QUIET)
-if (NOT TARGET lz4::lz4)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(LZ4 REQUIRED liblz4)
-    add_library(lz4::lz4 INTERFACE IMPORTED)
-    target_include_directories(lz4::lz4 INTERFACE ${LZ4_INCLUDE_DIRS})
-    target_link_libraries(lz4::lz4 INTERFACE ${LZ4_LIBRARIES})
-endif()
+if (BUILD_CORE_EXTENSIONS)
+    find_package(OpenSSL REQUIRED)
+    find_package(lz4 CONFIG QUIET)
+    if (NOT TARGET lz4::lz4)
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(LZ4 REQUIRED liblz4)
+        add_library(lz4::lz4 INTERFACE IMPORTED)
+        target_include_directories(lz4::lz4 INTERFACE ${LZ4_INCLUDE_DIRS})
+        target_link_libraries(lz4::lz4 INTERFACE ${LZ4_LIBRARIES})
+    endif()
 
-target_link_libraries(server_core PUBLIC OpenSSL::SSL OpenSSL::Crypto lz4::lz4 wire_proto)
+    target_link_libraries(server_core PUBLIC OpenSSL::SSL OpenSSL::Crypto lz4::lz4 wire_proto)
+endif()
 
 if (LUAJIT_VENDOR_TARGET)
     get_target_property(LUAJIT_VENDOR_LOCATION ${LUAJIT_VENDOR_TARGET} IMPORTED_LOCATION)
@@ -121,9 +129,12 @@ endif()
 
 target_include_directories(server_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<BUILD_INTERFACE:${DYNAXIS_GENERATED_INCLUDE_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
+
+if (BUILD_CORE_EXTENSIONS)
+    target_include_directories(server_core PUBLIC $<BUILD_INTERFACE:${DYNAXIS_GENERATED_INCLUDE_DIR}>)
+endif()
 
 if (SERVER_USE_HEADER_ONLY_BOOST_SYSTEM)
     # 헤더온리 boost::system 사용: 라이브러리 링크 생략, 매크로 정의 필요
@@ -190,9 +201,48 @@ if (LUAJIT_VENDOR_TARGET)
             DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 endif()
 
-install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-        FILES_MATCHING PATTERN "*.hpp")
-install(DIRECTORY "${DYNAXIS_GENERATED_INCLUDE_DIR}/"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-        FILES_MATCHING PATTERN "*.hpp")
+if (BUILD_CORE_EXTENSIONS)
+    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/"
+            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+            FILES_MATCHING PATTERN "*.hpp")
+    install(DIRECTORY "${DYNAXIS_GENERATED_INCLUDE_DIR}/"
+            DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+            FILES_MATCHING PATTERN "*.hpp")
+    else()
+        # 최소 설치에서도 구현이 없는 선택 기능 헤더를 공개하지 않는다.
+        set(CORE_RUNTIME_HEADERS
+            api/version.hpp
+            app/app_host.hpp
+            app/engine_builder.hpp
+            app/engine_context.hpp
+            app/engine_runtime.hpp
+            app/termination_signals.hpp
+            build_info.hpp
+            concurrent/job_queue.hpp
+            concurrent/thread_manager.hpp
+            concurrent/task_scheduler.hpp
+            memory/memory_pool.hpp
+            metrics/build_info.hpp
+            metrics/metrics.hpp
+            metrics/http_server.hpp
+            net/connection.hpp
+            net/listener.hpp
+            net/hive.hpp
+            net/transport_router.hpp
+            protocol/packet.hpp
+            protocol/opcode_policy.hpp
+            protocol/protocol_errors.hpp
+            protocol/protocol_flags.hpp
+            runtime_metrics.hpp
+            trace/context.hpp
+            util/log.hpp
+            util/service_registry.hpp
+            util/paths.hpp
+            util/crash_handler.hpp
+        )
+        foreach(header IN LISTS CORE_RUNTIME_HEADERS)
+            get_filename_component(header_dir "${header}" DIRECTORY)
+            install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/include/server/core/${header}"
+                    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/server/core/${header_dir}")
+        endforeach()
+endif()

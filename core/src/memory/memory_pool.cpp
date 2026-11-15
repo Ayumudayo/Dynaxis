@@ -1,6 +1,10 @@
 #include "server/core/memory/memory_pool.hpp"
 #include "server/core/runtime_metrics.hpp"
 
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+
 /**
  * @brief 고정 블록 메모리 풀/버퍼 매니저 구현입니다.
  *
@@ -21,7 +25,11 @@ MemoryPool::MemoryPool(size_t blockSize, size_t blockCount)
     // 고정 길이 blockCount 개를 한 번에 할당하면 운영체제 할당/해제 비용을 숨길 수 있습니다.
     // 이는 잦은 new/delete 호출로 인한 단편화와 오버헤드를 줄여줍니다.
     // 메모리 풀의 핵심 원리: 미리 할당하고 재사용한다.
+    if (blockCount > std::numeric_limits<std::size_t>::max() / blockSize) {
+        throw std::length_error("MemoryPool byte size overflow");
+    }
     memoryChunk_.resize(blockSize * blockCount);
+    allocated_.assign(blockCount, false);
     for (size_t i = 0; i < blockCount; ++i) {
         freeList_.push(memoryChunk_.data() + i * blockSize);
     }
@@ -40,6 +48,8 @@ void* MemoryPool::Acquire() {
     }
     void* ptr = freeList_.top();
     freeList_.pop();
+    const auto index = (static_cast<std::byte*>(ptr) - memoryChunk_.data()) / blockSize_;
+    allocated_[index] = true;
     runtime_metrics::record_memory_pool_acquire();
     return ptr;
 }
@@ -53,33 +63,35 @@ void MemoryPool::Release(void* ptr) {
         return;
     }
 
-    auto* begin = memoryChunk_.data();
-    auto* end = begin + memoryChunk_.size();
-    auto* byte_ptr = static_cast<std::byte*>(ptr);
-    if (byte_ptr < begin || byte_ptr >= end) {
+    const auto begin = reinterpret_cast<std::uintptr_t>(memoryChunk_.data());
+    const auto address = reinterpret_cast<std::uintptr_t>(ptr);
+    if (address < begin || address - begin >= memoryChunk_.size()) {
         return;
     }
 
-    const auto offset = static_cast<std::size_t>(byte_ptr - begin);
+    const auto offset = static_cast<std::size_t>(address - begin);
     if ((offset % blockSize_) != 0) {
         return;
     }
 
-    if (freeList_.size() >= blockCount_) {
+    const auto index = offset / blockSize_;
+    if (!allocated_[index]) {
         return;
     }
 
     freeList_.push(ptr);
+    allocated_[index] = false;
     runtime_metrics::record_memory_pool_release();
 }
 
 // --- BufferManager 구현 ---
 
 BufferManager::BufferManager(size_t blockSize, size_t blockCount)
-    : pool_(blockSize, blockCount), blockSize_(blockSize) {}
+    : pool_(std::make_shared<MemoryPool>(blockSize, blockCount)), blockSize_(blockSize) {}
 
 BufferManager::PooledBuffer BufferManager::Acquire() {
-    std::byte* raw_ptr = static_cast<std::byte*>(pool_.Acquire());
+    auto pool = pool_;
+    std::byte* raw_ptr = static_cast<std::byte*>(pool->Acquire());
     if (!raw_ptr) {
         // Pool 이 고갈되었습니다. 비어 있는 포인터를 반환합니다.
         return nullptr;
@@ -88,8 +100,8 @@ BufferManager::PooledBuffer BufferManager::Acquire() {
     // pool 로 복귀시키는 custom deleter 를 가진 unique_ptr 을 만듭니다.
     // unique_ptr가 scope를 벗어나면 Release()가 자동으로 호출되므로 호출자는 생명주기만 관리하면 됩니다.
     // 이는 C++의 RAII(Resource Acquisition Is Initialization) 패턴을 활용한 것입니다.
-    return PooledBuffer(raw_ptr, [this](std::byte* p) {
-        pool_.Release(p);
+    return PooledBuffer(raw_ptr, [pool = std::move(pool)](std::byte* p) {
+        pool->Release(p);
     });
 }
 

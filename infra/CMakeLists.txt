@@ -1,6 +1,11 @@
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
+find_package(OpenSSL REQUIRED)
+add_library(chat_auth STATIC src/auth/session_token.cpp)
+target_include_directories(chat_auth PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
+target_link_libraries(chat_auth PUBLIC server_core OpenSSL::Crypto PRIVATE nlohmann_json::nlohmann_json)
+
 set(INFRA_REDIS_PACKAGE_VERSION "1.0.0")
 file(READ "${CMAKE_SOURCE_DIR}/core/include/server/core/api/version.hpp" _server_core_api_version_hpp)
 string(REGEX MATCH "version_string\\(\\) noexcept \\{ return \"([0-9]+\\.[0-9]+\\.[0-9]+)\"; \\}"

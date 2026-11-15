@@ -1,4 +1,5 @@
 #include "gateway/gateway_connection.hpp"
+#include "server/auth/session_token.hpp"
 
 #include <atomic>
 #include <array>
@@ -364,9 +365,7 @@ bool GatewayConnection::try_finish_handshake() {
         if (authenticator_) {
             last_auth_result_ = authenticator_->authenticate(request);
         } else {
-            last_auth_result_.success = true;
-            last_auth_result_.subject = request.client_id.empty() ? "anonymous" : request.client_id;
-            last_auth_result_.failure_reason.clear();
+            last_auth_result_ = {false, {}, "authenticator unavailable"};
         }
 
         if (!last_auth_result_.success) {
@@ -377,9 +376,13 @@ bool GatewayConnection::try_finish_handshake() {
             return true;
         }
 
-        std::string routing_key = !request.client_id.empty() ? request.client_id : last_auth_result_.subject;
-        if (token.rfind(kResumeTokenPrefix, 0) == 0) {
-            const std::string raw_resume_token(token.substr(kResumeTokenPrefix.size()));
+        std::string routing_key = last_auth_result_.subject;
+        auto routing_token = token;
+        if (const auto credentials = server::auth::split_credentials(token); credentials && !credentials->resume_token.empty()) {
+            routing_token = "resume:" + credentials->resume_token;
+        }
+        if (routing_token.rfind(kResumeTokenPrefix, 0) == 0) {
+            const std::string raw_resume_token(routing_token.substr(kResumeTokenPrefix.size()));
             if (!raw_resume_token.empty()) {
                 const std::string resume_routing_key = make_resume_routing_key(raw_resume_token);
                 if (!resume_routing_key.empty()) {

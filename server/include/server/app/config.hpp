@@ -74,6 +74,8 @@ struct ServerConfig {
     // 메트릭 설정
     unsigned short metrics_port = 0;
 
+    // FPS는 명시적으로 활성화하는 실험 앱 기능이다. 기본 MSA 채팅은 tick을 돌리지 않는다.
+    bool fps_enabled = false;
     // FPS runtime 설정
     std::uint32_t fps_tick_rate_hz = 30;
     std::uint32_t fps_snapshot_refresh_ticks = 30;

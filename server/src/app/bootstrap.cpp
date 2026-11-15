@@ -33,7 +33,7 @@
 
 #include "server/core/net/dispatcher.hpp"
 #include "server/core/util/log.hpp"
-#include "server/core/util/service_registry.hpp"
+#include "server/auth/session_token.hpp"
 #include "server/core/app/engine_builder.hpp"
 #include "server/core/config/options.hpp"
 #include "server/core/concurrent/job_queue.hpp"
@@ -141,6 +141,8 @@ std::vector<std::filesystem::path> list_lua_scripts(const std::filesystem::path&
  * @return 종료 코드(0 정상)
  */
 int run_server(int argc, char** argv) {
+    // EngineContext와 종료 콜백이 timer/strand/acceptor를 보유하므로 io는 가장 늦게 파괴한다.
+    asio::io_context io;
     // 1. 핵심 컴포넌트 선언
     // 선언만 먼저 하고 실제 ready는 나중에 올린다. 그래야 "객체는 생겼지만 아직 서비스 가능하지 않다"를 표현할 수 있다.
     core::concurrent::TaskScheduler scheduler;
@@ -149,6 +151,7 @@ int run_server(int argc, char** argv) {
     std::shared_ptr<std::function<void()>> scheduler_tick;
     std::shared_ptr<core::concurrent::TaskScheduler::Clock::time_point> scheduler_last_poll_at;
     std::shared_ptr<asio::steady_timer> fps_tick_timer;
+    std::shared_ptr<std::function<void()>> fps_tick;
     std::shared_ptr<core::storage_execution::DbWorkerPool> db_workers;
     std::shared_ptr<core::scripting::LuaRuntime> lua_runtime;
     std::shared_ptr<asio::strand<asio::io_context::executor_type>> lua_reload_strand;
@@ -179,6 +182,7 @@ int run_server(int argc, char** argv) {
             return 1;
         }
 
+        const auto auth_config = server::auth::load_config_from_env();
         reset_bootstrap_shutdown_drain_metrics(config.shutdown_drain_timeout_ms);
 
         // readiness는 "필수 의존성이 실제로 준비됐는가"를 뜻한다.
@@ -220,21 +224,21 @@ int run_server(int argc, char** argv) {
             lua_cfg.memory_limit_bytes = static_cast<std::size_t>(capped_memory_limit);
 
             lua_runtime = std::make_shared<core::scripting::LuaRuntime>(std::move(lua_cfg));
-            engine.bridge_service(lua_runtime);
+            engine.set_service(lua_runtime);
             corelog::info("Lua runtime scaffold initialised");
         }
 
         // 3. 코어 컴포넌트 초기화
         // 작업 큐, 스레드 풀, 스케줄러를 먼저 세워 두어야 이후 저장소/리스너가 올리는 후속 작업을 안전하게 받을 수 있다.
-        asio::io_context io;
         if (lua_runtime) {
             lua_reload_strand = std::make_shared<asio::strand<asio::io_context::executor_type>>(
                 asio::make_strand(io));
         }
-        core::JobQueue job_queue(config.job_queue_max);
+        auto job_queue_owner = std::make_shared<core::JobQueue>(config.job_queue_max);
+        auto& job_queue = *job_queue_owner;
         auto* job_queue_ptr = &job_queue;
         core::ThreadManager workers(job_queue);
-        core::Dispatcher dispatcher;
+        core::Dispatcher dispatcher(job_queue_owner);
         auto options = std::make_shared<core::SessionOptions>();
         options->read_timeout_ms = 60'000;
         options->heartbeat_interval_ms = 10'000;
@@ -244,20 +248,20 @@ int run_server(int argc, char** argv) {
         core::BufferManager buffer_manager(buffer_block_size, 1024);
         auto state = core_internal::make_connection_runtime_state();
 
-        // 현재 서버 런타임 그래프에 대한 compatibility bridge를 유지한다.
-        // 기존 전역 lookup 사용처를 한 번에 없애기 전까지는, 이 다리가 있어야 새 runtime 소유권 모델과 공존할 수 있다.
-        engine.bridge_alias(io);
-        engine.bridge_alias(job_queue);
-        engine.bridge_alias(workers);
-        engine.bridge_alias(buffer_manager);
-        engine.bridge_alias(dispatcher);
-        engine.bridge_service(options);
-        core_internal::register_connection_runtime_state_service(state);
-        engine.bridge_alias(scheduler);
-        engine.bridge_alias(app_host);
-        engine.bridge_alias(engine);
+        // 서버 런타임 그래프는 instance context에만 등록한다.
+        // 채팅 의존성과 관측은 명시적으로 전달하며 다른 runtime의 전역 등록을 조회하지 않는다.
+        engine.set_alias(io);
+        engine.set_alias(job_queue);
+        engine.set_alias(workers);
+        engine.set_alias(buffer_manager);
+        engine.set_alias(dispatcher);
+        engine.set_service(options);
+        core_internal::set_connection_runtime_state(engine, state);
+        engine.set_alias(scheduler);
+        engine.set_alias(app_host);
+        engine.set_alias(engine);
         if (lua_reload_strand) {
-            engine.bridge_service(lua_reload_strand);
+            engine.set_service(lua_reload_strand);
         }
 
         // 스케줄러 타이머 설정
@@ -265,7 +269,7 @@ int run_server(int argc, char** argv) {
             "scheduler-poll-loop",
             [&](server::core::app::EngineRuntime&) {
                 scheduler_timer = std::make_shared<asio::steady_timer>(io);
-                engine.bridge_service(scheduler_timer);
+                engine.set_service(scheduler_timer);
                 scheduler_last_poll_at =
                     std::make_shared<core::concurrent::TaskScheduler::Clock::time_point>(
                         core::concurrent::TaskScheduler::Clock::now());
@@ -594,9 +598,9 @@ int run_server(int argc, char** argv) {
         }
 
         if (db_pool) {
-            core_internal::register_connection_pool_service(db_pool);
+            engine.set_service(db_pool);
             if (repository_pool) {
-                core_internal::register_repository_connection_pool_service(repository_pool);
+                engine.set_service(repository_pool);
             }
             std::size_t log_workers = config.db_worker_threads;
             if (log_workers == 0) {
@@ -605,21 +609,21 @@ int run_server(int argc, char** argv) {
             }
             db_workers = core_internal::make_db_worker_pool(db_pool, config.db_job_queue_max);
             core_internal::start_db_worker_pool(db_workers, config.db_worker_threads);
-            core_internal::register_db_worker_pool_service(db_workers);
+            engine.set_service(db_workers);
             corelog::info(std::string("DB worker pool started: ") + std::to_string(log_workers) + " threads.");
 
             // 주기적인 DB 헬스 체크
             core::concurrent::TaskScheduler::RepeatPolicy policy{};
-            policy.interval = std::chrono::seconds(60);
+            policy.interval = std::chrono::seconds(5);
             (void)scheduler.schedule_every_controlled([job_queue_ptr, db_pool, &app_host](
                                                           const core::concurrent::TaskScheduler::RepeatContext&) {
-                job_queue_ptr->Push([db_pool, &app_host]() {
+                if (!job_queue_ptr->TryPush([db_pool, &app_host]() {
                     const bool ok = core_internal::connection_pool_health_check(db_pool);
                     if (!ok) {
                         corelog::warn("Periodic DB health check failed");
                     }
                     app_host.set_dependency_ok("db", ok);
-                });
+                })) { app_host.set_dependency_ok("db", false); }
                 return core::concurrent::TaskScheduler::RepeatDecision::kContinue;
             },
                                                       policy,
@@ -656,7 +660,7 @@ int run_server(int argc, char** argv) {
         }
 
         if (redis) {
-            engine.bridge_service(redis);
+            engine.set_service(redis);
 
             const auto load_runtime_assignment =
                 [redis, assignment_key = config.topology_runtime_assignment_key, instance_id = config.server_instance_id]()
@@ -694,10 +698,10 @@ int run_server(int argc, char** argv) {
 
             // 주기적인 Redis 헬스 체크
             core::concurrent::TaskScheduler::RepeatPolicy policy{};
-            policy.interval = std::chrono::seconds(60);
+            policy.interval = std::chrono::seconds(5);
             (void)scheduler.schedule_every_controlled([job_queue_ptr, redis, &app_host](
                                                           const core::concurrent::TaskScheduler::RepeatContext&) {
-                job_queue_ptr->Push([redis, &app_host]() {
+                if (!job_queue_ptr->TryPush([redis, &app_host]() {
                     try {
                         const bool ok = redis->health_check();
                         if (!ok) {
@@ -705,13 +709,15 @@ int run_server(int argc, char** argv) {
                         }
                         app_host.set_dependency_ok("redis", ok);
                     } catch (const std::exception& ex) {
+                        app_host.set_dependency_ok("redis", false);
                         core::runtime_metrics::record_exception_recoverable();
                         corelog::error(std::string("component=server_bootstrap error_code=REDIS_HEALTH_CHECK periodic Redis health check exception: ") + ex.what());
                     } catch (...) {
+                        app_host.set_dependency_ok("redis", false);
                         core::runtime_metrics::record_exception_ignored();
                         corelog::error("component=server_bootstrap error_code=REDIS_HEALTH_CHECK periodic Redis health check unknown exception");
                     }
-                });
+                })) { app_host.set_dependency_ok("redis", false); }
                 return core::concurrent::TaskScheduler::RepeatDecision::kContinue;
             },
                                                       policy,
@@ -775,8 +781,16 @@ int run_server(int argc, char** argv) {
 
         // 6. 채팅 서비스 및 라우터 초기화
         // 외부 의존성이 올라온 뒤에 서비스와 dispatcher를 묶어야, 핸들러가 시작부터 완성된 runtime seam을 본다.
-        server::app::chat::ChatService chat(io, job_queue, repository_pool, redis);
-        server::app::fps::FpsService fps(server::app::fps::RuntimeConfig{
+        server::app::chat::ChatService::Dependencies chat_dependencies;
+        chat_dependencies.db_pool = repository_pool;
+        chat_dependencies.redis = redis;
+        chat_dependencies.lua = lua_runtime;
+        chat_dependencies.lua_strand = lua_reload_strand;
+        chat_dependencies.scheduler = std::shared_ptr<core::concurrent::TaskScheduler>(&scheduler, [](auto*) {});
+        chat_dependencies.require_auth = auth_config.required;
+        chat_dependencies.auth_signing_secret = auth_config.signing_secret;
+        server::app::chat::ChatService chat(io, job_queue, std::move(chat_dependencies));
+        auto fps = config.fps_enabled ? std::make_unique<server::app::fps::FpsService>(server::app::fps::RuntimeConfig{
             .tick_rate_hz = config.fps_tick_rate_hz,
             .snapshot_refresh_ticks = config.fps_snapshot_refresh_ticks,
             .interest_cell_size_mm = config.fps_interest_cell_size_mm,
@@ -784,40 +798,42 @@ int run_server(int argc, char** argv) {
             .max_interest_recipients_per_tick = config.fps_max_interest_recipients_per_tick,
             .max_delta_actors_per_tick = config.fps_max_delta_actors_per_tick,
             .history_ticks = config.fps_history_ticks,
-        });
-        engine.bridge_alias(chat);
-        engine.bridge_alias(fps);
-        register_routes(dispatcher, chat, fps);
+        }) : nullptr;
+        engine.set_alias(chat);
+        if (fps) { engine.set_alias(*fps); }
+        register_routes(dispatcher, chat, fps.get());
 
-        fps_tick_timer = std::make_shared<asio::steady_timer>(io);
-        auto fps_driver = std::make_shared<server::app::fps::FixedStepDriver>(config.fps_tick_rate_hz);
-        auto fps_last_tick = std::make_shared<server::app::fps::FixedStepDriver::Clock::time_point>(
-            server::app::fps::FixedStepDriver::Clock::now());
-        auto fps_tick = std::make_shared<std::function<void()>>();
-        std::weak_ptr<std::function<void()>> fps_tick_weak = fps_tick;
-        *fps_tick = [fps_tick_timer, fps_tick_weak, fps_driver, fps_last_tick, fps_ptr = &fps]() {
-            const auto now = server::app::fps::FixedStepDriver::Clock::now();
-            const auto elapsed = now - *fps_last_tick;
-            *fps_last_tick = now;
+        if (fps) {
+            fps_tick_timer = std::make_shared<asio::steady_timer>(io);
+            auto fps_driver = std::make_shared<server::app::fps::FixedStepDriver>(config.fps_tick_rate_hz);
+            auto fps_last_tick = std::make_shared<server::app::fps::FixedStepDriver::Clock::time_point>(
+                server::app::fps::FixedStepDriver::Clock::now());
+            fps_tick = std::make_shared<std::function<void()>>();
+            std::weak_ptr<std::function<void()>> fps_tick_weak = fps_tick;
+            *fps_tick = [fps_tick_timer, fps_tick_weak, fps_driver, fps_last_tick, fps_ptr = fps.get()]() {
+                const auto now = server::app::fps::FixedStepDriver::Clock::now();
+                const auto elapsed = now - *fps_last_tick;
+                *fps_last_tick = now;
 
-            const auto steps = fps_driver->consume_elapsed(elapsed);
-            for (std::size_t step = 0; step < steps; ++step) {
-                fps_ptr->tick();
-            }
-
-            fps_tick_timer->expires_after(fps_driver->step_duration());
-            fps_tick_timer->async_wait([fps_tick_timer, fps_tick_weak](const boost::system::error_code& ec) {
-                if (ec == asio::error::operation_aborted) {
-                    return;
+                const auto steps = fps_driver->consume_elapsed(elapsed);
+                for (std::size_t step = 0; step < steps; ++step) {
+                    fps_ptr->tick();
                 }
-                if (!ec) {
-                    if (auto locked = fps_tick_weak.lock()) {
-                        (*locked)();
+
+                fps_tick_timer->expires_after(fps_driver->step_duration());
+                fps_tick_timer->async_wait([fps_tick_timer, fps_tick_weak](const boost::system::error_code& ec) {
+                    if (ec == asio::error::operation_aborted) {
+                        return;
                     }
-                }
-            });
-        };
-        (*fps_tick)();
+                    if (!ec) {
+                        if (auto locked = fps_tick_weak.lock()) {
+                            (*locked)();
+                        }
+                    }
+                });
+            };
+            (*fps_tick)();
+        }
 
         // 7. TCP 리스너 시작
         // 이 단계 이전에는 절대로 외부 연결을 받지 않는다. 포트를 너무 일찍 열면 ready=false인데도 클라이언트가 붙을 수 있다.
@@ -829,10 +845,10 @@ int run_server(int argc, char** argv) {
             options,
             state,
             [&chat, &fps](std::shared_ptr<server::core::Session> session) {
-                fps.on_session_close(session);
+                if (fps) { fps->on_session_close(session); }
                 chat.on_session_close(session);
             });
-        engine.bridge_service(acceptor);
+        engine.set_service(acceptor);
         acceptor->start();
         corelog::info("server_app listening on 0.0.0.0:" + std::to_string(config.port));
 
@@ -910,7 +926,7 @@ int run_server(int argc, char** argv) {
         // 11. metrics/admin HTTP 시작
         // 운영 면은 데이터 plane과 거의 같이 열어 두되, ready 판정은 AppHost가 따로 쥔다.
         // 그래야 관측은 일찍 가능하면서도 실제 트래픽 수용 시점은 엄격하게 제어할 수 있다.
-        start_server_admin_http(engine, config.metrics_port);
+        start_server_admin_http(engine, chat, config.metrics_port);
 
         // 12. 종료 시그널 대기 및 shutdown 순서 등록
         // drain -> accept 중지 -> 워커/타이머 정리 순서를 명시해 새 연결 유입과 기존 연결 정리를 섞지 않는다.
@@ -942,6 +958,7 @@ int run_server(int argc, char** argv) {
         engine.mark_stopped();
 
         engine.clear_global_services();
+        engine.context().clear();
 
         return 0;
 
@@ -951,6 +968,7 @@ int run_server(int argc, char** argv) {
         corelog::error(std::string("component=server_bootstrap error_code=SERVER_FATAL server_app exception: ") + ex.what());
         engine.mark_failed();
         engine.clear_global_services();
+        engine.context().clear();
         return 1;
     }
 }

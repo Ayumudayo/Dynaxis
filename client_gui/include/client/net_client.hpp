@@ -35,6 +35,13 @@ public:
     using OnHello = std::function<void(std::uint16_t caps)>;
     using OnErr = std::function<void(std::uint16_t code, std::string msg)>;
     using OnLoginRes = std::function<void(std::string effective_user, std::uint32_t sid, bool is_admin)>;
+    /** @brief 서버가 반환한 인증/continuity 상태입니다. resume_token은 로그/UI 텍스트에 출력하지 않습니다. */
+    struct SessionInfo {
+        std::string principal_id, auth_session_id, display_name, logical_session_id, resume_token, world_id;
+        std::uint64_t resume_expires_unix_ms{};
+        bool resumed{};
+    };
+    using OnSessionInfo = std::function<void(SessionInfo)>;
     using OnBroadcast = std::function<void(std::string room, std::string sender, std::string text, std::uint16_t flags, std::uint32_t sender_sid)>;
     using OnRoomUsers = std::function<void(std::string room, std::vector<std::string> users)>;
     /** @brief 스냅샷 메시지의 송신자/본문/시각 필드입니다. */
@@ -56,6 +63,8 @@ public:
     void set_on_hello(OnHello f) { on_hello_ = std::move(f); }
     void set_on_err(OnErr f) { on_err_ = std::move(f); }
     void set_on_login_res(OnLoginRes f) { on_login_ = std::move(f); }
+    /** @brief 로그인 응답의 인증·continuity 상태 콜백을 등록합니다. */
+    void set_on_session_info(OnSessionInfo f) { on_session_info_ = std::move(f); }
     void set_on_broadcast(OnBroadcast f) { on_bcast_ = std::move(f); }
     void set_on_room_users(OnRoomUsers f) { on_room_users_ = std::move(f); }
     void set_on_snapshot(OnSnapshot f) { on_snapshot_ = std::move(f); }
@@ -126,6 +135,7 @@ private:
     OnHello on_hello_;
     OnErr on_err_;
     OnLoginRes on_login_;
+    OnSessionInfo on_session_info_;
     OnBroadcast on_bcast_;
     OnRoomUsers on_room_users_;
     OnSnapshot on_snapshot_;

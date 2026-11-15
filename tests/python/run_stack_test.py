@@ -157,6 +157,8 @@ def _require_fps_direct_udp() -> str | None:
     backend_env = _docker_inspect_env("dynaxis-stack-server-1-1")
     if backend_env is None:
         return "direct FPS transport requires at least one running server backend container"
+    if backend_env.get("FPS_ENABLED") != "1":
+        return "FPS transport proof requires FPS_ENABLED=1 on the backend server"
     if not _http_ready(36001) or not _tcp_ready(36100):
         return "direct UDP gateway-1 path is not ready on 36001/36100"
     if not _http_ready(39091):

@@ -167,6 +167,8 @@ services:
     <<: *gateway-build
     command: ["gateway"]
     environment:
+      CHAT_AUTH_MODE: "${CHAT_AUTH_MODE:-development}"
+      CHAT_AUTH_SIGNING_SECRET: "${CHAT_AUTH_SIGNING_SECRET:-}"
       GATEWAY_LISTEN: "0.0.0.0:6000"
       GATEWAY_UDP_LISTEN: "${GATEWAY1_UDP_LISTEN:-}"
       GATEWAY_UDP_BIND_SECRET: "${GATEWAY_UDP_BIND_SECRET:-}"
@@ -200,6 +202,8 @@ services:
     <<: *gateway
     command: ["gateway"]
     environment:
+      CHAT_AUTH_MODE: "${CHAT_AUTH_MODE:-development}"
+      CHAT_AUTH_SIGNING_SECRET: "${CHAT_AUTH_SIGNING_SECRET:-}"
       GATEWAY_LISTEN: "0.0.0.0:6000"
       GATEWAY_UDP_LISTEN: "${GATEWAY2_UDP_LISTEN:-}"
       GATEWAY_UDP_BIND_SECRET: "${GATEWAY_UDP_BIND_SECRET:-}"

@@ -1,10 +1,12 @@
 #include <gtest/gtest.h>
 #include <server/chat/chat_service.hpp>
+#include <server/auth/session_token.hpp>
 #include "chat_service_private_access.hpp"
 #include <server/core/discovery/world_lifecycle_policy.hpp>
 #include <server/core/net/session.hpp>
 #include <server/core/net/dispatcher.hpp>
 #include <server/core/concurrent/job_queue.hpp>
+#include <server/core/concurrent/task_scheduler.hpp>
 #include <server/storage/connection_pool.hpp>
 #include <server/storage/unit_of_work.hpp>
 #include <server/storage/redis/client.hpp>
@@ -718,34 +720,17 @@ protected:
     ChatServiceTest() : acceptor_(io_), peer_socket_(io_) {}
 
     void ProcessJobs() {
-        std::promise<bool> done;
-        std::future<bool> fut = done.get_future();
-        
-        std::thread worker([&]() {
-            try {
-                auto job = job_queue_.Pop();
-                if (job) {
-                    job();
-                    done.set_value(true);
-                } else {
-                    done.set_value(false);
-                }
-            } catch (const std::exception& e) {
-                std::printf("Job execution failed: %s\n", e.what());
-                done.set_value(false);
-            } catch (...) {
-                std::printf("Job execution failed with unknown error\n");
-                done.set_value(false);
-            }
-        });
-        
-        if (fut.wait_for(std::chrono::milliseconds(500)) == std::future_status::timeout) {
-            std::printf("ProcessJobs timed out\n");
-            job_queue_.Stop();
+        // FIFO 완료 marker까지 처리한다. CPU/파일 로딩 지연을 큐 정지로 바꾸지 않는다.
+        // 실제 교착은 CTest의 외부 timeout으로 실패시키며, 작업 예외/거절도 즉시 보고한다.
+        auto completed = std::make_shared<bool>(false);
+        ASSERT_TRUE(job_queue_.TryPush([completed] { *completed = true; }));
+        while (!*completed) {
+            auto job = job_queue_.Pop();
+            ASSERT_TRUE(job);
+            ASSERT_NO_THROW(job());
         }
-        worker.join();
     }
-    
+
     void FlushSessionIO() {
         if (io_.stopped()) io_.restart();
         while (io_.poll() > 0);
@@ -1700,6 +1685,86 @@ TEST_F(ChatServiceTest, LeaveDeniedByV2HookPluginReturnsForbidden) {
     ASSERT_TRUE(error_code.has_value());
     EXPECT_EQ(*error_code, core_proto::errc::FORBIDDEN);
     chat_service_.reset();
+}
+
+TEST_F(ChatServiceTest, LoginDoesNotPublishIpToRoomHistory) {
+    LoginAs("private-login-user");
+    EXPECT_FALSE(db_pool_->state()->users_by_id.empty());
+    EXPECT_FALSE(db_pool_->state()->rooms_by_id.empty());
+    for (const auto& [room, messages] : db_pool_->state()->messages_by_room_id) {
+        for (const auto& message : messages) {
+            EXPECT_EQ(message.content.find("login ip="), std::string::npos);
+            EXPECT_EQ(message.content.find("127.0.0.1"), std::string::npos);
+        }
+    }
+}
+
+TEST_F(ChatServiceTest, SignedLoginRejectsUnverifiedCredentials) {
+    ChatService::Dependencies dependencies;
+    dependencies.require_auth = true;
+    dependencies.auth_signing_secret = std::string(32, 'k');
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, std::move(dependencies));
+    LoginAs("victim", "unverified-token");
+    const auto error = WaitForError();
+    ASSERT_TRUE(error);
+    EXPECT_EQ(error->code, core_proto::errc::UNAUTHORIZED);
+    EXPECT_EQ(session_->session_status(), core_proto::SessionStatus::kAny);
+}
+
+TEST_F(ChatServiceTest, SignedLoginUsesVerifiedPrincipalInsteadOfClaimedName) {
+    ChatService::Dependencies dependencies;
+    dependencies.db_pool = db_pool_;
+    dependencies.redis = redis_;
+    dependencies.require_auth = true;
+    dependencies.auth_signing_secret = std::string(32, 'k');
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, std::move(dependencies));
+    const auto now = server::auth::unix_seconds();
+    const auto token = server::auth::issue_token({"verified-user", "auth-session", "Display label", now, now + 60}, std::string(32, 'k'));
+    LoginAs("impersonated-user", token);
+    for (int i = 0; i < 10; ++i) {
+        std::uint16_t id = 0;
+        std::vector<std::uint8_t> payload;
+        ASSERT_TRUE(WaitForPacket(id, payload));
+        if (id != game_proto::MSG_LOGIN_RES) { continue; }
+        server::wire::v1::LoginRes response;
+        ASSERT_TRUE(response.ParseFromArray(payload.data(), static_cast<int>(payload.size())));
+        EXPECT_EQ(response.effective_user(), "verified-user");
+        EXPECT_EQ(response.principal_id(), "verified-user");
+        EXPECT_EQ(response.auth_session_id(), "auth-session");
+        EXPECT_EQ(response.display_name(), "Display label");
+        return;
+    }
+    FAIL() << "login response missing";
+}
+
+TEST_F(ChatServiceTest, ExplicitDependenciesDoNotUseGlobalLuaRuntime) {
+    auto global_lua = std::make_shared<server::core::scripting::LuaRuntime>();
+    services::set(global_lua);
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, ChatService::Dependencies{});
+    EXPECT_FALSE(chat_service_->lua_hooks_metrics().enabled);
+}
+
+TEST_F(ChatServiceTest, DestroyedChatCancelsReloadAndDiscardsQueuedReloadCallback) {
+    if (std::string(TEST_CHAT_HOOK_THROWING_PATH).empty()) { GTEST_SKIP(); }
+    ScopedTempDir cache("chat_reload_lifetime");
+    ScopedEnvVar plugin("CHAT_HOOK_PLUGIN_PATH", TEST_CHAT_HOOK_THROWING_PATH);
+    ScopedEnvVar paths("CHAT_HOOK_PLUGIN_PATHS", "");
+    ScopedEnvVar directory("CHAT_HOOK_PLUGINS_DIR", "");
+    ScopedEnvVar enabled("CHAT_HOOK_ENABLED", "1");
+    ScopedEnvVar interval("CHAT_HOOK_RELOAD_INTERVAL_MS", "1");
+    const auto cache_path = cache.path().string();
+    ScopedEnvVar cache_dir("CHAT_HOOK_CACHE_DIR", cache_path.c_str());
+    auto scheduler = std::make_shared<server::core::concurrent::TaskScheduler>();
+    ChatService::Dependencies dependencies;
+    dependencies.scheduler = scheduler;
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, std::move(dependencies));
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    EXPECT_EQ(scheduler->poll(), 1u);
+    chat_service_.reset();
+    ProcessJobs();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    EXPECT_EQ(scheduler->poll(), 0u);
+    EXPECT_TRUE(scheduler->empty());
 }
 
 TEST_F(ChatServiceTest, ThrowingChatHookExceptionDoesNotStopChatOrAdminSettingPath) {

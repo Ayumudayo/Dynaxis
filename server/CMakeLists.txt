@@ -43,7 +43,7 @@ add_library(server_chat_runtime STATIC
 )
 target_include_directories(server_chat_runtime PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_include_directories(server_chat_runtime PRIVATE ${CMAKE_BINARY_DIR}/proto)
-target_link_libraries(server_chat_runtime PUBLIC server_core wire_proto)
+target_link_libraries(server_chat_runtime PUBLIC server_core wire_proto chat_auth)
 target_link_libraries(server_chat_runtime PRIVATE ${CMAKE_DL_LIBS})
 if (TARGET nlohmann_json::nlohmann_json)
     target_link_libraries(server_chat_runtime PRIVATE nlohmann_json::nlohmann_json)

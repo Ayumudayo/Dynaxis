@@ -84,6 +84,10 @@ if (BUILD_LOADGEN_TOOLS)
 endif()
 
 if (BUILD_ADMIN_APP)
+  add_library(admin_http_client STATIC admin_app/http_client.cpp)
+  target_include_directories(admin_http_client PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/admin_app)
+  target_link_libraries(admin_http_client PUBLIC server_core)
+
   add_library(admin_app_backends STATIC admin_app/redis_client_factory.cpp)
   target_link_libraries(admin_app_backends PUBLIC server_core)
   target_link_libraries(admin_app_backends PRIVATE infra_redis_factory)
@@ -96,7 +100,7 @@ if (BUILD_ADMIN_APP)
   else()
     message(WARNING "nlohmann_json target not found ? admin_app may fail to compile")
   endif()
-  target_link_libraries(admin_app PRIVATE admin_app_backends)
+  target_link_libraries(admin_app PRIVATE admin_app_backends admin_http_client)
 
   add_custom_command(TARGET admin_app POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

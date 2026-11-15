@@ -16,6 +16,7 @@
 #include "gateway/registry_backend_factory.hpp"
 #include "gateway/rudp_rollout_policy.hpp"
 #include "gateway/session_directory.hpp"
+#include "signed_authenticator.hpp"
 #include "gateway_app_access.hpp"
 #include "gateway_app_state.hpp"
 #include "server/core/storage/redis/client.hpp"
@@ -423,6 +424,11 @@ void GatewayAppAccess::configure_gateway(GatewayApp& app) {
         impl_->udp_bind_block_ms_);
 
     impl_->allow_anonymous_ = true;
+    const auto auth_config = server::auth::load_config_from_env();
+    impl_->authenticator_ = auth_config.required
+        ? std::shared_ptr<auth::IAuthenticator>(std::make_shared<auth::SignedAuthenticator>(auth_config))
+        : std::shared_ptr<auth::IAuthenticator>(std::make_shared<auth::NoopAuthenticator>());
+    server::core::log::info(auth_config.required ? "Gateway signed authentication enabled" : "Gateway development authentication enabled");
     if (const char* anonymous_env = std::getenv(kEnvAllowAnonymous); anonymous_env && *anonymous_env) {
         impl_->allow_anonymous_ = (std::string_view(anonymous_env) != "0");
     }

@@ -4,6 +4,16 @@
 .git
 .gitignore
 .gitattributes
+.worktrees/
+.cache/
+.codex/
+.opencode/
+.sisyphus/
+.ruff_cache/
+__pycache__/
+tasks/
+artifacts/
+tmp/
 
 # ==============================================================================
 # Build Artifacts (Local Builds)

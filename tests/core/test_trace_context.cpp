@@ -5,21 +5,30 @@
 
 #include <cstdlib>
 #include <string>
+#include <optional>
 #include <vector>
 
 namespace {
 
 void set_env_value(const char* key, const char* value) {
 #if defined(_WIN32)
-    _putenv_s(key, value);
+    _putenv_s(key, value ? value : "");
 #else
-    setenv(key, value, 1);
+    if (value) { setenv(key, value, 1); } else { unsetenv(key); }
 #endif
 }
 
 } // namespace
 
 TEST(TraceContextTest, InjectsTraceAndCorrelationIntoLogsWhenEnabled) {
+    struct LogFormatScope {
+        std::optional<std::string> previous;
+        LogFormatScope() {
+            if (const char* value = std::getenv("LOG_FORMAT")) { previous = value; }
+            set_env_value("LOG_FORMAT", "text");
+        }
+        ~LogFormatScope() { set_env_value("LOG_FORMAT", previous ? previous->c_str() : nullptr); }
+    } log_format;
     set_env_value("RUNTIME_TRACING_ENABLED", "1");
     set_env_value("RUNTIME_TRACING_SAMPLE_PERCENT", "100");
     server::core::trace::reset_for_tests();

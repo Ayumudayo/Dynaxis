@@ -38,7 +38,7 @@ pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build
 ## Config (Env Vars)
 - Listen/identity: `GATEWAY_LISTEN`, `GATEWAY_ID`
 - Discovery/sticky: `REDIS_URI`, `SERVER_REGISTRY_PREFIX`, `SERVER_REGISTRY_TTL`
-- Auth: `ALLOW_ANONYMOUS`, `AUTH_PROVIDER`, `AUTH_ENDPOINT`
+- Auth: `ALLOW_ANONYMOUS`; 독립 binary 기본 `CHAT_AUTH_MODE=signed`는 signing key를 요구한다. Docker 로컬 기본은 명시적 development이다. `docs/ops/authenticated-chat.md` 참고.
 - Observability: `METRICS_PORT` (serves `/metrics`)
 
 ## Metrics

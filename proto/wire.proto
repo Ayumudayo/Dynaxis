@@ -14,6 +14,9 @@ message LoginRes {
   uint64 resume_expires_unix_ms = 7;
   bool resumed = 8;
   string world_id = 9;
+  string principal_id = 10;
+  string auth_session_id = 11;
+  string display_name = 12;
 }
 
 message ChatBroadcast {

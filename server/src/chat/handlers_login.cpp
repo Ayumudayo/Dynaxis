@@ -44,6 +44,20 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
     }
 
     std::uint16_t client_proto_major = proto::kProtocolVersionMajor;
+    std::optional<server::auth::SessionClaims> auth_claims;
+    if (impl_->runtime.auth.required) {
+        const auto credentials = server::auth::split_credentials(token);
+        if (credentials) {
+            auth_claims = server::auth::verify_token(credentials->access_token,
+                impl_->runtime.auth.signing_secret, server::auth::unix_seconds());
+        }
+        if (!auth_claims) {
+            s.send_error(proto::errc::UNAUTHORIZED, "invalid credentials");
+            return;
+        }
+        user = auth_claims->subject;
+        token = credentials->resume_token.empty() ? std::string{} : "resume:" + credentials->resume_token;
+    }
     std::uint16_t client_proto_minor = proto::kProtocolVersionMinor;
     if (!sp.empty()) {
         // LOGIN_REQ 뒤에 선택적으로 client protocol version(major/minor)을 붙인다.
@@ -69,7 +83,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
     // 로그인은 DB/Redis 작업과 write-behind 이벤트가 함께 수행되므로 `job_queue`로 넘긴다.
     // 메인 I/O 스레드에서 이 작업을 직접 수행하면, 느린 저장소가 전체 로그인 latency를 바로 끌어올릴 수 있다.
     // 더 나쁘게는 accept/read 루프까지 막아 신규 연결 자체가 지연될 수 있다.
-    if (!job_queue_.TryPush([this, session_sp, user, token]() {
+    if (!job_queue_.TryPush([this, session_sp, user, token, auth_claims]() {
         const std::string session_id_str = get_or_create_session_uuid(*session_sp);
         std::string tracked_user_uuid;
         std::string lobby_room_id;
@@ -89,6 +103,10 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
 
         const auto requested_resume_token = extract_resume_token(token);
         const auto continuity_resume = try_resume_continuity_lease(token);
+        if (auth_claims && continuity_resume && continuity_resume->effective_user != auth_claims->subject) {
+            session_sp->send_error(proto::errc::UNAUTHORIZED, "resume identity mismatch");
+            return;
+        }
         if (requested_resume_token.has_value() && !continuity_resume.has_value()) {
             session_sp->send_error(proto::errc::UNAUTHORIZED, "invalid resume token");
             return;
@@ -270,15 +288,10 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                     uow3->users().update_last_login(uid, ip);
                     uow3->commit();
                 }
-                // 현재 방의 room_id를 확보한 뒤 시스템 메시지로 IP를 남긴다.
+                // write-behind용 room ID만 확보한다. 로그인 IP를 공개 채팅 history에 쓰지 않는다.
                 auto rid = ensure_room_id_ci(current_room);
                 if (!rid.empty()) {
                     lobby_room_id = rid; // write-behind 이벤트에 활용한다.
-                    auto ip = login_ip;
-                    auto uow2 = impl_->runtime.db_pool->make_repository_unit_of_work();
-                    std::string sys = std::string("(login ip=") + ip + ")";
-                    (void)uow2->messages().create(rid, current_room, std::nullopt, sys);
-                    uow2->commit();
                 }
             } catch (const std::exception& e) {
                 corelog::warn(std::string("login audit persist failed: ") + e.what());
@@ -311,6 +324,11 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
 
         server::wire::v1::LoginRes pb;
         pb.set_effective_user(new_user);
+        if (auth_claims) {
+            pb.set_principal_id(auth_claims->subject);
+            pb.set_auth_session_id(auth_claims->session_id);
+            pb.set_display_name(auth_claims->display_name);
+        }
         pb.set_session_id(session_sp->session_id());
         pb.set_message(resumed_login ? "resumed" : "ok");
         pb.set_is_admin(impl_->runtime.admin_users.count(new_user) > 0);

@@ -35,11 +35,15 @@
 - Gateway backend bridge path: `BackendConnection`은 bounded send queue, retry budget, exponential retry backoff, circuit breaker metrics를 함께 사용해 backend 장애 전파를 제한합니다.
 
 ## 소유권/수명주기 규칙
+- 새 runtime은 `TransportRouter(std::shared_ptr<JobQueue>)` 또는 `Dispatcher(std::shared_ptr<JobQueue>)`로 자기 worker queue를 주입합니다. router/dispatcher는 queue를 공유 소유하며, queue 소비와 종료는 앱이 관리합니다. worker 경로는 queue를 거쳐 session의 serialized context에 callback을 게시합니다.
+- `nullptr`를 명시하면 worker 경로는 `SERVER_BUSY`로 거절합니다. full/stopped queue도 거절하며 전역 queue로 우회하지 않습니다. 인수 없는 생성자만 기존 `ServiceRegistry` lookup을 유지하는 호환 경로입니다.
 - 비동기 전송 객체 소유권에는 `std::shared_ptr`를 사용합니다.
 - `Connection`의 송신 큐는 in-flight `async_write` 버퍼 수명을 close/queue-clear 이후까지 유지해야 합니다.
 - 콜백 핸들러는 논블로킹·예외 안전을 유지합니다.
 - 모듈 경계를 넘어 내부 가변 상태에 직접 접근하지 않습니다.
 
 ## Verification Pointers
+- Runtime별 worker 격리 / payload·session 수명: `tests/core/test_transport_router.cpp` (최소 core에서도 실행)
+- 관리 HTTP deadline / framing / 크기 상한: `tests/admin/test_http_client.cpp` (admin 모듈 전용)
 - Bounded queue / transport backpressure: `tests/core/test_core_net.cpp`
 - Policy primitives (`TokenBucket`, `RetryBudget`, `CircuitBreaker`): `tests/core/test_gateway_resilience_controls.cpp`

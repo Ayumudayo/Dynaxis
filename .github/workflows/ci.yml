@@ -17,6 +17,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  core-runtime-linux:
+    name: Minimal Core Runtime (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        # 최소 core는 LuaJIT/sol2/imgui checkout 없이 빌드되어야 한다.
+      - name: Install Minimal Build Dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libboost-dev libgtest-dev
+      - name: Build Minimal Core
+        run: |
+          cmake --preset linux-core-engine
+          cmake --build --preset linux-core-engine-debug --parallel 4
+      - name: Test Minimal Core Including Installed Consumer
+        run: ctest --preset linux-core-engine-test --no-tests=error
+
   windows-fast-tests:
     name: Windows Build, Docs, and Tests
     runs-on: windows-latest

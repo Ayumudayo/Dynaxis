@@ -1,3 +1,4 @@
+from session_continuity_common import safe_login_summary
 import argparse
 import hashlib
 import json
@@ -156,23 +157,23 @@ def wait_ready(port: int, timeout_sec: float = 60.0) -> None:
 
 def assert_initial_login(login: dict, user: str) -> tuple[str, str]:
     if login["effective_user"] != user:
-        raise AssertionError(f"effective user mismatch: {login}")
+        raise AssertionError(f"effective user mismatch: {safe_login_summary(login)}")
     if not login["logical_session_id"] or not login["resume_token"] or login["resume_expires_unix_ms"] == 0:
-        raise AssertionError(f"continuity lease fields missing: {login}")
+        raise AssertionError(f"continuity lease fields missing: {safe_login_summary(login)}")
     if not login["world_id"]:
-        raise AssertionError(f"world admission metadata missing: {login}")
+        raise AssertionError(f"world admission metadata missing: {safe_login_summary(login)}")
     if login["resumed"]:
-        raise AssertionError(f"initial login unexpectedly marked resumed: {login}")
+        raise AssertionError(f"initial login unexpectedly marked resumed: {safe_login_summary(login)}")
     return login["logical_session_id"], login["resume_token"]
 
 
 def assert_resumed_login(login: dict, user: str, logical_session_id: str) -> None:
     if login["effective_user"] != user:
-        raise AssertionError(f"resumed effective user mismatch: {login}")
+        raise AssertionError(f"resumed effective user mismatch: {safe_login_summary(login)}")
     if login["logical_session_id"] != logical_session_id:
-        raise AssertionError(f"logical session id changed across resume: {login}")
+        raise AssertionError(f"logical session id changed across resume: {safe_login_summary(login)}")
     if not login["resumed"]:
-        raise AssertionError(f"resumed login not marked resumed: {login}")
+        raise AssertionError(f"resumed login not marked resumed: {safe_login_summary(login)}")
 
 
 def connect_and_login(user: str, token: str, host: str, port: int) -> tuple[ChatClient, dict]:
@@ -428,7 +429,7 @@ def run_locator_fallback() -> None:
     try:
         logical_session_id, resume_token = assert_initial_login(login, user)
         if login["world_id"] != PRIMARY_WORLD_ID:
-            raise AssertionError(f"unexpected initial world residency: {login}")
+            raise AssertionError(f"unexpected initial world residency: {safe_login_summary(login)}")
         first.join_room(room, user)
 
         routing_key = make_resume_routing_key(resume_token)
@@ -503,7 +504,7 @@ def run_world_residency_fallback() -> None:
     try:
         logical_session_id, resume_token = assert_initial_login(login, user)
         if login["world_id"] != PRIMARY_WORLD_ID:
-            raise AssertionError(f"unexpected initial world residency: {login}")
+            raise AssertionError(f"unexpected initial world residency: {safe_login_summary(login)}")
         first.join_room(room, user)
 
         world_key = f"{CONTINUITY_WORLD_PREFIX}{logical_session_id}"
@@ -521,7 +522,7 @@ def run_world_residency_fallback() -> None:
 
         second, resumed = resume_until_success("127.0.0.1", 36100, resume_token, user, logical_session_id)
         if resumed["world_id"] != PRIMARY_WORLD_ID:
-            raise AssertionError(f"world residency fallback did not land on safe default world: {resumed}")
+            raise AssertionError(f"world residency fallback did not land on safe default world: {safe_login_summary(resumed)}")
 
         second.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8("should_fail_after_world_fallback"))
         error_code, error_message = second.wait_for_error(5.0)
@@ -567,7 +568,7 @@ def run_world_owner_fallback() -> None:
     try:
         logical_session_id, resume_token = assert_initial_login(login, user)
         if login["world_id"] != PRIMARY_WORLD_ID:
-            raise AssertionError(f"unexpected initial world residency: {login}")
+            raise AssertionError(f"unexpected initial world residency: {safe_login_summary(login)}")
         first.join_room(room, user)
 
         world_owner_key = f"{CONTINUITY_WORLD_OWNER_PREFIX}{login['world_id']}"
@@ -591,7 +592,7 @@ def run_world_owner_fallback() -> None:
 
         second, resumed = resume_until_success("127.0.0.1", 36100, resume_token, user, logical_session_id)
         if resumed["world_id"] != PRIMARY_WORLD_ID:
-            raise AssertionError(f"world owner fallback did not land on safe default world: {resumed}")
+            raise AssertionError(f"world owner fallback did not land on safe default world: {safe_login_summary(resumed)}")
 
         second.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8("should_fail_after_world_owner_fallback"))
         error_code, error_message = second.wait_for_error(5.0)
@@ -658,7 +659,7 @@ def run_world_owner_missing_fallback() -> None:
     try:
         logical_session_id, resume_token = assert_initial_login(login, user)
         if login["world_id"] != PRIMARY_WORLD_ID:
-            raise AssertionError(f"unexpected initial world residency: {login}")
+            raise AssertionError(f"unexpected initial world residency: {safe_login_summary(login)}")
         first.join_room(room, user)
 
         world_owner_key = f"{CONTINUITY_WORLD_OWNER_PREFIX}{login['world_id']}"
@@ -682,7 +683,7 @@ def run_world_owner_missing_fallback() -> None:
 
         second, resumed = resume_until_success("127.0.0.1", 36100, resume_token, user, logical_session_id)
         if resumed["world_id"] != PRIMARY_WORLD_ID:
-            raise AssertionError(f"missing-owner fallback did not land on safe default world: {resumed}")
+            raise AssertionError(f"missing-owner fallback did not land on safe default world: {safe_login_summary(resumed)}")
 
         second.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8("should_fail_after_world_owner_missing_fallback"))
         error_code, error_message = second.wait_for_error(5.0)
@@ -750,7 +751,7 @@ def run_world_drain_fallback() -> None:
     try:
         logical_session_id, resume_token = assert_initial_login(login, user)
         if login["world_id"] != PRIMARY_WORLD_ID:
-            raise AssertionError(f"unexpected initial world residency: {login}")
+            raise AssertionError(f"unexpected initial world residency: {safe_login_summary(login)}")
         first.join_room(room, user)
 
         routing_key = make_resume_routing_key(resume_token)
@@ -807,7 +808,7 @@ def run_world_drain_fallback() -> None:
                 f"fresh admission did not avoid draining owner: expected {fallback_server_id}, got {fresh_backend!r}"
             )
         if fresh_login["world_id"] != fallback_world_id:
-            raise AssertionError(f"fresh admission did not land on fallback world {fallback_world_id}: {fresh_login}")
+            raise AssertionError(f"fresh admission did not land on fallback world {fallback_world_id}: {safe_login_summary(fresh_login)}")
         fresh.close()
         fresh = None
 
@@ -819,7 +820,7 @@ def run_world_drain_fallback() -> None:
                 f"resume routing did not rebind away from the draining owner: {resumed_backend!r}"
             )
         if resumed["world_id"] != fallback_world_id:
-            raise AssertionError(f"resume did not fall back to world {fallback_world_id}: {resumed}")
+            raise AssertionError(f"resume did not fall back to world {fallback_world_id}: {safe_login_summary(resumed)}")
 
         second.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8("should_fail_after_world_drain_fallback"))
         error_code, error_message = second.wait_for_error(5.0)
@@ -922,7 +923,7 @@ def run_world_drain_reassignment() -> None:
     try:
         logical_session_id, resume_token = assert_initial_login(login, user)
         if login["world_id"] != PRIMARY_WORLD_ID:
-            raise AssertionError(f"unexpected initial world residency: {login}")
+            raise AssertionError(f"unexpected initial world residency: {safe_login_summary(login)}")
         first.join_room(room, user)
 
         routing_key = make_resume_routing_key(resume_token)
@@ -990,7 +991,7 @@ def run_world_drain_reassignment() -> None:
                 f"fresh admission did not reach replacement backend {replacement_server_id}: {fresh_backend!r}"
             )
         if fresh_login["world_id"] != PRIMARY_WORLD_ID:
-            raise AssertionError(f"fresh admission did not preserve same-world residency: {fresh_login}")
+            raise AssertionError(f"fresh admission did not preserve same-world residency: {safe_login_summary(fresh_login)}")
         if wait_for_redis_value(world_owner_key) != replacement_server_id:
             raise AssertionError(
                 f"world owner key was not reasserted to replacement backend {replacement_server_id}"
@@ -1006,7 +1007,7 @@ def run_world_drain_reassignment() -> None:
                 f"resume routing did not bind to the replacement backend: {resumed_backend!r}"
             )
         if resumed["world_id"] != PRIMARY_WORLD_ID:
-            raise AssertionError(f"resume did not preserve same-world residency: {resumed}")
+            raise AssertionError(f"resume did not preserve same-world residency: {safe_login_summary(resumed)}")
 
         second.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8(message))
         second.wait_for_self_chat(room, message, 5.0)
@@ -1110,7 +1111,7 @@ def run_world_drain_progress() -> None:
     try:
         logical_session_id, resume_token = assert_initial_login(login, user)
         if login["world_id"] != PRIMARY_WORLD_ID:
-            raise AssertionError(f"unexpected initial world residency: {login}")
+            raise AssertionError(f"unexpected initial world residency: {safe_login_summary(login)}")
 
         world_drain_path = f"/api/v1/worlds/{login['world_id']}/drain"
         print("Declaring named world drain and proving operator-visible progress reaches drained after the last session leaves...")
@@ -1195,7 +1196,7 @@ def run_world_drain_transfer_closure() -> None:
     try:
         logical_session_id, _resume_token = assert_initial_login(login, user)
         if login["world_id"] != PRIMARY_WORLD_ID:
-            raise AssertionError(f"unexpected initial world residency: {login}")
+            raise AssertionError(f"unexpected initial world residency: {safe_login_summary(login)}")
 
         world_drain_path = f"/api/v1/worlds/{login['world_id']}/drain"
         world_transfer_path = f"/api/v1/worlds/{login['world_id']}/transfer"
@@ -1285,7 +1286,7 @@ def run_world_drain_migration_closure() -> None:
     try:
         logical_session_id, _ = assert_initial_login(login, user)
         if login["world_id"] != PRIMARY_WORLD_ID:
-            raise AssertionError(f"unexpected initial world residency: {login}")
+            raise AssertionError(f"unexpected initial world residency: {safe_login_summary(login)}")
         wait_for_instance_active_sessions(PRIMARY_SERVER_ID, minimum_sessions=1)
         world_drain_path = f"/api/v1/worlds/{login['world_id']}/drain"
         world_migration_path = f"/api/v1/worlds/{login['world_id']}/migration"
@@ -1388,7 +1389,7 @@ def run_world_owner_transfer_commit() -> None:
     try:
         logical_session_id, resume_token = assert_initial_login(login, user)
         if login["world_id"] != PRIMARY_WORLD_ID:
-            raise AssertionError(f"unexpected initial world residency: {login}")
+            raise AssertionError(f"unexpected initial world residency: {safe_login_summary(login)}")
         first.join_room(room, user)
 
         routing_key = make_resume_routing_key(resume_token)
@@ -1461,7 +1462,7 @@ def run_world_owner_transfer_commit() -> None:
                 f"resume routing did not bind to committed replacement backend: {resumed_backend!r}"
             )
         if resumed["world_id"] != PRIMARY_WORLD_ID:
-            raise AssertionError(f"resume did not preserve same-world residency after committed transfer: {resumed}")
+            raise AssertionError(f"resume did not preserve same-world residency after committed transfer: {safe_login_summary(resumed)}")
 
         second.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8(message))
         second.wait_for_self_chat(room, message, 5.0)
@@ -1568,7 +1569,7 @@ def run_world_migration_handoff() -> None:
     try:
         logical_session_id, resume_token = assert_initial_login(login, user)
         if login["world_id"] != PRIMARY_WORLD_ID:
-            raise AssertionError(f"unexpected initial world residency: {login}")
+            raise AssertionError(f"unexpected initial world residency: {safe_login_summary(login)}")
         first.join_room(room, user)
 
         routing_key = make_resume_routing_key(resume_token)
@@ -1645,7 +1646,7 @@ def run_world_migration_handoff() -> None:
                 f"resume routing did not bind to the migration target backend: {resumed_backend!r}"
             )
         if resumed["world_id"] != fallback_world_id:
-            raise AssertionError(f"resume did not migrate to world {fallback_world_id}: {resumed}")
+            raise AssertionError(f"resume did not migrate to world {fallback_world_id}: {safe_login_summary(resumed)}")
 
         second.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8(message))
         second.wait_for_self_chat(room, message, 5.0)
@@ -1759,7 +1760,7 @@ def run_world_migration_target_room_handoff() -> None:
     try:
         logical_session_id, resume_token = assert_initial_login(login, user)
         if login["world_id"] != PRIMARY_WORLD_ID:
-            raise AssertionError(f"unexpected initial world residency: {login}")
+            raise AssertionError(f"unexpected initial world residency: {safe_login_summary(login)}")
         first.join_room(source_room, user)
 
         routing_key = make_resume_routing_key(resume_token)
@@ -1838,7 +1839,7 @@ def run_world_migration_target_room_handoff() -> None:
                 f"resume routing did not bind to the migration target backend: {resumed_backend!r}"
             )
         if resumed["world_id"] != fallback_world_id:
-            raise AssertionError(f"resume did not migrate to world {fallback_world_id}: {resumed}")
+            raise AssertionError(f"resume did not migrate to world {fallback_world_id}: {safe_login_summary(resumed)}")
 
         second.send_frame(MSG_CHAT_SEND, lp_utf8(source_room) + lp_utf8("should-fail"))
         errc, message = second.wait_for_error(5.0)

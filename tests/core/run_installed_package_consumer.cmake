@@ -96,4 +96,6 @@ function(run_consumer_executable target_name)
 endfunction()
 
 run_consumer_executable("server_core_installed_consumer")
-run_consumer_executable("server_core_extensibility_consumer")
+if(NOT DEFINED EXPECT_EXTENSIBILITY OR EXPECT_EXTENSIBILITY)
+    run_consumer_executable("server_core_extensibility_consumer")
+endif()

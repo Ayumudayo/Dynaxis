@@ -28,6 +28,11 @@ Shared C++20 library used by `server_app`, `gateway_app`, tools, and the Windows
   - `build/generated/include/server/generated/**`
 - Rule: treat generated payload as write-only; edit the JSON + generator instead.
 
+## Build boundary
+- `BUILD_CORE_EXTENSIONS=OFF` is the independently tested minimal runtime profile; it requires no Lua/Protobuf/OpenSSL/LZ4 or app adapters.
+- The default full profile retains the MSA chat server and the existing Stable API.
+- Ownership and migration limits: `docs/architecture/core-and-msa.md`.
+
 ## Build / Test (Windows)
 ```powershell
 pwsh scripts/build.ps1 -Config Debug -Target server_core
@@ -35,7 +40,7 @@ ctest --preset windows-test
 ```
 
 ## Runtime Extensibility Notes
-- Plugin/scripting modules in `core/include/server/core/plugin/*` and `core/include/server/core/scripting/*` are currently governed as transitional public API; check `docs/core-api-boundary.md` before signature changes.
+- Plugin/scripting modules are Stable in the full configuration; check `docs/core-api-boundary.md` before signature changes. They are excluded from `BUILD_CORE_EXTENSIONS=OFF`.
 - Keep host modules domain-agnostic: no `server/` or `gateway/` implementation coupling from `core/src`.
 - If adding plugin or Lua metrics, keep naming aligned with existing series in `server/src/app/metrics_server.cpp`.
 

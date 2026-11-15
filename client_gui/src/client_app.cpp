@@ -32,8 +32,13 @@ void ClientApp::disconnect() {
     data_.is_admin = false;
 }
 
-void ClientApp::login(const std::string& username) {
-    net_client_.send_login(username, "");
+void ClientApp::login(const std::string& username, const std::string& access_token, bool resume) {
+    std::string credentials = access_token;
+    if (resume && !data_.session_info.resume_token.empty()) {
+        credentials += access_token.empty() ? "resume:" : "|resume:";
+        credentials += data_.session_info.resume_token;
+    }
+    net_client_.send_login(username, credentials);
 }
 
 /**
@@ -129,6 +134,9 @@ void ClientApp::setup_callbacks() {
             data_.is_admin = is_admin;
             data_.add_log("[system] Logged in as: " + effective_user + " (SID: " + std::to_string(sid) + ")");
         });
+    });
+    net_client_.set_on_session_info([this](NetClient::SessionInfo info) {
+        event_queue_.push([this, info = std::move(info)]() mutable { data_.session_info = std::move(info); });
     });
 
     net_client_.set_on_disconnected([this](std::string reason) {
