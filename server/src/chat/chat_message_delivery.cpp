@@ -5,6 +5,7 @@
 
 #include "server/core/storage/redis/client.hpp"
 #include "server/core/protocol/protocol_flags.hpp"
+#include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/util/log.hpp"
 #include "server/protocol/game_opcodes.hpp"
 #include "server/storage/connection_pool.hpp"
@@ -43,21 +44,6 @@ PreparedChatBroadcast prepare_chat_broadcast(std::string_view room,
     prepared.snapshot_message.set_text(std::string(text));
     prepared.snapshot_message.set_ts_ms(prepared.ts_ms);
     return prepared;
-}
-
-void send_local_chat_broadcast(
-    const std::shared_ptr<server::core::net::Session>& sender_session,
-    const std::vector<std::shared_ptr<server::core::net::Session>>& targets,
-    const std::vector<std::uint8_t>& body) {
-    if (targets.empty()) {
-        sender_session->async_send(game_proto::MSG_CHAT_BROADCAST, body, proto::FLAG_SELF);
-        return;
-    }
-
-    for (const auto& target : targets) {
-        const auto flags = (target.get() == sender_session.get()) ? proto::FLAG_SELF : 0;
-        target->async_send(game_proto::MSG_CHAT_BROADCAST, body, flags);
-    }
 }
 
 std::vector<std::shared_ptr<server::core::net::Session>>
@@ -125,10 +111,11 @@ ChatServicePersistedMessage ChatServicePrivateAccess::persist_room_message(
         const auto user_uuid = lookup_user_uuid(service, session);
         auto uow = service.impl_->runtime.db_pool->make_repository_unit_of_work();
         auto msg = uow->messages().create(persisted.room_id, room_name, user_uuid, text);
-        persisted.message_id = msg.id;
         uow->commit();
+        persisted.message_id = msg.id;
     } catch (const std::exception& e) {
-        corelog::error(std::string("Failed to persist message: ") + e.what());
+        corelog::error("Failed to commit chat message");
+        return {};
     }
 
     return persisted;
@@ -215,17 +202,23 @@ void ChatService::dispatch_room_message(std::shared_ptr<Session> session_sp,
         *this,
         current_room,
         sender);
-    auto prepared = prepare_chat_broadcast(
-        current_room,
-        sender,
-        text,
-        session_sp->session_id());
-
     const auto persisted = ChatServicePrivateAccess::persist_room_message(
         *this,
         *session_sp,
         current_room,
         text);
+
+    if (persisted.message_id == 0) {
+        session_sp->send_error(proto::errc::SERVER_BUSY, "message commit not confirmed; refresh before retry");
+        return;
+    }
+    auto prepared = prepare_chat_broadcast(current_room, sender, text, session_sp->session_id());
+    server::wire::v1::ChatBroadcast broadcast;
+    broadcast.ParseFromString(prepared.serialized_payload);
+    broadcast.set_message_id(persisted.message_id);
+    broadcast.set_room_id(persisted.room_id);
+    broadcast.SerializeToString(&prepared.serialized_payload);
+    prepared.body.assign(prepared.serialized_payload.begin(), prepared.serialized_payload.end());
 
     if (impl_->runtime.redis && !persisted.room_id.empty() && persisted.message_id != 0) {
         prepared.snapshot_message.set_id(persisted.message_id);
@@ -247,7 +240,10 @@ void ChatService::dispatch_room_message(std::shared_ptr<Session> session_sp,
         }
     }
 
-    send_local_chat_broadcast(session_sp, targets, prepared.body);
+    session_sp->async_send(game_proto::MSG_CHAT_BROADCAST, prepared.body, proto::FLAG_SELF);
+    for (const auto& target : targets) {
+        if (target != session_sp) deliver_verified(target, game_proto::MSG_CHAT_BROADCAST, prepared.body, sender, current_room);
+    }
     (void)ChatServicePrivateAccess::touch_session_presence(*this, *session_sp);
     (void)ChatServicePrivateAccess::publish_room_fanout(
         *this,

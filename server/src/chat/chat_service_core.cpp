@@ -8,7 +8,6 @@
 #include "server/core/runtime_metrics.hpp"
 #include "server/core/trace/context.hpp"
 #include "server/core/util/log.hpp"
-#include "server/core/util/service_registry.hpp"
 #include "server/core/concurrent/job_queue.hpp"
 #include "server/wire/codec.hpp"
 // 저장소 연동 헤더
@@ -34,7 +33,6 @@ using namespace server::core;
 namespace proto = server::core::protocol;
 namespace game_proto = server::protocol;
 namespace corelog = server::core::log;
-namespace services = server::core::util::services;
 
 /**
  * @brief ChatService 코어 상태, 설정, 의존성 초기화 구현입니다.
@@ -102,8 +100,8 @@ ChatService::ChatService(boost::asio::io_context& io,
                          std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool,
                          std::shared_ptr<server::core::storage::redis::IRedisClient> redis)
     : ChatService(io, job_queue, Dependencies{
-        db_pool ? std::move(db_pool) : services::get<server::storage::IRepositoryConnectionPool>(),
-        redis ? std::move(redis) : services::get<server::core::storage::redis::IRedisClient>(),
+        std::move(db_pool),
+        std::move(redis),
         false, {}}) {}
 
 ChatService::ChatService(boost::asio::io_context& io, server::core::JobQueue& job_queue, Dependencies dependencies)
@@ -617,7 +615,7 @@ std::string ChatService::ensure_unique_or_error(Session& s, const std::string& d
         if (itset != impl_->state.by_user.end()) {
             bool taken = false;
             for (auto wit = itset->second.begin(); wit != itset->second.end(); ) {
-                if (auto p = wit->lock()) { taken = true; break; }
+                if (auto p = wit->lock()) { if (p.get() != &s) { taken = true; break; } ++wit; }
                 else { wit = itset->second.erase(wit); }
             }
             if (taken) {
@@ -1019,117 +1017,36 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
         rid = ensure_room_id_ci(current);
     }
 
-    std::unordered_set<std::uint64_t> added_ids;
-    bool loaded_from_cache = false;
-    std::size_t cached_messages = 0;
-    if (impl_->runtime.redis && !rid.empty()) {
-        std::vector<server::wire::v1::StateSnapshot::SnapshotMessage> cached;
-        if (ChatServicePrivateAccess::load_recent_messages_from_cache(*this, rid, cached)) {
-            for (auto& message : cached) {
-                if (added_ids.count(message.id())) continue; // 중복 제거
-                auto* sm = pb.add_messages();
-                *sm = message;
-                added_ids.insert(message.id());
-            }
-            cached_messages = cached.size();
-            loaded_from_cache = (cached_messages >= impl_->history.recent_limit);
-        }
-    }
-
-    std::uint64_t last_seen_value = 0;
-    bool last_seen_loaded = false;
+    pb.set_room_id(rid);
+    pb.set_history_limit(static_cast<std::uint32_t>(impl_->history.recent_limit));
     if (impl_->runtime.db_pool && !rid.empty()) {
         try {
+            auto work = impl_->runtime.db_pool->make_repository_unit_of_work();
+            work->chat_state().lock("message:" + rid);
+            // 같은 방 writer와 잠금을 공유한다. ID 할당 중인 transaction을 wm 앞에 남기지 않는다.
+            const auto watermark = work->messages().get_last_id(rid);
+            const auto messages = work->messages().fetch_recent_by_room(rid, 0, impl_->history.recent_limit);
             std::string uid;
-            {
-                std::lock_guard<std::mutex> lk(impl_->state.mu);
-                auto itu = impl_->state.user_uuid.find(&s);
-                if (itu != impl_->state.user_uuid.end()) uid = itu->second;
+            { std::lock_guard lock(impl_->state.mu); uid = impl_->state.user_uuid[&s]; }
+            if (!uid.empty()) pb.set_last_seen_id(work->memberships().get_last_seen(uid, rid).value_or(0));
+            work->commit();
+            pb.set_watermark(watermark);
+            pb.set_history_available(true);
+            for (const auto& message : messages) {
+                auto* item = pb.add_messages();
+                item->set_id(message.id);
+                item->set_sender(message.user_name.value_or("guest"));
+                item->set_text(message.content);
+                item->set_ts_ms(message.created_at_ms);
             }
-
-            auto uow = impl_->runtime.db_pool->make_repository_unit_of_work();
-            if (!uid.empty()) {
-                auto opt = uow->memberships().get_last_seen(uid, rid);
-                last_seen_value = opt.value_or(0);
-            }
-            last_seen_loaded = true;
-            pb.set_last_seen_id(last_seen_value);
-
-            // 캐시된 메시지가 부족하면 DB에서 추가로 조회합니다.
-            if (!loaded_from_cache || cached_messages < impl_->history.recent_limit) {
-                const std::size_t limit = impl_->history.recent_limit;
-                const std::size_t fetch_factor = impl_->history.fetch_factor;
-                const std::size_t fetch_span = limit * fetch_factor;
-                const std::size_t fetch_count = std::min(impl_->history.max_list_len, std::max(limit, fetch_span));
-
-                auto last_id = uow->messages().get_last_id(rid);
-                std::uint64_t since_id = 0;
-                // 마지막으로 읽은 메시지(last_seen)를 기준으로 가져올 범위를 계산합니다.
-                    if (last_id > 0) {
-                        // last_seen_value(마지막으로 읽은 메시지)를 기준으로 Fetch 범위를 결정합니다.
-                        // 1. last_seen이 없으면(0) 최신 N개를 가져옵니다.
-                        // 2. last_seen이 너무 오래되어 Gap이 크면, 중간을 건너뛰고 최신 메시지 위주로 가져옵니다.
-                        // 3. 정상적인 경우 last_seen 직후부터 가져옵니다.
-                        if (last_seen_value == 0) {
-                            since_id = (last_id > limit) ? (last_id - limit) : 0;
-                        } else if (last_seen_value >= last_id) {
-                            since_id = (last_id > limit) ? (last_id - limit) : 0;
-                        } else {
-                            std::uint64_t context = static_cast<std::uint64_t>(limit) * static_cast<std::uint64_t>(fetch_factor);
-                            if (last_id > context) {
-                                std::uint64_t cut = last_id - context;
-                                since_id = (last_seen_value > cut) ? last_seen_value : cut;
-                            } else {
-                                since_id = last_seen_value;
-                            }
-                        }
-                    }
-
-                auto msgs = uow->messages().fetch_recent_by_room(rid, since_id, fetch_count);
-                // DB에서 가져온 것 중 이미 캐시에 있는 것은 제외
-                std::vector<server::storage::Message> filtered;
-                filtered.reserve(msgs.size());
-                for (const auto& m : msgs) {
-                    if (added_ids.find(m.id) == added_ids.end()) {
-                        server::storage::Message m_copy = m;
-                        filtered.push_back(std::move(m_copy));
-                    }
-                }
-                msgs = std::move(filtered);
-
-                if (msgs.size() > limit) {
-                    msgs.erase(msgs.begin(), msgs.end() - static_cast<std::ptrdiff_t>(limit));
-                }
-                std::size_t budget = (cached_messages >= limit) ? 0 : (limit - cached_messages);
-                if (budget == 0) {
-                    msgs.clear();
-                } else if (msgs.size() > budget) {
-                    msgs.erase(msgs.begin(), msgs.end() - static_cast<std::ptrdiff_t>(budget));
-                }
-                for (const auto& m : msgs) {
-                    auto* sm = pb.add_messages();
-                    sm->set_id(m.id);
-                    std::string sender;
-                    if (m.user_name && !m.user_name->empty()) sender = *m.user_name;
-                    else sender = std::string("(system)");
-                    sm->set_sender(sender);
-                    sm->set_text(m.content);
-                    sm->set_ts_ms(static_cast<std::uint64_t>(m.created_at_ms));
-                    // DB에서 가져온 메시지를 Redis 캐시에 채워넣습니다 (Read-Repair).
-                    if (impl_->runtime.redis) {
-                        ChatServicePrivateAccess::cache_recent_message(*this, rid, *sm);
-                    }
-                    added_ids.insert(m.id);
-                }
-            }
-        } catch (const std::exception& e) {
-            corelog::warn(std::string("recent history DB fallback failed: ") + e.what());
-        } catch (...) {
-            corelog::warn("recent history DB fallback failed: unknown error");
-        }
+        } catch (...) { corelog::warn("recent history DB unavailable"); }
     }
-    if (!last_seen_loaded) {
-        pb.set_last_seen_id(last_seen_value);
+    if (!pb.history_available() && impl_->runtime.redis && !rid.empty()) {
+        std::vector<server::wire::v1::StateSnapshot::SnapshotMessage> cached;
+        if (ChatServicePrivateAccess::load_recent_messages_from_cache(*this, rid, cached)) {
+            for (auto& message : cached) *pb.add_messages() = message;
+            // Cache fallback is partial: never present its max ID as a complete DB boundary.
+        }
     }
 
     // 현재 세션의 이름(닉네임)을 클라이언트에게 알려줌 (Guest 식별용)
@@ -1167,8 +1084,7 @@ void ChatService::broadcast_room(const std::string& room, const std::vector<std:
         targets = collect_room_targets_locked(impl_->state, room, sender);
     }
     for (auto& t : targets) {
-        int f = 0; // 재전파에서는 self 플래그를 사용하지 않는다.
-        t->async_send(game_proto::MSG_CHAT_BROADCAST, body, f);
+        deliver_verified(t, game_proto::MSG_CHAT_BROADCAST, body, sender, room);
     }
 }
 
@@ -1256,7 +1172,7 @@ void ChatService::deliver_remote_whisper(const std::vector<std::uint8_t>& body) 
     }
     std::vector<std::uint8_t> incoming(incoming_bytes.begin(), incoming_bytes.end());
     for (auto& target : targets) {
-        target->async_send(game_proto::MSG_WHISPER_BROADCAST, incoming, 0);
+        deliver_verified(target, game_proto::MSG_WHISPER_BROADCAST, incoming, notice.sender());
     }
 
     corelog::debug("[whisper] sender=" + notice.sender() +
@@ -1419,7 +1335,7 @@ void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const st
     notice.SerializeToString(&incoming_bytes);
     std::vector<std::uint8_t> incoming(incoming_bytes.begin(), incoming_bytes.end());
     for (auto& target : targets) {
-        target->async_send(game_proto::MSG_WHISPER_BROADCAST, incoming, 0);
+        deliver_verified(target, game_proto::MSG_WHISPER_BROADCAST, incoming, notice.sender());
     }
 
     send_outgoing();
@@ -1475,6 +1391,7 @@ std::string ChatService::ensure_room_id_ci(const std::string& room_name) {
     }
     try {
         auto uow = impl_->runtime.db_pool->make_repository_unit_of_work();
+        uow->chat_state().lock("room:" + room_name);
         auto found = uow->rooms().find_by_name_exact_ci(room_name);
         std::string id;
         if (found) {

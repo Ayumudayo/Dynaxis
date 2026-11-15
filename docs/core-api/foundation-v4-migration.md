@@ -11,3 +11,9 @@ LoginRes의 protobuf 필드 9(world_id)는 이름과 번호를 reserve했다. �
 최소 core와 전체 MSA package는 각각 다른 설치 prefix를 사용한다. `BUILD_CORE_EXTENSIONS=ON`은 현재 MSA 통합 범위이며 이전 확장 API 제공을 뜻하지 않는다. 최소 package는 `server_core_HAS_EXTENSIONS=OFF`다.
 
 DB의 기존 사용자·룸·메시지·세션 데이터를 삭제하는 migration은 없다. 운영 Redis의 오래된 world 키를 자동으로 삭제하지 않는다. 제거된 기능의 환경 변수는 새 실행에 사용하지 않는다.
+
+기초 계약 보완에는 `0002_chat_authority.sql` 적용이 필요하다. 기존 owner의 근거가 없는 방은 owner 없는 공유 상태로 보존하며 첫 접속자에게 소유권을 부여하지 않는다. 관리자가 초대하거나 제거 후 재생성할 수 있다. 새 방은 생성과 함께 owner·초대·참여 권한을 저장한다.
+
+`ChatService`의 편의 생성자도 null 의존성을 전역 Registry에서 찾지 않는다. 저장소와 Redis를 명시적으로 전달한다. 외부 저장소 구현과 mock은 `IRepositoryUnitOfWork::chat_state()` 계약을 구현해야 한다.
+
+채팅 wire의 설치 타깃은 `server_core::wire_proto`에서 독립 패키지의 `chat_wire::wire_proto`로 옮겼다. wire 소비자는 `find_package(chat_wire CONFIG REQUIRED)`를 명시한다. generic core만 사용하는 소비자에게 Protobuf를 전이 링크하지 않는다. 새 message ID와 snapshot 필드는 기존 Protobuf 번호를 유지하며 추가했다. 세부 실패·병합 규칙은 [기초 계약](../architecture/foundation-contracts.md)과 [snapshot](../protocol/snapshot.md)을 따른다.

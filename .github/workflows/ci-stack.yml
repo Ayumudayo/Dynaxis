@@ -101,6 +101,10 @@ jobs:
         run: python3 tests/python/verify_signed_chat.py --manage-stack
       - name: Database and Redis Recovery
         run: python3 tests/python/verify_core_dependency_recovery.py
+      - name: Distributed Authority and Committed Delivery
+        run: |
+          python3 tests/python/verify_gateway_readiness.py
+          python3 tests/python/verify_foundation_contracts.py
       - name: Protocol and Bounded Connections
         run: |
           python3 tests/python/verify_pong.py
@@ -109,6 +113,9 @@ jobs:
           python3 tests/python/verify_soak_perf_gate.py
       - name: Session Restart and Failover
         run: python3 tests/python/verify_continuity_recovery_matrix.py --no-build
+      - name: Failure Diagnostics
+        if: failure()
+        run: python3 tests/python/diagnose_stack.py
       - name: Cleanup
         if: always()
         shell: pwsh

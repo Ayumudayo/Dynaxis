@@ -89,3 +89,6 @@ external/imgui/.git
 !docs/
 !docs/**
 !tests/python/*.py
+
+# Build-stage regression checks use the same Python test sources as native CI.
+!tests/python/**

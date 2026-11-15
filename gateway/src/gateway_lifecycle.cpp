@@ -60,6 +60,7 @@ GatewayApp::GatewayApp()
     // Redis는 백엔드 탐색(discovery)과 고정 라우팅(sticky routing)에 필수다.
     // 이 의존성을 readiness에 반영해야, 엣지가 백엔드를 찾지 못하는 상태를 "정상 준비"로 오해하지 않는다.
     impl_->engine_.declare_dependency("redis", server::core::app::AppHost::DependencyRequirement::kRequired);
+    impl_->engine_.declare_dependency("backend", server::core::app::AppHost::DependencyRequirement::kRequired);
     impl_->engine_.set_ready(false);
 
     if (const char* port_env = std::getenv("METRICS_PORT")) {

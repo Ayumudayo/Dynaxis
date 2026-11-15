@@ -2,6 +2,7 @@
 #include <chrono>
 #include <future>
 #include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -12,6 +13,40 @@ using namespace std::chrono_literals;
 using server::core::Job;
 using server::core::JobQueue;
 using server::core::ThreadManager;
+
+TEST(JobQueueTests, BoundedMpmcMakesProgressWithoutExternalWakeups) {
+    JobQueue queue(1);
+    std::atomic<int> consumed{0};
+    std::vector<std::thread> consumers, producers;
+    constexpr int total = 20000;
+    for (int i = 0; i < 2; ++i) {
+        consumers.emplace_back([&] { while (auto job = queue.Pop()) { job(); } });
+        producers.emplace_back([&] {
+            for (int n = 0; n < total / 2; ++n) queue.Push([&] { ++consumed; });
+        });
+    }
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (consumed < total && std::chrono::steady_clock::now() < deadline) std::this_thread::sleep_for(1ms);
+    const bool completed = consumed == total;
+    queue.Stop(); // 실패 시에도 producer/consumer 모두 join하고 CTest를 교착시키지 않는다.
+    for (auto& producer : producers) producer.join();
+    for (auto& consumer : consumers) consumer.join();
+    EXPECT_TRUE(completed);
+    EXPECT_EQ(consumed, total);
+}
+
+TEST(JobQueueTests, StopWakesBlockedProducerAndDrainsAcceptedJob) {
+    JobQueue queue(1);
+    queue.Push([] {});
+    std::promise<void> entered;
+    std::thread producer([&] { entered.set_value(); queue.Push([] {}); });
+    entered.get_future().wait();
+    queue.Stop();
+    producer.join();
+    EXPECT_TRUE(queue.Pop());
+    EXPECT_FALSE(queue.Pop());
+    EXPECT_FALSE(queue.TryPush([] {}));
+}
 
 /**
  * @brief JobQueue/ThreadManager의 대기/깨움/실행/정지 동작을 검증합니다.

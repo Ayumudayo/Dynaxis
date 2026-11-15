@@ -146,8 +146,8 @@ public:
         std::vector<Message> out; out.reserve(limit);
         auto r = w_->exec_params(
             "select m.id, m.room_id::text, coalesce(m.room_name, ''), coalesce(m.user_id::text, ''), m.content, (extract(epoch from m.created_at)*1000)::bigint, coalesce(u.name,'') "
-            "from messages m left join users u on u.id = m.user_id "
-            "where m.room_id=$1::uuid and m.id > $2 order by m.id asc limit $3",
+            "from (select * from messages where room_id=$1::uuid and id>$2 order by id desc limit $3) m "
+            "left join users u on u.id=m.user_id order by m.id asc",
             room_id, static_cast<long long>(since_id), static_cast<int>(limit));
         for (const auto& row : r) {
             Message m{}; m.id = row[0].as<std::uint64_t>(); m.room_id = row[1].c_str(); m.room_name = row[2].c_str();
@@ -163,6 +163,8 @@ public:
                    const std::string& room_name,
                    const std::optional<std::string>& user_id,
                    const std::string& content) override {
+        // ID 할당 전에 방 writer를 직렬화해 같은 방의 ID와 commit 순서를 일치시킨다.
+        w_->exec_params("select pg_advisory_xact_lock(hashtextextended($1, 0))", "chat:message:" + room_id);
         pqxx::result r;
         if (user_id) {
             r = w_->exec_params(
@@ -271,6 +273,30 @@ private:
     pqxx::work* w_{};
 };
 
+// 작은 채팅 제어 상태는 app-owned JSON이며 모든 read/modify/write는 transaction lock으로 보호한다.
+class PgChatStateRepository final : public IChatStateRepository {
+public:
+    explicit PgChatStateRepository(pqxx::work* work) : work_(work) {}
+    void lock(const std::string& key) override {
+        work_->exec_params("select pg_advisory_xact_lock(hashtextextended(case when $1 like 'chat:room:%' then lower($1) else $1 end, 0))", "chat:" + key);
+    }
+    std::optional<std::string> get(const std::string& key) override {
+        const auto rows = work_->exec_params("select value::text from chat_shared_state where key=case when $1 like 'room:%' then lower($1) else $1 end", key);
+        if (rows.empty()) return std::nullopt;
+        return rows[0][0].as<std::string>();
+    }
+    void put(const std::string& key, const std::string& json) override {
+        work_->exec_params("insert into chat_shared_state(key,value) values(case when $1 like 'room:%' then lower($1) else $1 end,$2::jsonb) "
+                           "on conflict(key) do update set value=excluded.value", key, json);
+    }
+    void erase(const std::string& key) override { work_->exec_params("delete from chat_shared_state where key=case when $1 like 'room:%' then lower($1) else $1 end", key); }
+    std::uint64_t now_ms() override {
+        return work_->exec("select (extract(epoch from clock_timestamp())*1000)::bigint")[0][0].as<std::uint64_t>();
+    }
+private:
+    pqxx::work* work_;
+};
+
 // `pqxx::work` 하나에 모든 Repository를 묶어 transaction을 관리한다.
 // UnitOfWork 패턴을 구현해 여러 저장소 변경이 한 트랜잭션 경계로 움직이게 한다.
 // commit 전까지는 DB에 반영되지 않으므로, 도메인 로직이 중간 상태를 남기지 않게 하기 쉽다.
@@ -278,7 +304,7 @@ class PgRepositoryUnitOfWork final : public IRepositoryUnitOfWork {
 public:
     explicit PgRepositoryUnitOfWork(std::shared_ptr<pqxx::connection> conn)
         : conn_(std::move(conn)), w_(*conn_),
-          users_(&w_), rooms_(&w_), messages_(&w_), sessions_(&w_), memberships_(&w_) {}
+          users_(&w_), rooms_(&w_), messages_(&w_), sessions_(&w_), memberships_(&w_), chat_state_(&w_) {}
 
     void commit() override { w_.commit(); }
     void rollback() override { w_.abort(); }
@@ -288,6 +314,7 @@ public:
     IMessageRepository& messages() override { return messages_; }
     ISessionRepository& sessions() override { return sessions_; }
     IMembershipRepository& memberships() override { return memberships_; }
+    IChatStateRepository& chat_state() override { return chat_state_; }
 
 private:
     std::shared_ptr<pqxx::connection> conn_{};
@@ -297,6 +324,7 @@ private:
     PgMessageRepository messages_;
     PgSessionRepository sessions_;
     PgMembershipRepository memberships_;
+    PgChatStateRepository chat_state_;
 };
 
 // 간단한 연결 팩토리 구현: 요청마다 pqxx connection을 생성한다.

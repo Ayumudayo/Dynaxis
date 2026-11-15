@@ -18,7 +18,11 @@ def command(*args: str, input: str | None = None) -> str:
     result = subprocess.run(args, cwd=ROOT, input=input, capture_output=True, text=True,
                             encoding="utf-8", errors="replace", timeout=120)
     if result.returncode:
-        raise RuntimeError("dependency recovery command failed: " + args[0])
+        # 테스트 자식은 합성 사용자·opcode만 출력한다. 배포/DB 명령의 출력은 자격 노출을 피한다.
+        diagnostic = ""
+        if len(args) > 1 and Path(args[1]).name == "verify_whisper_cross_instance.py":
+            diagnostic = "\n" + (result.stdout + result.stderr)[-6000:]
+        raise RuntimeError("dependency recovery command failed: " + args[0] + diagnostic)
     return result.stdout.strip()
 
 

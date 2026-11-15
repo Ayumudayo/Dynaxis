@@ -440,8 +440,8 @@ void GuiManager::render_chat_panel() {
 
     // 1. 채팅 로그 스크롤 영역
     ImGui::BeginChild("ScrollingRegion", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()), false, ImGuiWindowFlags_HorizontalScrollbar);
-    for (const auto& item : data.logs) {
-        ImGui::TextUnformatted(item.c_str());
+    for (const auto& item : data.timeline.lines) {
+        ImGui::TextUnformatted(item.text.c_str());
     }
     // 자동 스크롤
     if (state_.auto_scroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {

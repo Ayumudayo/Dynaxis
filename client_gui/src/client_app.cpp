@@ -148,10 +148,10 @@ void ClientApp::setup_callbacks() {
         });
     });
 
-    net_client_.set_on_broadcast([this](std::string room, std::string sender, std::string text, std::uint16_t, std::uint32_t) {
-         event_queue_.push([this, room, sender, text]() {
+    net_client_.set_on_broadcast([this](std::string room, std::string sender, std::string text, std::uint16_t, std::uint32_t, std::uint64_t id, std::string room_id) {
+         event_queue_.push([this, room, sender, text, id, room_id]() {
             // 채팅 포맷: [방이름] 보낸사람: 내용
-            data_.add_log("[" + room + "] " + sender + ": " + text);
+            data_.timeline.add_message(room_id, id, "[" + room + "] " + sender + ": " + text);
         });
     });
 
@@ -165,9 +165,11 @@ void ClientApp::setup_callbacks() {
         });
     });
 
-    net_client_.set_on_snapshot([this](std::string cur_room, std::vector<std::string> rooms, std::vector<std::string> users, std::vector<bool> locked, std::vector<NetClient::SnapshotMessage> msgs, std::string) {
-        event_queue_.push([this, cur_room, rooms, users, locked, msgs]() {
+    net_client_.set_on_snapshot([this](std::string cur_room, std::vector<std::string> rooms, std::vector<std::string> users, std::vector<bool> locked, std::vector<NetClient::SnapshotMessage> msgs, std::string, std::uint64_t watermark, std::string room_id, bool history_available) {
+        event_queue_.push([this, cur_room, rooms, users, locked, msgs, watermark, room_id, history_available]() {
             data_.current_room = cur_room;
+            data_.timeline.snapshot(cur_room, room_id, watermark);
+            if (!history_available) data_.add_log("[system] 최근 대화를 모두 불러오지 못했습니다.");
             data_.room_list.clear();
             for (size_t i = 0; i < rooms.size(); ++i) {
                 bool is_locked = (i < locked.size()) ? locked[i] : false;
@@ -177,7 +179,7 @@ void ClientApp::setup_callbacks() {
             
             data_.add_log("[system] Joined room: " + cur_room);
             for (const auto& m : msgs) {
-                data_.add_log("[" + cur_room + "] " + m.sender + ": " + m.text);
+                data_.timeline.add_message(room_id, m.id, "[" + cur_room + "] " + m.sender + ": " + m.text);
             }
         });
     });

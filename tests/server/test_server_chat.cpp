@@ -1,3 +1,4 @@
+#include <nlohmann/json.hpp>
 #include <gtest/gtest.h>
 #include <server/chat/chat_service.hpp>
 #include <server/auth/session_token.hpp>
@@ -5,6 +6,7 @@
 #include <server/core/net/session.hpp>
 #include <server/core/net/dispatcher.hpp>
 #include <server/core/concurrent/job_queue.hpp>
+#include <server/core/concurrent/thread_manager.hpp>
 #include <server/core/concurrent/task_scheduler.hpp>
 #include <server/storage/connection_pool.hpp>
 #include <server/storage/unit_of_work.hpp>
@@ -21,6 +23,7 @@
 #include "wire.pb.h"
 #include <boost/asio.hpp>
 #include <thread>
+#include <future>
 #include <chrono>
 #include <vector>
 #include <array>
@@ -147,6 +150,10 @@ std::string lower_ascii_copy(std::string_view value) {
 }
 
 struct MockStorageState {
+    std::recursive_mutex control_mu;
+    std::unordered_map<std::string, std::string> control;
+    bool fail_message_commit{false};
+    std::function<void(const std::string&)> before_message_create;
     std::unordered_map<std::string, server::storage::User> users_by_id;
     std::unordered_map<std::string, std::string> user_id_by_name_ci;
     std::unordered_map<std::string, server::storage::Room> rooms_by_id;
@@ -316,6 +323,7 @@ public:
                    const std::string& room_name,
                    const std::optional<std::string>& user_id,
                    const std::string& content) override {
+        if (state_->before_message_create) state_->before_message_create(content);
         Message message{};
         message.id = state_->next_message_id++;
         message.room_id = room_id;
@@ -327,6 +335,7 @@ public:
                 std::chrono::system_clock::now().time_since_epoch()).count());
         state_->messages_by_room_id[room_id].push_back(message);
         state_->last_created_message = message;
+        created_ids.push_back(message.id);
         return message;
     }
 
@@ -340,6 +349,13 @@ public:
 
     void delete_by_room(const std::string& room_id) override {
         state_->messages_by_room_id.erase(room_id);
+    }
+    std::vector<std::uint64_t> created_ids;
+    void undo_created() {
+        for (auto& [_, messages] : state_->messages_by_room_id) {
+            std::erase_if(messages, [&](const auto& message) { return std::find(created_ids.begin(), created_ids.end(), message.id) != created_ids.end(); });
+        }
+        created_ids.clear();
     }
 
 private:
@@ -456,24 +472,50 @@ private:
     std::shared_ptr<MockStorageState> state_;
 };
 
+class MockChatStateRepository : public server::storage::IChatStateRepository {
+public:
+    explicit MockChatStateRepository(std::shared_ptr<MockStorageState> state) : state_(std::move(state)) {}
+    void lock(const std::string&) override { if (!lock_.owns_lock()) lock_ = std::unique_lock<std::recursive_mutex>(state_->control_mu); }
+    std::optional<std::string> get(const std::string& key) override {
+        const auto it = state_->control.find(key);
+        return it == state_->control.end() ? std::nullopt : std::optional<std::string>(it->second);
+    }
+    void put(const std::string& key, const std::string& value) override { state_->control[key] = value; }
+    void erase(const std::string& key) override { state_->control.erase(key); }
+    std::uint64_t now_ms() override { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count(); }
+    void unlock() { if (lock_.owns_lock()) lock_.unlock(); }
+private:
+    std::shared_ptr<MockStorageState> state_;
+    std::unique_lock<std::recursive_mutex> lock_;
+};
+
 class MockUnitOfWork : public IRepositoryUnitOfWork {
 public:
     explicit MockUnitOfWork(std::shared_ptr<MockStorageState> state)
-        : user_repo(state),
+        : state_(state), control_repo(state), user_repo(state),
           room_repo(state),
           msg_repo(state),
           membership_repo(state),
           session_repo(std::move(state)) {}
 
+    std::shared_ptr<MockStorageState> state_;
+    MockChatStateRepository control_repo;
     MockUserRepository user_repo;
     MockRoomRepository room_repo;
     MockMessageRepository msg_repo;
     MockMembershipRepository membership_repo;
     MockSessionRepository session_repo;
 
-    void commit() override {}
-    void rollback() override {}
+    bool committed{false};
+    ~MockUnitOfWork() override { if (!committed) msg_repo.undo_created(); }
+    void commit() override {
+        if (state_->fail_message_commit && !msg_repo.created_ids.empty()) throw std::runtime_error("injected commit failure");
+        committed = true;
+        control_repo.unlock();
+    }
+    void rollback() override { control_repo.unlock(); }
 
+    server::storage::IChatStateRepository& chat_state() override { return control_repo; }
     IUserRepository& users() override { return user_repo; }
     IRoomRepository& rooms() override { return room_repo; }
     IMessageRepository& messages() override { return msg_repo; }
@@ -1126,6 +1168,139 @@ TEST_F(ChatServiceTest, ChatSend) {
     EXPECT_TRUE(WaitForData()) << "Chat message broadcast should be received by peer";
 }
 
+TEST_F(ChatServiceTest, CommitFailureDoesNotBroadcastCacheOrAdvanceLastSeen) {
+    ScopedEnvVar pubsub_env("USE_REDIS_PUBSUB", "1");
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+    LoginAs("commit_failure_user");
+    WaitForData();
+    JoinRoom("commit_failure_room");
+    WaitForData();
+    redis_->reset_publish_trace();
+    const auto lists_before = redis_->list_store;
+    db_pool_->state()->last_membership_last_seen.reset();
+    db_pool_->state()->fail_message_commit = true;
+    SendChat("commit_failure_room", "must not escape rollback");
+    const auto error = WaitForError();
+    ASSERT_TRUE(error);
+    EXPECT_EQ(error->code, core_proto::errc::SERVER_BUSY);
+    EXPECT_FALSE(redis_->publish_called);
+    EXPECT_EQ(redis_->list_store, lists_before);
+    EXPECT_FALSE(db_pool_->state()->last_membership_last_seen);
+    EXPECT_FALSE(WaitForBroadcastText("must not escape rollback", 50));
+    for (const auto& [_, messages] : db_pool_->state()->messages_by_room_id) EXPECT_TRUE(messages.empty());
+}
+
+TEST_F(ChatServiceTest, SharedPrincipalReservationRejectsSecondServiceInstance) {
+    LoginAs("single_principal");
+    ASSERT_TRUE(WaitForLoginResponse());
+    auto first = std::move(chat_service_);
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+    LoginAs("single_principal");
+    const auto error = WaitForError();
+    ASSERT_TRUE(error);
+    EXPECT_EQ(error->code, core_proto::errc::NAME_TAKEN);
+    first->on_session_close(session_);
+    ProcessJobs();
+    WaitForData();
+    LoginAs("single_principal");
+    EXPECT_TRUE(WaitForLoginResponse());
+}
+
+TEST_F(ChatServiceTest, RepeatedLoginCannotReserveAnotherPrincipalOnSameConnection) {
+    LoginAs("first_identity");
+    ASSERT_TRUE(WaitForLoginResponse());
+    LoginAs("second_identity");
+    const auto error = WaitForError();
+    ASSERT_TRUE(error);
+    EXPECT_EQ(error->code, core_proto::errc::FORBIDDEN);
+    EXPECT_TRUE(db_pool_->state()->control.count("login:first_identity"));
+    EXPECT_FALSE(db_pool_->state()->control.count("login:second_identity"));
+}
+
+TEST_F(ChatServiceTest, RetiredSessionCloseDoesNotEraseReplacementPresence) {
+    ScopedEnvVar continuity_enabled("SESSION_CONTINUITY_ENABLED", "1");
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+    LoginAs("lease_identity");
+    const auto initial = WaitForLoginResponse();
+    ASSERT_TRUE(initial);
+    ASSERT_FALSE(initial->resume_token().empty());
+    auto retired = std::move(chat_service_);
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+    LoginAs("ignored", "resume:" + initial->resume_token());
+    const auto resumed = WaitForLoginResponse();
+    ASSERT_TRUE(resumed);
+    ASSERT_TRUE(resumed->resumed());
+    const auto presence = redis_->kv_store;
+    const auto users = redis_->set_store;
+    retired->on_session_close(session_);
+    ProcessJobs();
+    EXPECT_EQ(redis_->kv_store, presence);
+    EXPECT_EQ(redis_->set_store, users);
+    EXPECT_TRUE(db_pool_->state()->control.count("login:lease_identity"));
+}
+
+TEST_F(ChatServiceTest, SharedRoomInviteSurvivesServiceBoundaryWithoutGrantingOwnership) {
+    LoginAs("original_owner");
+    WaitForData();
+    JoinRoom("shared_private_room");
+    WaitForData();
+    auto first = std::move(chat_service_);
+    chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
+    LoginAs("other_member");
+    WaitForData();
+    JoinRoom("shared_private_room");
+    const auto denied = WaitForError();
+    ASSERT_TRUE(denied);
+    EXPECT_EQ(denied->message, "invite required");
+    std::vector<std::uint8_t> invite;
+    write_lp_utf8(invite, "shared_private_room");
+    write_lp_utf8(invite, "/invite other_member");
+    first->on_chat_send(*session_, invite);
+    ProcessJobs();
+    EXPECT_TRUE(WaitForBroadcastText("invited user: other_member"));
+    JoinRoom("shared_private_room");
+    EXPECT_TRUE(WaitForData());
+    EXPECT_EQ(ChatServicePrivateAccess::lookup_room_owner(*chat_service_, "shared_private_room").value_or(""), "original_owner");
+    SendChat("shared_private_room", "/invite unrelated");
+    EXPECT_TRUE(WaitForBroadcastText("room command denied: owner/admin only"));
+}
+
+TEST_F(ChatServiceTest, RealWorkersKeepSameSessionOrderWhenFirstDbWriteStalls) {
+    LoginAs("ordered_user");
+    WaitForData();
+    JoinRoom("ordered_room");
+    WaitForData();
+    std::promise<void> first_entered, release_first;
+    auto release = release_first.get_future().share();
+    std::atomic<bool> second_entered{false};
+    db_pool_->state()->before_message_create = [&](const std::string& content) {
+        if (content == "first") { first_entered.set_value(); release.wait(); }
+        if (content == "second") second_entered = true;
+    };
+    server::core::ThreadManager workers(job_queue_);
+    workers.Start(2);
+    auto send = [&](const std::string& text) {
+        std::vector<std::uint8_t> body;
+        write_lp_utf8(body, "ordered_room");
+        write_lp_utf8(body, text);
+        chat_service_->on_chat_send(*session_, body);
+    };
+    send("first");
+    const bool entered = first_entered.get_future().wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    send("second");
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    EXPECT_FALSE(second_entered.load());
+    release_first.set_value();
+    workers.Stop();
+    EXPECT_TRUE(entered);
+    EXPECT_TRUE(second_entered.load());
+    const auto room_id = db_pool_->state()->room_id_by_name_ci.at("ordered_room");
+    const auto& messages = db_pool_->state()->messages_by_room_id.at(room_id);
+    ASSERT_EQ(messages.size(), 2);
+    EXPECT_EQ(messages[0].content, "first");
+    EXPECT_EQ(messages[1].content, "second");
+}
+
 TEST_F(ChatServiceTest, ChatSendPersistsMembershipStateAndPublishesRoomFanout) {
     ScopedEnvVar pubsub_env("USE_REDIS_PUBSUB", "1");
     chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
@@ -1438,7 +1613,7 @@ TEST_F(ChatServiceTest, RoomOwnerCanRemoveOwnRoom) {
     EXPECT_TRUE(WaitForBroadcastText("room removed: owner_room"));
 }
 
-TEST_F(ChatServiceTest, ContinuityResumeDoesNotGrantRoomOwnerPrivilegesAfterRestart) {
+TEST_F(ChatServiceTest, ContinuityResumeRestoresPersistedOwnerInsteadOfMintingOne) {
     ScopedEnvVar continuity_enabled("SESSION_CONTINUITY_ENABLED", "1");
     ScopedEnvVar continuity_prefix("SESSION_CONTINUITY_REDIS_PREFIX", "dynaxis");
 
@@ -1454,6 +1629,9 @@ TEST_F(ChatServiceTest, ContinuityResumeDoesNotGrantRoomOwnerPrivilegesAfterRest
     JoinRoom("resume_owner_room");
     WaitForData();
 
+    auto authority = nlohmann::json::parse(db_pool_->state()->control.at("room:resume_owner_room"));
+    authority["owner"] = "actual_owner";
+    db_pool_->state()->control["room:resume_owner_room"] = authority.dump();
     chat_service_.reset();
     chat_service_ = std::make_unique<ChatService>(io_, job_queue_, db_pool_, redis_);
 
@@ -1470,7 +1648,8 @@ TEST_F(ChatServiceTest, ContinuityResumeDoesNotGrantRoomOwnerPrivilegesAfterRest
 
     const auto resumed_owner =
         ChatServicePrivateAccess::lookup_room_owner(*chat_service_, "resume_owner_room");
-    EXPECT_FALSE(resumed_owner.has_value());
+    ASSERT_TRUE(resumed_owner.has_value());
+    EXPECT_EQ(*resumed_owner, "actual_owner");
 }
 
 

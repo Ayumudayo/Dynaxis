@@ -209,6 +209,15 @@ class ChatClient:
         self.send_frame(MSG_JOIN_ROOM, lp_utf8(room) + lp_utf8(password))
         self.wait_for_join_confirmation(room, user, timeout_sec)
 
+    def invite(self, room: str, user: str) -> None:
+        self.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8("/invite " + user))
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            opcode, _, _, _, payload = self.recv_frame(deadline - time.monotonic())
+            if opcode == MSG_CHAT_BROADCAST and ("invited user: " + user).encode() in payload:
+                return
+        raise AssertionError("invite not acknowledged")
+
     def wait_for_self_chat(self, room: str, text: str, timeout_sec: float) -> None:
         deadline = time.monotonic() + timeout_sec
         while True:

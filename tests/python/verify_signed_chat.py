@@ -77,6 +77,7 @@ def main() -> int:
         second.login("another-forged-name", second_token)
         room = "signed-room-" + suffix
         first.join_room(room, first_subject)
+        first.invite(room, second_subject)
         second.join_room(room, second_subject)
         message = "signed-fanout-" + suffix
         first.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8(message))
@@ -86,8 +87,6 @@ def main() -> int:
             if opcode == 0x0101 and message.encode() in payload:
                 break
         print("PASS: verified identity overrides claimed name; authenticated cross-node chat delivered")
-        first.close()
-        time.sleep(0.3)
         thief = ChatClient()
         clients.append(thief)
         thief.connect()
@@ -101,9 +100,16 @@ def main() -> int:
         resumed = resumed_client.login("ignored", first_token + "|resume:" + login["resume_token"])
         assert resumed["principal_id"] == first_subject and resumed["resumed"]
         assert resumed["logical_session_id"] == login["logical_session_id"]
+        try:
+            first.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8("stale-connection-must-not-send"))
+            code, _ = first.wait_for_error(5)
+            assert code == 0x0101
+        except (ConnectionError, ConnectionResetError, BrokenPipeError):
+            pass
+        first.close()
         resumed_client.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8("after-resume"))
         resumed_client.wait_for_self_chat(room, "after-resume", 5)
-        print("PASS: resume preserves logical identity and rejects a different authenticated principal")
+        print("PASS: live resume fences the prior connection, preserves identity and rejects a different principal")
         return 0
     finally:
         for client in clients:

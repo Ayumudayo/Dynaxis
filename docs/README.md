@@ -8,3 +8,5 @@
 - [저장소](db/architecture.md) · [write-behind](db/write-behind.md) · [마이그레이션](db/migrations.md)
 - [관측](ops/observability.md) · [운영](ops/runbook.md) · [검증](tests.md)
 - [명명 규칙](naming-conventions.md) · [이름 변경 경계](rename_boundary.md)
+
+- [기초 상태·전달·복구 계약](architecture/foundation-contracts.md)

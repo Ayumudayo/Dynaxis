@@ -99,7 +99,7 @@ if (BUILD_CORE_EXTENSIONS)
         target_link_libraries(lz4::lz4 INTERFACE ${LZ4_LIBRARIES})
     endif()
 
-    target_link_libraries(server_core PUBLIC OpenSSL::SSL OpenSSL::Crypto lz4::lz4 wire_proto)
+    target_link_libraries(server_core PUBLIC OpenSSL::SSL OpenSSL::Crypto lz4::lz4)
 endif()
 
 

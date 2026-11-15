@@ -8,7 +8,7 @@ Dynaxis는 C++20 서버 코어와 그 위에 조립한 MSA 채팅 스택이다.
 | 서비스 기반 | gateway 인증/발견/라우팅, 저장소 adapter, 비동기 적재 | gateway, infra, tools/wb_* |
 | 채팅 | 로그인, 룸, 메시지, 귓속말, history, presence, 재접속, 권한/제재 | server |
 
-의존 방향은 앱 → 기반/코어다. core는 server/gateway 구현을 참조하지 않는다. bootstrap은 서비스 인스턴스를 명시적으로 주입한다. 기본 생성자의 일부 Registry 호환 경로는 남아 있으므로 새 조립 코드는 명시적 의존성을 사용한다.
+의존 방향은 앱 → 기반/코어다. core는 server/gateway 구현을 참조하지 않는다. bootstrap은 서비스 인스턴스를 명시적으로 주입한다. 편의 생성자의 null 의존성도 전역 Registry로 대체하지 않는다.
 
 기본 구성은 HAProxy → gateway → server와 Redis/Postgres/worker를 실행한다. 최소 `BUILD_CORE_EXTENSIONS=OFF` 구성은 TCP runtime만 빌드·설치하며 Boost 외의 앱 의존성을 요구하지 않는다. `BUILD_CORE_EXTENSIONS`는 MSA 프로토콜·저장소 통합을 포함할지 결정한다.
 
@@ -29,3 +29,5 @@ flowchart LR
   R --> W["Write-behind worker"]
   W --> DB
 ```
+
+공유 상태·명령 순서·저장 확정·준비 상태의 기준은 [기초 계약](foundation-contracts.md)을 따른다. 채팅 wire는 별도 `chat_wire` 패키지로 소유하며 `server_core`의 링크 의존성에 포함하지 않는다.

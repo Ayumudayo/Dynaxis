@@ -30,6 +30,7 @@ add_library(server_chat_runtime STATIC
     src/chat/chat_slash_commands.cpp
     src/chat/chat_spam_moderation.cpp
     src/chat/chat_service_core.cpp
+    src/chat/chat_shared_state.cpp
     src/chat/chat_room_state.cpp
     src/chat/handlers_login.cpp
     src/chat/handlers_join.cpp
@@ -168,4 +169,5 @@ install(FILES
         "${CMAKE_CURRENT_LIST_DIR}/include/server/storage/connection_pool.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/include/server/storage/unit_of_work.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/include/server/storage/repositories.hpp"
+        "${CMAKE_CURRENT_LIST_DIR}/include/server/storage/chat_state_repository.hpp"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/server/storage")

@@ -42,15 +42,16 @@ public:
         bool resumed{};
     };
     using OnSessionInfo = std::function<void(SessionInfo)>;
-    using OnBroadcast = std::function<void(std::string room, std::string sender, std::string text, std::uint16_t flags, std::uint32_t sender_sid)>;
+    using OnBroadcast = std::function<void(std::string room, std::string sender, std::string text, std::uint16_t flags, std::uint32_t sender_sid, std::uint64_t message_id, std::string room_id)>;
     using OnRoomUsers = std::function<void(std::string room, std::vector<std::string> users)>;
     /** @brief 스냅샷 메시지의 송신자/본문/시각 필드입니다. */
     struct SnapshotMessage {
         std::string sender;
         std::string text;
         std::uint64_t ts_ms;
+        std::uint64_t id{};
     };
-    using OnSnapshot = std::function<void(std::string current, std::vector<std::string> rooms, std::vector<std::string> users, std::vector<bool> locked, std::vector<SnapshotMessage> messages, std::string your_name)>;
+    using OnSnapshot = std::function<void(std::string current, std::vector<std::string> rooms, std::vector<std::string> users, std::vector<bool> locked, std::vector<SnapshotMessage> messages, std::string your_name, std::uint64_t watermark, std::string room_id, bool history_available)>;
     using OnWhisper = std::function<void(std::string sender, std::string recipient, std::string text, bool outgoing)>;
     using OnWhisperResult = std::function<void(bool ok, std::string reason)>;
     using OnRefreshNotify = std::function<void()>;

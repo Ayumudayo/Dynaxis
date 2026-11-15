@@ -19,7 +19,8 @@ namespace game_proto = server::protocol;
 namespace server::app::chat {
 
 void ChatService::on_session_close(std::shared_ptr<Session> s) {
-    job_queue_.Push([this, s]() {
+    enqueue_session(s, [this, s]() {
+        (void)release_shared_login(*s);
         const std::string session_id_str = get_or_create_session_uuid(*s);
         std::string user_uuid;
         std::string room_uuid;
@@ -48,6 +49,12 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
                     itset->second.erase(s);
                 }
             }
+            impl_->state.user_uuid.erase(s.get());
+            if (auto it = impl_->state.by_user.find(name); it != impl_->state.by_user.end() && it->second.empty()) {
+                impl_->state.by_user.erase(it);
+                impl_->state.user_last_ip.erase(name);
+                impl_->state.user_last_hwid_hash.erase(name);
+            }
             impl_->state.user.erase(s.get());
             impl_->state.session_uuid.erase(s.get());
             impl_->state.logical_session_id.erase(s.get());
@@ -58,6 +65,7 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
             auto current_room_it = impl_->state.cur_room.find(s.get());
             if (current_room_it != impl_->state.cur_room.end()) {
                 room_left = current_room_it->second;
+                if (auto id = impl_->state.room_ids.find(room_left); id != impl_->state.room_ids.end()) room_uuid = id->second;
                 if (room_exists_locked(impl_->state, room_left)) {
                     server::wire::v1::ChatBroadcast pb;
                     pb.set_room(room_left);
@@ -80,34 +88,6 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
             target->async_send(game_proto::MSG_CHAT_BROADCAST, body, 0);
         }
 
-        if (impl_->runtime.redis && !room_left.empty()) {
-            try {
-                std::string uid;
-                {
-                    std::lock_guard<std::mutex> lk(impl_->state.mu);
-                    auto it = impl_->state.user_uuid.find(s.get());
-                    if (it != impl_->state.user_uuid.end()) {
-                        uid = it->second;
-                    }
-                }
-                if (!uid.empty()) {
-                    auto rid = ensure_room_id_ci(room_left);
-                    room_uuid = rid;
-                    if (!rid.empty()) {
-                        impl_->runtime.redis->srem(make_presence_key("presence:room:", rid), uid);
-                    }
-                }
-                impl_->runtime.redis->srem("room:users:" + room_left, name);
-                if (room_left != "lobby") {
-                    impl_->runtime.redis->sadd("room:users:lobby", name);
-                    std::size_t remaining = 1;
-                    if (impl_->runtime.redis->scard("room:users:" + room_left, remaining) && remaining == 0) {
-                        impl_->runtime.redis->srem("rooms:active", room_left);
-                    }
-                }
-            } catch (...) {}
-        }
-
         if (!room_left.empty()) {
             std::optional<std::string> uid_opt;
             if (!user_uuid.empty()) {
@@ -123,7 +103,7 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
             emit_write_behind_event("session_close", session_id_str, uid_opt, room_id_opt, std::move(wb_fields));
             broadcast_refresh(room_left);
         }
-    });
+    }, true);
 }
 
 } // namespace server::app::chat

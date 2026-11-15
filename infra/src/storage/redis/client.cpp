@@ -177,6 +177,7 @@ public:
                         } catch (const sw::redis::TimeoutError&) {
                             // 유휴 구독의 정상 timeout이다. 구독을 유지하고 stop만 확인한다.
                         } catch (...) {
+                            subscription_ready_.store(false, std::memory_order_relaxed);
                             subscriber_.reset();
                             std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
                             backoff_ms = std::min(1000, backoff_ms * 2);
@@ -195,7 +196,10 @@ public:
         } catch (...) { server::core::log::warn("Redis PSUBSCRIBE failed: unknown"); return false; }
     }
 
+    bool subscription_ready() const override { return subscription_ready_.load(std::memory_order_relaxed); }
+
     void stop_psubscribe() override {
+        subscription_ready_.store(false, std::memory_order_relaxed);
         try {
             sub_running_ = false;
             if (sub_thread_.joinable()) sub_thread_.join();
@@ -558,7 +562,11 @@ public:
 
 private:
     std::unique_ptr<sw::redis::Subscriber> make_subscriber() {
+        subscription_ready_.store(false, std::memory_order_relaxed);
         auto sub = std::make_unique<sw::redis::Subscriber>(subscription_source_->subscriber());
+        sub->on_meta([this](sw::redis::Subscriber::MsgType type, const auto&, long long count) {
+            if (type == sw::redis::Subscriber::MsgType::PSUBSCRIBE) subscription_ready_.store(count > 0, std::memory_order_relaxed);
+        });
         sub->on_pmessage([this](std::string /*pattern*/, std::string channel, std::string message) {
             if (sub_cb_) { sub_cb_(channel, message); }
         });
@@ -571,6 +579,7 @@ private:
     std::unique_ptr<sw::redis::Subscriber> subscriber_;
     std::thread sub_thread_;
     std::atomic<bool> sub_running_{false};
+    std::atomic<bool> subscription_ready_{false};
     std::function<void(const std::string&, const std::string&)> sub_cb_{};
     std::string sub_pattern_{};
 };

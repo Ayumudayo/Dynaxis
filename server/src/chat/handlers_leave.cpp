@@ -30,7 +30,7 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
         proto::read_lp_utf8(payload, room);
     }
 
-    if (!job_queue_.TryPush([this, session_sp, room]() {
+    if (!enqueue_session(session_sp, [this, session_sp, room]() {
         const std::string session_id_str = get_or_create_session_uuid(*session_sp);
         std::string user_uuid;
         std::string room_uuid;
@@ -121,30 +121,6 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
                 } else {
                     room_uuid = ensure_room_id_ci(room_to_leave);
                     impl_->runtime.redis->srem("room:users:" + room_to_leave, sender_name);
-                }
-
-                if (room_to_leave != "lobby") {
-                    std::size_t remaining = 1;
-                    (void)impl_->runtime.redis->scard("room:users:" + room_to_leave, remaining);
-                    if (remaining == 0) {
-                        impl_->runtime.redis->srem("rooms:active", room_to_leave);
-                        impl_->runtime.redis->del("room:password:" + room_to_leave);
-                        if (impl_->runtime.db_pool && !room_uuid.empty()) {
-                            try {
-                                auto uow = impl_->runtime.db_pool->make_repository_unit_of_work();
-                                uow->rooms().close(room_uuid);
-                                uow->commit();
-                                {
-                                    std::lock_guard<std::mutex> lk(impl_->state.mu);
-                                    impl_->state.room_ids.erase(room_to_leave);
-                                    impl_->state.room_owners.erase(room_to_leave);
-                                    impl_->state.room_invites.erase(room_to_leave);
-                                }
-                            } catch (const std::exception& e) {
-                                corelog::error("failed to close room: " + std::string(e.what()));
-                            }
-                        }
-                    }
                 }
 
                 impl_->runtime.redis->sadd("room:users:lobby", sender_name);

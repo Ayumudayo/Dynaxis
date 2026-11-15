@@ -116,6 +116,7 @@ int run_server(int argc, char** argv) {
         engine.declare_dependency("db");
         if (!config.redis_uri.empty()) {
             engine.declare_dependency("redis");
+            if (config.use_redis_pubsub) engine.declare_dependency("fanout");
         }
 
         // 기본 ready는 리스너와 워커가 실제로 올라온 뒤에만 true로 바뀐다.
@@ -354,15 +355,16 @@ int run_server(int argc, char** argv) {
             // 주기적인 Redis 헬스 체크
             core::concurrent::TaskScheduler::RepeatPolicy policy{};
             policy.interval = std::chrono::seconds(5);
-            (void)scheduler.schedule_every_controlled([job_queue_ptr, redis, &app_host](
+            (void)scheduler.schedule_every_controlled([job_queue_ptr, redis, &app_host, fanout = config.use_redis_pubsub](
                                                           const core::concurrent::TaskScheduler::RepeatContext&) {
-                if (!job_queue_ptr->TryPush([redis, &app_host]() {
+                if (!job_queue_ptr->TryPush([redis, &app_host, fanout]() {
                     try {
                         const bool ok = redis->health_check();
                         if (!ok) {
                             corelog::warn("Periodic Redis health check failed");
                         }
                         app_host.set_dependency_ok("redis", ok);
+                        if (fanout) app_host.set_dependency_ok("fanout", ok && redis->subscription_ready());
                     } catch (const std::exception& ex) {
                         app_host.set_dependency_ok("redis", false);
                         core::runtime_metrics::record_exception_recoverable();
@@ -460,6 +462,37 @@ int run_server(int argc, char** argv) {
         acceptor->start();
         corelog::info("server_app listening on 0.0.0.0:" + std::to_string(config.port));
 
+        // 12. 종료 시그널 대기 및 shutdown 순서 등록
+        // drain -> accept 중지 -> 워커/타이머 정리 순서를 명시해 새 연결 유입과 기존 연결 정리를 섞지 않는다.
+        register_server_shutdown_steps(
+            engine,
+            ServerShutdownContext{
+                .workers = &workers,
+                .io = &io,
+                .connection_state = state,
+                .acceptor = acceptor,
+                .db_workers = db_workers,
+                .redis = redis,
+                .registry_registered = &registry_registered,
+                .registry_backend = registry_backend,
+                .registry_record = &registry_record,
+                .shutdown_drain_timeout_ms = config.shutdown_drain_timeout_ms,
+                .shutdown_drain_poll_ms = config.shutdown_drain_poll_ms,
+            });
+
+        // 예외로 scope를 벗어나도 chat이 살아 있을 때 stop/drain/join을 끝낸다.
+        // thread 생성 중 실패와 metrics bind 실패도 정상 종료와 같은 수명 규칙을 따른다.
+        struct RunGuard {
+            server::core::app::EngineRuntime& engine;
+            asio::io_context& io;
+            std::vector<std::thread> threads;
+            ~RunGuard() {
+                engine.run_shutdown();
+                io.stop();
+                for (auto& thread : threads) if (thread.joinable()) thread.join();
+            }
+        } run_guard{engine, io, {}};
+
         // Subscribe before starting threads: a failed initial subscription must unwind safely.
         start_chat_fanout_subscription(chat, redis, config);
 
@@ -471,7 +504,7 @@ int run_server(int argc, char** argv) {
         // 9. I/O 스레드 풀 시작
         // accept보다 실행기를 늦게 올리면 큐에 쌓인 작업이 소비되지 않는 구간이 생기므로, ready를 열기 직전에 둘 다 보장한다.
         unsigned int num_io_threads = std::max(1u, std::thread::hardware_concurrency());
-        std::vector<std::thread> io_threads;
+        auto& io_threads = run_guard.threads;
         io_threads.reserve(num_io_threads);
         for (unsigned int i = 0; i < num_io_threads; ++i) {
             io_threads.emplace_back([&io]() {
@@ -506,24 +539,6 @@ int run_server(int argc, char** argv) {
         // 운영 면은 데이터 plane과 거의 같이 열어 두되, ready 판정은 AppHost가 따로 쥔다.
         // 그래야 관측은 일찍 가능하면서도 실제 트래픽 수용 시점은 엄격하게 제어할 수 있다.
         start_server_admin_http(engine, chat, config.metrics_port);
-
-        // 12. 종료 시그널 대기 및 shutdown 순서 등록
-        // drain -> accept 중지 -> 워커/타이머 정리 순서를 명시해 새 연결 유입과 기존 연결 정리를 섞지 않는다.
-        register_server_shutdown_steps(
-            engine,
-            ServerShutdownContext{
-                .workers = &workers,
-                .io = &io,
-                .connection_state = state,
-                .acceptor = acceptor,
-                .db_workers = db_workers,
-                .redis = redis,
-                .registry_registered = &registry_registered,
-                .registry_backend = registry_backend,
-                .registry_record = &registry_record,
-                .shutdown_drain_timeout_ms = config.shutdown_drain_timeout_ms,
-                .shutdown_drain_poll_ms = config.shutdown_drain_poll_ms,
-            });
 
         engine.install_asio_termination_signals(io, {});
 

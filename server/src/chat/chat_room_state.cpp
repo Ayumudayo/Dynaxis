@@ -14,25 +14,7 @@ void erase_room_metadata_locked(ChatServiceState& state, std::string_view room_n
     state.room_invites.erase(room);
 }
 
-std::string select_replacement_room_owner_locked(
-    const ChatServiceState& state,
-    const ChatRoomSet& members) {
-    std::string new_owner;
-    for (const auto& weak : members) {
-        if (auto candidate = weak.lock()) {
-            auto user_it = state.user.find(candidate.get());
-            if (user_it == state.user.end()) {
-                continue;
-            }
 
-            new_owner = user_it->second;
-            if (new_owner != "guest") {
-                break;
-            }
-        }
-    }
-    return new_owner;
-}
 
 } // namespace
 
@@ -239,13 +221,6 @@ ChatRoomDepartureResult remove_session_from_room_locked(
         return result;
     }
 
-    const bool was_owner =
-        room != "lobby"
-        && [&]() {
-            auto owner_it = state.room_owners.find(room);
-            return owner_it != state.room_owners.end() && owner_it->second == sender_name;
-        }();
-
     room_it->second.erase(session);
     result.targets = collect_room_targets_locked(state, room, sender_name);
 
@@ -260,15 +235,6 @@ ChatRoomDepartureResult remove_session_from_room_locked(
         return result;
     }
 
-    if (was_owner && room != "lobby") {
-        auto owner_it = state.room_owners.find(room);
-        if (owner_it != state.room_owners.end()) {
-            const std::string new_owner = select_replacement_room_owner_locked(state, room_it->second);
-            if (!new_owner.empty()) {
-                owner_it->second = new_owner;
-            }
-        }
-    }
 
     return result;
 }

@@ -10,6 +10,7 @@ INLINE_LINK_RE = re.compile(r'!?\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)')
 SCHEMES = ("http://", "https://", "mailto:", "file://", "app://", "plugin://")
 DEFAULT_PATTERNS = (
     "README.md",
+    ".github/**/*.md",
     "docs/**/*.md",
     "tools/**/README.md",
     "core/README.md",

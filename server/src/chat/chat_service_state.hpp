@@ -22,8 +22,6 @@ namespace server::app::chat {
 using ChatWeakSession = std::weak_ptr<server::core::net::Session>;
 using ChatWeakLess = std::owner_less<ChatWeakSession>;
 using ChatRoomSet = std::set<ChatWeakSession, ChatWeakLess>;
-using ChatExec = boost::asio::io_context::executor_type;
-using ChatStrand = boost::asio::strand<ChatExec>;
 
 /** @brief `ChatService`가 사용하는 비공개 세션/방/제재 메모리 상태입니다. */
 struct ChatServiceState {
@@ -73,7 +71,9 @@ struct ChatServiceState {
 };
 
 struct ChatServiceDispatchState {
-    std::unordered_map<std::string, std::shared_ptr<ChatStrand>> room_strands;
+    std::mutex mu;
+    std::unordered_map<server::core::net::Session*, std::deque<std::function<void()>>> sessions;
+    std::size_t pending{0};
 };
 
 /** @brief write-behind 파라미터 묶음입니다. */

@@ -26,6 +26,8 @@ message ChatBroadcast {
   string text = 3;
   uint32 sender_sid = 4;   // 0 if unknown
   uint64 ts_ms = 5;        // UTC epoch milliseconds
+  uint64 message_id = 6;   // committed durable message; 0 is an ephemeral system notice
+  string room_id = 7;
 }
 
 message StateSnapshot {
@@ -47,6 +49,10 @@ message StateSnapshot {
   uint64 last_seen_id = 5;              // membership.last_seen_msg_id (0 if unknown)
   // 클라이언트에게 할당된 이름 (Guest 식별용)
   string your_name = 6;
+  uint64 watermark = 7;    // committed room high-water mark, independent of last_seen_id
+  bool history_available = 8;
+  string room_id = 9;
+  uint32 history_limit = 10; // bounded recent window; not unlimited replay
 }
 message RoomUsers {
   string room = 1;

@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 #include <cstdint>
+#include <functional>
 
 #include <boost/asio.hpp>
 
@@ -44,8 +45,8 @@ struct ChatServicePrivateAccess;
  *   외부 진입 계약은 유지한 채 내부 구조만 점진적으로 정리할 수 있습니다.
  *
  * 동시성 규칙:
- * - 상태 변경은 `job_queue_` 또는 room별 `Strand`를 통해 순서를 보장하거나,
- *   공용 상태 컨테이너의 `mutex`로 보호해야 합니다.
+ * - 명령과 close는 세션별 FIFO에서 실행하고 다른 세션은 worker pool에서 병렬 처리합니다.
+ * - 로컬 컨테이너는 mutex, 공유 권한과 메시지 commit 순서는 DB 트랜잭션 잠금으로 보호합니다.
  * - 이 규칙을 깨면 중복 로그인 정리, 방 멤버십, 스팸 제재, refresh 스냅샷이 서로 다른 시점을 보게 됩니다.
  */
 class ChatService {
@@ -88,6 +89,9 @@ public:
 
     /** @brief 채팅 상태를 해제합니다. 호출 전에 worker와 구독을 종료해야 합니다. */
     ~ChatService();
+
+    /** @brief 공유 권한 변경 알림 뒤 로컬 세션을 재검증합니다. 알림 유실 시에도 다음 명령에서 검증합니다. */
+    void enforce_shared_state();
 
     // ======================================================================
     // 패킷 핸들러
@@ -262,6 +266,18 @@ public:
     ContinuityMetrics continuity_metrics() const;
 
 private:
+    // 세션의 명령과 close를 같은 FIFO에서 실행한다. closing은 정리 작업을 거절하지 않는다.
+    bool enqueue_session(std::shared_ptr<NetSession> session, std::function<void()> job, bool closing = false);
+    bool claim_shared_login(NetSession& session, const std::string& user, const std::string& resume_logical_id);
+    bool renew_shared_login(NetSession& session, const std::string& logical_id = {});
+    bool release_shared_login(NetSession& session);
+    bool admit_shared_room(NetSession& session, std::string& room, const std::string& password, bool resume = false);
+    bool handle_shared_room_command(std::shared_ptr<NetSession> session, const std::string& room, const std::string& text);
+    void persist_shared_penalty(const std::string& user, bool ban, std::uint32_t seconds);
+    void persist_shared_blacklist(const std::string& user);
+    void deliver_verified(std::shared_ptr<NetSession> target, std::uint16_t opcode, std::vector<std::uint8_t> body,
+                          std::string sender, std::string room = {});
+    void publish_control_change();
     using Session = NetSession;
 
     /** @brief 채팅 런타임의 config/state/dispatch 세부 배치를 숨기는 단일 비공개 구현 상태입니다. */

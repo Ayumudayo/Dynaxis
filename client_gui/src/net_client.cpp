@@ -308,7 +308,7 @@ void NetClient::handle_packet(const proto::PacketHeader& hh, std::span<const std
         server::wire::v1::ChatBroadcast pb;
         if (server::wire::codec::Decode(in.data(), in.size(), pb)) {
             if (on_bcast_) {
-                on_bcast_(pb.room(), pb.sender(), pb.text(), hh.flags, pb.sender_sid());
+                on_bcast_(pb.room(), pb.sender(), pb.text(), hh.flags, pb.sender_sid(), pb.message_id(), pb.room_id());
             }
         }
         return;
@@ -348,10 +348,10 @@ void NetClient::handle_packet(const proto::PacketHeader& hh, std::span<const std
             std::vector<SnapshotMessage> messages;
             messages.reserve(pb.messages_size());
             for (const auto& m : pb.messages()) {
-                messages.push_back({m.sender(), m.text(), m.ts_ms()});
+                messages.push_back({m.sender(), m.text(), m.ts_ms(), m.id()});
             }
             if (on_snapshot_) {
-                on_snapshot_(pb.current_room(), std::move(rooms), std::move(users), std::move(locked), std::move(messages), pb.your_name());
+                on_snapshot_(pb.current_room(), std::move(rooms), std::move(users), std::move(locked), std::move(messages), pb.your_name(), pb.watermark(), pb.room_id(), pb.history_available());
             }
         }
         return;

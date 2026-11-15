@@ -19,7 +19,9 @@ void start_chat_fanout_subscription(chat::ChatService& chat,
             const auto refresh = prefix + "refresh:";
             const auto room = prefix + "room:";
             const std::vector<std::uint8_t> body(message.begin() + newline + 1, message.end());
-            if (channel.starts_with(refresh)) {
+            if (channel == prefix + "control") {
+                chat.enforce_shared_state();
+            } else if (channel.starts_with(refresh)) {
                 chat.broadcast_refresh_local(channel.substr(refresh.size()));
             } else if (channel.starts_with(room)) {
                 chat.broadcast_room(channel.substr(room.size()), body);

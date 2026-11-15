@@ -83,7 +83,14 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
     // 로그인은 DB/Redis 작업과 write-behind 이벤트가 함께 수행되므로 `job_queue`로 넘긴다.
     // 메인 I/O 스레드에서 이 작업을 직접 수행하면, 느린 저장소가 전체 로그인 latency를 바로 끌어올릴 수 있다.
     // 더 나쁘게는 accept/read 루프까지 막아 신규 연결 자체가 지연될 수 있다.
-    if (!job_queue_.TryPush([this, session_sp, user, token, auth_claims]() {
+    if (!enqueue_session(session_sp, [this, session_sp, user, token, auth_claims]() {
+        {
+            std::lock_guard lock(impl_->state.mu);
+            if (impl_->state.authed.count(session_sp.get())) {
+                session_sp->send_error(proto::errc::FORBIDDEN, "already authenticated");
+                return;
+            }
+        }
         const std::string session_id_str = get_or_create_session_uuid(*session_sp);
         std::string tracked_user_uuid;
         std::string lobby_room_id;
@@ -115,7 +122,9 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         const std::string requested_user =
             continuity_resume.has_value() ? continuity_resume->effective_user : user;
         bool guest_mode = continuity_resume.has_value() ? false : (user.empty() || user == "guest");
-        std::string new_user = ensure_unique_or_error(*session_sp, requested_user);
+        // 유효한 resume는 이전 연결이 아직 살아 있어도 같은 logical lease를 교체한다.
+        // 최종 배타 소유권은 DB에서 결정하고 옛 연결은 token fence로 차단한다.
+        std::string new_user = continuity_resume ? requested_user : ensure_unique_or_error(*session_sp, requested_user);
         if (new_user.empty()) return; // 중복 등으로 실패 시 종료
         const std::string hwid_hash = hash_hwid_token(
             continuity_resume.has_value() ? std::string_view{} : std::string_view(token));
@@ -131,9 +140,8 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
 
         const auto now = std::chrono::steady_clock::now();
         std::string deny_reason;
-        {
+        if (!impl_->runtime.db_pool) {
             std::lock_guard<std::mutex> lk(impl_->state.mu);
-
             if (auto it = impl_->state.banned_users.find(new_user); it != impl_->state.banned_users.end()) {
                 if (it->second.expires_at <= now) {
                     impl_->state.banned_users.erase(it);
@@ -167,6 +175,8 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             session_sp->send_error(proto::errc::FORBIDDEN, deny_reason);
             return;
         }
+
+        if (!claim_shared_login(*session_sp, new_user, continuity_session_id)) return;
 
         {
             std::lock_guard<std::mutex> lk(impl_->state.mu);
@@ -307,6 +317,14 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         } else if (!continuity_session_id.empty()) {
             persist_continuity_room(continuity_session_id, current_room, continuity_expires_unix_ms);
         }
+
+        if (resumed_login && current_room != "lobby" && !admit_shared_room(*session_sp, current_room, {}, true)) {
+            std::lock_guard lock(impl_->state.mu);
+            remove_session_from_room_locked(impl_->state, session_sp, current_room, new_user);
+            current_room = "lobby";
+            place_session_in_room_locked(impl_->state, session_sp, current_room, new_user);
+        }
+        if (!renew_shared_login(*session_sp, continuity_session_id)) return;
 
         server::wire::v1::LoginRes pb;
         pb.set_effective_user(new_user);

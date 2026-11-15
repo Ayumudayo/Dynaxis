@@ -10,7 +10,6 @@ endif()
 
 set(server_core_HAS_EXTENSIONS @BUILD_CORE_EXTENSIONS@)
 if(server_core_HAS_EXTENSIONS)
-    find_dependency(Protobuf REQUIRED)
     find_dependency(OpenSSL REQUIRED)
 
     find_package(lz4 CONFIG QUIET)

@@ -9,6 +9,7 @@
 #include <atomic>
 
 #include "client/net_client.hpp"
+#include "client/message_timeline.hpp"
 
 /**
  * @brief 방 정보 구조체
@@ -36,17 +37,17 @@ struct AppData {
     std::vector<RoomInfo> room_list;
     
     // 채팅 로그 (채팅창에 표시될 내용)
-    std::vector<std::string> logs;
+    MessageTimeline timeline;
 
     // 로그 추가 헬퍼
     void add_log(const std::string& msg) {
-        logs.push_back(msg);
+        timeline.add_notice(msg);
     }
     
     // 마지막 로그 가져오기 (디버그용)
     std::string get_last_log() const {
-        if (logs.empty()) return "";
-        return logs.back();
+        if (timeline.lines.empty()) return "";
+        return timeline.lines.back().text;
     }
 };
 
