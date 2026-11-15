@@ -234,13 +234,6 @@ function Get-RuntimeImageBuildSpecs([string]$ProjectRoot) {
             Context = $ProjectRoot
         },
         @{
-            Name = "admin-runtime"
-            Image = "dynaxis-admin:local"
-            Target = "admin-runtime"
-            Dockerfile = $dockerfilePath
-            Context = $ProjectRoot
-        },
-        @{
             Name = "migrator-runtime"
             Image = "dynaxis-migrator:local"
             Target = "migrator-runtime"

@@ -22,32 +22,19 @@ add_library(server_core
 )
 if (BUILD_CORE_EXTENSIONS)
     target_sources(server_core PRIVATE
-        src/realtime/runtime.cpp
         src/net/acceptor.cpp
         src/net/session.cpp
         src/net/dispatcher.cpp
-        src/net/rudp/ack_window.cpp
-        src/net/rudp/retransmission_queue.cpp
-        src/net/rudp/rudp_engine.cpp
         src/state/instance_registry.cpp
         src/state/redis_instance_registry.cpp
         src/state/redis_backend_factory.cpp
         src/storage/db_worker_pool.cpp
         src/security/cipher.cpp
-        src/security/admin_command_auth.cpp
         src/compression/compressor.cpp
-        src/plugin/shared_library.cpp
-        src/scripting/lua_sandbox.cpp
-        src/scripting/script_watcher.cpp
-        src/scripting/lua_runtime.cpp
     )
 endif()
 add_library(server_core::server_core ALIAS server_core)
 
-if (BUILD_CORE_EXTENSIONS)
-    configure_luajit_submodule(LUAJIT_VENDOR_TARGET)
-    configure_sol2_submodule(SOL2_VENDOR_TARGET)
-endif()
 include(GNUInstallDirs)
 
 # -----------------------------------------------------------------------------
@@ -109,23 +96,7 @@ if (BUILD_CORE_EXTENSIONS)
     target_link_libraries(server_core PUBLIC OpenSSL::SSL OpenSSL::Crypto lz4::lz4 wire_proto)
 endif()
 
-if (LUAJIT_VENDOR_TARGET)
-    get_target_property(LUAJIT_VENDOR_LOCATION ${LUAJIT_VENDOR_TARGET} IMPORTED_LOCATION)
-    get_filename_component(LUAJIT_VENDOR_INSTALL_NAME "${LUAJIT_VENDOR_LOCATION}" NAME)
 
-    target_link_libraries(server_core PUBLIC
-        $<BUILD_INTERFACE:${LUAJIT_VENDOR_TARGET}>
-        $<INSTALL_INTERFACE:$<INSTALL_PREFIX>/${CMAKE_INSTALL_LIBDIR}/${LUAJIT_VENDOR_INSTALL_NAME}>
-    )
-
-    if (UNIX AND NOT APPLE)
-        target_link_libraries(server_core PUBLIC $<INSTALL_INTERFACE:m> $<INSTALL_INTERFACE:dl>)
-    endif()
-endif()
-
-if (SOL2_VENDOR_TARGET)
-    target_link_libraries(server_core PRIVATE $<BUILD_INTERFACE:${SOL2_VENDOR_TARGET}>)
-endif()
 
 target_include_directories(server_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -195,11 +166,6 @@ install(FILES
         "${CMAKE_CURRENT_BINARY_DIR}/server_coreConfigVersion.cmake"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/server_core")
 
-if (LUAJIT_VENDOR_TARGET)
-    install(FILES
-            "${LUAJIT_VENDOR_LOCATION}"
-            DESTINATION "${CMAKE_INSTALL_LIBDIR}")
-endif()
 
 if (BUILD_CORE_EXTENSIONS)
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/"

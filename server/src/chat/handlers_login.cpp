@@ -89,7 +89,6 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         std::string lobby_room_id;
         std::string login_ip = session_sp->remote_ip();
         std::string current_room = "lobby";
-        std::string current_world = current_runtime_default_world_id();
         std::string continuity_session_id;
         std::string continuity_resume_token;
         std::uint64_t continuity_expires_unix_ms = 0;
@@ -126,15 +125,8 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             continuity_session_id = continuity_resume->logical_session_id;
             continuity_resume_token = continuity_resume->resume_token;
             continuity_expires_unix_ms = continuity_resume->expires_unix_ms;
-            current_world = continuity_resume->world_id.empty()
-                ? current_runtime_default_world_id()
-                : continuity_resume->world_id;
             current_room = continuity_resume->room.empty() ? std::string("lobby") : continuity_resume->room;
             resumed_login = true;
-        }
-
-        if (maybe_handle_login_hook(*session_sp, new_user)) {
-            return;
         }
 
         const auto now = std::chrono::steady_clock::now();
@@ -209,7 +201,6 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 impl_->state.logical_session_id[session_sp.get()] = continuity_session_id;
                 impl_->state.logical_session_expires_unix_ms[session_sp.get()] = continuity_expires_unix_ms;
             }
-            impl_->state.cur_world[session_sp.get()] = current_world;
             // 기본적으로 로비에 입장시키고, continuity resume이면 마지막 방을 복원한다.
             // fallback room을 먼저 정하지 않으면 로그인 직후 "현재 방 없음" 상태가 길게 남아 refresh와 제재 경로가 흔들린다.
             std::string room = current_room.empty() ? std::string("lobby") : current_room;
@@ -244,7 +235,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                                 uid = existing[0].id;
                             }
                         }
-                        
+
                         // 2. 기존 사용자가 없다면 새로 생성을 시도합니다.
                         // find 후 create는 완전한 원자 연산은 아니므로, 아래 재조회 경로가 함께 필요합니다.
                         if (uid.empty()) {
@@ -277,7 +268,7 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 }
                 // write-behind 이벤트용 user_uuid를 저장한다.
                 if (!uid.empty()) { tracked_user_uuid = uid; }
-                
+
                 // 게스트 이름 강제 정규화는 제거했다.
                 // DB에 기록된 이름과 실제 세션 이름이 어긋나면 감사/재현/운영 문의 대응에서 혼란이 더 커졌기 때문이다.
 
@@ -302,23 +293,18 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
             if (auto lease = issue_continuity_lease(
                     tracked_user_uuid,
                     new_user,
-                    current_world,
                     current_room,
                     login_ip.empty() ? std::optional<std::string>{} : std::optional<std::string>{login_ip});
                 lease.has_value()) {
                 continuity_session_id = lease->logical_session_id;
                 continuity_resume_token = lease->resume_token;
                 continuity_expires_unix_ms = lease->expires_unix_ms;
-                current_world = lease->world_id;
                 current_room = lease->room;
                 std::lock_guard<std::mutex> lk(impl_->state.mu);
                 impl_->state.logical_session_id[session_sp.get()] = continuity_session_id;
                 impl_->state.logical_session_expires_unix_ms[session_sp.get()] = continuity_expires_unix_ms;
-                impl_->state.cur_world[session_sp.get()] = current_world;
             }
         } else if (!continuity_session_id.empty()) {
-            persist_continuity_world(continuity_session_id, current_world, continuity_expires_unix_ms);
-            persist_continuity_world_owner(current_world, impl_->continuity.current_owner_id, continuity_expires_unix_ms);
             persist_continuity_room(continuity_session_id, current_room, continuity_expires_unix_ms);
         }
 
@@ -342,16 +328,13 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         if (continuity_expires_unix_ms > 0) {
             pb.set_resume_expires_unix_ms(continuity_expires_unix_ms);
         }
-        if (!current_world.empty()) {
-            pb.set_world_id(current_world);
-        }
         std::string bytes;
         pb.SerializeToString(&bytes);
         std::vector<std::uint8_t> res(bytes.begin(), bytes.end());
 
         session_sp->set_session_status(server::core::protocol::SessionStatus::kAuthenticated);
         session_sp->async_send(game_proto::MSG_LOGIN_RES, res, 0);
-        
+
         // presence:user:{uid} 키의 TTL을 갱신해 온라인 리스트를 유지한다.
         // 로그인 직후 이 값을 놓치면 사용자는 실제로 붙어 있는데도 다른 런타임에서는 offline처럼 보일 수 있다.
         if (impl_->runtime.redis) {
@@ -366,18 +349,16 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
                 }
                 touch_user_presence(uid);
                 if (!continuity_session_id.empty()) {
-                    persist_continuity_world(continuity_session_id, current_world, continuity_expires_unix_ms);
-                    persist_continuity_world_owner(current_world, impl_->continuity.current_owner_id, continuity_expires_unix_ms);
                     persist_continuity_room(continuity_session_id, current_room, continuity_expires_unix_ms);
                 }
-                
+
                 // 초기 입장 방을 표시용 사용자 목록에 반영한다.
                 if (current_room != "lobby") {
                     impl_->runtime.redis->srem("room:users:lobby", new_user);
                     impl_->runtime.redis->sadd("rooms:active", current_room);
                 }
                 impl_->runtime.redis->sadd("room:users:" + current_room, new_user);
-                
+
                 // 초기 입장 방에 있는 다른 유저들에게 갱신 알림 전송
                 // 로그인 직후 refresh를 보내 두어야 분산 환경에서도 사용자 목록이 빨리 수렴한다.
                 broadcast_refresh(current_room);
@@ -395,7 +376,6 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
         }
         std::vector<std::pair<std::string, std::string>> wb_fields;
         wb_fields.emplace_back("room", current_room);
-        wb_fields.emplace_back("world_id", current_world);
         wb_fields.emplace_back("user_name", new_user);
         if (resumed_login) {
             wb_fields.emplace_back("resumed", "1");
@@ -412,6 +392,3 @@ void ChatService::on_login(Session& s, std::span<const std::uint8_t> payload) {
 }
 
 } // namespace server::app::chat
-
-
-

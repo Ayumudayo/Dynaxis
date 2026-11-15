@@ -84,24 +84,6 @@ std::string format_double(double value) {
     return stream.str();
 }
 
-const char* rudp_fallback_reason_label(std::size_t index) {
-    using server::core::runtime_metrics::RudpFallbackReason;
-    switch (static_cast<RudpFallbackReason>(index)) {
-    case RudpFallbackReason::kHandshakeTimeout:
-        return "handshake_timeout";
-    case RudpFallbackReason::kIdleTimeout:
-        return "idle_timeout";
-    case RudpFallbackReason::kProtocolError:
-        return "protocol_error";
-    case RudpFallbackReason::kInflightLimit:
-        return "inflight_limit";
-    case RudpFallbackReason::kDisabled:
-        return "disabled";
-    case RudpFallbackReason::kOther:
-        return "other";
-    }
-    return "other";
-}
 
 void append_sample_line(std::ostream& out,
                         std::string_view metric_name,
@@ -544,20 +526,10 @@ void append_runtime_core_metrics(std::ostream& out) {
     out << "# TYPE core_runtime_http_bad_request_total counter\n";
     out << "core_runtime_http_bad_request_total " << snap.http_bad_request_total << "\n";
 
-    out << "# TYPE core_runtime_setting_reload_attempt_total counter\n";
-    out << "core_runtime_setting_reload_attempt_total " << snap.runtime_setting_reload_attempt_total << "\n";
 
-    out << "# TYPE core_runtime_setting_reload_success_total counter\n";
-    out << "core_runtime_setting_reload_success_total " << snap.runtime_setting_reload_success_total << "\n";
 
-    out << "# TYPE core_runtime_setting_reload_failure_total counter\n";
-    out << "core_runtime_setting_reload_failure_total " << snap.runtime_setting_reload_failure_total << "\n";
 
-    out << "# TYPE core_runtime_setting_reload_latency_sum_ns counter\n";
-    out << "core_runtime_setting_reload_latency_sum_ns " << snap.runtime_setting_reload_latency_sum_ns << "\n";
 
-    out << "# TYPE core_runtime_setting_reload_latency_max_ns gauge\n";
-    out << "core_runtime_setting_reload_latency_max_ns " << snap.runtime_setting_reload_latency_max_ns << "\n";
 
     out << "# TYPE core_runtime_watchdog_total gauge\n";
     out << "core_runtime_watchdog_total " << snap.watchdog_total << "\n";
@@ -602,35 +574,6 @@ void append_runtime_core_metrics(std::ostream& out) {
         }
     }
 
-    out << "# TYPE core_runtime_rudp_handshake_total counter\n";
-    out << "core_runtime_rudp_handshake_total{result=\"ok\"} " << snap.rudp_handshake_ok_total << "\n";
-    out << "core_runtime_rudp_handshake_total{result=\"fail\"} " << snap.rudp_handshake_fail_total << "\n";
-
-    out << "# TYPE core_runtime_rudp_retransmit_total counter\n";
-    out << "core_runtime_rudp_retransmit_total " << snap.rudp_retransmit_total << "\n";
-
-    out << "# TYPE core_runtime_rudp_inflight_packets gauge\n";
-    out << "core_runtime_rudp_inflight_packets " << snap.rudp_inflight_packets << "\n";
-
-    out << "# TYPE core_runtime_rudp_rtt_ms histogram\n";
-    std::uint64_t rudp_rtt_bucket_cumulative = 0;
-    for (std::size_t i = 0; i < snap.rudp_rtt_ms_bucket_counts.size(); ++i) {
-        rudp_rtt_bucket_cumulative += snap.rudp_rtt_ms_bucket_counts[i];
-        out << "core_runtime_rudp_rtt_ms_bucket{le=\"" << server::core::runtime_metrics::kRudpRttBucketUpperBoundsMs[i]
-            << "\"} " << rudp_rtt_bucket_cumulative << "\n";
-    }
-    out << "core_runtime_rudp_rtt_ms_bucket{le=\"+Inf\"} " << snap.rudp_rtt_ms_count << "\n";
-    out << "core_runtime_rudp_rtt_ms_sum " << snap.rudp_rtt_ms_sum << "\n";
-    out << "core_runtime_rudp_rtt_ms_count " << snap.rudp_rtt_ms_count << "\n";
-    out << "# TYPE core_runtime_rudp_rtt_ms_max gauge\n";
-    out << "core_runtime_rudp_rtt_ms_max " << snap.rudp_rtt_ms_max << "\n";
-
-    out << "# TYPE core_runtime_rudp_fallback_total counter\n";
-    for (std::size_t i = 0; i < snap.rudp_fallback_total.size(); ++i) {
-        out << "core_runtime_rudp_fallback_total{reason=\""
-            << rudp_fallback_reason_label(i)
-            << "\"} " << snap.rudp_fallback_total[i] << "\n";
-    }
 }
 
 void reset_for_tests() {

@@ -40,7 +40,7 @@ GTest 없이 TCP/설치 소비자만 검증하려면 configure 시 `-DBUILD_GTES
 큰 변경(빌드/의존성/워크플로우/다중 모듈 변경)은 push 전에 로컬 검증을 통과하는 것을 권장한다.
 
 - 핵심 원칙: 로컬 검증 실패 상태에서는 push하지 않는다.
-- 권장 최소 검증: `pwsh scripts/build.ps1 -Config Release`, `ctest --preset windows-test -R WindowsReleaseTreeReady --output-on-failure --no-tests=error`, `ctest --preset windows-test --parallel 8 --output-on-failure`
+- 권장 최소 검증: `pwsh scripts/build.ps1 -Config Release`, `ctest --preset windows-test --output-on-failure --no-tests=error`, `ctest --preset windows-test --parallel 8 --output-on-failure`
 
 ## 윈도우(Windows) 개발 빌드
 
@@ -60,14 +60,12 @@ pwsh scripts/build.ps1 -Config Debug -Target server_app
 
 도구 실행 파일은 `tools/CMakeLists.txt`가 소유한다.
 - write-behind: `wb_worker`, `wb_emit`, `wb_check`, `wb_dlq_replayer`
-- control plane: `admin_app`
 - schema: `migrations_runner`
-- loadgen: `stack_loadgen`
 
 ### 2) 테스트
 ```powershell
 pwsh scripts/build.ps1 -Config Release
-ctest --preset windows-test -R WindowsReleaseTreeReady --output-on-failure --no-tests=error
+ctest --preset windows-test --output-on-failure --no-tests=error
 ctest --preset windows-test --parallel 8 --output-on-failure
 ```
 

@@ -64,9 +64,9 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
     std::string room, text;
     auto sp = std::span<const std::uint8_t>(payload.data(), payload.size());
     // 페이로드 파싱: 방 이름, 메시지 내용
-    if (!proto::read_lp_utf8(sp, room) || !proto::read_lp_utf8(sp, text)) { 
-        s.send_error(proto::errc::INVALID_PAYLOAD, "bad chat payload"); 
-        return; 
+    if (!proto::read_lp_utf8(sp, room) || !proto::read_lp_utf8(sp, text)) {
+        s.send_error(proto::errc::INVALID_PAYLOAD, "bad chat payload");
+        return;
     }
 
     auto session_sp = s.shared_from_this();
@@ -84,14 +84,14 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
         std::string current_room = room;
         {
             std::lock_guard<std::mutex> lk(impl_->state.mu);
-            if (!impl_->state.authed.count(session_sp.get())) { 
-                session_sp->send_error(proto::errc::UNAUTHORIZED, "unauthorized"); 
-                return; 
+            if (!impl_->state.authed.count(session_sp.get())) {
+                session_sp->send_error(proto::errc::UNAUTHORIZED, "unauthorized");
+                return;
             }
-            auto it = impl_->state.cur_room.find(session_sp.get()); 
-            if (it == impl_->state.cur_room.end()) { 
-                session_sp->send_error(proto::errc::NO_ROOM, "no current room"); 
-                return; 
+            auto it = impl_->state.cur_room.find(session_sp.get());
+            if (it == impl_->state.cur_room.end()) {
+                session_sp->send_error(proto::errc::NO_ROOM, "no current room");
+                return;
             }
             const std::string& authoritative_room = it->second;
             if (!current_room.empty() && current_room != authoritative_room) {
@@ -140,9 +140,6 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
 
         // 플러그인은 내장 slash command 다음, 실제 fan-out 직전에 탄다.
         // 그래야 기본 명령 체계는 유지하면서도 마지막 정책 게이트로 moderation/변환을 덧댈 수 있다.
-        if (maybe_handle_chat_hook_plugin(*session_sp, current_room, moderation.sender, text)) {
-            return;
-        }
 
         dispatch_room_message(session_sp, current_room, moderation.sender, text);
     })) {
@@ -232,4 +229,3 @@ void ChatService::on_refresh_request(Session& s, std::span<const std::uint8_t>) 
 }
 
 } // namespace server::app::chat
-

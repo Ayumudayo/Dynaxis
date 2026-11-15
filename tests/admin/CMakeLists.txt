@@ -1,3 +1,0 @@
-add_executable(admin_http_client_tests test_http_client.cpp)
-target_link_libraries(admin_http_client_tests PRIVATE admin_http_client GTest::gtest_main)
-discover_labeled_gtests(admin_http_client_tests "admin;integration")

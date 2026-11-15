@@ -1,172 +1,93 @@
 groups:
-  - name: gateway-resilience
-    rules:
-      - alert: GatewayBackendCircuitOpen
-        expr: max_over_time(gateway_backend_circuit_open[5m]) > 0
-        for: 5m
-        labels:
-          severity: warning
-          service: gateway
-        annotations:
-          summary: "Gateway backend circuit breaker is open"
-          description: "Backend circuit stayed open for 5m. Check downstream server_app availability and gateway retry budget usage."
-
-      - alert: GatewayIngressRateLimited
-        expr: sum(rate(gateway_ingress_reject_rate_limit_total[5m])) > 5
-        for: 10m
-        labels:
-          severity: warning
-          service: gateway
-        annotations:
-          summary: "Gateway ingress rate-limit rejects are elevated"
-          description: "Ingress token bucket is rejecting more than 5 connections/sec for 10m. Revisit ingress thresholds or scale gateway replicas."
-
-      - alert: WbFlushRetryExhausted
-        expr: increase(wb_flush_retry_exhausted_total[10m]) > 0
-        for: 5m
-        labels:
-          severity: warning
-          service: write_behind
-        annotations:
-          summary: "wb_worker flush retry budget exhausted"
-          description: "wb_worker exhausted flush retry budget in the last 10m. Check DB availability and WB_RETRY_* settings."
-
-  - name: gateway-udp-quality
-    rules:
-      - alert: GatewayUdpBindAbuseSpike
-        expr: sum(rate(gateway_udp_bind_rate_limit_reject_total[5m])) > 1
-        for: 10m
-        labels:
-          severity: warning
-          service: gateway
-        annotations:
-          summary: "Gateway UDP bind rate-limit rejects are rising"
-          description: "UDP bind rejections by rate-limit exceeded 1/s for 10m. Check source distribution and bind guard thresholds."
-
-      - alert: GatewayUdpEstimatedLossHigh
-        expr: sum(rate(gateway_udp_loss_estimated_total[5m])) / clamp_min(sum(rate(gateway_udp_forward_total[5m])), 1) > 0.05
-        for: 10m
-        labels:
-          severity: warning
-          service: gateway
-        annotations:
-          summary: "Gateway UDP estimated loss ratio is high"
-          description: "Estimated UDP packet loss ratio is above 5% for 10m. Check network quality and transport fallback strategy."
-
-      - alert: GatewayUdpReplayDropSpike
-        expr: sum(rate(gateway_udp_replay_drop_total[5m])) > 2
-        for: 10m
-        labels:
-          severity: warning
-          service: gateway
-        annotations:
-          summary: "Gateway UDP replay/reorder drops are elevated"
-          description: "Replay/reorder UDP packet drops exceeded 2/s for 10m. Validate client sequencing and potential abuse."
-
-      - alert: GatewayUdpJitterHigh
-        expr: max_over_time(gateway_udp_jitter_ms_last[10m]) > 150
-        for: 10m
-        labels:
-          severity: warning
-          service: gateway
-        annotations:
-          summary: "Gateway UDP jitter remains high"
-          description: "Observed UDP jitter exceeded 150ms for 10m. Investigate network path or force TCP fallback."
-
-  - name: gateway-rudp-rollout
-    rules:
-      - alert: RudpHandshakeFailureSpike
-        expr: >-
-          (sum(rate(core_runtime_rudp_handshake_total{result="fail"}[5m]))
-          / clamp_min(sum(rate(core_runtime_rudp_handshake_total[5m])), 1)) > 0.2
-          and sum(rate(core_runtime_rudp_handshake_total[5m])) > 0.1
-        for: 10m
-        labels:
-          severity: warning
-          service: gateway
-        annotations:
-          summary: "RUDP handshake failure ratio is elevated"
-          description: "RUDP handshake failure ratio stayed above 20% for 10m. Reduce canary percent and inspect bind/auth path plus packet captures."
-
-      - alert: RudpRetransmitRatioHigh
-        expr: >-
-          (sum(rate(core_runtime_rudp_retransmit_total[5m]))
-          / clamp_min(sum(rate(gateway_rudp_inner_forward_total[5m])), 1)) > 0.15
-          and sum(rate(gateway_rudp_inner_forward_total[5m])) > 1
-        for: 10m
-        labels:
-          severity: warning
-          service: gateway
-        annotations:
-          summary: "RUDP retransmit ratio is high"
-          description: "RUDP retransmits exceeded 15% of forwarded inner frames for 10m. Check network quality and narrow RUDP opcode allowlist if needed."
-
-      - alert: RudpFallbackSpike
-        expr: sum(rate(gateway_rudp_fallback_total[5m])) > 0.1
-        for: 10m
-        labels:
-          severity: warning
-          service: gateway
-        annotations:
-          summary: "RUDP fallback rate is spiking"
-          description: "RUDP fallback events exceeded 0.1/s for 10m. Set GATEWAY_RUDP_CANARY_PERCENT=0 and verify TCP KPIs recover."
-
-  - name: tls-certificate-expiry
-    rules:
-      - alert: TLSCertificateExpiringIn30Days
-        expr: (probe_ssl_earliest_cert_expiry - time()) <= (30 * 24 * 3600) and (probe_ssl_earliest_cert_expiry - time()) > (14 * 24 * 3600)
-        for: 4h
-        labels:
-          severity: info
-          service: edge
-        annotations:
-          summary: "TLS certificate expires in <= 30 days"
-          description: "Certificate for {{ $labels.instance }} is within the 30-day expiry window. Start renewal scheduling."
-
-      - alert: TLSCertificateExpiringIn14Days
-        expr: (probe_ssl_earliest_cert_expiry - time()) <= (14 * 24 * 3600) and (probe_ssl_earliest_cert_expiry - time()) > (7 * 24 * 3600)
-        for: 1h
-        labels:
-          severity: warning
-          service: edge
-        annotations:
-          summary: "TLS certificate expires in <= 14 days"
-          description: "Certificate for {{ $labels.instance }} is within the 14-day expiry window. Verify renewal rollout status."
-
-      - alert: TLSCertificateExpiringIn7Days
-        expr: (probe_ssl_earliest_cert_expiry - time()) <= (7 * 24 * 3600)
-        for: 5m
-        labels:
-          severity: critical
-          service: edge
-        annotations:
-          summary: "TLS certificate expires in <= 7 days"
-          description: "Certificate for {{ $labels.instance }} is in the critical expiry window. Rotate immediately."
-
-  - name: service-slo-burn-rate
-    rules:
-      - alert: ChatErrorBudgetBurnRateFast
-        expr: >-
-          (sum(rate(chat_frame_error_total[2h])) / clamp_min(sum(rate(chat_frame_total[2h])), 1)) > 0.01
-          and sum(rate(chat_frame_total[2h])) > 1
-        for: 2h
-        labels:
-          severity: critical
-          service: chat_server
-          slo_window: short
-        annotations:
-          summary: "chat_server fast burn-rate budget risk"
-          description: "2h error ratio exceeded 1% for 2h while traffic is present. Check recent deploys and dependency saturation."
-
-      - alert: ChatErrorBudgetBurnRateSlow
-        expr: >-
-          (sum(rate(chat_frame_error_total[12h])) / clamp_min(sum(rate(chat_frame_total[12h])), 1)) > 0.003
-          and sum(rate(chat_frame_total[12h])) > 1
-        for: 6h
-        labels:
-          severity: warning
-          service: chat_server
-          slo_window: long
-        annotations:
-          summary: "chat_server sustained burn-rate budget risk"
-          description: "12h error ratio exceeded 0.3% for 6h while traffic is present. Evaluate rollback or freeze risky feature changes."
+- name: gateway-resilience
+  rules:
+  - alert: GatewayBackendCircuitOpen
+    expr: max_over_time(gateway_backend_circuit_open[5m]) > 0
+    for: 5m
+    labels:
+      severity: warning
+      service: gateway
+    annotations:
+      summary: Gateway backend circuit breaker is open
+      description: Backend circuit stayed open for 5m. Check downstream server_app
+        availability and gateway retry budget usage.
+  - alert: GatewayIngressRateLimited
+    expr: sum(rate(gateway_ingress_reject_rate_limit_total[5m])) > 5
+    for: 10m
+    labels:
+      severity: warning
+      service: gateway
+    annotations:
+      summary: Gateway ingress rate-limit rejects are elevated
+      description: Ingress token bucket is rejecting more than 5 connections/sec for
+        10m. Revisit ingress thresholds or scale gateway replicas.
+  - alert: WbFlushRetryExhausted
+    expr: increase(wb_flush_retry_exhausted_total[10m]) > 0
+    for: 5m
+    labels:
+      severity: warning
+      service: write_behind
+    annotations:
+      summary: wb_worker flush retry budget exhausted
+      description: wb_worker exhausted flush retry budget in the last 10m. Check DB
+        availability and WB_RETRY_* settings.
+- name: tls-certificate-expiry
+  rules:
+  - alert: TLSCertificateExpiringIn30Days
+    expr: (probe_ssl_earliest_cert_expiry - time()) <= (30 * 24 * 3600) and (probe_ssl_earliest_cert_expiry
+      - time()) > (14 * 24 * 3600)
+    for: 4h
+    labels:
+      severity: info
+      service: edge
+    annotations:
+      summary: TLS certificate expires in <= 30 days
+      description: Certificate for {{ $labels.instance }} is within the 30-day expiry
+        window. Start renewal scheduling.
+  - alert: TLSCertificateExpiringIn14Days
+    expr: (probe_ssl_earliest_cert_expiry - time()) <= (14 * 24 * 3600) and (probe_ssl_earliest_cert_expiry
+      - time()) > (7 * 24 * 3600)
+    for: 1h
+    labels:
+      severity: warning
+      service: edge
+    annotations:
+      summary: TLS certificate expires in <= 14 days
+      description: Certificate for {{ $labels.instance }} is within the 14-day expiry
+        window. Verify renewal rollout status.
+  - alert: TLSCertificateExpiringIn7Days
+    expr: (probe_ssl_earliest_cert_expiry - time()) <= (7 * 24 * 3600)
+    for: 5m
+    labels:
+      severity: critical
+      service: edge
+    annotations:
+      summary: TLS certificate expires in <= 7 days
+      description: Certificate for {{ $labels.instance }} is in the critical expiry
+        window. Rotate immediately.
+- name: service-slo-burn-rate
+  rules:
+  - alert: ChatErrorBudgetBurnRateFast
+    expr: (sum(rate(chat_frame_error_total[2h])) / clamp_min(sum(rate(chat_frame_total[2h])),
+      1)) > 0.01 and sum(rate(chat_frame_total[2h])) > 1
+    for: 2h
+    labels:
+      severity: critical
+      service: chat_server
+      slo_window: short
+    annotations:
+      summary: chat_server fast burn-rate budget risk
+      description: 2h error ratio exceeded 1% for 2h while traffic is present. Check
+        recent deploys and dependency saturation.
+  - alert: ChatErrorBudgetBurnRateSlow
+    expr: (sum(rate(chat_frame_error_total[12h])) / clamp_min(sum(rate(chat_frame_total[12h])),
+      1)) > 0.003 and sum(rate(chat_frame_total[12h])) > 1
+    for: 6h
+    labels:
+      severity: warning
+      service: chat_server
+      slo_window: long
+    annotations:
+      summary: chat_server sustained burn-rate budget risk
+      description: 12h error ratio exceeded 0.3% for 6h while traffic is present.
+        Evaluate rollback or freeze risky feature changes.

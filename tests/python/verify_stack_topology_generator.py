@@ -11,7 +11,6 @@ STACK_DIR = REPO_ROOT / "docker" / "stack"
 BASE_COMPOSE = STACK_DIR / "docker-compose.yml"
 GENERATOR_SCRIPT = REPO_ROOT / "scripts" / "generate_stack_topology.py"
 DEFAULT_TOPOLOGY = STACK_DIR / "topologies" / "default.json"
-PROOF_TOPOLOGY = STACK_DIR / "topologies" / "mmorpg-same-world-proof.json"
 INVALID_TOPOLOGY = STACK_DIR / "topologies" / "invalid-duplicate-port.json"
 TEMP_DIR = REPO_ROOT / "build" / "stack-topology-tests"
 
@@ -72,7 +71,6 @@ def generate_and_validate(topology_config: Path, output_stem: str) -> None:
 def main() -> int:
     try:
         generate_and_validate(DEFAULT_TOPOLOGY, "default")
-        generate_and_validate(PROOF_TOPOLOGY, "proof")
         run_command(
             [
                 sys.executable,

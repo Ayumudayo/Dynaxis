@@ -66,7 +66,6 @@ def parse_login_res(payload: bytes) -> dict:
         "resume_token": "",
         "resume_expires_unix_ms": 0,
         "resumed": False,
-        "world_id": "",
         "principal_id": "", "auth_session_id": "", "display_name": "",
     }
     offset = 0
@@ -75,7 +74,7 @@ def parse_login_res(payload: bytes) -> dict:
         field_number = tag >> 3
         wire_type = tag & 0x07
 
-        if wire_type == 2 and field_number in {1, 3, 5, 6, 9, 10, 11, 12}:
+        if wire_type == 2 and field_number in {1, 3, 5, 6, 10, 11, 12}:
             length, offset = read_varint(payload, offset)
             raw = payload[offset:offset + length]
             offset += length
@@ -90,8 +89,6 @@ def parse_login_res(payload: bytes) -> dict:
                 result["resume_token"] = value
             elif field_number in {10, 11, 12}:
                 result[{10: "principal_id", 11: "auth_session_id", 12: "display_name"}[field_number]] = value
-            elif field_number == 9:
-                result["world_id"] = value
             continue
 
         if wire_type == 0 and field_number in {2, 4, 7, 8}:

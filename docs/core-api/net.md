@@ -44,6 +44,5 @@
 
 ## Verification Pointers
 - Runtime별 worker 격리 / payload·session 수명: `tests/core/test_transport_router.cpp` (최소 core에서도 실행)
-- 관리 HTTP deadline / framing / 크기 상한: `tests/admin/test_http_client.cpp` (admin 모듈 전용)
 - Bounded queue / transport backpressure: `tests/core/test_core_net.cpp`
 - Policy primitives (`TokenBucket`, `RetryBudget`, `CircuitBreaker`): `tests/core/test_gateway_resilience_controls.cpp`

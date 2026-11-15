@@ -159,10 +159,7 @@ void GatewayConnection::handle_backend_payload(std::vector<std::uint8_t> payload
         [this](std::span<const std::uint8_t> body) {
             inspect_login_response_payload(body);
         },
-        [this](std::uint16_t msg_id, std::span<const std::uint8_t> frame) {
-            return !session_id_.empty()
-                && GatewayAppAccess::try_send_direct_client_frame(app_, session_id_, msg_id, frame);
-        });
+        {});
 
     if (!tcp_payload.empty()) {
         async_send(std::move(tcp_payload));
@@ -416,9 +413,7 @@ bool GatewayConnection::try_finish_handshake() {
             return true;
         }
 
-        if (auto udp_bind_ticket = GatewayAppAccess::make_udp_bind_ticket_frame(app_, session_id_)) {
-            async_send(std::move(*udp_bind_ticket));
-        }
+
 
         (void)handshake_timer_.cancel();
 

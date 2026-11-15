@@ -11,7 +11,7 @@
 param(
   [string]$PrometheusUrl = "http://127.0.0.1:39090",
   [string]$GrafanaUrl = "http://127.0.0.1:33000",
-  [string[]]$ExpectedJobs = @("chat_server", "gateway", "write_behind", "admin_app", "haproxy", "redis", "postgres"),
+  [string[]]$ExpectedJobs = @("chat_server", "gateway", "write_behind", "haproxy", "redis", "postgres"),
   [switch]$SkipGrafana
 )
 

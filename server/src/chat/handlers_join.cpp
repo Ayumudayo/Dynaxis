@@ -72,10 +72,6 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
             auto user_it = impl_->state.user.find(session_sp.get());
             sender = (user_it != impl_->state.user.end()) ? user_it->second : std::string("guest");
 
-            if (maybe_handle_join_hook(*session_sp, sender, room_to_join)) {
-                return;
-            }
-
             const bool is_admin_user = impl_->runtime.admin_users.count(sender) > 0;
             bool is_room_owner = false;
             bool has_room_invite = false;

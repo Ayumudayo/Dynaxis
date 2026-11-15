@@ -160,9 +160,7 @@ bool ServerConfig::load(int argc, char** argv) {
     if (const char* val = std::getenv("REDIS_CHANNEL_PREFIX"); val && *val) redis_channel_prefix = val;
     if (const char* val = std::getenv("USE_REDIS_PUBSUB"); val && *val) use_redis_pubsub = (std::strcmp(val, "0") != 0);
     if (const char* val = std::getenv("GATEWAY_ID"); val && *val) gateway_id = val;
-    if (const char* val = std::getenv("TOPOLOGY_RUNTIME_ASSIGNMENT_KEY"); val && *val) {
-        topology_runtime_assignment_key = val;
-    }
+
     if (const char* val = std::getenv("SERVER_DRAIN_TIMEOUT_MS"); val && *val) {
         auto parsed = std::strtoull(val, nullptr, 10);
         if (parsed > 0 && parsed <= 600'000) {
@@ -175,110 +173,12 @@ bool ServerConfig::load(int argc, char** argv) {
             shutdown_drain_poll_ms = parsed;
         }
     }
-    if (const char* val = std::getenv("ADMIN_COMMAND_SIGNING_SECRET"); val && *val) {
-        admin_command_signing_secret = val;
-    }
-    if (const char* val = std::getenv("ADMIN_COMMAND_TTL_MS"); val && *val) {
-        auto parsed = std::strtoull(val, nullptr, 10);
-        if (parsed > 0) {
-            admin_command_ttl_ms = parsed;
-        }
-    }
-    if (const char* val = std::getenv("ADMIN_COMMAND_FUTURE_SKEW_MS"); val && *val) {
-        auto parsed = std::strtoull(val, nullptr, 10);
-        admin_command_future_skew_ms = parsed;
-    }
 
-    // 6. Lua 스크립팅 설정
-    // reload 주기와 resource limit은 기능 옵션이면서 동시에 안전장치다. 이 값을 흩어 놓으면 운영자가 실패 원인을 추적하기 어렵다.
-    if (const char* val = std::getenv("LUA_ENABLED"); val && *val) {
-        lua_enabled = (std::strcmp(val, "0") != 0);
-    }
-    if (const char* val = std::getenv("LUA_SCRIPTS_DIR"); val && *val) {
-        lua_scripts_dir = val;
-    }
-    if (const char* val = std::getenv("LUA_FALLBACK_SCRIPTS_DIR"); val && *val) {
-        lua_fallback_scripts_dir = val;
-    }
-    if (const char* val = std::getenv("LUA_LOCK_PATH"); val && *val) {
-        lua_lock_path = val;
-    }
-    if (const char* val = std::getenv("LUA_RELOAD_INTERVAL_MS"); val && *val) {
-        auto parsed = std::strtoull(val, nullptr, 10);
-        if (parsed > 0 && parsed <= 600'000) {
-            lua_reload_interval_ms = parsed;
-        }
-    }
-    if (const char* val = std::getenv("LUA_INSTRUCTION_LIMIT"); val && *val) {
-        auto parsed = std::strtoull(val, nullptr, 10);
-        if (parsed > 0) {
-            lua_instruction_limit = parsed;
-        }
-    }
-    if (const char* val = std::getenv("LUA_MEMORY_LIMIT_BYTES"); val && *val) {
-        auto parsed = std::strtoull(val, nullptr, 10);
-        if (parsed > 0) {
-            lua_memory_limit_bytes = parsed;
-        }
-    }
-    if (const char* val = std::getenv("LUA_AUTO_DISABLE_THRESHOLD"); val && *val) {
-        auto parsed = std::strtoull(val, nullptr, 10);
-        if (parsed > 0) {
-            lua_auto_disable_threshold = parsed;
-        }
-    }
 
     // 7. 메트릭 설정
     if (const char* val = std::getenv("METRICS_PORT"); val && *val) {
         unsigned long v = std::strtoul(val, nullptr, 10);
         if (v > 0 && v < 65536) metrics_port = static_cast<unsigned short>(v);
-    }
-
-    // 8. FPS runtime 설정
-    if (const char* val = std::getenv("FPS_ENABLED"); val && *val) {
-        fps_enabled = std::strcmp(val, "1") == 0 || std::strcmp(val, "true") == 0;
-    }
-    if (const char* val = std::getenv("FPS_TICK_RATE_HZ"); val && *val) {
-        const auto parsed = std::strtoul(val, nullptr, 10);
-        if (parsed > 0 && parsed <= 240) {
-            fps_tick_rate_hz = static_cast<std::uint32_t>(parsed);
-        }
-    }
-    if (const char* val = std::getenv("FPS_SNAPSHOT_REFRESH_TICKS"); val && *val) {
-        const auto parsed = std::strtoul(val, nullptr, 10);
-        if (parsed > 0) {
-            fps_snapshot_refresh_ticks = static_cast<std::uint32_t>(parsed);
-        }
-    }
-    if (const char* val = std::getenv("FPS_INTEREST_CELL_SIZE_MM"); val && *val) {
-        const auto parsed = std::strtol(val, nullptr, 10);
-        if (parsed > 0) {
-            fps_interest_cell_size_mm = static_cast<std::int32_t>(parsed);
-        }
-    }
-    if (const char* val = std::getenv("FPS_INTEREST_RADIUS_CELLS"); val && *val) {
-        const auto parsed = std::strtol(val, nullptr, 10);
-        if (parsed >= 0) {
-            fps_interest_radius_cells = static_cast<std::int32_t>(parsed);
-        }
-    }
-    if (const char* val = std::getenv("FPS_MAX_INTEREST_RECIPIENTS_PER_TICK"); val && *val) {
-        const auto parsed = std::strtoul(val, nullptr, 10);
-        if (parsed > 0) {
-            fps_max_interest_recipients_per_tick = static_cast<std::uint32_t>(parsed);
-        }
-    }
-    if (const char* val = std::getenv("FPS_MAX_DELTA_ACTORS_PER_TICK"); val && *val) {
-        const auto parsed = std::strtoul(val, nullptr, 10);
-        if (parsed > 0) {
-            fps_max_delta_actors_per_tick = static_cast<std::uint32_t>(parsed);
-        }
-    }
-    if (const char* val = std::getenv("FPS_HISTORY_TICKS"); val && *val) {
-        const auto parsed = std::strtoul(val, nullptr, 10);
-        if (parsed > 0) {
-            fps_history_ticks = static_cast<std::uint32_t>(parsed);
-        }
     }
 
     return true;

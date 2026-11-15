@@ -31,9 +31,6 @@ add_library(server_chat_runtime STATIC
     src/chat/chat_spam_moderation.cpp
     src/chat/chat_service_core.cpp
     src/chat/chat_room_state.cpp
-    src/chat/chat_hook_plugin_manager.cpp
-    src/chat/chat_hook_plugin_chain.cpp
-    src/scripting/chat_lua_bindings.cpp
     src/chat/handlers_login.cpp
     src/chat/handlers_join.cpp
     src/chat/handlers_leave.cpp
@@ -49,16 +46,9 @@ if (TARGET nlohmann_json::nlohmann_json)
     target_link_libraries(server_chat_runtime PRIVATE nlohmann_json::nlohmann_json)
 endif()
 
-add_library(server_fps_runtime STATIC
-    src/fps/fps_service.cpp
-)
-target_include_directories(server_fps_runtime PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
-target_include_directories(server_fps_runtime PRIVATE ${CMAKE_BINARY_DIR}/proto)
-target_link_libraries(server_fps_runtime PUBLIC server_core wire_proto)
-
 add_executable(server_app
     src/main.cpp
-    src/app/admin_fanout_subscription.cpp
+    src/app/chat_fanout_subscription.cpp
     src/app/bootstrap.cpp
     src/app/chat_metrics_text.cpp
     src/app/metrics_server.cpp
@@ -68,7 +58,7 @@ add_executable(server_app
     src/app/router.cpp
 )
 target_include_directories(server_app PRIVATE ${CMAKE_CURRENT_LIST_DIR}/include)
-target_link_libraries(server_app PRIVATE server_app_config server_app_backends server_chat_runtime server_fps_runtime server_core wire_proto)
+target_link_libraries(server_app PRIVATE server_app_config server_app_backends server_chat_runtime server_core wire_proto)
 # dlopen/dlsym (Linux)
 target_link_libraries(server_app PRIVATE ${CMAKE_DL_LIBS})
 if (TARGET nlohmann_json::nlohmann_json)
@@ -148,12 +138,6 @@ target_include_directories(server_state_redis_factory PUBLIC ${CMAKE_CURRENT_LIS
 target_link_libraries(server_state_redis_factory PUBLIC server_core)
 target_link_libraries(server_state_redis_factory PRIVATE server_state_redis)
 
-add_library(server_state_consul STATIC
-    src/state/instance_registry_consul.cpp
-)
-target_include_directories(server_state_consul PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
-target_link_libraries(server_state_consul PUBLIC server_state_common)
-
 configure_package_config_file(
     "${CMAKE_CURRENT_LIST_DIR}/cmake/server_storage_pg_factoryConfig.cmake.in"
     "${CMAKE_CURRENT_BINARY_DIR}/server_storage_pg_factoryConfig.cmake"
@@ -185,5 +169,3 @@ install(FILES
         "${CMAKE_CURRENT_LIST_DIR}/include/server/storage/unit_of_work.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/include/server/storage/repositories.hpp"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/server/storage")
-
-add_subdirectory(plugins)

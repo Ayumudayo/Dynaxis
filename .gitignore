@@ -555,9 +555,6 @@ opencode.json
 
 # Documentation
 *_deep_dive.md
-!core/core_architecture_deep_dive.md
-!gateway/gateway_architecture_deep_dive.md
-!server/server_architecture_deep_dive.md
 !server/server_write_behind_deep_dive.md
 
 # External references
@@ -566,3 +563,7 @@ external-refs/
 # Internal docs
 tasks/
 tmp/
+
+# Retired dependency checkouts retained locally only
+external/luajit/
+external/sol2/

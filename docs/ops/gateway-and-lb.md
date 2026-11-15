@@ -25,7 +25,7 @@ server 역할 요약:
 
 이 구분이 중요한 이유는 room 상태와 사용자 의미론까지 gateway 쪽으로 끌어오면 edge 계층이 비대해지기 때문이다. 반대로 server가 연결과 분산까지 떠안으면 수평 확장과 장애 격리가 어려워진다.
 
-> 구현 경계: shared instance-discovery 계약(`InstanceRecord`, selector, backend interface)과 world lifecycle policy 계약은 `server_core`의 stable `core::discovery` 표면에 있고, Redis/Consul adapter와 sticky `SessionDirectory` 구현은 여전히 internal, app-owned 경계에 남아 있다.
+> 구현 경계: shared instance-discovery 계약(`InstanceRecord`, selector, backend interface)은 `server_core`의 stable `core::discovery` 표면에 있고, Redis adapter와 sticky `SessionDirectory` 구현은 여전히 internal, app-owned 경계에 남아 있다.
 
 ## 2. Gateway 세부
 

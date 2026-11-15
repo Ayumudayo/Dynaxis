@@ -41,7 +41,6 @@
 ## Consumer Guidance
 - 인스턴스 단위 lifecycle, readiness, context service ownership을 읽고 싶다면 `EngineRuntime::snapshot()`을 사용합니다.
 - bootstrap-owned module started/watchdog detail을 읽고 싶다면 `EngineRuntime::module_snapshot()`을 사용합니다.
-- 프로세스 전체의 hot-path telemetry, queue depth, dispatch latency, HTTP reject, RUDP fallback, liveness/watchdog aggregate를 읽고 싶다면 `runtime_metrics`를 사용합니다.
 - `runtime_metrics::set_liveness_state()`는 process-global lifecycle/liveness 모델을 갱신하는 stable hook입니다.
 - `runtime_metrics::record_watchdog_sample()` / `watchdog_snapshot()`은 named watchdog transition/health aggregate를 다루는 stable hook입니다.
 - `runtime_metrics::record_watchdog_freeze_suspect()` / `detailed_telemetry_snapshot()`은 freeze suspicion과 threshold-triggered detailed telemetry window를 읽는 stable hook입니다.

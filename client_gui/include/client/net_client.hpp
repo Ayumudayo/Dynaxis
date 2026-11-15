@@ -15,10 +15,10 @@
 
 /**
  * @brief 네트워크 클라이언트 클래스
- * 
+ *
  * 서버(Gateway)와의 TCP 연결을 관리하고, 비동기로 메시지를 송수신합니다.
  * UI 로직과 분리하기 위해 콜백(Callback) 패턴을 사용합니다.
- * 
+ *
  * 주요 기능:
  * - 비동기 연결 및 재연결 관리
  * - 패킷 직렬화/역직렬화 (Protobuf + PacketHeader)
@@ -31,13 +31,13 @@ public:
     // 콜백 함수 타입 정의
     // 서버로부터 메시지를 받았을 때 호출될 함수들의 시그니처입니다.
     // ======================================================================
-    
+
     using OnHello = std::function<void(std::uint16_t caps)>;
     using OnErr = std::function<void(std::uint16_t code, std::string msg)>;
     using OnLoginRes = std::function<void(std::string effective_user, std::uint32_t sid, bool is_admin)>;
     /** @brief 서버가 반환한 인증/continuity 상태입니다. resume_token은 로그/UI 텍스트에 출력하지 않습니다. */
     struct SessionInfo {
-        std::string principal_id, auth_session_id, display_name, logical_session_id, resume_token, world_id;
+        std::string principal_id, auth_session_id, display_name, logical_session_id, resume_token;
         std::uint64_t resume_expires_unix_ms{};
         bool resumed{};
     };
@@ -80,19 +80,19 @@ public:
      * @return 연결 시도 성공 여부 (즉시 반환, 실제 연결은 비동기)
      */
     bool connect(const std::string& host, unsigned short port);
-    
+
     /**
      * @brief 연결을 종료합니다.
      */
     void close();
-    
+
     /**
      * @brief 현재 연결되어 있는지 확인합니다.
      */
     bool is_connected() const { return connected_.load(); }
 
     // --- 메시지 전송 메서드 ---
-    
+
     void send_login(const std::string& user, const std::string& token);
     void send_join(const std::string& room, const std::string& password = std::string());
     void send_leave(const std::string& room = std::string());
@@ -144,4 +144,3 @@ private:
     OnRefreshNotify on_refresh_notify_;
     OnDisconnected on_disconnected_;
 };
-

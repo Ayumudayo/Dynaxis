@@ -51,10 +51,7 @@ GatewayApp::GatewayApp()
     impl_->boot_id_ = make_boot_id();
     server::core::log::info("GatewayApp boot_id=" + impl_->boot_id_);
 
-    if (impl_->udp_listen_port_ != 0 && impl_->udp_bind_secret_.empty()) {
-        impl_->udp_bind_secret_ = impl_->boot_id_;
-        server::core::log::warn("GatewayApp GATEWAY_UDP_BIND_SECRET not set; using boot_id derived secret");
-    }
+
 
     GatewayAppAccess::configure_infrastructure(*this);
     impl_->engine_.set_service(impl_->hive_);
@@ -81,20 +78,17 @@ GatewayApp::GatewayApp()
         "gateway-runtime",
         [this](server::core::app::EngineRuntime&) {
             GatewayAppAccess::start_listener(*this);
-            GatewayAppAccess::start_udp_listener(*this);
             GatewayAppAccess::start_infrastructure_probe(*this);
         },
         [this]() { stop(); },
         [this]() {
             server::core::app::EngineRuntime::WatchdogStatus status;
             const bool listener_ready = static_cast<bool>(impl_->listener_);
-            const bool udp_ready = (impl_->udp_listen_port_ == 0) || static_cast<bool>(impl_->udp_socket_);
             const bool probe_ready = impl_->redis_client_ == nullptr || impl_->infra_probe_thread_.joinable();
-            status.healthy = listener_ready && udp_ready && probe_ready;
+            status.healthy = listener_ready && probe_ready;
             if (!listener_ready) {
                 status.detail = "listener-missing";
-            } else if (!udp_ready) {
-                status.detail = "udp-listener-missing";
+
             } else if (!probe_ready) {
                 status.detail = "infra-probe-missing";
             } else {
@@ -148,7 +142,6 @@ void GatewayApp::stop() {
         impl_->listener_->stop();
     }
 
-    GatewayAppAccess::stop_udp_listener(*this);
 
     {
         std::lock_guard<std::mutex> lock(impl_->session_mutex_);
@@ -167,5 +160,3 @@ void GatewayApp::stop() {
 }
 
 } // namespace gateway
-
-

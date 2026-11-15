@@ -1,173 +1,120 @@
 rule_files:
-  - alerts.yml
-
+- alerts.yml
 evaluation_interval: 1h
-
 tests:
-  - interval: 1h
-    input_series:
-      - series: 'probe_ssl_earliest_cert_expiry{job="tls_probe",instance="edge-30d"}'
-        values: '2500000 2500000 2500000 2500000 2500000 2500000'
-    alert_rule_test:
-      - eval_time: 5h
+- interval: 1h
+  input_series:
+  - series: probe_ssl_earliest_cert_expiry{job="tls_probe",instance="edge-30d"}
+    values: 2500000 2500000 2500000 2500000 2500000 2500000
+  alert_rule_test:
+  - eval_time: 5h
+    alertname: TLSCertificateExpiringIn30Days
+    exp_alerts:
+    - exp_labels:
         alertname: TLSCertificateExpiringIn30Days
-        exp_alerts:
-          - exp_labels:
-              alertname: TLSCertificateExpiringIn30Days
-              service: edge
-              severity: info
-              job: tls_probe
-              instance: edge-30d
-            exp_annotations:
-              summary: "TLS certificate expires in <= 30 days"
-              description: "Certificate for edge-30d is within the 30-day expiry window. Start renewal scheduling."
-      - eval_time: 5h
+        service: edge
+        severity: info
+        job: tls_probe
+        instance: edge-30d
+      exp_annotations:
+        summary: TLS certificate expires in <= 30 days
+        description: Certificate for edge-30d is within the 30-day expiry window.
+          Start renewal scheduling.
+  - eval_time: 5h
+    alertname: TLSCertificateExpiringIn14Days
+    exp_alerts: []
+  - eval_time: 5h
+    alertname: TLSCertificateExpiringIn7Days
+    exp_alerts: []
+- interval: 1h
+  input_series:
+  - series: probe_ssl_earliest_cert_expiry{job="tls_probe",instance="edge-14d"}
+    values: 1100000 1100000 1100000
+  alert_rule_test:
+  - eval_time: 2h
+    alertname: TLSCertificateExpiringIn14Days
+    exp_alerts:
+    - exp_labels:
         alertname: TLSCertificateExpiringIn14Days
-        exp_alerts: []
-      - eval_time: 5h
+        service: edge
+        severity: warning
+        job: tls_probe
+        instance: edge-14d
+      exp_annotations:
+        summary: TLS certificate expires in <= 14 days
+        description: Certificate for edge-14d is within the 14-day expiry window.
+          Verify renewal rollout status.
+  - eval_time: 2h
+    alertname: TLSCertificateExpiringIn30Days
+    exp_alerts: []
+  - eval_time: 2h
+    alertname: TLSCertificateExpiringIn7Days
+    exp_alerts: []
+- interval: 1h
+  input_series:
+  - series: probe_ssl_earliest_cert_expiry{job="tls_probe",instance="edge-7d"}
+    values: 500000 500000
+  alert_rule_test:
+  - eval_time: 1h
+    alertname: TLSCertificateExpiringIn7Days
+    exp_alerts:
+    - exp_labels:
         alertname: TLSCertificateExpiringIn7Days
-        exp_alerts: []
-
-  - interval: 1h
-    input_series:
-      - series: 'probe_ssl_earliest_cert_expiry{job="tls_probe",instance="edge-14d"}'
-        values: '1100000 1100000 1100000'
-    alert_rule_test:
-      - eval_time: 2h
-        alertname: TLSCertificateExpiringIn14Days
-        exp_alerts:
-          - exp_labels:
-              alertname: TLSCertificateExpiringIn14Days
-              service: edge
-              severity: warning
-              job: tls_probe
-              instance: edge-14d
-            exp_annotations:
-              summary: "TLS certificate expires in <= 14 days"
-              description: "Certificate for edge-14d is within the 14-day expiry window. Verify renewal rollout status."
-      - eval_time: 2h
-        alertname: TLSCertificateExpiringIn30Days
-        exp_alerts: []
-      - eval_time: 2h
-        alertname: TLSCertificateExpiringIn7Days
-        exp_alerts: []
-
-  - interval: 1h
-    input_series:
-      - series: 'probe_ssl_earliest_cert_expiry{job="tls_probe",instance="edge-7d"}'
-        values: '500000 500000'
-    alert_rule_test:
-      - eval_time: 1h
-        alertname: TLSCertificateExpiringIn7Days
-        exp_alerts:
-          - exp_labels:
-              alertname: TLSCertificateExpiringIn7Days
-              service: edge
-              severity: critical
-              job: tls_probe
-              instance: edge-7d
-            exp_annotations:
-              summary: "TLS certificate expires in <= 7 days"
-              description: "Certificate for edge-7d is in the critical expiry window. Rotate immediately."
-      - eval_time: 1h
-        alertname: TLSCertificateExpiringIn30Days
-        exp_alerts: []
-      - eval_time: 1h
-        alertname: TLSCertificateExpiringIn14Days
-        exp_alerts: []
-
-  - interval: 1h
-    input_series:
-      - series: 'chat_frame_total{job="chat_server",instance="srv-fast"}'
-        values: '0+36000x12'
-      - series: 'chat_frame_error_total{job="chat_server",instance="srv-fast"}'
-        values: '0+720x12'
-    alert_rule_test:
-      - eval_time: 5h
+        service: edge
+        severity: critical
+        job: tls_probe
+        instance: edge-7d
+      exp_annotations:
+        summary: TLS certificate expires in <= 7 days
+        description: Certificate for edge-7d is in the critical expiry window. Rotate
+          immediately.
+  - eval_time: 1h
+    alertname: TLSCertificateExpiringIn30Days
+    exp_alerts: []
+  - eval_time: 1h
+    alertname: TLSCertificateExpiringIn14Days
+    exp_alerts: []
+- interval: 1h
+  input_series:
+  - series: chat_frame_total{job="chat_server",instance="srv-fast"}
+    values: 0+36000x12
+  - series: chat_frame_error_total{job="chat_server",instance="srv-fast"}
+    values: 0+720x12
+  alert_rule_test:
+  - eval_time: 5h
+    alertname: ChatErrorBudgetBurnRateFast
+    exp_alerts:
+    - exp_labels:
         alertname: ChatErrorBudgetBurnRateFast
-        exp_alerts:
-          - exp_labels:
-              alertname: ChatErrorBudgetBurnRateFast
-              service: chat_server
-              severity: critical
-              slo_window: short
-            exp_annotations:
-              summary: "chat_server fast burn-rate budget risk"
-              description: "2h error ratio exceeded 1% for 2h while traffic is present. Check recent deploys and dependency saturation."
-      - eval_time: 5h
+        service: chat_server
+        severity: critical
+        slo_window: short
+      exp_annotations:
+        summary: chat_server fast burn-rate budget risk
+        description: 2h error ratio exceeded 1% for 2h while traffic is present. Check
+          recent deploys and dependency saturation.
+  - eval_time: 5h
+    alertname: ChatErrorBudgetBurnRateSlow
+    exp_alerts: []
+- interval: 1h
+  input_series:
+  - series: chat_frame_total{job="chat_server",instance="srv-slow"}
+    values: 0+36000x24
+  - series: chat_frame_error_total{job="chat_server",instance="srv-slow"}
+    values: 0+150x24
+  alert_rule_test:
+  - eval_time: 19h
+    alertname: ChatErrorBudgetBurnRateSlow
+    exp_alerts:
+    - exp_labels:
         alertname: ChatErrorBudgetBurnRateSlow
-        exp_alerts: []
-
-  - interval: 1h
-    input_series:
-      - series: 'chat_frame_total{job="chat_server",instance="srv-slow"}'
-        values: '0+36000x24'
-      - series: 'chat_frame_error_total{job="chat_server",instance="srv-slow"}'
-        values: '0+150x24'
-    alert_rule_test:
-      - eval_time: 19h
-        alertname: ChatErrorBudgetBurnRateSlow
-        exp_alerts:
-          - exp_labels:
-              alertname: ChatErrorBudgetBurnRateSlow
-              service: chat_server
-              severity: warning
-              slo_window: long
-            exp_annotations:
-              summary: "chat_server sustained burn-rate budget risk"
-              description: "12h error ratio exceeded 0.3% for 6h while traffic is present. Evaluate rollback or freeze risky feature changes."
-      - eval_time: 19h
-        alertname: ChatErrorBudgetBurnRateFast
-        exp_alerts: []
-
-  - interval: 1m
-    input_series:
-      - series: 'core_runtime_rudp_handshake_total{job="gateway",instance="gw-handshake",result="ok"}'
-        values: '0+60x180'
-      - series: 'core_runtime_rudp_handshake_total{job="gateway",instance="gw-handshake",result="fail"}'
-        values: '0+30x180'
-    alert_rule_test:
-      - eval_time: 2h
-        alertname: RudpHandshakeFailureSpike
-        exp_alerts:
-          - exp_labels:
-              alertname: RudpHandshakeFailureSpike
-              service: gateway
-              severity: warning
-            exp_annotations:
-              summary: "RUDP handshake failure ratio is elevated"
-              description: "RUDP handshake failure ratio stayed above 20% for 10m. Reduce canary percent and inspect bind/auth path plus packet captures."
-
-  - interval: 1m
-    input_series:
-      - series: 'core_runtime_rudp_retransmit_total{job="gateway",instance="gw-retry"}'
-        values: '0+30x180'
-      - series: 'gateway_rudp_inner_forward_total{job="gateway",instance="gw-retry"}'
-        values: '0+120x180'
-    alert_rule_test:
-      - eval_time: 2h
-        alertname: RudpRetransmitRatioHigh
-        exp_alerts:
-          - exp_labels:
-              alertname: RudpRetransmitRatioHigh
-              service: gateway
-              severity: warning
-            exp_annotations:
-              summary: "RUDP retransmit ratio is high"
-              description: "RUDP retransmits exceeded 15% of forwarded inner frames for 10m. Check network quality and narrow RUDP opcode allowlist if needed."
-
-  - interval: 1m
-    input_series:
-      - series: 'gateway_rudp_fallback_total{job="gateway",instance="gw-fallback"}'
-        values: '0+18x180'
-    alert_rule_test:
-      - eval_time: 2h
-        alertname: RudpFallbackSpike
-        exp_alerts:
-          - exp_labels:
-              alertname: RudpFallbackSpike
-              service: gateway
-              severity: warning
-            exp_annotations:
-              summary: "RUDP fallback rate is spiking"
-              description: "RUDP fallback events exceeded 0.1/s for 10m. Set GATEWAY_RUDP_CANARY_PERCENT=0 and verify TCP KPIs recover."
+        service: chat_server
+        severity: warning
+        slo_window: long
+      exp_annotations:
+        summary: chat_server sustained burn-rate budget risk
+        description: 12h error ratio exceeded 0.3% for 6h while traffic is present.
+          Evaluate rollback or freeze risky feature changes.
+  - eval_time: 19h
+    alertname: ChatErrorBudgetBurnRateFast
+    exp_alerts: []

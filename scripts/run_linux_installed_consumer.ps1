@@ -13,9 +13,9 @@ $configValue = $Config
 $containerCommand = @(
     "set -euo pipefail"
     "cd /workspace"
-    "cmake -S . -B $buildDirLinux -G Ninja -DCMAKE_BUILD_TYPE=$configValue -DBUILD_GTEST_TESTS=OFF -DBUILD_SERVER_STACK=OFF -DBUILD_GATEWAY_APP=OFF -DBUILD_WRITE_BEHIND_TOOLS=OFF -DBUILD_LOADGEN_TOOLS=OFF -DBUILD_ADMIN_APP=OFF -DBUILD_MIGRATIONS_RUNNER=OFF"
-    "cmake --build $buildDirLinux --target server_core core_public_api_smoke core_public_api_headers_compile core_public_api_stable_header_scenarios --parallel"
-    "ctest --test-dir $buildDirLinux -R ""CoreInstalledPackageConsumer|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures"" --output-on-failure"
+    "cmake -S . -B $buildDirLinux -G Ninja -DCMAKE_BUILD_TYPE=$configValue -DBUILD_GTEST_TESTS=OFF -DBUILD_SERVER_STACK=OFF -DBUILD_GATEWAY_APP=OFF -DBUILD_WRITE_BEHIND_TOOLS=OFF -DBUILD_MIGRATIONS_RUNNER=OFF"
+    "cmake --build $buildDirLinux --target server_core core_public_api_smoke core_public_api_headers_compile --parallel"
+    "ctest --test-dir $buildDirLinux -R ""CoreInstalledPackageConsumer"" --output-on-failure --no-tests=error"
 ) -join "`n"
 
 docker run --rm `

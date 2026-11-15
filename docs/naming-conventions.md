@@ -52,7 +52,7 @@
 
 ## 3. CMake 타깃/바이너리 네이밍
 - **라이브러리**: `server_core`, `gateway_common`, `storage_pg`.
-- **실행 파일**: `<role>_app` 또는 `<tool>`. 예: `server_app`, `gateway_app`, `wb_worker`, `admin_app`, `client_gui`.
+- **실행 파일**: `<role>_app` 또는 `<tool>`. 예: `server_app`, `gateway_app`, `wb_worker`, `client_gui`.
 - **테스트**: `<module>_tests`, `<scenario>_tests`. 예: `state_instance_registry_tests`, `core_concurrency_tests`.
 - **설치 산출물**: 동일 이름을 유지하며, `install(TARGETS server_core EXPORT server_coreTargets ...)` 형식으로 패키징한다.
 - CMake 네임스페이스/패키지 export 이름도 `server_core::` 처럼 역할 기반으로 통일한다.

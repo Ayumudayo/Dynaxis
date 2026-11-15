@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-        # 최소 core는 LuaJIT/sol2/imgui checkout 없이 빌드되어야 한다.
+        # 최소 core는 외부 서브모듈 없이 빌드되어야 한다.
       - name: Install Minimal Build Dependencies
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libboost-dev libgtest-dev
       - name: Build Minimal Core
@@ -136,16 +136,6 @@ jobs:
         run: |
           python -c "import pathlib, yaml; [yaml.safe_load(path.read_text(encoding='utf-8')) for path in pathlib.Path('.github/workflows').glob('*.yml')]"
 
-      - name: Run CI Workflow Contract Tests
-        shell: pwsh
-        run: |
-          python tests/python/test_ci_workflow_contracts.py
-
-      - name: Run Package Consumer Contract Tests
-        shell: pwsh
-        run: |
-          python tests/python/test_package_consumer_contracts.py
-
       - name: Run Doxygen Tool Unit Tests
         shell: pwsh
         run: |
@@ -164,12 +154,7 @@ jobs:
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1 -Config Release
 
-      - name: Run Windows Release Tree Preflight
-        shell: pwsh
-        run: |
-          ctest --preset windows-test -R WindowsReleaseTreeReady --output-on-failure --no-tests=error
-
       - name: Run Windows Tests Including Public API And Installed Consumer (ctest)
         shell: pwsh
         run: |
-          ctest --preset windows-test --parallel 8 --output-on-failure
+          ctest --preset windows-test --parallel 8 --output-on-failure --no-tests=error

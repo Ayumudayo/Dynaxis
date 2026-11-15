@@ -61,7 +61,6 @@ def normalize_topology(data: object, source_path: Path) -> dict:
             return value
 
         instance_id = read_required_string("instance_id")
-        world_id = read_required_string("world_id")
         shard = read_required_string("shard")
         tcp_host_port = read_required_port("tcp_host_port")
         metrics_host_port = read_required_port("metrics_host_port")
@@ -79,10 +78,6 @@ def normalize_topology(data: object, source_path: Path) -> dict:
             tag = raw_tag.strip()
             if "," in tag:
                 fail(f"servers[{index}].extra_tags[{tag_index}] must not contain commas")
-            if tag.startswith("world:"):
-                fail(
-                    f"servers[{index}].extra_tags[{tag_index}] must not override the generated world tag"
-                )
             extra_tags.append(tag)
 
         if instance_id in seen_ids:
@@ -101,7 +96,6 @@ def normalize_topology(data: object, source_path: Path) -> dict:
         normalized_servers.append(
             {
                 "instance_id": instance_id,
-                "world_id": world_id,
                 "shard": shard,
                 "tcp_host_port": tcp_host_port,
                 "metrics_host_port": metrics_host_port,
@@ -122,7 +116,7 @@ def yaml_quote(value: str) -> str:
 
 
 def render_server_service(server: dict) -> list[str]:
-    tags = [f"world:{server['world_id']}", *server["extra_tags"]]
+    tags = server["extra_tags"]
     tag_value = ",".join(tags)
     instance_id = server["instance_id"]
     shard = server["shard"]
@@ -141,7 +135,6 @@ def render_server_service(server: dict) -> list[str]:
         "    environment:",
         '      CHAT_AUTH_MODE: "${CHAT_AUTH_MODE:-development}"',
         '      CHAT_AUTH_SIGNING_SECRET: "${CHAT_AUTH_SIGNING_SECRET:-}"',
-        '      FPS_ENABLED: "${FPS_ENABLED:-0}"',
         "      PORT: \"5000\"",
         "      DB_URI: postgresql://${POSTGRES_USER:-dynaxis}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-dynaxis_db}",
         "      REDIS_URI: tcp://redis:6379",
@@ -160,26 +153,12 @@ def render_server_service(server: dict) -> list[str]:
         f"      GATEWAY_ID: {yaml_quote(instance_id)}",
         "      METRICS_PORT: \"9090\"",
         "      RECENT_HISTORY_LIMIT: \"20\"",
-        "      CHAT_HOOK_PLUGINS_DIR: \"/app/plugins\"",
-        "      CHAT_HOOK_FALLBACK_PLUGINS_DIR: \"/app/plugins_builtin\"",
-        "      CHAT_HOOK_ENABLED: \"${CHAT_HOOK_ENABLED:-0}\"",
-        "      CHAT_HOOK_CACHE_DIR: \"/tmp/chat_hook_cache\"",
-        "      CHAT_HOOK_RELOAD_INTERVAL_MS: \"500\"",
-        "      LUA_ENABLED: \"${LUA_ENABLED:-0}\"",
-        "      LUA_SCRIPTS_DIR: \"/app/scripts\"",
-        "      LUA_FALLBACK_SCRIPTS_DIR: \"/app/scripts_builtin\"",
         "      SESSION_CONTINUITY_ENABLED: \"${SESSION_CONTINUITY_ENABLED:-0}\"",
         "      SESSION_CONTINUITY_LEASE_TTL_SEC: \"${SESSION_CONTINUITY_LEASE_TTL_SEC:-900}\"",
-        "      ADMIN_COMMAND_SIGNING_SECRET: \"${ADMIN_COMMAND_SIGNING_SECRET:-dev-admin-command-secret}\"",
-        "      ADMIN_COMMAND_TTL_MS: \"${ADMIN_COMMAND_TTL_MS:-60000}\"",
-        "      ADMIN_COMMAND_FUTURE_SKEW_MS: \"${ADMIN_COMMAND_FUTURE_SKEW_MS:-5000}\"",
         "      SERVER_DRAIN_TIMEOUT_MS: \"${SERVER_DRAIN_TIMEOUT_MS:-15000}\"",
         "      SERVER_DRAIN_POLL_MS: \"${SERVER_DRAIN_POLL_MS:-100}\"",
         "      RUNTIME_TRACING_ENABLED: \"${RUNTIME_TRACING_ENABLED:-0}\"",
         "      RUNTIME_TRACING_SAMPLE_PERCENT: \"${RUNTIME_TRACING_SAMPLE_PERCENT:-100}\"",
-        "    volumes:",
-        "      - ./plugins:/app/plugins:ro",
-        "      - ./scripts:/app/scripts:ro",
         "    depends_on:",
         "      redis:",
         "        condition: service_healthy",

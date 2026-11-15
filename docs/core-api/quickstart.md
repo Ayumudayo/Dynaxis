@@ -88,7 +88,7 @@ cmake --build build-windows/package-smoke/build --config Debug
 
 의존성 탐색에 실패하면 현재 build tree의 Conan generator 출력과 install prefix가 모두 존재하는지 확인합니다.
 
-자동화된 계약 검증에서는 같은 흐름을 `CoreInstalledPackageConsumer` 테스트로 실행합니다. 이 테스트는 install prefix를 만든 뒤 별도 consumer configure/build를 수행하고, `server_core_installed_consumer`와 `server_core_extensibility_consumer` 실행까지 확인합니다.
+자동화된 계약 검증에서는 같은 흐름을 `CoreInstalledPackageConsumer` 테스트로 실행합니다. 이 테스트는 install prefix를 만든 뒤 별도 consumer configure/build를 수행하고, `server_core_installed_consumer` 실행까지 확인합니다.
 
 ```powershell
 ctest --test-dir build-windows -C Debug -R "CoreInstalledPackageConsumer|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure

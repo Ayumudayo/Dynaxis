@@ -21,7 +21,7 @@ core/src/
 
 ## Conventions
 - Add new files to `core/CMakeLists.txt` explicitly (no `file(GLOB ...)`).
-- Keep build portability: Docker/Linux uses system deps; Windows uses vcpkg feature `windows-dev`.
+- Keep build portability: Docker/Linux uses system deps; Windows uses the Conan2 lockfile.
 
 ## Anti-Patterns
 - No references to `server/*` or `gateway/*` code from `core/src`.

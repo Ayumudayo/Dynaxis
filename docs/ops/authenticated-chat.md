@@ -38,7 +38,7 @@ access 형식은 `chat1.<hex JSON>.<hex HMAC-SHA256>`이다. 서명 대상은 �
 
 ## 실행/복구 경계
 
-실제 server bootstrap은 의존성을 instance context와 `ChatService::Dependencies`에 주입한다. 전역 Registry 기반 생성자는 기존 코드 호환을 위해 남지만 실제 bootstrap과 관측 HTTP는 이를 조회하지 않는다. 플러그인 재로드 예약은 chat 파괴 시 취소하고 잔여 callback도 실행하지 않는다. chat 파괴 전에 worker를 drain하는 소유권 규약은 유지한다.
+실제 server bootstrap은 의존성을 instance context와 `ChatService::Dependencies`에 주입한다. 전역 Registry 기반 생성자는 기존 코드 호환을 위해 남지만 실제 bootstrap과 관측 HTTP는 이를 조회하지 않는다. chat 파괴 전에 worker를 drain하는 소유권 규약은 유지한다.
 
 DB/Redis readiness 검사는 5초마다 bounded queue에 예약한다. 큐 적재 실패나 검사 예외는 준비 상태 실패로 반영한다. `ThreadManager`는 작업 예외를 기록하고 다음 작업을 계속 실행한다. 종료 시 새 enqueue를 거절하고 접수한 작업을 drain한 뒤 join한다. 실행 중인 작업을 강제 중단하지 않으므로 작업 자체의 I/O timeout도 필요하다.
 
@@ -49,6 +49,6 @@ Redis 구독은 재연결 자체가 실패한 경우에도 계속 재시도한�
 - `ctest --test-dir build-windows -C Debug -R "SessionTokenTest|ThreadManagerTests|ChatServiceTest" --output-on-failure --no-tests=error`
 - `python tests/python/verify_signed_chat.py --manage-stack`: 현재 이미지를 signed 모드로 실행해 신원·거절·노드 간 전달·재접속 binding을 검증하고 원래 환경으로 복구한다.
 - `python tests/python/verify_core_dependency_recovery.py`: 실행 중인 기본 개발 스택에서 DB/Redis를 실제 중지해 readiness와 앱 재시작 없는 복구를 검사한다. 운영 스택에 실행하지 않는다.
-- `python tests/python/verify_continuity_recovery_matrix.py --no-build`: gateway/server 재시작 및 locator/residency fallback 기준 검증.
+- `python tests/python/verify_continuity_recovery_matrix.py --no-build`: gateway/server 재시작 및 locator fallback/다른 서버 failover 검증.
 
-관리 콘솔 확장과 world/provider 기능 확대는 이 핵심 완료 범위에 포함하지 않는다.
+현재 기초 실행 범위는 `docs/architecture/core-and-msa.md`에 정의한다.

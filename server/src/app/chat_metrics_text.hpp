@@ -25,9 +25,7 @@ void append_chat_bootstrap_metrics(MetricsTextWriter& writer, const BootstrapMet
 void append_chat_continuity_metrics(MetricsTextWriter& writer,
                                     std::ostream& stream,
                                     const std::optional<server::app::chat::ContinuityMetrics>& snapshot);
-void append_chat_hook_plugin_metrics(std::ostream& stream,
-                                     const std::optional<server::app::chat::ChatHookPluginsMetrics>& snapshot);
-void append_chat_lua_hook_metrics(std::ostream& stream,
-                                  const std::optional<server::app::chat::LuaHooksMetrics>& snapshot);
+
+
 
 } // namespace server::app

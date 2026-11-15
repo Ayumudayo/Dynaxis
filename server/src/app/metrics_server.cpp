@@ -55,8 +55,6 @@ std::string render_metrics_impl(server::core::app::EngineRuntime* runtime = null
     append_chat_continuity_metrics(writer, stream, (chat ? std::optional(chat->continuity_metrics()) : server_chat_continuity_metrics()));
     append_chat_runtime_metrics(writer, stream, snap);
 
-    append_chat_hook_plugin_metrics(stream, (chat ? std::optional(chat->chat_hook_plugins_metrics()) : server_chat_hook_plugin_metrics()));
-    append_chat_lua_hook_metrics(stream, (chat ? std::optional(chat->lua_hooks_metrics()) : server_chat_lua_hooks_metrics()));
 
     stream << (runtime ? runtime->host().dependency_metrics_text() : server_dependency_metrics_text());
     stream << (runtime ? runtime->host().lifecycle_metrics_text() : server_lifecycle_metrics_text());

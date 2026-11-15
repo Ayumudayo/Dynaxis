@@ -1,14 +1,6 @@
-# Client GUI (ImGui Client)
+# C++ development client
 
-**Dynaxis** 프로젝트를 위한 차세대 그래픽 채팅 클라이언트입니다.
-**Dear ImGui** 라이브러리를 기반으로 제작되었으며, 직관적인 UI와 한국어 입력 지원을 특징으로 합니다.
-
-## ✨ 주요 기능 (Key Features)
-
--   **Modern UI**: VS 스타일의 Docking Layout을 지원하여 사용자가 원하는 대로 창 배치를 변경할 수 있습니다.
--   **Korean Support**: `Malgun Gothic`(맑은 고딕) 폰트를 시스템에서 동적으로 로드하여 완벽한 한국어 입출력을 지원합니다.
--   **Real-time Synchronization**: 서버의 상태 변경(유저 입장/퇴장, 방 변경 등)을 실시간으로 반영합니다.
--   **Clean Architecture**: Model(Data/Logic)과 View(UI)를 철저히 분리하여 유지보수성을 극대화했습니다.
+서버의 로그인·메시지·재접속을 확인하는 C++/Dear ImGui 개발 클라이언트다. 제품용 UI 프레임워크는 아직 결정하지 않았다. `NetClient`와 `ClientApp`은 ImGui/GLFW를 직접 참조하지 않아 UI 교체 시 통신과 상태 처리 코드를 재사용할 수 있다. 현재 개발 환경은 Windows다.
 
 ## 🛠️ 빌드 방법 (Build Guide)
 

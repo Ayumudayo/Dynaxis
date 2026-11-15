@@ -124,7 +124,7 @@ void NetClient::start_read_header() {
                 }
                 proto::PacketHeader header{};
                 proto::decode_header(read_header_.data(), header);
-                
+
                 // 헤더에 명시된 길이만큼 본문 버퍼 할당
                 read_body_.assign(header.length, 0);
                 start_read_body(header);
@@ -278,7 +278,7 @@ void NetClient::handle_packet(const proto::PacketHeader& hh, std::span<const std
         if (server::wire::codec::Decode(in.data(), in.size(), pb)) {
             if (on_session_info_) {
                 on_session_info_({pb.principal_id(), pb.auth_session_id(), pb.display_name(),
-                    pb.logical_session_id(), pb.resume_token(), pb.world_id(), pb.resume_expires_unix_ms(), pb.resumed()});
+                    pb.logical_session_id(), pb.resume_token(), pb.resume_expires_unix_ms(), pb.resumed()});
             }
             if (on_login_) on_login_(pb.effective_user(), pb.session_id(), pb.is_admin());
         } else {

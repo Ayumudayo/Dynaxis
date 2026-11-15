@@ -50,40 +50,17 @@ struct ServerConfig {
     std::string redis_channel_prefix;
     bool use_redis_pubsub = true;
     std::string gateway_id = "gw-default";
-    std::string topology_runtime_assignment_key = "dynaxis:topology:actuation:runtime-assignment";
 
     // Graceful drain (P1-4)
     std::uint64_t shutdown_drain_timeout_ms = 15'000;
     std::uint64_t shutdown_drain_poll_ms = 100;
 
     // Admin command integrity (P1-7)
-    std::string admin_command_signing_secret;
-    std::uint64_t admin_command_ttl_ms = 60'000;
-    std::uint64_t admin_command_future_skew_ms = 5'000;
 
-    // Lua scripting (Stream B scaffold)
-    bool lua_enabled = false;
-    std::string lua_scripts_dir;
-    std::string lua_fallback_scripts_dir;
-    std::string lua_lock_path;
-    std::uint64_t lua_reload_interval_ms = 1'000;
-    std::uint64_t lua_instruction_limit = 100'000;
-    std::uint64_t lua_memory_limit_bytes = 1'048'576;
-    std::uint64_t lua_auto_disable_threshold = 3;
 
     // 메트릭 설정
     unsigned short metrics_port = 0;
 
-    // FPS는 명시적으로 활성화하는 실험 앱 기능이다. 기본 MSA 채팅은 tick을 돌리지 않는다.
-    bool fps_enabled = false;
-    // FPS runtime 설정
-    std::uint32_t fps_tick_rate_hz = 30;
-    std::uint32_t fps_snapshot_refresh_ticks = 30;
-    std::int32_t fps_interest_cell_size_mm = 10'000;
-    std::int32_t fps_interest_radius_cells = 1;
-    std::uint32_t fps_max_interest_recipients_per_tick = 64;
-    std::uint32_t fps_max_delta_actors_per_tick = 32;
-    std::uint32_t fps_history_ticks = 64;
 
     /**
      * @brief 환경 변수로부터 설정을 로드합니다.

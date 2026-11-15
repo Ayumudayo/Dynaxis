@@ -10,12 +10,6 @@ Shared C++20 library used by `server_app`, `gateway_app`, tools, and the Windows
 - `core/src/runtime_metrics.cpp`: runtime metrics storage/aggregation.
 - `core/include/server/core/metrics/http_server.hpp`: minimal HTTP server for exposing `/metrics`.
 - `core/src/metrics/http_server.cpp`: `MetricsHttpServer` implementation.
-- `core/include/server/core/plugin/shared_library.hpp`: cross-platform shared library wrapper for plugin loading.
-- `core/include/server/core/plugin/plugin_host.hpp`: generic hot-reload host for single plugin API table.
-- `core/include/server/core/plugin/plugin_chain_host.hpp`: multi-plugin chain host (directory scan + stable ordering).
-- `core/include/server/core/scripting/script_watcher.hpp`: mtime-based watcher with lock/sentinel support.
-- `core/include/server/core/scripting/lua_runtime.hpp`: Lua runtime facade and call/load metrics surface.
-- `core/include/server/core/scripting/lua_sandbox.hpp`: safe environment and resource limit helpers.
 
 ## Protocol / Wire Codegen
 - Sources: `core/protocol/system_opcodes.json`, `server/protocol/game_opcodes.json`, `protocol/wire_map.json`
@@ -29,8 +23,7 @@ Shared C++20 library used by `server_app`, `gateway_app`, tools, and the Windows
 - Rule: treat generated payload as write-only; edit the JSON + generator instead.
 
 ## Build boundary
-- `BUILD_CORE_EXTENSIONS=OFF` is the independently tested minimal runtime profile; it requires no Lua/Protobuf/OpenSSL/LZ4 or app adapters.
-- The default full profile retains the MSA chat server and the existing Stable API.
+- The default full profile retains the MSA chat server and the 4.0 Stable API.
 - Ownership and migration limits: `docs/architecture/core-and-msa.md`.
 
 ## Build / Test (Windows)
@@ -39,10 +32,7 @@ pwsh scripts/build.ps1 -Config Debug -Target server_core
 ctest --preset windows-test
 ```
 
-## Runtime Extensibility Notes
-- Plugin/scripting modules are Stable in the full configuration; check `docs/core-api-boundary.md` before signature changes. They are excluded from `BUILD_CORE_EXTENSIONS=OFF`.
 - Keep host modules domain-agnostic: no `server/` or `gateway/` implementation coupling from `core/src`.
-- If adding plugin or Lua metrics, keep naming aligned with existing series in `server/src/app/metrics_server.cpp`.
 
 ## Local Constraints
 - Keep dependencies one-way: `server/` and `gateway/` depend on `core/`, not the other way around.

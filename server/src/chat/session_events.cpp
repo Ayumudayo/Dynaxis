@@ -3,7 +3,6 @@
 #include "chat_room_state.hpp"
 #include "chat_service_state.hpp"
 
-#include "server/chat/chat_hook_plugin_abi.hpp"
 #include "server/core/concurrent/job_queue.hpp"
 #include "server/protocol/game_opcodes.hpp"
 #include "server/storage/redis/client.hpp"
@@ -29,17 +28,6 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
         std::string name;
         std::string room_left;
 
-        std::string user_for_hook;
-        {
-            std::lock_guard<std::mutex> lk(impl_->state.mu);
-            if (auto itname = impl_->state.user.find(s.get()); itname != impl_->state.user.end()) {
-                user_for_hook = itname->second;
-            }
-        }
-        notify_session_event_hook(s->session_id(),
-                                  SessionEventKindV2::kClose,
-                                  user_for_hook,
-                                  "connection_closed");
 
         {
             std::lock_guard<std::mutex> lk(impl_->state.mu);
@@ -64,7 +52,6 @@ void ChatService::on_session_close(std::shared_ptr<Session> s) {
             impl_->state.session_uuid.erase(s.get());
             impl_->state.logical_session_id.erase(s.get());
             impl_->state.logical_session_expires_unix_ms.erase(s.get());
-            impl_->state.cur_world.erase(s.get());
             impl_->state.session_ip.erase(s.get());
             impl_->state.session_hwid_hash.erase(s.get());
 

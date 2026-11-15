@@ -8,7 +8,7 @@ option(ENABLE_SANITIZERS "Enable sanitizers (ASan+UBSan)" OFF)
 option(ENABLE_IPO "Enable interprocedural optimization (IPO/LTO)" OFF)
 option(BUILD_SERVER_STACK "Build server libraries and server_app" ON)
 option(BUILD_GATEWAY_APP "Build gateway_app" ON)
-option(BUILD_CORE_EXTENSIONS "Build MSA adapters, protocol, scripting and realtime capabilities" ON)
+option(BUILD_CORE_EXTENSIONS "Build MSA adapters, protocol and storage integration" ON)
 option(BUILD_CLIENT_GUI "Build the Windows developer client" ${WIN32})
 
 
@@ -16,45 +16,12 @@ option(BUILD_SERVER_TESTS "Build server tests" ON)
 option(BUILD_GTEST_TESTS "Build GTest-based unit tests" ON)
 option(BUILD_CONTRACT_TESTS "Build non-GTest contract/governance checks" ON)
 option(BUILD_WRITE_BEHIND_TOOLS "Build write-behind helper tools" ON)
-option(BUILD_LOADGEN_TOOLS "Build unified load generator tools" ON)
-option(BUILD_ADMIN_APP "Build admin management app" ON)
 option(BUILD_MIGRATIONS_RUNNER "Build migrations runner tool" ON)
-set(LUAJIT_SUBMODULE_DIR "${CMAKE_SOURCE_DIR}/external/luajit" CACHE PATH
-    "Path to the upstream LuaJIT source submodule")
-set(SOL2_SUBMODULE_DIR "${CMAKE_SOURCE_DIR}/external/sol2" CACHE PATH
-    "Path to the sol2 header-only source submodule")
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
-if (BUILD_CORE_EXTENSIONS)
-    include(luajit_submodule)
-    include(sol2_submodule)
-
-    if (NOT EXISTS "${LUAJIT_SUBMODULE_DIR}/src/lua.h")
-        message(FATAL_ERROR
-            "Lua capability requires upstream LuaJIT sources at: ${LUAJIT_SUBMODULE_DIR}. "
-            "Run: git submodule update --init --recursive external/luajit")
-    endif()
-
-    file(STRINGS "${LUAJIT_SUBMODULE_DIR}/src/luajit_rolling.h" _LUAJIT_VERSION_LINE
-         REGEX "^#define[ \t]+LUAJIT_VERSION[ \t]+")
-    if (NOT _LUAJIT_VERSION_LINE)
-        message(FATAL_ERROR
-            "Lua capability expects LuaJIT headers at: ${LUAJIT_SUBMODULE_DIR}. "
-            "Detected Lua headers without LUAJIT_VERSION marker.")
-    endif()
-
-    if (NOT EXISTS "${SOL2_SUBMODULE_DIR}/include/sol/sol.hpp")
-        message(FATAL_ERROR
-            "Lua capability requires sol2 headers at: ${SOL2_SUBMODULE_DIR}. "
-            "Run: git submodule update --init --recursive external/sol2")
-    endif()
-endif()
-
-
-
 if (MSVC)
     add_compile_options(/utf-8 /MP)
 endif()
@@ -87,7 +54,7 @@ endif()
 
 if (NOT BUILD_CORE_EXTENSIONS AND
     (BUILD_SERVER_STACK OR BUILD_GATEWAY_APP OR BUILD_WRITE_BEHIND_TOOLS OR
-     BUILD_LOADGEN_TOOLS OR BUILD_ADMIN_APP OR BUILD_MIGRATIONS_RUNNER OR BUILD_CLIENT_GUI))
+     BUILD_MIGRATIONS_RUNNER OR BUILD_CLIENT_GUI))
     message(FATAL_ERROR "MSA apps/tools require BUILD_CORE_EXTENSIONS=ON; use a core-engine preset for the minimal runtime")
 endif()
 
@@ -183,7 +150,7 @@ if (BUILD_CORE_EXTENSIONS)
         find_package(Python3 COMPONENTS Interpreter QUIET)
 endif()
 add_subdirectory(core)
-if (BUILD_SERVER_STACK OR BUILD_GATEWAY_APP OR BUILD_WRITE_BEHIND_TOOLS OR BUILD_ADMIN_APP)
+if (BUILD_SERVER_STACK OR BUILD_GATEWAY_APP OR BUILD_WRITE_BEHIND_TOOLS)
   add_subdirectory(infra)
 endif()
 if (BUILD_SERVER_STACK)
@@ -194,7 +161,7 @@ if (BUILD_GATEWAY_APP)
 endif()
 
 
-if (BUILD_WRITE_BEHIND_TOOLS OR BUILD_LOADGEN_TOOLS OR BUILD_ADMIN_APP OR BUILD_MIGRATIONS_RUNNER)
+if (BUILD_WRITE_BEHIND_TOOLS OR BUILD_MIGRATIONS_RUNNER)
   add_subdirectory(tools)
 endif()
 

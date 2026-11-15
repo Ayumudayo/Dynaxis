@@ -14,7 +14,6 @@
 #include <utility>
 
 #include "gateway/registry_backend_factory.hpp"
-#include "gateway/rudp_rollout_policy.hpp"
 #include "gateway/session_directory.hpp"
 #include "signed_authenticator.hpp"
 #include "gateway_app_access.hpp"
@@ -32,8 +31,6 @@ constexpr const char* kEnvGatewayId = "GATEWAY_ID";
 constexpr const char* kEnvRedisUri = "REDIS_URI";
 constexpr const char* kEnvServerRegistryPrefix = "SERVER_REGISTRY_PREFIX";
 constexpr const char* kEnvServerRegistryTtl = "SERVER_REGISTRY_TTL";
-constexpr const char* kEnvRedisChannelPrefix = "REDIS_CHANNEL_PREFIX";
-constexpr const char* kEnvSessionContinuityRedisPrefix = "SESSION_CONTINUITY_REDIS_PREFIX";
 constexpr const char* kEnvGatewayBackendConnectTimeoutMs = "GATEWAY_BACKEND_CONNECT_TIMEOUT_MS";
 constexpr const char* kEnvGatewayBackendSendQueueMaxBytes = "GATEWAY_BACKEND_SEND_QUEUE_MAX_BYTES";
 constexpr const char* kEnvGatewayBackendCircuitEnabled = "GATEWAY_BACKEND_CIRCUIT_BREAKER_ENABLED";
@@ -46,27 +43,6 @@ constexpr const char* kEnvGatewayIngressTokensPerSec = "GATEWAY_INGRESS_TOKENS_P
 constexpr const char* kEnvGatewayIngressBurstTokens = "GATEWAY_INGRESS_BURST_TOKENS";
 constexpr const char* kEnvGatewayIngressMaxActiveSessions = "GATEWAY_INGRESS_MAX_ACTIVE_SESSIONS";
 constexpr const char* kEnvAllowAnonymous = "ALLOW_ANONYMOUS";
-constexpr const char* kEnvGatewayUdpListen = "GATEWAY_UDP_LISTEN";
-constexpr const char* kEnvGatewayUdpBindSecret = "GATEWAY_UDP_BIND_SECRET";
-constexpr const char* kEnvGatewayUdpBindTtlMs = "GATEWAY_UDP_BIND_TTL_MS";
-constexpr const char* kEnvGatewayUdpBindFailWindowMs = "GATEWAY_UDP_BIND_FAIL_WINDOW_MS";
-constexpr const char* kEnvGatewayUdpBindFailLimit = "GATEWAY_UDP_BIND_FAIL_LIMIT";
-constexpr const char* kEnvGatewayUdpBindBlockMs = "GATEWAY_UDP_BIND_BLOCK_MS";
-constexpr const char* kEnvGatewayUdpBindRetryBackoffMs = "GATEWAY_UDP_BIND_RETRY_BACKOFF_MS";
-constexpr const char* kEnvGatewayUdpBindRetryBackoffMaxMs = "GATEWAY_UDP_BIND_RETRY_BACKOFF_MAX_MS";
-constexpr const char* kEnvGatewayUdpBindRetryMaxAttempts = "GATEWAY_UDP_BIND_RETRY_MAX_ATTEMPTS";
-constexpr const char* kEnvGatewayUdpOpcodeAllowlist = "GATEWAY_UDP_OPCODE_ALLOWLIST";
-constexpr const char* kEnvGatewayRudpEnable = "GATEWAY_RUDP_ENABLE";
-constexpr const char* kEnvGatewayRudpCanaryPercent = "GATEWAY_RUDP_CANARY_PERCENT";
-constexpr const char* kEnvGatewayRudpOpcodeAllowlist = "GATEWAY_RUDP_OPCODE_ALLOWLIST";
-constexpr const char* kEnvGatewayRudpHandshakeTimeoutMs = "GATEWAY_RUDP_HANDSHAKE_TIMEOUT_MS";
-constexpr const char* kEnvGatewayRudpIdleTimeoutMs = "GATEWAY_RUDP_IDLE_TIMEOUT_MS";
-constexpr const char* kEnvGatewayRudpAckDelayMs = "GATEWAY_RUDP_ACK_DELAY_MS";
-constexpr const char* kEnvGatewayRudpMaxInflightPackets = "GATEWAY_RUDP_MAX_INFLIGHT_PACKETS";
-constexpr const char* kEnvGatewayRudpMaxInflightBytes = "GATEWAY_RUDP_MAX_INFLIGHT_BYTES";
-constexpr const char* kEnvGatewayRudpMtuPayloadBytes = "GATEWAY_RUDP_MTU_PAYLOAD_BYTES";
-constexpr const char* kEnvGatewayRudpRtoMinMs = "GATEWAY_RUDP_RTO_MIN_MS";
-constexpr const char* kEnvGatewayRudpRtoMaxMs = "GATEWAY_RUDP_RTO_MAX_MS";
 constexpr const char* kEnvSessionContinuityLeaseTtlSec = "SESSION_CONTINUITY_LEASE_TTL_SEC";
 constexpr const char* kDefaultGatewayListen = "0.0.0.0:6000";
 constexpr const char* kDefaultGatewayId = "gateway-default";
@@ -84,18 +60,7 @@ constexpr std::uint32_t kDefaultBackendRetryBackoffMaxMs = 2000;
 constexpr std::uint32_t kDefaultIngressTokensPerSec = 200;
 constexpr std::uint32_t kDefaultIngressBurstTokens = 400;
 constexpr std::size_t kDefaultIngressMaxActiveSessions = 50000;
-constexpr std::uint32_t kDefaultUdpBindTtlMs = 5000;
-constexpr std::uint32_t kDefaultUdpBindFailWindowMs = 10000;
-constexpr std::uint32_t kDefaultUdpBindFailLimit = 5;
-constexpr std::uint32_t kDefaultUdpBindBlockMs = 60000;
-constexpr std::uint32_t kDefaultUdpBindRetryBackoffMs = 200;
-constexpr std::uint32_t kDefaultUdpBindRetryBackoffMaxMs = 2000;
-constexpr std::uint32_t kDefaultUdpBindRetryMaxAttempts = 6;
-constexpr bool kDefaultGatewayRudpEnable = false;
-constexpr std::uint32_t kDefaultGatewayRudpCanaryPercent = 0;
 constexpr std::uint32_t kDefaultResumeLocatorTtlSec = 900;
-constexpr bool kGatewayUdpIngressBuildEnabled = true;
-constexpr bool kCoreRudpBuildEnabled = true;
 
 bool parse_env_bool(const char* key, bool fallback) {
     if (const char* value = std::getenv(key); value && *value) {
@@ -276,153 +241,6 @@ void GatewayAppAccess::configure_gateway(GatewayApp& app) {
         impl_->backend_circuit_fail_threshold_,
         impl_->backend_circuit_open_ms_);
 
-    if (const char* udp_listen_env = std::getenv(kEnvGatewayUdpListen); udp_listen_env && *udp_listen_env) {
-        const auto [udp_host, udp_port] = parse_listen(std::string_view(udp_listen_env), 0);
-        impl_->udp_listen_host_ = udp_host;
-        impl_->udp_listen_port_ = udp_port;
-    }
-
-    if (const char* udp_secret_env = std::getenv(kEnvGatewayUdpBindSecret); udp_secret_env && *udp_secret_env) {
-        impl_->udp_bind_secret_ = udp_secret_env;
-    }
-
-    impl_->udp_bind_ttl_ms_ = parse_env_u32_bounded(
-        kEnvGatewayUdpBindTtlMs,
-        kDefaultUdpBindTtlMs,
-        1000,
-        120000,
-        "GatewayApp invalid GATEWAY_UDP_BIND_TTL_MS; using default");
-
-    impl_->udp_bind_fail_window_ms_ = parse_env_u32_bounded(
-        kEnvGatewayUdpBindFailWindowMs,
-        kDefaultUdpBindFailWindowMs,
-        1000,
-        120000,
-        "GatewayApp invalid GATEWAY_UDP_BIND_FAIL_WINDOW_MS; using default");
-
-    impl_->udp_bind_fail_limit_ = parse_env_u32_bounded(
-        kEnvGatewayUdpBindFailLimit,
-        kDefaultUdpBindFailLimit,
-        2,
-        100,
-        "GatewayApp invalid GATEWAY_UDP_BIND_FAIL_LIMIT; using default");
-
-    impl_->udp_bind_block_ms_ = parse_env_u32_bounded(
-        kEnvGatewayUdpBindBlockMs,
-        kDefaultUdpBindBlockMs,
-        1000,
-        300000,
-        "GatewayApp invalid GATEWAY_UDP_BIND_BLOCK_MS; using default");
-
-    impl_->udp_bind_retry_backoff_ms_ = parse_env_u32_bounded(
-        kEnvGatewayUdpBindRetryBackoffMs,
-        kDefaultUdpBindRetryBackoffMs,
-        10,
-        60000,
-        "GatewayApp invalid GATEWAY_UDP_BIND_RETRY_BACKOFF_MS; using default");
-
-    impl_->udp_bind_retry_backoff_max_ms_ = parse_env_u32_bounded(
-        kEnvGatewayUdpBindRetryBackoffMaxMs,
-        kDefaultUdpBindRetryBackoffMaxMs,
-        10,
-        300000,
-        "GatewayApp invalid GATEWAY_UDP_BIND_RETRY_BACKOFF_MAX_MS; using default");
-    if (impl_->udp_bind_retry_backoff_max_ms_ < impl_->udp_bind_retry_backoff_ms_) {
-        impl_->udp_bind_retry_backoff_max_ms_ = impl_->udp_bind_retry_backoff_ms_;
-    }
-
-    impl_->udp_bind_retry_max_attempts_ = parse_env_u32_bounded(
-        kEnvGatewayUdpBindRetryMaxAttempts,
-        kDefaultUdpBindRetryMaxAttempts,
-        1,
-        32,
-        "GatewayApp invalid GATEWAY_UDP_BIND_RETRY_MAX_ATTEMPTS; using default");
-
-    if (const char* udp_allowlist_env = std::getenv(kEnvGatewayUdpOpcodeAllowlist);
-        udp_allowlist_env && *udp_allowlist_env) {
-        impl_->udp_opcode_allowlist_ = gateway::parse_udp_opcode_allowlist(udp_allowlist_env);
-    } else {
-        impl_->udp_opcode_allowlist_.clear();
-    }
-    if (impl_->udp_opcode_allowlist_.empty()) {
-        impl_->udp_opcode_allowlist_.insert(server::protocol::MSG_UDP_BIND_REQ);
-    }
-
-    impl_->rudp_rollout_policy_.enabled = parse_env_bool(kEnvGatewayRudpEnable, kDefaultGatewayRudpEnable);
-    impl_->rudp_rollout_policy_.canary_percent = parse_env_u32_bounded(
-        kEnvGatewayRudpCanaryPercent,
-        kDefaultGatewayRudpCanaryPercent,
-        0,
-        100,
-        "GatewayApp invalid GATEWAY_RUDP_CANARY_PERCENT; using default");
-
-    if (const char* allowlist_env = std::getenv(kEnvGatewayRudpOpcodeAllowlist); allowlist_env && *allowlist_env) {
-        impl_->rudp_rollout_policy_.opcode_allowlist = gateway::parse_rudp_opcode_allowlist(allowlist_env);
-    } else {
-        impl_->rudp_rollout_policy_.opcode_allowlist.clear();
-    }
-
-    impl_->rudp_config_->handshake_timeout_ms = parse_env_u32_bounded(
-        kEnvGatewayRudpHandshakeTimeoutMs,
-        1500,
-        100,
-        60000,
-        "GatewayApp invalid GATEWAY_RUDP_HANDSHAKE_TIMEOUT_MS; using default");
-    impl_->rudp_config_->idle_timeout_ms = parse_env_u32_bounded(
-        kEnvGatewayRudpIdleTimeoutMs,
-        10000,
-        1000,
-        300000,
-        "GatewayApp invalid GATEWAY_RUDP_IDLE_TIMEOUT_MS; using default");
-    impl_->rudp_config_->ack_delay_ms = parse_env_u32_bounded(
-        kEnvGatewayRudpAckDelayMs,
-        10,
-        1,
-        200,
-        "GatewayApp invalid GATEWAY_RUDP_ACK_DELAY_MS; using default");
-    impl_->rudp_config_->max_inflight_packets = parse_env_size_bounded(
-        kEnvGatewayRudpMaxInflightPackets,
-        256,
-        1,
-        4096,
-        "GatewayApp invalid GATEWAY_RUDP_MAX_INFLIGHT_PACKETS; using default");
-    impl_->rudp_config_->max_inflight_bytes = parse_env_size_bounded(
-        kEnvGatewayRudpMaxInflightBytes,
-        256 * 1024,
-        1024,
-        16 * 1024 * 1024,
-        "GatewayApp invalid GATEWAY_RUDP_MAX_INFLIGHT_BYTES; using default");
-    impl_->rudp_config_->mtu_payload_bytes = parse_env_size_bounded(
-        kEnvGatewayRudpMtuPayloadBytes,
-        1200,
-        256,
-        1400,
-        "GatewayApp invalid GATEWAY_RUDP_MTU_PAYLOAD_BYTES; using default");
-    impl_->rudp_config_->rto_min_ms = parse_env_u32_bounded(
-        kEnvGatewayRudpRtoMinMs,
-        50,
-        1,
-        10000,
-        "GatewayApp invalid GATEWAY_RUDP_RTO_MIN_MS; using default");
-    impl_->rudp_config_->rto_max_ms = parse_env_u32_bounded(
-        kEnvGatewayRudpRtoMaxMs,
-        2000,
-        1,
-        60000,
-        "GatewayApp invalid GATEWAY_RUDP_RTO_MAX_MS; using default");
-    if (impl_->rudp_config_->rto_max_ms < impl_->rudp_config_->rto_min_ms) {
-        impl_->rudp_config_->rto_max_ms = impl_->rudp_config_->rto_min_ms;
-    }
-
-    if (!impl_->rudp_rollout_policy_.enabled) {
-        impl_->rudp_rollout_policy_.canary_percent = 0;
-    }
-
-    impl_->udp_bind_abuse_guard_.configure(
-        impl_->udp_bind_fail_window_ms_,
-        impl_->udp_bind_fail_limit_,
-        impl_->udp_bind_block_ms_);
-
     impl_->allow_anonymous_ = true;
     const auto auth_config = server::auth::load_config_from_env();
     impl_->authenticator_ = auth_config.required
@@ -436,18 +254,6 @@ void GatewayAppAccess::configure_gateway(GatewayApp& app) {
     server::core::log::info(
         "GatewayApp configured: gateway_id=" + impl_->gateway_id_
         + " listen=" + impl_->listen_host_ + ":" + std::to_string(impl_->listen_port_)
-        + " udp_listen="
-        + (impl_->udp_listen_port_ == 0 ? std::string("disabled")
-                                        : (impl_->udp_listen_host_ + ":" + std::to_string(impl_->udp_listen_port_)))
-        + " udp_bind_ttl_ms=" + std::to_string(impl_->udp_bind_ttl_ms_)
-        + " udp_bind_fail_window_ms=" + std::to_string(impl_->udp_bind_fail_window_ms_)
-        + " udp_bind_fail_limit=" + std::to_string(impl_->udp_bind_fail_limit_)
-        + " udp_bind_block_ms=" + std::to_string(impl_->udp_bind_block_ms_)
-        + " udp_bind_retry_backoff_ms=" + std::to_string(impl_->udp_bind_retry_backoff_ms_)
-        + " udp_bind_retry_backoff_max_ms=" + std::to_string(impl_->udp_bind_retry_backoff_max_ms_)
-        + " udp_bind_retry_max_attempts=" + std::to_string(impl_->udp_bind_retry_max_attempts_)
-        + " udp_opcode_allowlist_size=" + std::to_string(impl_->udp_opcode_allowlist_.size())
-        + " udp_ingress_feature=" + std::string(kGatewayUdpIngressBuildEnabled ? "on" : "off")
         + " backend_connect_timeout_ms=" + std::to_string(impl_->backend_connect_timeout_ms_)
         + " backend_send_queue_max_bytes=" + std::to_string(impl_->backend_send_queue_max_bytes_)
         + " backend_circuit_enabled=" + std::string(impl_->backend_circuit_breaker_enabled_ ? "1" : "0")
@@ -459,36 +265,13 @@ void GatewayAppAccess::configure_gateway(GatewayApp& app) {
         + " ingress_tokens_per_sec=" + std::to_string(impl_->ingress_tokens_per_sec_)
         + " ingress_burst_tokens=" + std::to_string(impl_->ingress_burst_tokens_)
         + " ingress_max_active_sessions=" + std::to_string(impl_->ingress_max_active_sessions_)
-        + " allow_anonymous=" + std::string(impl_->allow_anonymous_ ? "1" : "0")
-        + " rudp_core_build=" + std::string(kCoreRudpBuildEnabled ? "1" : "0")
-        + " rudp_enable=" + std::string(impl_->rudp_rollout_policy_.enabled ? "1" : "0")
-        + " rudp_canary_percent=" + std::to_string(impl_->rudp_rollout_policy_.canary_percent)
-        + " rudp_opcode_allowlist_size=" + std::to_string(impl_->rudp_rollout_policy_.opcode_allowlist.size())
-        + " rudp_handshake_timeout_ms=" + std::to_string(impl_->rudp_config_->handshake_timeout_ms)
-        + " rudp_idle_timeout_ms=" + std::to_string(impl_->rudp_config_->idle_timeout_ms)
-        + " rudp_ack_delay_ms=" + std::to_string(impl_->rudp_config_->ack_delay_ms)
-        + " rudp_rto_min_ms=" + std::to_string(impl_->rudp_config_->rto_min_ms)
-        + " rudp_rto_max_ms=" + std::to_string(impl_->rudp_config_->rto_max_ms)
-        + " rudp_max_inflight_packets=" + std::to_string(impl_->rudp_config_->max_inflight_packets)
-        + " rudp_max_inflight_bytes=" + std::to_string(impl_->rudp_config_->max_inflight_bytes)
-        + " rudp_mtu_payload_bytes=" + std::to_string(impl_->rudp_config_->mtu_payload_bytes));
+        + " allow_anonymous=" + std::string(impl_->allow_anonymous_ ? "1" : "0"));
 }
 
 void GatewayAppAccess::configure_infrastructure(GatewayApp& app) {
     auto* impl_ = app.impl_.get();
     const char* redis_env = std::getenv(kEnvRedisUri);
     impl_->redis_uri_ = redis_env ? redis_env : kDefaultRedisUri;
-    if (const char* prefix = std::getenv(kEnvSessionContinuityRedisPrefix); prefix && *prefix) {
-        impl_->continuity_prefix_ = prefix;
-    } else if (const char* prefix = std::getenv(kEnvRedisChannelPrefix); prefix && *prefix) {
-        impl_->continuity_prefix_ = prefix;
-    } else {
-        impl_->continuity_prefix_.clear();
-    }
-    if (!impl_->continuity_prefix_.empty() && impl_->continuity_prefix_.back() != ':') {
-        impl_->continuity_prefix_.push_back(':');
-    }
-    impl_->continuity_prefix_ += "continuity:";
     impl_->session_directory_prefix_ = kDefaultSessionDirectoryPrefix;
     if (!impl_->session_directory_prefix_.empty() && impl_->session_directory_prefix_.back() != '/') {
         impl_->session_directory_prefix_.push_back('/');

@@ -175,13 +175,6 @@ void append_chat_runtime_metrics(MetricsTextWriter& writer,
     writer.append_counter("chat_http_header_oversize_total", snapshot.http_header_oversize_total);
     writer.append_counter("chat_http_body_oversize_total", snapshot.http_body_oversize_total);
     writer.append_counter("chat_http_bad_request_total", snapshot.http_bad_request_total);
-    writer.append_counter("chat_runtime_setting_reload_attempt_total", snapshot.runtime_setting_reload_attempt_total);
-    writer.append_counter("chat_runtime_setting_reload_success_total", snapshot.runtime_setting_reload_success_total);
-    writer.append_counter("chat_runtime_setting_reload_failure_total", snapshot.runtime_setting_reload_failure_total);
-    writer.append_counter("chat_runtime_setting_reload_latency_sum_ns", snapshot.runtime_setting_reload_latency_sum_ns);
-    writer.append_gauge(
-        "chat_runtime_setting_reload_latency_max_ms",
-        static_cast<long double>(snapshot.runtime_setting_reload_latency_max_ns) / 1'000'000.0L);
     writer.append_gauge("chat_runtime_watchdog_total", static_cast<long double>(snapshot.watchdog_total));
     writer.append_gauge("chat_runtime_watchdog_unhealthy_total", static_cast<long double>(snapshot.watchdog_unhealthy_total));
     writer.append_counter("chat_runtime_watchdog_transition_total", snapshot.watchdog_transition_total);

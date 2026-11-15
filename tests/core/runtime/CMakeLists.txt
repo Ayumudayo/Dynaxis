@@ -22,7 +22,6 @@ if (NOT BUILD_CORE_EXTENSIONS AND BUILD_CONTRACT_TESTS)
             "-DGENERATOR=${CMAKE_GENERATOR}"
             "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
             "-DGENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
-            "-DEXPECT_EXTENSIBILITY=OFF"
             -P "${CMAKE_SOURCE_DIR}/tests/core/run_installed_package_consumer.cmake")
     set_tests_properties(CoreRuntimeInstalledConsumer PROPERTIES LABELS "core-runtime;installed-consumer" TIMEOUT 120)
 endif()

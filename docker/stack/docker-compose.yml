@@ -31,17 +31,6 @@ x-worker-build: &worker-build
     dockerfile: Dockerfile
     target: worker-runtime
 
-x-admin: &admin
-  image: dynaxis-admin:local
-  pull_policy: never
-
-x-admin-build: &admin-build
-  <<: *admin
-  build:
-    context: ../..
-    dockerfile: Dockerfile
-    target: admin-runtime
-
 x-migrator: &migrator
   image: dynaxis-migrator:local
   pull_policy: never
@@ -123,46 +112,6 @@ services:
     ports:
       - "${WB_WORKER_METRICS_HOST_PORT:-39093}:9090"
 
-  admin-app:
-    <<: *admin-build
-    command: ["admin"]
-    environment:
-      REDIS_URI: tcp://redis:6379
-      REDIS_CHANNEL_PREFIX: "dynaxis:"
-      SERVER_REGISTRY_PREFIX: "gateway/instances/"
-      SERVER_REGISTRY_TTL: "30"
-      GATEWAY_SESSION_PREFIX: "gateway/session/"
-      WB_WORKER_METRICS_URL: "http://wb_worker:9090/metrics"
-      METRICS_PORT: "39200"
-      ADMIN_POLL_INTERVAL_MS: "1000"
-      GRAFANA_BASE_URL: "http://127.0.0.1:${GRAFANA_HOST_PORT:-33000}"
-      PROMETHEUS_BASE_URL: "http://127.0.0.1:${PROMETHEUS_HOST_PORT:-39090}"
-      ADMIN_COMMAND_SIGNING_SECRET: "${ADMIN_COMMAND_SIGNING_SECRET:-dev-admin-command-secret}"
-      CHAT_HOOK_PLUGINS_DIR: "/app/plugins"
-      CHAT_HOOK_FALLBACK_PLUGINS_DIR: "/app/plugins"
-      LUA_SCRIPTS_DIR: "/app/scripts"
-      LUA_FALLBACK_SCRIPTS_DIR: "/app/scripts"
-      ADMIN_EXT_FORCE_FAIL_WAVE_INDEX: "${ADMIN_EXT_FORCE_FAIL_WAVE_INDEX:-0}"
-    volumes:
-      - ./plugins:/app/plugins:ro
-      - ./scripts:/app/scripts:ro
-    depends_on:
-      redis:
-        condition: service_healthy
-      wb_worker:
-        condition: service_started
-      migrator:
-        condition: service_completed_successfully
-    networks:
-      - dynaxis-stack
-    ports:
-      - "${ADMIN_APP_HOST_PORT:-39200}:39200"
-    healthcheck:
-      test: ["CMD", "bash", "-lc", "exec 3<>/dev/tcp/127.0.0.1/39200 && printf 'GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && IFS= read -r line <&3 && [[ \"$$line\" == *\" 200 \"* ]]"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   gateway-1:
     <<: *gateway-build
     command: ["gateway"]
@@ -170,16 +119,6 @@ services:
       CHAT_AUTH_MODE: "${CHAT_AUTH_MODE:-development}"
       CHAT_AUTH_SIGNING_SECRET: "${CHAT_AUTH_SIGNING_SECRET:-}"
       GATEWAY_LISTEN: "0.0.0.0:6000"
-      GATEWAY_UDP_LISTEN: "${GATEWAY1_UDP_LISTEN:-}"
-      GATEWAY_UDP_BIND_SECRET: "${GATEWAY_UDP_BIND_SECRET:-}"
-      GATEWAY_UDP_BIND_TTL_MS: "${GATEWAY_UDP_BIND_TTL_MS:-5000}"
-      GATEWAY_UDP_BIND_FAIL_WINDOW_MS: "${GATEWAY_UDP_BIND_FAIL_WINDOW_MS:-10000}"
-      GATEWAY_UDP_BIND_FAIL_LIMIT: "${GATEWAY_UDP_BIND_FAIL_LIMIT:-5}"
-      GATEWAY_UDP_BIND_BLOCK_MS: "${GATEWAY_UDP_BIND_BLOCK_MS:-60000}"
-      GATEWAY_UDP_OPCODE_ALLOWLIST: "${GATEWAY_UDP_OPCODE_ALLOWLIST:-}"
-      GATEWAY_RUDP_ENABLE: "${GATEWAY_RUDP_ENABLE:-0}"
-      GATEWAY_RUDP_CANARY_PERCENT: "${GATEWAY_RUDP_CANARY_PERCENT:-0}"
-      GATEWAY_RUDP_OPCODE_ALLOWLIST: "${GATEWAY_RUDP_OPCODE_ALLOWLIST:-}"
       GATEWAY_ID: "gw1"
       REDIS_URI: "tcp://redis:6379"
       REDIS_CHANNEL_PREFIX: "dynaxis:"
@@ -196,7 +135,6 @@ services:
     ports:
       - "${GATEWAY1_TCP_HOST_PORT:-36100}:6000"
       - "${GATEWAY1_METRICS_HOST_PORT:-36001}:6001"
-      - "${GATEWAY1_UDP_HOST_PORT:-7000}:7000/udp"
 
   gateway-2:
     <<: *gateway
@@ -205,16 +143,6 @@ services:
       CHAT_AUTH_MODE: "${CHAT_AUTH_MODE:-development}"
       CHAT_AUTH_SIGNING_SECRET: "${CHAT_AUTH_SIGNING_SECRET:-}"
       GATEWAY_LISTEN: "0.0.0.0:6000"
-      GATEWAY_UDP_LISTEN: "${GATEWAY2_UDP_LISTEN:-}"
-      GATEWAY_UDP_BIND_SECRET: "${GATEWAY_UDP_BIND_SECRET:-}"
-      GATEWAY_UDP_BIND_TTL_MS: "${GATEWAY_UDP_BIND_TTL_MS:-5000}"
-      GATEWAY_UDP_BIND_FAIL_WINDOW_MS: "${GATEWAY_UDP_BIND_FAIL_WINDOW_MS:-10000}"
-      GATEWAY_UDP_BIND_FAIL_LIMIT: "${GATEWAY_UDP_BIND_FAIL_LIMIT:-5}"
-      GATEWAY_UDP_BIND_BLOCK_MS: "${GATEWAY_UDP_BIND_BLOCK_MS:-60000}"
-      GATEWAY_UDP_OPCODE_ALLOWLIST: "${GATEWAY_UDP_OPCODE_ALLOWLIST:-}"
-      GATEWAY_RUDP_ENABLE: "${GATEWAY_RUDP_ENABLE:-0}"
-      GATEWAY_RUDP_CANARY_PERCENT: "${GATEWAY_RUDP_CANARY_PERCENT:-0}"
-      GATEWAY_RUDP_OPCODE_ALLOWLIST: "${GATEWAY_RUDP_OPCODE_ALLOWLIST:-}"
       GATEWAY_ID: "gw2"
       REDIS_URI: "tcp://redis:6379"
       REDIS_CHANNEL_PREFIX: "dynaxis:"
@@ -231,7 +159,6 @@ services:
     ports:
       - "${GATEWAY2_TCP_HOST_PORT:-36101}:6000"
       - "${GATEWAY2_METRICS_HOST_PORT:-36002}:6001"
-      - "${GATEWAY2_UDP_HOST_PORT:-7001}:7000/udp"
 
   haproxy:
     image: haproxy:2.9-alpine

@@ -73,10 +73,6 @@ void ChatService::on_leave(ChatService::NetSession& s, std::span<const std::uint
                     logical_session_expires_unix_ms = expires_it->second;
                 }
 
-                if (maybe_handle_leave_hook(*session_sp, sender_name, room_to_leave)) {
-                    return;
-                }
-
                 targets = remove_session_from_room_locked(impl_->state, session_sp, room_to_leave, sender_name).targets;
             }
 

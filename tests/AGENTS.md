@@ -29,19 +29,14 @@ Note: `ctest` does not rebuild binaries. If a test executable fails to start wit
 - `tests/python/verify_chat.py`
 - `tests/python/verify_pong.py`
 - `tests/python/verify_whisper_cross_instance.py`
-- `tests/python/verify_admin_api.py`
-- `tests/python/verify_admin_auth.py`
-- `tests/python/verify_admin_control_plane_e2e.py`
 - `tests/python/verify_runtime_toggle_metrics.py`
 - `tests/python/test_check_doxygen_coverage.py`
 
 Most Python tests expect the Docker stack (`docker/stack`) to be running.
 
-Plugin/script smoke tests can be run through ctest labels after configuring tests:
 
 ```bash
 cmake --preset linux -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=ON
-ENABLE_STACK_PYTHON_TESTS=1 ctest --test-dir build-linux -L "plugin-script" --output-on-failure
 ```
 
 Without `ENABLE_STACK_PYTHON_TESTS=1`, label-matched stack Python tests are skipped by design.

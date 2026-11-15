@@ -201,7 +201,6 @@ if ($useConanPreset) {
       '-DBUILD_GATEWAY_APP=OFF',
       '-DBUILD_SERVER_TESTS=OFF',
       '-DBUILD_WRITE_BEHIND_TOOLS=OFF',
-      '-DBUILD_ADMIN_APP=OFF',
       '-DBUILD_MIGRATIONS_RUNNER=OFF'
     )
   }
@@ -352,4 +351,3 @@ if ($Run -ne 'none') {
 }
 
 Info "완료"
-

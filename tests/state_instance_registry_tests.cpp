@@ -6,14 +6,12 @@
 #include "server/core/discovery/instance_registry.hpp"
 #include "server/state/instance_registry_common.hpp"
 #include "server/state/redis_instance_registry.hpp"
-#include "server/state/consul_instance_registry.hpp"
 
 namespace core_state = server::core::discovery;
-using server::state::ConsulInstanceStateBackend;
 using server::state::RedisInstanceStateBackend;
 
 /**
- * @brief 인스턴스 레지스트리(in-memory/Redis/Consul adapter) 동작을 검증합니다.
+ * @brief 인스턴스 레지스트리(in-memory/Redis adapter) 동작을 검증합니다.
  */
 namespace {
 
@@ -174,30 +172,6 @@ TEST(InstanceRegistryJsonTests, ParsesRegionShardAndTags) {
     ASSERT_EQ(parsed->tags.size(), 2u);
     EXPECT_EQ(parsed->tags[0], "canary");
     EXPECT_EQ(parsed->tags[1], "vip");
-}
-
-TEST(ConsulInstanceStateBackendTests, UsesCallbacks) {
-    std::vector<std::string> put_paths;
-    std::vector<std::string> delete_paths;
-
-    ConsulInstanceStateBackend backend(
-        "v1/kv/gateway",
-        [&](const std::string& path, const std::string& payload) {
-            put_paths.push_back(path + ":" + payload);
-            return true;
-        },
-        [&](const std::string& path, const std::string&) {
-            delete_paths.push_back(path);
-            return true;
-        });
-
-    auto record = sample_record();
-    EXPECT_TRUE(backend.upsert(record));
-    EXPECT_TRUE(backend.touch("core-1", 888));
-    EXPECT_TRUE(backend.remove("core-1"));
-
-    EXPECT_EQ(put_paths.size(), 2u);
-    EXPECT_EQ(delete_paths.size(), 1u);
 }
 
 TEST(InstanceSelectorTests, MatchesAllWhenAllIsTrue) {

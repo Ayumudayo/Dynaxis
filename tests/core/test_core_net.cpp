@@ -508,26 +508,7 @@ TEST(SessionBackpressureTest, OversizedPacketDropsSessionAndRecordsQueueDropMetr
     EXPECT_EQ(close_count, 1u);
 }
 
-TEST(OpcodePolicyTest, UdpBindOpcodePoliciesAreExpected) {
-    using server::core::protocol::DeliveryClass;
-    using server::core::protocol::SessionStatus;
-    using server::core::protocol::TransportKind;
-    using server::core::protocol::TransportMask;
 
-    const auto bind_req_policy = server::protocol::opcode_policy(server::protocol::MSG_UDP_BIND_REQ);
-    EXPECT_EQ(bind_req_policy.required_state, SessionStatus::kAny);
-    EXPECT_EQ(bind_req_policy.transport, TransportMask::kUdp);
-    EXPECT_EQ(bind_req_policy.delivery, DeliveryClass::kReliable);
-    EXPECT_FALSE(server::core::protocol::transport_allows(bind_req_policy.transport, TransportKind::kTcp));
-    EXPECT_TRUE(server::core::protocol::transport_allows(bind_req_policy.transport, TransportKind::kUdp));
-
-    const auto bind_res_policy = server::protocol::opcode_policy(server::protocol::MSG_UDP_BIND_RES);
-    EXPECT_EQ(bind_res_policy.required_state, SessionStatus::kAny);
-    EXPECT_EQ(bind_res_policy.transport, TransportMask::kBoth);
-    EXPECT_EQ(bind_res_policy.delivery, DeliveryClass::kReliable);
-    EXPECT_TRUE(server::core::protocol::transport_allows(bind_res_policy.transport, TransportKind::kTcp));
-    EXPECT_TRUE(server::core::protocol::transport_allows(bind_res_policy.transport, TransportKind::kUdp));
-}
 
 TEST(PacketUtf8Test, RejectsOverlongAndSurrogateSequences) {
     const std::array<std::uint8_t, 2> overlong_slash{0xC0, 0xAF};
