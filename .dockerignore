@@ -78,3 +78,14 @@ external/
 external-refs/
 *.md
 !README.md
+
+# Shared desktop source is also compiled by the Linux verification stage.
+!external/
+external/*
+!external/imgui/
+external/imgui/.git
+
+# Contract checks use the same checked-in documents and Python helpers.
+!docs/
+!docs/**
+!tests/python/*.py

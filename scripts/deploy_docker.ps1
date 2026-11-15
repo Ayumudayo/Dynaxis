@@ -197,11 +197,17 @@ function Test-ComposeConfiguration([string[]]$ComposeArgs) {
 }
 
 function Needs-BaseImage([string]$ComposePath) {
-    return (-not $NoBase)
+    return $true
 }
 
 function Ensure-BaseImage {
-    if ($NoCache -or -not (Test-DockerImageExists "dynaxis-base")) {
+    if ($NoBase) {
+        $dependencyLabel = docker image inspect dynaxis-base --format '{{index .Config.Labels "org.dynaxis.dependencies"}}' 2>$null
+        if ($LASTEXITCODE -ne 0 -or $dependencyLabel -ne 'conan-2.29.1') {
+            throw 'Conan base image required. Run docker build -f Dockerfile.base -t dynaxis-base . first.'
+        }
+    }
+    if (-not $NoBase) {
         Write-Host "Building base image 'dynaxis-base'..." -ForegroundColor Yellow
         $BuildArgs = @("build", "-f", "Dockerfile.base", "-t", "dynaxis-base", ".")
         if ($NoCache) { $BuildArgs += "--no-cache" }

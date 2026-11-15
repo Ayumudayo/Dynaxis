@@ -35,6 +35,12 @@ if (BUILD_CORE_EXTENSIONS)
 endif()
 add_library(server_core::server_core ALIAS server_core)
 
+# Instrumented static libraries need the sanitizer runtime in downstream links,
+# including consumers configured outside this repository after cmake --install.
+if (ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_link_options(server_core INTERFACE -fsanitize=address,undefined)
+endif()
+
 include(GNUInstallDirs)
 
 # -----------------------------------------------------------------------------

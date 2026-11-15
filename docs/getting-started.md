@@ -54,8 +54,8 @@ PostgreSQL에 `tools/migrations/*.sql`의 테이블을 적용해 둡니다(sessi
 
 Windows 예시(빌드 산출물 사용):
 ```
-build-windows/Debug/migrations_runner.exe --db-uri "postgresql://user:pass@127.0.0.1:5432/appdb?sslmode=disable" --dry-run  # 보류 목록 확인
-build-windows/Debug/migrations_runner.exe --db-uri "postgresql://user:pass@127.0.0.1:5432/appdb?sslmode=disable"
+build/windows/full/debug/tools/Debug/migrations_runner.exe --db-uri "postgresql://user:pass@127.0.0.1:5432/appdb?sslmode=disable" --dry-run  # 보류 목록 확인
+build/windows/full/debug/tools/Debug/migrations_runner.exe --db-uri "postgresql://user:pass@127.0.0.1:5432/appdb?sslmode=disable"
 ```
 
 주의: `tools/migrations/0002_indexes.sql`은 `CREATE INDEX CONCURRENTLY`를 포함하므로 트랜잭션 블록 밖에서 실행됩니다(러너가 자동 처리).
@@ -77,27 +77,27 @@ scripts/build.ps1  -Config Debug -Target wb_worker
 ```
 
 산출물 예시(Visual Studio 제너레이터):
-- 서버: `build-windows/server/Debug/server_app.exe`
-- 워커: `build-windows/Debug/wb_worker.exe`
+- 서버: `build/windows/full/debug/server/Debug/server_app.exe`
+- 워커: `build/windows/full/debug/tools/Debug/wb_worker.exe`
 
 ## 4) 실행
 터미널 1 — 서버:
 ```
-build-windows/server/Debug/server_app.exe 5000
+build/windows/full/debug/server/Debug/server_app.exe 5000
 ```
 
 터미널 2 — 워커:
 ```
-build-windows/Debug/wb_worker.exe
+build/windows/full/debug/tools/Debug/wb_worker.exe
 ```
 
-옵션: DLQ 재처리도 구동하려면 `build-windows/Debug/wb_dlq_replayer.exe` 실행.
+옵션: DLQ 재처리도 구동하려면 `build/windows/full/debug/tools/Debug/wb_dlq_replayer.exe` 실행.
 
 ## 5) 통합 스모크 테스트
 PowerShell 스크립트 하나로 Streams→DB 반영 경로를 확인합니다.
 
 ```
-scripts/smoke_wb.ps1 -Config Debug -BuildDir build-windows
+scripts/smoke_wb.ps1 -Config Debug -BuildDir build/windows/full/debug
 ```
 
 내부 동작:
@@ -128,7 +128,7 @@ CLI(`dev_chat_cli.exe`)를 실행하면 입력창에서 다음 명령을 사용�
 - Redis/DB 연결 실패: `.env`와 실제 인스턴스 주소/권한 확인
 - Streams 처리 지연: `wb_pending`(XPENDING) 로그 값과 Redis 부하 확인
  - 링크 오류 LNK2019(load_dotenv)로 `wb_check` 빌드 실패: 최신 CMake 설정에서 `wb_check`가 `server_core`에 링크되도록 보강되었습니다. 기존 빌드 캐시 문제가 의심되면 `scripts/build.ps1 -Clean`로 재구성하세요.
- - CMake 캐시 경로 불일치 오류: 다른 쉘/경로에서 생성된 빌드 캐시가 섞였을 수 있습니다. `build-windows` 디렉터리를 정리 후 `scripts/build.ps1`로 재설정하세요.
+ - CMake 캐시 경로 불일치 오류: 다른 쉘/경로에서 생성된 빌드 캐시가 섞였을 수 있습니다. `build/windows/full/debug` 디렉터리를 정리 후 `scripts/build.ps1`로 재설정하세요.
 
 ## 다음 단계
 - Docker 기반 스택 기동 절차는 `docs/build.md`, 운영 체크는 `docs/ops/runbook.md`를 참고하세요.

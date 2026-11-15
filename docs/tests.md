@@ -3,10 +3,10 @@
 `ctest`는 바이너리를 다시 빌드하지 않는다. 먼저 해당 구성의 빌드를 완료한다.
 
 ```powershell
-cmake --build build-windows --config Debug --parallel 4
-ctest --test-dir build-windows -C Debug --output-on-failure --no-tests=error
-cmake --build --preset windows-core-engine-debug
-ctest --preset windows-core-engine-test --no-tests=error
+python scripts/build.py --profile full --config Debug --step all
+python scripts/build.py --profile full --config Debug --step test
+python scripts/build.py --profile core --config Debug --step all
+python scripts/build.py --profile core --config Debug --step test
 python -m unittest discover -s tests/python -p 'test_*.py'
 python tools/check_doxygen_coverage.py
 python tools/check_core_api_contracts.py --check-boundary --check-boundary-fixtures --check-stable-governance-fixtures
@@ -20,4 +20,4 @@ Docker 표준 실행은 `pwsh scripts/deploy_docker.ps1 -Action up -Detached -Bu
 
 `verify_pong.py`, `verify_chat.py`, `verify_whisper_cross_instance.py`는 실행 중인 개발 스택의 기본 프로토콜 검사다. `verify_soak_perf_gate.py`는 14-byte frame/HELLO와 오류율·종료 후 큐/세션 수를 검사한다. 짧은 연결 gate를 장시간 채팅 부하 검증으로 해석하지 않는다.
 
-CI는 Windows 빌드/단위/설치 검사, Linux 최소 core, Docker 핵심 종단 검사, Linux sanitizer/fuzz를 유지한다. 관리·게임·확장 기능 검사는 제거했다.
+CI는 Windows 빌드/단위/설치 검사, Linux 최소 core, Docker 핵심 종단 검사, Linux sanitizer/fuzz와 ImGui software-rendering smoke를 유지한다. 관리·게임·확장 기능 검사는 제거했다.

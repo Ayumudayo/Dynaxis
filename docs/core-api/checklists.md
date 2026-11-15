@@ -52,19 +52,19 @@
 ### 검증 명령
 
 ```powershell
-cmake --build build-windows --config Debug --target `
+cmake --build build/windows/full/debug --config Debug --target `
   core_public_api_smoke `
   core_public_api_headers_compile `
   --parallel
 
-build-windows/tests/contracts/Debug/core_public_api_smoke.exe
-build-windows/tests/contracts/Debug/core_public_api_headers_compile.exe
+build/windows/full/debug/tests/contracts/Debug/core_public_api_smoke.exe
+build/windows/full/debug/tests/contracts/Debug/core_public_api_headers_compile.exe
 
 python tools/check_core_api_contracts.py --check-boundary
 python tools/check_core_api_contracts.py --check-boundary-fixtures
 python tools/check_core_api_contracts.py --check-stable-governance-fixtures
 
-ctest --test-dir build-windows -C Debug -R "CoreInstalledPackageConsumer|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure
+ctest --test-dir build/windows/full/debug -C Debug -R "CoreInstalledPackageConsumer|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure
 
 ```
 

@@ -563,3 +563,6 @@ external-refs/
 # Internal docs
 tasks/
 tmp/
+
+# Dear ImGui runtime layout
+imgui.ini

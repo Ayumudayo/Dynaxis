@@ -1,87 +1,17 @@
-# ==============================================================================
-# Dynaxis Server - Base Image with Dependencies
-# ==============================================================================
-# This image contains all C++ dependencies built from source or apt packages.
-# Hybrid approach: System packages where stable, source builds for C++20 ABI.
-# ==============================================================================
-
+# Native build tools and platform SDKs only; all C++ libraries come from Conan.
 FROM ubuntu:24.04 AS base
-
-# Prevent interactive prompts during build
 ENV DEBIAN_FRONTEND=noninteractive
-
-# ==============================================================================
-# System Build Tools and Runtime Dependencies
-# ==============================================================================
-RUN apt-get update && apt-get install -y \
-    --no-install-recommends \
-    # Build essentials
-    build-essential \
-    cmake \
-    ninja-build \
-    git \
-    curl \
-    zip \
-    unzip \
-    tar \
-    pkg-config \
-    linux-libc-dev \
-    ca-certificates \
-    wget \
-    python3 \
-    # C++ libraries (system packages)
-    libboost-dev \
-    libboost-system-dev \
-    protobuf-compiler \
-    libprotobuf-dev \
-    libpq-dev \
-    nlohmann-json3-dev \
-    libhiredis-dev \
-    liblz4-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    # Remove conflicting system libpqxx (we build from source for C++20)
-    && (apt-get purge -y libpqxx* || true) \
-    && rm -f /usr/lib/x86_64-linux-gnu/libpqxx* \
-    && rm -f /usr/lib/libpqxx*
-
-# Environment configuration
-ENV PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
-ENV CMAKE_MAKE_PROGRAM=/usr/bin/ninja
-
-# ==============================================================================
-# Source Build: libpqxx 7.9.0 (C++20 ABI Compatibility)
-# ==============================================================================
-# System libpqxx is C++17, causes ABI mismatch. Build from source with C++20.
-RUN git clone --depth 1 --branch 7.9.0 https://github.com/jtv/libpqxx.git && \
-    cd libpqxx && \
-    mkdir build && cd build && \
-    cmake -Dpqxx_CXX_STANDARD=20 \
-    -DBUILD_SHARED_LIBS=ON \
-    -DSKIP_BUILD_TEST=ON .. && \
-    make -j$(nproc) && \
-    make install && \
-    cd ../.. && \
-    rm -rf libpqxx && \
-    ldconfig
-
-# Verify libpqxx installation
-RUN pkg-config --libs libpqxx && echo "✓ libpqxx 7.9.0 (C++20) installed"
-
-# ==============================================================================
-# Source Build: redis-plus-plus (Not in Ubuntu repos)
-# ==============================================================================
-RUN git clone --depth 1 https://github.com/sewenew/redis-plus-plus.git && \
-    cd redis-plus-plus && \
-    mkdir build && cd build && \
-    cmake -DREDIS_PLUS_PLUS_BUILD_TEST=OFF \
-    -DCMAKE_BUILD_TYPE=Release .. && \
-    make -j$(nproc) && \
-    make install && \
-    cd ../.. && \
-    rm -rf redis-plus-plus && \
-    ldconfig
-
-# ==============================================================================
-# Application Workspace
-# ==============================================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build git curl zip unzip tar pkg-config ca-certificates \
+    python3 python3-venv perl autoconf automake libtool bison flex \
+    libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+    libxkbcommon-dev libwayland-dev wayland-protocols xorg-dev xvfb xauth fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+COPY conan/requirements.txt /tmp/conan-requirements.txt
+RUN python3 -m venv /opt/conan && /opt/conan/bin/python -m pip install --no-cache-dir -r /tmp/conan-requirements.txt
+ENV PATH="/opt/conan/bin:${PATH}"
+COPY conan/linux-system-packages.txt /tmp/linux-system-packages.txt
+RUN sed -i 's/\r$//' /tmp/linux-system-packages.txt && apt-get update && xargs -a /tmp/linux-system-packages.txt apt-get install -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+LABEL org.dynaxis.dependencies="conan-2.29.1"
 WORKDIR /app

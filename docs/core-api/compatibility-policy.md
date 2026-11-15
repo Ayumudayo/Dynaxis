@@ -38,7 +38,7 @@
 - `docs/core-api/` 하위 도메인 문서를 함께 갱신합니다.
 - 파괴적 변경은 마이그레이션 노트를 추가/갱신합니다.
 - `core_public_api_smoke`, `core_public_api_headers_compile`를 build/run 기준으로 검증합니다.
-- `ctest --test-dir build-windows -C Debug -R "CoreInstalledPackageConsumer|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure`를 통과합니다.
+- `ctest --test-dir build/windows/full/debug -C Debug -R "CoreInstalledPackageConsumer|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure`를 통과합니다.
 - `core/include/server/core/api/version.hpp`를 갱신합니다.
 - `docs/core-api/compatibility-matrix.json`를 갱신합니다.
 

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 CONFIG="${1:-Debug}"
-BUILDDIR="${2:-build-linux}"
+BUILDDIR="${2:-build/linux/full/${CONFIG,,}}"
 PORT="${3:-5000}"
 RUN_DLQ="${RUN_DLQ:-0}"
 WITH_CLIENT="${WITH_CLIENT:-0}"
@@ -15,21 +15,16 @@ fail(){ echo -e "\033[31m[fail]\033[0m $*"; exit 1; }
 
 if [[ ! -f .env ]]; then warn ".env 없음 — OS 환경변수 사용"; fi
 
-if [[ "$WITH_CLIENT" == "1" ]]; then
-  warn "WITH_CLIENT is ignored on Linux/WSL (GUI client is Windows-only)."
-  WITH_CLIENT=0
-fi
-
 info "필요 타깃 빌드(server_app, wb_worker${RUN_DLQ:+, wb_dlq_replayer})"
-pwsh ./scripts/build.ps1 -Config "$CONFIG" -BuildDir "$BUILDDIR" -Target server_app >/dev/null
-pwsh ./scripts/build.ps1 -Config "$CONFIG" -BuildDir "$BUILDDIR" -Target wb_worker   >/dev/null
-if [[ "$RUN_DLQ" == "1" ]]; then pwsh ./scripts/build.ps1 -Config "$CONFIG" -BuildDir "$BUILDDIR" -Target wb_dlq_replayer >/dev/null; fi
+python3 scripts/build.py --config "$CONFIG" --build-dir "$BUILDDIR" --target server_app >/dev/null
+python3 scripts/build.py --config "$CONFIG" --build-dir "$BUILDDIR" --target wb_worker   >/dev/null
+if [[ "$RUN_DLQ" == "1" ]]; then python3 scripts/build.py --config "$CONFIG" --build-dir "$BUILDDIR" --target wb_dlq_replayer >/dev/null; fi
 
-serverExe="$BUILDDIR/server/$CONFIG/server_app"
-[[ -f "$serverExe.exe" ]] && serverExe="$BUILDDIR/server/$CONFIG/server_app.exe"
-workerExe="$BUILDDIR/$CONFIG/wb_worker"
-[[ -f "$workerExe.exe" ]] && workerExe="$BUILDDIR/$CONFIG/wb_worker.exe"
-dlqExe="$BUILDDIR/$CONFIG/wb_dlq_replayer"; [[ -f "$dlqExe.exe" ]] && dlqExe="$BUILDDIR/$CONFIG/wb_dlq_replayer.exe"
+serverExe="$BUILDDIR/server/server_app"
+[[ -f "$serverExe.exe" ]] && serverExe="$BUILDDIR/server/server_app.exe"
+workerExe="$BUILDDIR/tools/wb_worker"
+[[ -f "$workerExe.exe" ]] && workerExe="$BUILDDIR/tools/wb_worker.exe"
+dlqExe="$BUILDDIR/tools/wb_dlq_replayer"; [[ -f "$dlqExe.exe" ]] && dlqExe="$BUILDDIR/tools/wb_dlq_replayer.exe"
 
 [[ -f "$serverExe" ]] || fail "server_app 실행 파일을 찾을 수 없습니다: $serverExe"
 [[ -f "$workerExe" ]] || fail "wb_worker 실행 파일을 찾을 수 없습니다: $workerExe"
@@ -51,10 +46,10 @@ fi
 
 if [[ "$SMOKE" == "1" ]]; then
   info "스모크: wb_emit → wb_check"
-  pwsh ./scripts/build.ps1 -Config "$CONFIG" -BuildDir "$BUILDDIR" -Target wb_emit  >/dev/null
-  pwsh ./scripts/build.ps1 -Config "$CONFIG" -BuildDir "$BUILDDIR" -Target wb_check >/dev/null
-  emitExe="$BUILDDIR/$CONFIG/wb_emit"; [[ -f "$emitExe.exe" ]] && emitExe="$BUILDDIR/$CONFIG/wb_emit.exe"
-  checkExe="$BUILDDIR/$CONFIG/wb_check"; [[ -f "$checkExe.exe" ]] && checkExe="$BUILDDIR/$CONFIG/wb_check.exe"
+  python3 scripts/build.py --config "$CONFIG" --build-dir "$BUILDDIR" --target wb_emit  >/dev/null
+  python3 scripts/build.py --config "$CONFIG" --build-dir "$BUILDDIR" --target wb_check >/dev/null
+  emitExe="$BUILDDIR/tools/wb_emit"; [[ -f "$emitExe.exe" ]] && emitExe="$BUILDDIR/tools/wb_emit.exe"
+  checkExe="$BUILDDIR/tools/wb_check"; [[ -f "$checkExe.exe" ]] && checkExe="$BUILDDIR/tools/wb_check.exe"
   if [[ -f "$emitExe" ]]; then
     eid=$("$emitExe" session_login | head -n1 || true)
     if [[ -n "$eid" ]]; then info "event_id=$eid"; sleep 1; [[ -f "$checkExe" ]] && "$checkExe" "$eid" && info "스모크 성공" || warn "스모크 확인 실패"; else warn "wb_emit 실패"; fi

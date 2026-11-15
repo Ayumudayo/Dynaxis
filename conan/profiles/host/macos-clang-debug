@@ -1,0 +1,11 @@
+{% set arch_name = detect_api.detect_arch() %}
+[settings]
+os=Macos
+arch={{ arch_name }}
+compiler=apple-clang
+compiler.version=17
+compiler.cppstd=20
+compiler.libcxx=libc++
+build_type=Debug
+[conf]
+tools.cmake.cmaketoolchain:generator=Ninja

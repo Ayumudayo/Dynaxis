@@ -46,8 +46,8 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install "conan>=2.0,<3"
-          conan --version
+          python -m pip install -r conan/requirements.txt
+          python scripts/conan_cli.py --version
 
       - name: Enable MSVC Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1
@@ -55,12 +55,12 @@ jobs:
       - name: Build and Stage Factory Package Bundle
         shell: pwsh
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/publish_factory_packages.ps1 -BuildDir build-windows -OutputRoot artifacts/factory-packages -Zip -CleanOutput
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/publish_factory_packages.ps1 -BuildDir build/windows/full/release -OutputRoot artifacts/factory-packages -Zip -CleanOutput
 
       - name: Validate Package Consumers
         shell: pwsh
         run: |
-          ctest -C Release --test-dir build-windows/tests --output-on-failure -R "CoreInstalledPackageConsumer|FactoryPgInstalledPackageConsumer|FactoryRedisInstalledPackageConsumer"
+          ctest -C Release --test-dir build/windows/full/release/tests --output-on-failure -R "CoreInstalledPackageConsumer|FactoryPgInstalledPackageConsumer|FactoryRedisInstalledPackageConsumer"
 
       - name: Upload Factory Package Artifact
         uses: actions/upload-artifact@v4

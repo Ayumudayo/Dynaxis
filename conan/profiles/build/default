@@ -16,7 +16,7 @@ compiler.version={{ compiler_version }}
 {% endif %}
 build_type=Release
 {% if os_name != "Windows" and compiler in ["gcc", "clang", "apple-clang"] %}
-compiler.libcxx=libstdc++11
+compiler.libcxx={{ "libc++" if os_name == "Macos" else "libstdc++11" }}
 {% endif %}
 
 [conf]

@@ -1,5 +1,6 @@
 #include "client/client_app.hpp"
 #include "client/gui_manager.hpp"
+#include <string_view>
 
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
 #pragma comment(lib, "legacy_stdio_definitions")
@@ -11,7 +12,7 @@
  * UI 수명주기(`GuiManager`)와 로직 수명주기(`ClientApp`)를 분리해,
  * 네트워크/상태 로직과 렌더링 계층을 독립적으로 유지합니다.
  */
-int main(int, char**)
+int main(int argc, char** argv)
 {
     // 1. 비즈니스 로직 & 데이터 상태 관리자 생성
     ClientApp app;
@@ -25,7 +26,8 @@ int main(int, char**)
     }
 
     // 4. 메인 루프 실행
-    gui.run();
+    const bool smoke = argc == 2 && std::string_view(argv[1]) == "--smoke-test";
+    gui.run(smoke ? 10u : 0u);
 
     return 0;
 }

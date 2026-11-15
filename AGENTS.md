@@ -1,6 +1,6 @@
 # Dynaxis project knowledge
 
-C++20 reusable TCP server core and MSA chat foundation. Standard runtime is Linux Docker; Windows supports development and the optional C++ ImGui client. Baseline before capability removal: refactor@8d48ccf. Current API: 4.0.0.
+C++20 reusable TCP server core and MSA chat foundation. Standard runtime is Linux Docker; Windows and Linux build the same C++ ImGui client. Baseline before capability removal: refactor@8d48ccf. Current API: 4.0.0.
 
 ## Structure and ownership
 - core: TCP/framing/dispatch, bounded queue, scheduler, buffers, lifecycle, metrics; MSA protocol/discovery/storage execution integration.
@@ -8,18 +8,21 @@ C++20 reusable TCP server core and MSA chat foundation. Standard runtime is Linu
 - server: chat users/rooms/messages/whispers/history/presence/moderation/session continuity; explicit bootstrap dependencies.
 - infra: Redis adapter and signed credential adapter.
 - tools: write-behind worker/helpers, migrations and protocol generators, offline credential issuer.
-- client_gui: replaceable development UI; NetClient has no ImGui/GLFW dependency. Product UI is undecided.
+- client_gui: replaceable development UI; NetClient has no ImGui/GLFW dependency. GUI stack: ImGui/GLFW/OpenGL.
 - docker/stack: HAProxy, gateway/server instances, Redis/Postgres, worker/migrator; optional observability.
 - docs/README.md: canonical entrypoint. tasks/: ignored local plans and evidence.
 
 ## Commands
-- Build: pwsh scripts/build.ps1 -Config Debug
-- Tests: ctest --test-dir build-windows -C Debug --output-on-failure --no-tests=error
+- Build: python scripts/build.py --profile full --config Debug --step all
+- Tests: python scripts/build.py --profile full --config Debug --step test
 - Runtime: pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build
-- Minimum core: cmake --preset windows-core-engine; cmake --build --preset windows-core-engine-debug; ctest --preset windows-core-engine-test
+- Minimum core: python scripts/build.py --profile core --step all; python scripts/build.py --profile core --step test
 - Contracts: python tools/check_doxygen_coverage.py; python tools/check_core_api_contracts.py --check-boundary; python tools/gen_opcode_docs.py --check
 
 ## Rules
+- Conan 2 version: conan/requirements.txt. All C++ dependencies use conanfile.py + conan.lock on Windows/Linux/Docker.
+- scripts/build.py is the common native entry; deps/configure/build/test are separate steps. Build trees live under build/<os>/<profile>/<config>.
+- OS graphics SDKs/drivers and compiler are platform prerequisites; do not substitute distro C++ libraries or clone dependency sources in Docker.
 - Explicit CMake source lists; no file(GLOB). No core dependency on server/gateway implementation.
 - Use scripts/deploy_docker.ps1 or run_full_stack_observability.ps1 for Docker runtime; no alternative wrapper.
 - Update Doxygen for public/runtime changes. Validate coverage before completion.

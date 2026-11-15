@@ -61,8 +61,8 @@ try {
   if (-not $isWindowsHost) { $isWindowsHost = ($env:OS -like '*Windows*') }
 
   if (-not $BuildDir -or $BuildDir -eq '') {
-    if ($isWindowsHost) { $BuildDir = 'build-windows' }
-    else { $BuildDir = 'build-linux-conan' }
+    if ($isWindowsHost) { $BuildDir = 'build/windows/full/release' }
+    else { $BuildDir = 'build/linux/full/release' }
   }
 
   $config = 'Release'

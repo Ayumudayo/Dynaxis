@@ -98,8 +98,8 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install "conan>=2.0,<3"
-          conan --version
+          python -m pip install -r conan/requirements.txt
+          python scripts/conan_cli.py --version
 
       - name: Enable MSVC Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1
@@ -126,7 +126,7 @@ jobs:
         run: |
           $config = '${{ github.event.inputs.config }}'
           if ([string]::IsNullOrWhiteSpace($config)) { $config = 'Release' }
-          $elapsed = Measure-Command { ctest --test-dir build-windows --build-config $config --parallel 8 --output-on-failure }
+          $elapsed = Measure-Command { python scripts/build.py --profile full --config $config --step test }
           $ctestSec = [Math]::Round($elapsed.TotalSeconds, 2)
           "CONAN_STRATEGY_CTEST_ELAPSED_SEC=$ctestSec" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("- ctest_elapsed_sec: {0}" -f $ctestSec)

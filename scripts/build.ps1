@@ -75,179 +75,19 @@ $onWindows = $false
 try { if ($IsWindows) { $onWindows = $true } } catch { }
 if (-not $onWindows) { $onWindows = ($PSVersionTable.PSEdition -eq 'Desktop' -or $env:OS -like '*Windows*') }
 
-if ($ClientOnly -and -not $onWindows) {
-  Warn "ClientOnly mode is Windows-only. Falling back to the default preset selection."
-  $ClientOnly = $false
+if ($Clean) { Fail "Use cmake --build <directory> --target clean; dependency metadata is retained." }
+if ($ClientOnly) { $Config = 'Release'; $profileName = 'client' } else { $profileName = 'full' }
+if (-not $BuildDir) {
+  $platformName = if ($onWindows) { 'windows' } elseif ($IsMacOS) { 'macos' } else { 'linux' }
+  $BuildDir = "build/$platformName/$profileName/$($Config.ToLowerInvariant())"
 }
-
-if ($ClientOnly) {
-  if ($Config -ne 'Release') {
-    Warn "ClientOnly mode enforces Release build to reduce artifact size. Config '$Config' -> 'Release'"
-    $Config = 'Release'
-  }
-  if (-not $Target -or $Target -eq '') {
-    $Target = 'client_gui'
-    Info "ClientOnly mode: default target set to client_gui"
-  }
-}
-
-if (-not $PSBoundParameters.ContainsKey('UseConan')) {
-  $UseConan = $true
-}
-if (-not $UseConan) {
-  Warn "비-Conan 빌드 경로는 제거되었습니다. Conan 모드로 강제 전환합니다."
-  $UseConan = $true
-}
-
-if (-not $BuildDir -or $BuildDir -eq '') {
-  # CMakePresets.json의 기본 binaryDir과 일치시키는 것을 전제로 한다.
-  if ($onWindows) {
-    if ($ClientOnly) {
-      $BuildDir = 'build-windows-client'
-    }
-    elseif ($Config -eq 'Release') {
-      $BuildDir = 'build-windows-release'
-    }
-    else {
-      $BuildDir = 'build-windows'
-    }
-  } else {
-    $BuildDir = 'build-linux-conan'
-  }
-}
-Info "BuildDir=$BuildDir"
-
-if ($Clean) {
-  if (Test-Path $BuildDir) { Info "빌드 폴더 정리: $BuildDir"; Remove-Item -Recurse -Force $BuildDir }
-}
-
-# 제너레이터 설정 및 프리셋 선택
-if (-not $Generator -or $Generator -eq '') {
-  if ($onWindows) {
-    if ($ClientOnly) { $Preset = 'windows-client' }
-    elseif ($Config -eq 'Release') { $Preset = 'windows-release-tree' }
-    else { $Preset = 'windows' }
-  } else {
-    if ($Config -eq 'Debug') { $Preset = 'linux-conan' }
-    else { $Preset = 'linux-conan-release' }
-  }
-}
-
-$cmakeArgs = @()
-$useVsBuildLayout = $false
-
-$setupConanScript = Join-Path $PSScriptRoot 'setup_conan.ps1'
-if (-not (Test-Path $setupConanScript)) { Fail "setup_conan.ps1 스크립트를 찾을 수 없습니다: $setupConanScript" }
-
-$conanFeature = 'windows-dev'
-if ($ClientOnly) { $conanFeature = 'windows-client' }
-$conanLockfile = 'conan.lock'
-if ($conanFeature -eq 'windows-client') { $conanLockfile = 'conan-client.lock' }
-
-$conanOutputDir = & $setupConanScript -Config $Config -Feature $conanFeature -BuildDir $BuildDir -LockfilePath $conanLockfile
-if (-not $conanOutputDir) { Fail "Conan output 경로를 확인할 수 없습니다." }
-
-$toolchainCandidates = @(
-  (Join-Path $conanOutputDir 'conan_toolchain.cmake'),
-  (Join-Path $conanOutputDir 'build\generators\conan_toolchain.cmake'),
-  (Join-Path $conanOutputDir 'build\Debug\generators\conan_toolchain.cmake'),
-  (Join-Path $conanOutputDir 'build\Release\generators\conan_toolchain.cmake')
-)
-$toolchainFile = $null
-foreach ($candidate in $toolchainCandidates) {
-  if (Test-Path $candidate) {
-    $toolchainFile = $candidate
-    break
-  }
-}
-if (-not $toolchainFile) {
-  Fail "Conan toolchain 파일을 찾지 못했습니다. 확인한 경로: $($toolchainCandidates -join ', ')"
-}
-
-$useConanPreset = ($Preset -and $Preset -ne '')
-if ($useConanPreset) {
-  $useVsBuildLayout = $onWindows
-  $cmakeArgs = @('--preset', $Preset)
-  if ($onWindows) {
-    # Conan install은 단일 build_type 바이너리 그래프를 생성하므로,
-    # Multi-config(VS)에서도 해당 구성만 생성 대상으로 제한한다.
-    $cmakeArgs += "-DCMAKE_CONFIGURATION_TYPES=$Config"
-  }
-  Info "CMake 구성 중... (Conan preset: $Preset)"
-} else {
-  if ($onWindows) { $Generator = 'Visual Studio 17 2022' }
-  else { $Generator = 'Ninja' }
-  $useVsBuildLayout = ($onWindows -and $Generator -like 'Visual Studio*')
-
-  $cmakeArgs = @('-S', '.', '-B', $BuildDir, '-G', $Generator, "-DCMAKE_TOOLCHAIN_FILE=$toolchainFile")
-  if ($onWindows) {
-    if ($Generator -like 'Visual Studio*') {
-      $cmakeArgs += @('-A', 'x64')
-    } else {
-      $cmakeArgs += "-DCMAKE_BUILD_TYPE=$Config"
-    }
-  } else {
-    $cmakeArgs += "-DCMAKE_BUILD_TYPE=$Config"
-  }
-
-  $cmakeArgs += @(
-    '-DCMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO=Release',
-    '-DCMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL=Release'
-  )
-
-  if ($ClientOnly) {
-    $cmakeArgs += @(
-      '-DBUILD_SERVER_STACK=OFF',
-      '-DBUILD_GATEWAY_APP=OFF',
-      '-DBUILD_SERVER_TESTS=OFF',
-      '-DBUILD_WRITE_BEHIND_TOOLS=OFF',
-      '-DBUILD_MIGRATIONS_RUNNER=OFF'
-    )
-  }
-
-  Info "CMake 구성 중... (Conan + Generator: $Generator)"
-}
-
-& cmake @cmakeArgs
-if ($LASTEXITCODE -ne 0) { Fail "CMake 구성 실패" }
-
-Info "빌드 중... (Directory: $BuildDir)"
-
-$buildArgs = @()
-if ($Target -and $Target -ne '') {
-  if ($useVsBuildLayout) {
-    $resolvedBuildDir = $BuildDir
-    try { $resolvedBuildDir = (Resolve-Path $BuildDir).Path } catch {}
-    $proj = $null
-    try {
-      $proj = Get-ChildItem -Path $resolvedBuildDir -Recurse -File -Filter "$Target.vcxproj" -ErrorAction SilentlyContinue |
-              Sort-Object FullName |
-              Select-Object -First 1
-    } catch {}
-
-    if ($proj) {
-      $buildArgs = @('--build', $proj.DirectoryName, '--config', $Config, '--target', $Target)
-    } else {
-      $buildArgs = @('--build', $BuildDir, '--config', $Config, '--target', $Target)
-    }
-  } else {
-    $buildArgs = @('--build', $BuildDir, '--target', $Target)
-  }
-} else {
-  $buildArgs = @('--build', $BuildDir)
-  if ($useVsBuildLayout) {
-    $buildArgs += @('--config', $Config)
-  }
-}
-
-if ($MaxJobs -gt 0) {
-  $buildArgs += @('--parallel', $MaxJobs)
-} else {
-  $buildArgs += @('--parallel')
-}
-
-& cmake @buildArgs
-if ($LASTEXITCODE -ne 0) { Fail "빌드 실패" }
+$commonArgs = @((Join-Path $PSScriptRoot 'build.py'), '--profile', $profileName,
+  '--config', $Config, '--build-dir', $BuildDir, '--step', 'all')
+if ($Target) { $commonArgs += @('--target', $Target) }
+if ($MaxJobs -gt 0) { $commonArgs += @('--jobs', $MaxJobs) }
+if ($Generator) { $commonArgs += @('--generator', $Generator) }
+& python @commonArgs
+if ($LASTEXITCODE -ne 0) { Fail 'Conan/CMake build failed' }
 
 if ($InstallPrefix -and $InstallPrefix -ne '') {
   Info "설치 중... ($InstallPrefix)"
@@ -285,9 +125,10 @@ if ($ReleasePackage) {
 }
 
 if ($Run -ne 'none') {
+  $Generator = if ($onWindows) { 'Visual Studio 17 2022' } else { 'Ninja' }
   $exe = ''
   if ($Run -eq 'server') {
-    if ($onWindows -and $Generator -like 'Visual Studio*') { $exe = Join-Path $BuildDir (Join-Path $Config 'server_app.exe') }
+    if ($onWindows -and $Generator -like 'Visual Studio*') { $exe = Join-Path $BuildDir (Join-Path 'server' (Join-Path $Config 'server_app.exe')) }
     else { $exe = Join-Path $BuildDir 'server/server_app' }
     if (-not (Test-Path $exe)) { $exe = Join-Path $BuildDir 'server_app' }
     if (-not (Test-Path $exe)) { Fail "server_app 실행 파일을 찾을 수 없습니다." }
@@ -295,13 +136,12 @@ if ($Run -ne 'none') {
     & $exe $Port
   }
   elseif ($Run -eq 'client') {
-    if (-not $onWindows) {
-      Fail "클라이언트 실행은 Windows에서만 지원됩니다. client_gui를 사용하세요."
-    }
+
     $candidates = @(
       (Join-Path $BuildDir (Join-Path 'client_gui' (Join-Path $Config 'client_gui.exe'))),
       (Join-Path $BuildDir (Join-Path $Config 'client_gui.exe')),
-      (Join-Path $BuildDir 'client_gui.exe')
+      (Join-Path $BuildDir 'client_gui.exe'),
+      (Join-Path $BuildDir 'client_gui/client_gui')
     )
     foreach ($candidate in $candidates) {
       if (Test-Path $candidate) {
@@ -316,7 +156,7 @@ if ($Run -ne 'none') {
   elseif ($Run -eq 'both') {
     # 서버 실행(백그라운드), 잠시 대기 후 클라이언트 실행(localhost:5000 기본값)
     $serverExe = ''
-    if ($onWindows -and $Generator -like 'Visual Studio*') { $serverExe = Join-Path $BuildDir (Join-Path $Config 'server_app.exe') }
+    if ($onWindows -and $Generator -like 'Visual Studio*') { $serverExe = Join-Path $BuildDir (Join-Path 'server' (Join-Path $Config 'server_app.exe')) }
     else { $serverExe = Join-Path $BuildDir 'server/server_app' }
     if (-not (Test-Path $serverExe)) { $serverExe = Join-Path $BuildDir 'server_app' }
     if (-not (Test-Path $serverExe)) { Fail "server_app 실행 파일을 찾을 수 없습니다." }
@@ -328,7 +168,8 @@ if ($Run -ne 'none') {
     $clientCandidates = @(
       (Join-Path $BuildDir (Join-Path 'client_gui' (Join-Path $Config 'client_gui.exe'))),
       (Join-Path $BuildDir (Join-Path $Config 'client_gui.exe')),
-      (Join-Path $BuildDir 'client_gui.exe')
+      (Join-Path $BuildDir 'client_gui.exe'),
+      (Join-Path $BuildDir 'client_gui/client_gui')
     )
     foreach ($candidate in $clientCandidates) {
       if (Test-Path $candidate) {
@@ -340,7 +181,7 @@ if ($Run -ne 'none') {
 
     Info "서버 시작: $serverExe 5000 (백그라운드)"
     if ($onWindows) {
-      Start-Process -FilePath $serverExe -ArgumentList '5000' -WindowStyle Minimized | Out-Null
+      Start-Process -FilePath $serverExe -ArgumentList '5000' -WindowStyle Hidden | Out-Null
     } else {
       Start-Process -FilePath $serverExe -ArgumentList '5000' | Out-Null
     }

@@ -1,6 +1,6 @@
 # C++ development client
 
-서버의 로그인·메시지·재접속을 확인하는 C++/Dear ImGui 개발 클라이언트다. 제품용 UI 프레임워크는 아직 결정하지 않았다. `NetClient`와 `ClientApp`은 ImGui/GLFW를 직접 참조하지 않아 UI 교체 시 통신과 상태 처리 코드를 재사용할 수 있다. 현재 개발 환경은 Windows다.
+서버의 로그인·메시지·재접속을 확인하는 C++/Dear ImGui 개발 클라이언트다. GUI 스택은 ImGui/GLFW/OpenGL로 통일한다. `NetClient`와 `ClientApp`은 ImGui/GLFW를 직접 참조하지 않아 UI 교체 시 통신과 상태 처리 코드를 재사용할 수 있다. Windows와 Linux는 같은 소스를 사용한다. 빌드 절차와 플랫폼 준비 사항은 [공통 빌드](../docs/build.md)를 따른다.
 
 ## 🛠️ 빌드 방법 (Build Guide)
 
@@ -9,10 +9,10 @@
 
 ```powershell
 # 프로젝트 루트에서 실행 (권장: client-only release)
-pwsh scripts/build.ps1 -ClientOnly -Target client_gui
+python scripts/build.py --profile client --config Release --step all
 
 # (직접 CMake 사용 시)
-cmake --build build-windows-client --config Release --target client_gui
+python scripts/build.py --profile client --config Release --step build --target client_gui
 ```
 
 ## 🚀 사용법 (Usage)

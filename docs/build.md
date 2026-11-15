@@ -1,179 +1,53 @@
-# 빌드 가이드
+# 공통 빌드
 
-Dynaxis의 표준 런타임/검증 환경은 Linux(Docker) 풀스택(`docker/stack`)이다.
-Windows는 개발/디버깅(빌드/클라이언트) 용도로 유지한다.
+Windows/MSVC와 Linux/GCC는 같은 C++20 소스, Conan 2 recipe/lockfile과 CMake를 사용한다. ImGui/GLFW/OpenGL 클라이언트도 같은 소스로 빌드한다. OS compiler·graphics SDK·driver·시스템 폰트는 플랫폼 준비 사항이다.
 
-## 전제
-- CMake 3.21+ (`CMakePresets.json` 사용)
-- C++20 컴파일러
-- Conan 2 (`scripts/build.ps1`는 Conan-generated toolchain만 지원)
-- Python 3 (전체 구성의 `opcodes`/`wire` generated public header 생성에 필수; 최소 runtime에는 필수가 아님)
+## 준비
 
-## 최소 코어 구성
+Git submodule `external/imgui`를 초기화한다. Python 3.10 이상과 CMake 3.23 이상이 필요하다.
 
-MSA 전체 구성은 기존 명령을 유지한다. 최소 구성은 [계층 경계](architecture/core-and-msa.md)에 따라 앱/GUI와 선택 기능 의존성을 제외하고 독립 검증한다.
-
-```bash
-cmake --preset linux-core-engine
-cmake --build --preset linux-core-engine-debug --parallel 4
-ctest --preset linux-core-engine-test --no-tests=error
+```sh
+git submodule update --init --recursive
+python -m pip install -r conan/requirements.txt
+python scripts/build.py --profile full --config Debug --step deps
+python scripts/build.py --profile full --config Debug --step configure
+python scripts/build.py --profile full --config Debug --step build
+python scripts/build.py --profile full --config Debug --step test
 ```
 
-Windows에서는 먼저 Conan 개발 의존성을 준비한 뒤 같은 runtime 프로파일을 사용한다. 이 준비 단계의 기존 Conan `windows-dev` recipe는 전체 개발 의존성을 설치하지만, 최소 CMake target은 그 라이브러리들을 링크하지 않는다.
+`--step all`은 deps → configure → build를 묶는다. recipe/lock/profile/Conan 버전/캐시 위치와 build configuration이 같으면 의존성 설치를 생략한다. 의존성을 의도적으로 다시 설치할 때만 `--step deps --refresh`를 쓴다. `--step build`는 설치나 네트워크 접근을 하지 않는다. Conan 실행 파일이 PATH에 없어도 동일 Python의 Conan CLI를 호출한다.
+
+## 구성
+
+| profile | 내용 |
+|---|---|
+| full | 서버·게이트웨이·워커·도구·ImGui·검사 |
+| server | 서버 스택과 검사, GUI 제외 |
+| client | ImGui 클라이언트와 공통 코어 |
+| core | 최소 TCP 코어와 독립 검사 |
+
+산출물은 `build/<windows|linux|macos>/<profile>/<debug|release>`에 있다. configuration은 디렉터리로 격리한다. Conan 생성 파일은 각 폴더의 `conan/`, 실 패키지는 Conan 공용 캐시에 둔다. `CONAN_HOME`으로 CI 캐시 경로를 지정할 수 있다. `--build-dir`로 저장소 내부 경로를 지정할 수 있다.
+
+기본 Windows compiler profile은 MSVC 194/x64, Linux는 GCC 13/x64다. Linux 준비 환경은 Ubuntu 24.04이며 필요한 graphics SDK는 `Dockerfile.base`를 기준으로 한다. macOS profile은 AppleClang 17/native arch를 제공하지만 현재 검증 플랫폼은 Windows와 Linux다.
+
+`CMakePresets.json`은 동일한 경로와 옵션을 제공한다. 해당 profile의 `--step deps` 이후 `cmake --preset windows-full-debug`, `cmake --build --preset windows-full-debug`처럼 사용할 수 있다. 기존 PowerShell `build.ps1`과 shell `build.sh`는 공통 Python 경로를 사용한다. shell 인자는 Python과 동일하다.
+
+## 의존성 갱신
+
+버전과 recipe revision의 단일 기준은 `conan.lock`이다. direct dependency version은 `conanfile.py`에 명시한다. 새 OS/profile에 필요한 transitive dependency가 있으면 해당 profile로 `conan lock create`를 실행하고 Conan의 `lock merge`로 공통 lock에 합친다. 일반 빌드에서는 partial lock이나 자동 lock 갱신을 허용하지 않는다.
+
+`build/.../conan/graph.json`은 실제 선택된 dependency version/revision과 설정을 기록한다. Windows와 Linux는 플랫폼 시스템 패키지와 binary ID가 다를 수 있지만 공통 C++ library version/revision을 공유한다.
+
+## Docker
 
 ```powershell
-pwsh scripts/setup_conan.ps1 -Config Debug -BuildDir build-windows-core-engine
-cmake --preset windows-core-engine -DCMAKE_CONFIGURATION_TYPES=Debug
-cmake --build --preset windows-core-engine-debug --parallel 4
-ctest --preset windows-core-engine-test --no-tests=error
-```
-
-GTest 없이 TCP/설치 소비자만 검증하려면 configure 시 `-DBUILD_GTEST_TESTS=OFF`를 추가한다. 최소 프로파일의 `BUILD_CORE_EXTENSIONS=OFF`는 전체 Stable API를 제공한다는 뜻이 아니며, 기본 MSA 구성과 별도 build/install 디렉터리를 사용한다.
-
-빌드 ownership은 top-level에서 모두 직접 선언하지 않는다.
-- runtime/library 진입: root `CMakeLists.txt`
-- tool 진입: `tools/CMakeLists.txt`
-- test 진입: `tests/CMakeLists.txt` + domain manifests
-
-## 로컬 사전 검증
-
-큰 변경(빌드/의존성/워크플로우/다중 모듈 변경)은 push 전에 로컬 검증을 통과하는 것을 권장한다.
-
-- 핵심 원칙: 로컬 검증 실패 상태에서는 push하지 않는다.
-- 권장 최소 검증: `pwsh scripts/build.ps1 -Config Release`, `ctest --preset windows-test --output-on-failure --no-tests=error`, `ctest --preset windows-test --parallel 8 --output-on-failure`
-
-## 윈도우(Windows) 개발 빌드
-
-### 1) 빌드
-```powershell
-# 권장: 경량 클라이언트 전용 릴리즈 빌드
-pwsh scripts/build.ps1 -ClientOnly -Target client_gui
-
-# 서버/테스트까지 포함한 전체 Windows 개발 빌드(필요할 때만)
-pwsh scripts/build.ps1 -Config Debug
-
-# 단일 타깃 빌드(서버 예시)
-pwsh scripts/build.ps1 -Config Debug -Target server_app
-```
-
-`scripts/build.ps1`는 Conan 출력/toolchain을 자동으로 사용한다. `conan` 실행 파일이 보이지 않으면 먼저 Conan 2 설치 상태를 확인한다.
-
-도구 실행 파일은 `tools/CMakeLists.txt`가 소유한다.
-- write-behind: `wb_worker`, `wb_emit`, `wb_check`, `wb_dlq_replayer`
-- schema: `migrations_runner`
-
-### 2) 테스트
-```powershell
-pwsh scripts/build.ps1 -Config Release
-ctest --preset windows-test --output-on-failure --no-tests=error
-ctest --preset windows-test --parallel 8 --output-on-failure
-```
-
-### 3) 산출물 위치(예시)
-- `build-windows-client/client_gui/Release/client_gui.exe` (권장 client-only 빌드)
-- `build-windows/server/Debug/server_app.exe` (전체 Windows 빌드 시)
-- `build-windows/gateway/Debug/gateway_app.exe` (전체 Windows 빌드 시)
-- `build-windows/Debug/wb_worker.exe` (전체 Windows 빌드 시)
-
-## 팩토리 패키지 설치 스모크
-
-`server_storage_pg_factory`와 `infra_redis_factory`는 install/export/package-consumer smoke를 지원한다.
-Redis 쪽의 legacy package name `server_storage_redis_factory`는 1개 release cycle 동안 compatibility alias/config로 유지한다.
-app-local helper target은 여전히 패키지 대상이 아니다.
-
-```powershell
-cmake --install build-windows --config Debug --prefix build-windows/install-smoke
-```
-
-Postgres factory consumer 예시:
-
-```powershell
-cmake -S tests/package/factory_pg_consumer -B build-windows/factory-pg-consumer/build --fresh `
-  -DCMAKE_PREFIX_PATH="${PWD}/build-windows/install-smoke" `
-  -DCMAKE_TOOLCHAIN_FILE="${PWD}/build-windows/conan/build/generators/conan_toolchain.cmake"
-cmake --build build-windows/factory-pg-consumer/build --config Debug
-```
-
-Redis factory consumer 예시(canonical package 우선):
-
-```powershell
-cmake -S tests/package/factory_redis_consumer -B build-windows/factory-redis-consumer/build --fresh `
-  -DCMAKE_PREFIX_PATH="${PWD}/build-windows/install-smoke" `
-  -DCMAKE_TOOLCHAIN_FILE="${PWD}/build-windows/conan/build/generators/conan_toolchain.cmake"
-cmake --build build-windows/factory-redis-consumer/build --config Debug
-```
-
-자동화된 검증에서는 `FactoryPgInstalledPackageConsumer`, `FactoryRedisInstalledPackageConsumer` contract test가 같은 흐름을 실행한다.
-
-## 팩토리 패키지 배포 번들
-
-first milestone publish automation은 `server_storage_pg_factory`와 `infra_redis_factory`를 별도 package manager publish가 아니라
-하나의 Release install-prefix bundle로 배포한다.
-
-로컬 생성:
-
-```powershell
-pwsh scripts/publish_factory_packages.ps1 -BuildDir build-windows -OutputRoot artifacts/factory-packages -Zip -CleanOutput
-```
-
-출력:
-- bundle 디렉터리: `artifacts/factory-packages/dynaxis-factory-packages-windows-x64-release-<version>/`
-- staged prefix: `.../prefix/`
-- manifest: `.../manifest.json`
-- zip: `...zip`
-
-이 bundle에는 다음 package surface가 포함된다.
-- `server_core`
-- `server_storage_pg_factory`
-- `infra_redis_factory`
-
-호환성 alias/config package도 함께 staged된다.
-- `server_storage_redis_factory`
-
-다음 항목은 의도적으로 포함되지 않는다.
-- app-local helper target
-- compatibility umbrella target의 우선 surface
-- `server_state_redis_factory`
-
-CI 수동 artifact 생성:
-- GitHub Actions `Factory Package Publish` workflow (`workflow_dispatch`)
-- 업로드 artifact root: `artifacts/factory-packages/**`
-
-## 리눅스(Linux) (표준 런타임 = Docker 풀스택)
-
-`scripts/deploy_docker.ps1`를 통해 base 이미지/compose profile/포트 매핑을 일관되게 유지한다.
-
-```powershell
-# 스택 기동
 pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build
-
-# 스택 기동 + 관측성(Observability: Prometheus/Grafana)
-pwsh scripts/run_full_stack_observability.ps1
-
-# 스택 종료
-pwsh scripts/deploy_docker.ps1 -Action down
 ```
 
-## 메모리/정의되지 않은 동작 검사(ASan/UBSan)
+base image는 compiler·Conan·OS SDK만 설치한다. 앱과 C++ dependency는 공통 recipe로 빌드한다. BuildKit의 `dynaxis-conan2` 캐시에 다운로드/빌드를 보존한다. runtime image는 Conan에서 생성한 runtime library만 가져오며 Ubuntu C++ library 버전으로 바꾸지 않는다. 기존 구형 base를 재사용하려고 `-NoBase`를 지정하지 말고 최초 한 번 새 base를 빌드한다.
 
-- CMake 옵션: `ENABLE_SANITIZERS=ON`
-- 프리셋: `linux-asan`
+Linux 전체 서버/클라이언트/installed consumer 검사는 `docker build --target desktop-build -t dynaxis-desktop-verify .`로 실행한다. 이 stage는 Xvfb/software OpenGL로 클라이언트 10-frame 렌더링 smoke도 실행한다.
 
-로컬 Linux 환경에서:
-```bash
-cmake --preset linux-asan
-cmake --build --preset linux-asan --target server_app --parallel
-```
+## 폰트
 
-CI에서는 `dynaxis-base` 컨테이너 내부에서 `linux-asan` 빌드를 수행한다. (`.github/workflows/ci-hardening.yml` 참고)
-
-## 코드 생성(opcodes)
-
-- 소스(JSON)
-  - system(core): `core/protocol/system_opcodes.json`
-  - game(server): `server/protocol/game_opcodes.json`
-- 생성기
-  - 헤더 생성: `tools/gen_opcodes.py`
-  - 문서/검증: `tools/gen_opcode_docs.py` → `docs/protocol/opcodes.md`
-
-규칙: 생성된 헤더는 수동으로 편집하지 말고(JSON + generator 수정) 다시 생성한다.
+`DYNAXIS_FONT_PATH`로 CJK 지원 TTF/TTC를 지정할 수 있다. 기본 후보는 Windows 맑은 고딕, Linux Noto Sans CJK, macOS Apple SD Gothic Neo다. 폰트가 없으면 ImGui 기본 폰트를 사용하므로 한글 표시에는 CJK 폰트가 필요하다.

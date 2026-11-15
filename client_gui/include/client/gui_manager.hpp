@@ -52,8 +52,11 @@ public:
     // 초기화 (윈도우 생성 등)
     bool init(int width, int height, const std::string& title);
     
-    // 메인 루프 실행 (블로킹)
-    void run();
+    /**
+     * @brief 렌더링 루프를 실행합니다.
+     * @param frame_limit 0이면 창이 닫힐 때까지 실행하고, 양수이면 해당 프레임 수 뒤 반환합니다.
+     */
+    void run(unsigned int frame_limit = 0);
 
     // 정리
     void shutdown();

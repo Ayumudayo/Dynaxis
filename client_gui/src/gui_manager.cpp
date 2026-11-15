@@ -8,7 +8,12 @@
 #include "backends/imgui_impl_opengl3.h"
 #include <GLFW/glfw3.h>
 #include <cstdio>
-#include <shlobj.h> // SHGetFolderPath
+#include <vector>
+#include <cstdlib>
+#include <filesystem>
+#if defined(_WIN32)
+#include <shlobj.h>
+#endif
 
 /**
  * @brief ImGui/GLFW 기반 UI 렌더링 및 입력 처리 구현입니다.
@@ -32,9 +37,17 @@ bool GuiManager::init(int width, int height, const std::string& title) {
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) return false;
 
+#if defined(__APPLE__)
+    const char* glsl_version = "#version 150";
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+#else
     const char* glsl_version = "#version 130";
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+#endif
 
     window_ = glfwCreateWindow(width, height, title.c_str(), NULL, NULL);
     if (window_ == NULL) return false;
@@ -53,25 +66,30 @@ bool GuiManager::init(int width, int height, const std::string& title) {
     ImGui_ImplGlfw_InitForOpenGL(window_, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
 
-    // 한글 폰트 로드
-    ImFontConfig config;
-    config.MergeMode = false;
-    
-    // 시스템 폰트 경로 동적 탐색 (SHGetFolderPath)
+    // Use the same rendering code with a native or explicitly selected font.
+    std::vector<std::filesystem::path> fonts;
+    if (const char* custom_font = std::getenv("DYNAXIS_FONT_PATH")) {
+        fonts.emplace_back(custom_font);
+    }
+#if defined(_WIN32)
     char font_dir[MAX_PATH];
-    std::string font_path;
-    if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_FONTS, NULL, 0, font_dir))) {
-        font_path = std::string(font_dir) + "\\malgun.ttf";
+    if (SUCCEEDED(SHGetFolderPathA(nullptr, CSIDL_FONTS, nullptr, 0, font_dir))) {
+        fonts.emplace_back(std::filesystem::path(font_dir) / "malgun.ttf");
     }
-
-    FILE* f = fopen(font_path.c_str(), "rb");
-    if (f) {
-        fclose(f);
-        io.Fonts->AddFontFromFileTTF(font_path.c_str(), 18.0f, NULL, io.Fonts->GetGlyphRangesKorean());
-    } else {
-        // 폰트가 없으면 기본 폰트 사용 (한글 깨질 수 있음)
-        io.Fonts->AddFontDefault();
+#elif defined(__APPLE__)
+    fonts.emplace_back("/System/Library/Fonts/AppleSDGothicNeo.ttc");
+#else
+    fonts.emplace_back("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc");
+#endif
+    bool font_loaded = false;
+    for (const auto& font : fonts) {
+        if (std::filesystem::is_regular_file(font) &&
+            io.Fonts->AddFontFromFileTTF(font.string().c_str(), 18.0f)) {
+            font_loaded = true;
+            break;
+        }
     }
+    if (!font_loaded) { io.Fonts->AddFontDefault(); }
 
     return true;
 }
@@ -87,12 +105,13 @@ void GuiManager::shutdown() {
     }
 }
 
-void GuiManager::run() {
+void GuiManager::run(unsigned int frame_limit) {
     if (!window_) return;
 
     // 클리어 색상
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
     
+    unsigned int rendered_frames = 0;
     while (!glfwWindowShouldClose(window_)) {
         glfwPollEvents();
 
@@ -134,6 +153,7 @@ void GuiManager::run() {
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(window_);
+        if (frame_limit && ++rendered_frames >= frame_limit) { break; }
     }
 }
 

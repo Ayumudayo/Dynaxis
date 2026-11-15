@@ -36,8 +36,8 @@ This document is the current migration entrypoint; older planning/checklist note
 Windows example:
 
 ```powershell
-build-windows/Debug/migrations_runner.exe --db-uri "postgresql://user:pass@127.0.0.1:5432/appdb?sslmode=disable" --dry-run
-build-windows/Debug/migrations_runner.exe --db-uri "postgresql://user:pass@127.0.0.1:5432/appdb?sslmode=disable"
+build/windows/full/debug/tools/Debug/migrations_runner.exe --db-uri "postgresql://user:pass@127.0.0.1:5432/appdb?sslmode=disable" --dry-run
+build/windows/full/debug/tools/Debug/migrations_runner.exe --db-uri "postgresql://user:pass@127.0.0.1:5432/appdb?sslmode=disable"
 ```
 
 Direct `psql` examples and quick local setup live in `docs/getting-started.md`.

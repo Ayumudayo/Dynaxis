@@ -1,6 +1,6 @@
 # Dynaxis
 
-C++20 서버 코어와 MSA 채팅 스택입니다. HAProxy → gateway → chat server로 연결하고 Redis로 노드 간 전달과 라우팅을, Postgres와 write-behind worker로 영속화를 처리합니다.
+C++20 서버 코어와 MSA 채팅 스택입니다. Windows와 Linux는 Conan 2·CMake와 같은 소스를 사용하며, 개발 GUI는 ImGui/GLFW/OpenGL로 빌드합니다. HAProxy → gateway → chat server로 연결하고 Redis로 노드 간 전달과 라우팅을, Postgres와 write-behind worker로 영속화를 처리합니다.
 
 ```powershell
 pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build

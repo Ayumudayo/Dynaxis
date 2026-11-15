@@ -9,7 +9,7 @@ option(ENABLE_IPO "Enable interprocedural optimization (IPO/LTO)" OFF)
 option(BUILD_SERVER_STACK "Build server libraries and server_app" ON)
 option(BUILD_GATEWAY_APP "Build gateway_app" ON)
 option(BUILD_CORE_EXTENSIONS "Build MSA adapters, protocol and storage integration" ON)
-option(BUILD_CLIENT_GUI "Build the Windows developer client" ${WIN32})
+option(BUILD_CLIENT_GUI "Build the ImGui desktop client" ON)
 
 
 option(BUILD_SERVER_TESTS "Build server tests" ON)
@@ -170,6 +170,6 @@ if (BUILD_SERVER_TESTS)
   add_subdirectory(tests)
 endif()
 
-if (BUILD_CLIENT_GUI AND WIN32)
+if (BUILD_CLIENT_GUI)
     add_subdirectory(client_gui)
 endif()

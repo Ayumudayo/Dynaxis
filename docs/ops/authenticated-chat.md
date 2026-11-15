@@ -46,7 +46,7 @@ Redis 구독은 재연결 자체가 실패한 경우에도 계속 재시도한�
 
 검증 진입점:
 
-- `ctest --test-dir build-windows -C Debug -R "SessionTokenTest|ThreadManagerTests|ChatServiceTest" --output-on-failure --no-tests=error`
+- `ctest --test-dir build/windows/full/debug -C Debug -R "SessionTokenTest|ThreadManagerTests|ChatServiceTest" --output-on-failure --no-tests=error`
 - `python tests/python/verify_signed_chat.py --manage-stack`: 현재 이미지를 signed 모드로 실행해 신원·거절·노드 간 전달·재접속 binding을 검증하고 원래 환경으로 복구한다.
 - `python tests/python/verify_core_dependency_recovery.py`: 실행 중인 기본 개발 스택에서 DB/Redis를 실제 중지해 readiness와 앱 재시작 없는 복구를 검사한다. 운영 스택에 실행하지 않는다.
 - `python tests/python/verify_continuity_recovery_matrix.py --no-build`: gateway/server 재시작 및 locator fallback/다른 서버 failover 검증.

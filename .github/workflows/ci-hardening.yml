@@ -51,4 +51,4 @@ jobs:
 
       - name: ASan Core and Chat Regression Tests
         run: |
-          docker run --rm -v "${GITHUB_WORKSPACE}:/app" -w /app dynaxis-base:latest bash -lc "set -e; apt-get update && apt-get install -y ninja-build libgtest-dev; cmake --preset linux-asan -DBUILD_CONTRACT_TESTS=OFF; cmake --build --preset linux-asan --parallel 4; ctest --test-dir build-linux --output-on-failure --no-tests=error"
+          docker run --rm -v "${GITHUB_WORKSPACE}:/app" -v dynaxis-sanitizer-conan:/root/.conan2 -w /app dynaxis-base:latest bash -lc "set -e; python scripts/build.py --profile full --config Debug --build-dir build/linux/full/asan --sanitize --step all; python scripts/build.py --profile full --config Debug --build-dir build/linux/full/asan --sanitize --step test"

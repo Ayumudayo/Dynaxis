@@ -16,7 +16,7 @@ Dynaxis는 C++20 서버 코어와 그 위에 조립한 MSA 채팅 스택이다.
 
 기초 범위에 없는 기능은 활성 소스와 빌드에서 제거했다. 변경 계약은 [4.0 migration](../core-api/foundation-v4-migration.md)에 있다. 새 기능은 사용 사례, 책임/데이터 계약, 실패 경계, 검증 기준을 먼저 정한 뒤 추가한다.
 
-클라이언트는 C++ 개발 도구다. NetClient의 TCP/프로토콜 구현은 UI 의존성이 없으며 현재 ImGui 화면은 교체할 수 있다. 제품 UI 스택은 아직 확정하지 않았다.
+클라이언트는 C++ 개발 도구다. NetClient의 TCP/프로토콜 구현은 UI 의존성이 없으며 현재 ImGui 화면은 교체할 수 있다. GUI 스택은 ImGui/GLFW/OpenGL로 통일하고 Windows와 Linux에서 같은 소스를 사용한다.
 
 ```mermaid
 flowchart LR

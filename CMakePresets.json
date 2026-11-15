@@ -2,423 +2,915 @@
   "version": 5,
   "cmakeMinimumRequired": {
     "major": 3,
-    "minor": 21,
+    "minor": 23,
     "patch": 0
   },
   "configurePresets": [
     {
-      "name": "windows-base",
+      "name": "native-base",
       "hidden": true,
-      "displayName": "Windows Base",
-      "description": "Base configuration for Windows using VS2022 and Conan2 toolchain",
-      "generator": "Visual Studio 17 2022",
-      "binaryDir": "${sourceDir}/build-windows",
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Windows"
-      },
-      "toolchainFile": "${sourceDir}/build-windows/conan/build/generators/conan_toolchain.cmake",
       "cacheVariables": {
         "CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO": "Release",
         "CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL": "Release"
       }
     },
     {
-      "name": "windows-ninja-base",
+      "name": "profile-full",
       "hidden": true,
-      "displayName": "Windows Ninja Base",
-      "description": "Base configuration for Windows using Ninja and Conan2 toolchain",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build-windows-ninja",
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Windows"
-      },
-      "toolchainFile": "${sourceDir}/build-windows-ninja/conan/build/Debug/generators/conan_toolchain.cmake",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO": "Release",
-        "CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL": "Release"
+        "BUILD_CORE_EXTENSIONS": "ON",
+        "BUILD_SERVER_STACK": "ON",
+        "BUILD_GATEWAY_APP": "ON",
+        "BUILD_WRITE_BEHIND_TOOLS": "ON",
+        "BUILD_MIGRATIONS_RUNNER": "ON",
+        "BUILD_CLIENT_GUI": "ON",
+        "BUILD_SERVER_TESTS": "ON"
       }
+    },
+    {
+      "name": "profile-server",
+      "hidden": true,
+      "cacheVariables": {
+        "BUILD_CORE_EXTENSIONS": "ON",
+        "BUILD_SERVER_STACK": "ON",
+        "BUILD_GATEWAY_APP": "ON",
+        "BUILD_WRITE_BEHIND_TOOLS": "ON",
+        "BUILD_MIGRATIONS_RUNNER": "ON",
+        "BUILD_CLIENT_GUI": "OFF",
+        "BUILD_SERVER_TESTS": "ON"
+      }
+    },
+    {
+      "name": "profile-client",
+      "hidden": true,
+      "cacheVariables": {
+        "BUILD_CORE_EXTENSIONS": "ON",
+        "BUILD_SERVER_STACK": "OFF",
+        "BUILD_GATEWAY_APP": "OFF",
+        "BUILD_WRITE_BEHIND_TOOLS": "OFF",
+        "BUILD_MIGRATIONS_RUNNER": "OFF",
+        "BUILD_CLIENT_GUI": "ON",
+        "BUILD_SERVER_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "profile-core",
+      "hidden": true,
+      "cacheVariables": {
+        "BUILD_CORE_EXTENSIONS": "OFF",
+        "BUILD_SERVER_STACK": "OFF",
+        "BUILD_GATEWAY_APP": "OFF",
+        "BUILD_WRITE_BEHIND_TOOLS": "OFF",
+        "BUILD_MIGRATIONS_RUNNER": "OFF",
+        "BUILD_CLIENT_GUI": "OFF",
+        "BUILD_SERVER_TESTS": "ON"
+      }
+    },
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "inherits": "native-base",
+      "generator": "Visual Studio 17 2022"
     },
     {
       "name": "linux-base",
       "hidden": true,
-      "displayName": "Linux Base",
-      "description": "Base configuration for Linux using Ninja (system deps)",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build-linux",
-      "condition": {
-        "type": "notEquals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Windows"
-      },
+      "inherits": "native-base",
+      "generator": "Ninja"
+    },
+    {
+      "name": "macos-base",
+      "hidden": true,
+      "inherits": "native-base",
+      "generator": "Ninja"
+    },
+    {
+      "name": "windows-full-debug",
+      "binaryDir": "${sourceDir}/build/windows/full/debug",
+      "toolchainFile": "${sourceDir}/build/windows/full/debug/conan/build/generators/conan_toolchain.cmake",
+      "inherits": [
+        "windows-base",
+        "profile-full"
+      ],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+        "CMAKE_CONFIGURATION_TYPES": "Debug"
+      }
+    },
+    {
+      "name": "windows-full-release",
+      "binaryDir": "${sourceDir}/build/windows/full/release",
+      "toolchainFile": "${sourceDir}/build/windows/full/release/conan/build/generators/conan_toolchain.cmake",
+      "inherits": [
+        "windows-base",
+        "profile-full"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CONFIGURATION_TYPES": "Release"
+      }
+    },
+    {
+      "name": "windows-server-debug",
+      "binaryDir": "${sourceDir}/build/windows/server/debug",
+      "toolchainFile": "${sourceDir}/build/windows/server/debug/conan/build/generators/conan_toolchain.cmake",
+      "inherits": [
+        "windows-base",
+        "profile-server"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CONFIGURATION_TYPES": "Debug"
+      }
+    },
+    {
+      "name": "windows-server-release",
+      "binaryDir": "${sourceDir}/build/windows/server/release",
+      "toolchainFile": "${sourceDir}/build/windows/server/release/conan/build/generators/conan_toolchain.cmake",
+      "inherits": [
+        "windows-base",
+        "profile-server"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CONFIGURATION_TYPES": "Release"
+      }
+    },
+    {
+      "name": "windows-client-debug",
+      "binaryDir": "${sourceDir}/build/windows/client/debug",
+      "toolchainFile": "${sourceDir}/build/windows/client/debug/conan/build/generators/conan_toolchain.cmake",
+      "inherits": [
+        "windows-base",
+        "profile-client"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CONFIGURATION_TYPES": "Debug"
+      }
+    },
+    {
+      "name": "windows-client-release",
+      "binaryDir": "${sourceDir}/build/windows/client/release",
+      "toolchainFile": "${sourceDir}/build/windows/client/release/conan/build/generators/conan_toolchain.cmake",
+      "inherits": [
+        "windows-base",
+        "profile-client"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CONFIGURATION_TYPES": "Release"
+      }
+    },
+    {
+      "name": "windows-core-debug",
+      "binaryDir": "${sourceDir}/build/windows/core/debug",
+      "toolchainFile": "${sourceDir}/build/windows/core/debug/conan/build/generators/conan_toolchain.cmake",
+      "inherits": [
+        "windows-base",
+        "profile-core"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CONFIGURATION_TYPES": "Debug"
+      }
+    },
+    {
+      "name": "windows-core-release",
+      "binaryDir": "${sourceDir}/build/windows/core/release",
+      "toolchainFile": "${sourceDir}/build/windows/core/release/conan/build/generators/conan_toolchain.cmake",
+      "inherits": [
+        "windows-base",
+        "profile-core"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CONFIGURATION_TYPES": "Release"
+      }
+    },
+    {
+      "name": "linux-full-debug",
+      "binaryDir": "${sourceDir}/build/linux/full/debug",
+      "toolchainFile": "${sourceDir}/build/linux/full/debug/conan/build/Debug/generators/conan_toolchain.cmake",
+      "inherits": [
+        "linux-base",
+        "profile-full"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CONFIGURATION_TYPES": "Debug"
+      }
+    },
+    {
+      "name": "linux-full-release",
+      "binaryDir": "${sourceDir}/build/linux/full/release",
+      "toolchainFile": "${sourceDir}/build/linux/full/release/conan/build/Release/generators/conan_toolchain.cmake",
+      "inherits": [
+        "linux-base",
+        "profile-full"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CONFIGURATION_TYPES": "Release"
+      }
+    },
+    {
+      "name": "linux-server-debug",
+      "binaryDir": "${sourceDir}/build/linux/server/debug",
+      "toolchainFile": "${sourceDir}/build/linux/server/debug/conan/build/Debug/generators/conan_toolchain.cmake",
+      "inherits": [
+        "linux-base",
+        "profile-server"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CONFIGURATION_TYPES": "Debug"
+      }
+    },
+    {
+      "name": "linux-server-release",
+      "binaryDir": "${sourceDir}/build/linux/server/release",
+      "toolchainFile": "${sourceDir}/build/linux/server/release/conan/build/Release/generators/conan_toolchain.cmake",
+      "inherits": [
+        "linux-base",
+        "profile-server"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CONFIGURATION_TYPES": "Release"
+      }
+    },
+    {
+      "name": "linux-client-debug",
+      "binaryDir": "${sourceDir}/build/linux/client/debug",
+      "toolchainFile": "${sourceDir}/build/linux/client/debug/conan/build/Debug/generators/conan_toolchain.cmake",
+      "inherits": [
+        "linux-base",
+        "profile-client"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CONFIGURATION_TYPES": "Debug"
+      }
+    },
+    {
+      "name": "linux-client-release",
+      "binaryDir": "${sourceDir}/build/linux/client/release",
+      "toolchainFile": "${sourceDir}/build/linux/client/release/conan/build/Release/generators/conan_toolchain.cmake",
+      "inherits": [
+        "linux-base",
+        "profile-client"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CONFIGURATION_TYPES": "Release"
+      }
+    },
+    {
+      "name": "linux-core-debug",
+      "binaryDir": "${sourceDir}/build/linux/core/debug",
+      "toolchainFile": "${sourceDir}/build/linux/core/debug/conan/build/Debug/generators/conan_toolchain.cmake",
+      "inherits": [
+        "linux-base",
+        "profile-core"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CONFIGURATION_TYPES": "Debug"
+      }
+    },
+    {
+      "name": "linux-core-release",
+      "binaryDir": "${sourceDir}/build/linux/core/release",
+      "toolchainFile": "${sourceDir}/build/linux/core/release/conan/build/Release/generators/conan_toolchain.cmake",
+      "inherits": [
+        "linux-base",
+        "profile-core"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CONFIGURATION_TYPES": "Release"
+      }
+    },
+    {
+      "name": "macos-full-debug",
+      "binaryDir": "${sourceDir}/build/macos/full/debug",
+      "toolchainFile": "${sourceDir}/build/macos/full/debug/conan/build/Debug/generators/conan_toolchain.cmake",
+      "inherits": [
+        "macos-base",
+        "profile-full"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CONFIGURATION_TYPES": "Debug"
+      }
+    },
+    {
+      "name": "macos-full-release",
+      "binaryDir": "${sourceDir}/build/macos/full/release",
+      "toolchainFile": "${sourceDir}/build/macos/full/release/conan/build/Release/generators/conan_toolchain.cmake",
+      "inherits": [
+        "macos-base",
+        "profile-full"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CONFIGURATION_TYPES": "Release"
+      }
+    },
+    {
+      "name": "macos-server-debug",
+      "binaryDir": "${sourceDir}/build/macos/server/debug",
+      "toolchainFile": "${sourceDir}/build/macos/server/debug/conan/build/Debug/generators/conan_toolchain.cmake",
+      "inherits": [
+        "macos-base",
+        "profile-server"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CONFIGURATION_TYPES": "Debug"
+      }
+    },
+    {
+      "name": "macos-server-release",
+      "binaryDir": "${sourceDir}/build/macos/server/release",
+      "toolchainFile": "${sourceDir}/build/macos/server/release/conan/build/Release/generators/conan_toolchain.cmake",
+      "inherits": [
+        "macos-base",
+        "profile-server"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CONFIGURATION_TYPES": "Release"
+      }
+    },
+    {
+      "name": "macos-client-debug",
+      "binaryDir": "${sourceDir}/build/macos/client/debug",
+      "toolchainFile": "${sourceDir}/build/macos/client/debug/conan/build/Debug/generators/conan_toolchain.cmake",
+      "inherits": [
+        "macos-base",
+        "profile-client"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CONFIGURATION_TYPES": "Debug"
+      }
+    },
+    {
+      "name": "macos-client-release",
+      "binaryDir": "${sourceDir}/build/macos/client/release",
+      "toolchainFile": "${sourceDir}/build/macos/client/release/conan/build/Release/generators/conan_toolchain.cmake",
+      "inherits": [
+        "macos-base",
+        "profile-client"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CONFIGURATION_TYPES": "Release"
+      }
+    },
+    {
+      "name": "macos-core-debug",
+      "binaryDir": "${sourceDir}/build/macos/core/debug",
+      "toolchainFile": "${sourceDir}/build/macos/core/debug/conan/build/Debug/generators/conan_toolchain.cmake",
+      "inherits": [
+        "macos-base",
+        "profile-core"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CONFIGURATION_TYPES": "Debug"
+      }
+    },
+    {
+      "name": "macos-core-release",
+      "binaryDir": "${sourceDir}/build/macos/core/release",
+      "toolchainFile": "${sourceDir}/build/macos/core/release/conan/build/Release/generators/conan_toolchain.cmake",
+      "inherits": [
+        "macos-base",
+        "profile-core"
+      ],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CONFIGURATION_TYPES": "Release"
       }
     },
     {
       "name": "windows",
-      "inherits": "windows-base",
-      "displayName": "Windows (VS2022)",
-      "description": "Windows configuration using Visual Studio 2022"
+      "inherits": "windows-full-debug"
     },
     {
       "name": "windows-release-tree",
-      "inherits": "windows-base",
-      "displayName": "Windows Release Tree (VS2022)",
-      "description": "Dedicated Windows release-validation tree using Visual Studio 2022",
-      "binaryDir": "${sourceDir}/build-windows-release",
-      "toolchainFile": "${sourceDir}/build-windows-release/conan/build/generators/conan_toolchain.cmake"
-    },
-    {
-      "name": "windows-core-engine",
-      "inherits": "windows-base",
-      "displayName": "Windows Core Engine (VS2022)",
-      "description": "Minimal runtime and independent tests; no MSA apps, GUI or extension dependencies",
-      "binaryDir": "${sourceDir}/build-windows-core-engine",
-      "toolchainFile": "${sourceDir}/build-windows-core-engine/conan/build/generators/conan_toolchain.cmake",
-      "cacheVariables": {
-        "BUILD_CORE_EXTENSIONS": "OFF",
-        "BUILD_CLIENT_GUI": "OFF",
-        "BUILD_SERVER_STACK": "OFF",
-        "BUILD_GATEWAY_APP": "OFF",
-        "BUILD_SERVER_TESTS": "ON",
-        "BUILD_WRITE_BEHIND_TOOLS": "OFF",
-        "BUILD_MIGRATIONS_RUNNER": "OFF"
-      }
+      "inherits": "windows-full-release"
     },
     {
       "name": "windows-client",
-      "inherits": "windows-base",
-      "displayName": "Windows Client Release (VS2022)",
-      "description": "Low-footprint client_gui-only profile (Conan2)",
-      "binaryDir": "${sourceDir}/build-windows-client",
-      "toolchainFile": "${sourceDir}/build-windows-client/conan/build/generators/conan_toolchain.cmake",
-      "cacheVariables": {
-        "BUILD_SERVER_STACK": "OFF",
-        "BUILD_GATEWAY_APP": "OFF",
-        "BUILD_SERVER_TESTS": "OFF",
-        "BUILD_WRITE_BEHIND_TOOLS": "OFF",
-        "BUILD_MIGRATIONS_RUNNER": "OFF"
-      }
+      "inherits": "windows-client-release"
     },
     {
-      "name": "windows-ninja",
-      "inherits": "windows-ninja-base",
-      "displayName": "Windows (Ninja)",
-      "description": "Windows configuration using Ninja (Debug, exports compile_commands.json)"
-    },
-    {
-      "name": "windows-ninja-release",
-      "inherits": "windows-ninja-base",
-      "displayName": "Windows Release (Ninja)",
-      "description": "Windows configuration using Ninja (Release, exports compile_commands.json)",
-      "toolchainFile": "${sourceDir}/build-windows-ninja/conan/build/Release/generators/conan_toolchain.cmake",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO": "Release",
-        "CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL": "Release"
-      }
+      "name": "windows-core-engine",
+      "inherits": "windows-core-debug"
     },
     {
       "name": "linux",
-      "inherits": "linux-base",
-      "displayName": "Linux (Ninja)",
-      "description": "Linux configuration using Ninja (Debug)"
+      "inherits": "linux-full-debug"
     },
     {
       "name": "linux-release",
-      "inherits": "linux-base",
-      "displayName": "Linux Release (Ninja)",
-      "description": "Linux configuration using Ninja (Release)",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
-      }
-    },
-    {
-      "name": "linux-asan",
-      "inherits": "linux-base",
-      "displayName": "Linux ASan/UBSan (Ninja)",
-      "description": "Linux configuration using Ninja (Debug, ASan+UBSan)",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "ENABLE_SANITIZERS": "ON"
-      }
-    },
-    {
-      "name": "windows-conan-base",
-      "hidden": true,
-      "displayName": "Windows Conan Base",
-      "description": "Base configuration for Windows using VS2022 and Conan2 toolchain",
-      "generator": "Visual Studio 17 2022",
-      "binaryDir": "${sourceDir}/build-windows",
-      "condition": {
-        "type": "equals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Windows"
-      },
-      "toolchainFile": "${sourceDir}/build-windows/conan/build/generators/conan_toolchain.cmake",
-      "cacheVariables": {
-        "CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO": "Release",
-        "CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL": "Release"
-      }
-    },
-    {
-      "name": "windows-conan",
-      "inherits": "windows-conan-base",
-      "displayName": "Windows Conan2 (VS2022)",
-      "description": "Windows configuration using Conan2-generated toolchain"
-    },
-    {
-      "name": "windows-client-conan",
-      "inherits": "windows-conan-base",
-      "displayName": "Windows Client Conan2 (VS2022)",
-      "description": "Client-only configuration using Conan2-generated toolchain",
-      "binaryDir": "${sourceDir}/build-windows-client",
-      "toolchainFile": "${sourceDir}/build-windows-client/conan/build/generators/conan_toolchain.cmake",
-      "cacheVariables": {
-        "CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO": "Release",
-        "CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL": "Release",
-        "BUILD_SERVER_STACK": "OFF",
-        "BUILD_GATEWAY_APP": "OFF",
-        "BUILD_SERVER_TESTS": "OFF",
-        "BUILD_WRITE_BEHIND_TOOLS": "OFF",
-        "BUILD_MIGRATIONS_RUNNER": "OFF"
-      }
-    },
-    {
-      "name": "linux-conan-base",
-      "hidden": true,
-      "displayName": "Linux Conan Base",
-      "description": "Base configuration for Linux using Ninja and Conan2 toolchain",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build-linux-conan",
-      "condition": {
-        "type": "notEquals",
-        "lhs": "${hostSystemName}",
-        "rhs": "Windows"
-      },
-      "toolchainFile": "${sourceDir}/build-linux-conan/conan/build/Debug/generators/conan_toolchain.cmake",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO": "Release",
-        "CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL": "Release"
-      }
-    },
-    {
-      "name": "linux-conan",
-      "inherits": "linux-conan-base",
-      "displayName": "Linux Conan2 (Ninja)",
-      "description": "Linux Debug configuration using Conan2-generated toolchain"
-    },
-    {
-      "name": "linux-conan-release",
-      "inherits": "linux-conan-base",
-      "displayName": "Linux Conan2 Release (Ninja)",
-      "description": "Linux Release configuration using Conan2-generated toolchain",
-      "toolchainFile": "${sourceDir}/build-linux-conan/conan/build/Release/generators/conan_toolchain.cmake",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO": "Release",
-        "CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL": "Release"
-      }
+      "inherits": "linux-server-release"
     },
     {
       "name": "linux-core-engine",
-      "inherits": "linux-base",
-      "binaryDir": "${sourceDir}/build-linux-core-engine",
+      "inherits": "linux-core-debug"
+    },
+    {
+      "name": "linux-conan",
+      "inherits": "linux-full-debug"
+    },
+    {
+      "name": "linux-conan-release",
+      "inherits": "linux-server-release"
+    },
+    {
+      "name": "windows-conan",
+      "inherits": "windows-full-debug"
+    },
+    {
+      "name": "windows-client-conan",
+      "inherits": "windows-client-release"
+    },
+    {
+      "name": "linux-asan",
+      "inherits": "linux-full-debug",
+      "binaryDir": "${sourceDir}/build/linux/full/asan",
+      "toolchainFile": "${sourceDir}/build/linux/full/asan/conan/build/Debug/generators/conan_toolchain.cmake",
       "cacheVariables": {
-        "BUILD_CORE_EXTENSIONS": "OFF",
-        "BUILD_CLIENT_GUI": "OFF",
-        "BUILD_SERVER_STACK": "OFF",
-        "BUILD_GATEWAY_APP": "OFF",
-        "BUILD_SERVER_TESTS": "ON",
-        "BUILD_WRITE_BEHIND_TOOLS": "OFF",
-        "BUILD_MIGRATIONS_RUNNER": "OFF"
+        "ENABLE_SANITIZERS": "ON"
       }
     }
   ],
   "buildPresets": [
     {
-      "name": "windows-debug",
-      "configurePreset": "windows",
-      "configuration": "Debug",
-      "displayName": "Windows Debug"
+      "name": "windows-full-debug",
+      "configurePreset": "windows-full-debug",
+      "configuration": "Debug"
     },
     {
-      "name": "windows-release",
-      "configurePreset": "windows",
-      "configuration": "RelWithDebInfo",
-      "displayName": "Windows Release"
+      "name": "windows-full-release",
+      "configurePreset": "windows-full-release",
+      "configuration": "Release"
     },
     {
-      "name": "windows-core-engine-debug",
-      "configurePreset": "windows-core-engine",
-      "configuration": "Debug",
-      "displayName": "Windows Core Engine Debug"
+      "name": "windows-server-debug",
+      "configurePreset": "windows-server-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-server-release",
+      "configurePreset": "windows-server-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-client-debug",
+      "configurePreset": "windows-client-debug",
+      "configuration": "Debug"
     },
     {
       "name": "windows-client-release",
+      "configurePreset": "windows-client-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-core-debug",
+      "configurePreset": "windows-core-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-core-release",
+      "configurePreset": "windows-core-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "linux-full-debug",
+      "configurePreset": "linux-full-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "linux-full-release",
+      "configurePreset": "linux-full-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "linux-server-debug",
+      "configurePreset": "linux-server-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "linux-server-release",
+      "configurePreset": "linux-server-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "linux-client-debug",
+      "configurePreset": "linux-client-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "linux-client-release",
+      "configurePreset": "linux-client-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "linux-core-debug",
+      "configurePreset": "linux-core-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "linux-core-release",
+      "configurePreset": "linux-core-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "macos-full-debug",
+      "configurePreset": "macos-full-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "macos-full-release",
+      "configurePreset": "macos-full-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "macos-server-debug",
+      "configurePreset": "macos-server-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "macos-server-release",
+      "configurePreset": "macos-server-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "macos-client-debug",
+      "configurePreset": "macos-client-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "macos-client-release",
+      "configurePreset": "macos-client-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "macos-core-debug",
+      "configurePreset": "macos-core-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "macos-core-release",
+      "configurePreset": "macos-core-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows",
+      "configurePreset": "windows",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-release-tree",
+      "configurePreset": "windows-release-tree",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-client",
       "configurePreset": "windows-client",
-      "configuration": "Release",
-      "displayName": "Windows Client Release"
+      "configuration": "Release"
     },
     {
-      "name": "windows-ninja-debug",
-      "configurePreset": "windows-ninja",
-      "configuration": "Debug",
-      "displayName": "Windows Ninja Debug"
+      "name": "windows-core-engine",
+      "configurePreset": "windows-core-engine",
+      "configuration": "Debug"
     },
     {
-      "name": "windows-ninja-release",
-      "configurePreset": "windows-ninja-release",
-      "configuration": "Release",
-      "displayName": "Windows Ninja Release"
-    },
-    {
-      "name": "linux-debug",
+      "name": "linux",
       "configurePreset": "linux",
-      "configuration": "Debug",
-      "displayName": "Linux Debug"
+      "configuration": "Debug"
     },
     {
       "name": "linux-release",
       "configurePreset": "linux-release",
-      "configuration": "Release",
-      "displayName": "Linux Release"
+      "configuration": "Release"
     },
     {
-      "name": "linux-asan",
-      "configurePreset": "linux-asan",
-      "configuration": "Debug",
-      "displayName": "Linux ASan/UBSan"
+      "name": "linux-core-engine",
+      "configurePreset": "linux-core-engine",
+      "configuration": "Debug"
     },
     {
-      "name": "windows-conan-debug",
-      "configurePreset": "windows-conan",
-      "configuration": "Debug",
-      "displayName": "Windows Conan2 Debug"
-    },
-    {
-      "name": "windows-conan-relwithdebinfo",
-      "configurePreset": "windows-conan",
-      "configuration": "RelWithDebInfo",
-      "displayName": "Windows Conan2 RelWithDebInfo"
-    },
-    {
-      "name": "windows-conan-release",
-      "configurePreset": "windows-conan",
-      "configuration": "Release",
-      "displayName": "Windows Conan2 Release"
-    },
-    {
-      "name": "windows-client-conan-release",
-      "configurePreset": "windows-client-conan",
-      "configuration": "Release",
-      "displayName": "Windows Client Conan2 Release"
-    },
-    {
-      "name": "linux-conan-debug",
+      "name": "linux-conan",
       "configurePreset": "linux-conan",
-      "configuration": "Debug",
-      "displayName": "Linux Conan2 Debug"
+      "configuration": "Debug"
     },
     {
       "name": "linux-conan-release",
       "configurePreset": "linux-conan-release",
-      "configuration": "Release",
-      "displayName": "Linux Conan2 Release"
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-conan",
+      "configurePreset": "windows-conan",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-client-conan",
+      "configurePreset": "windows-client-conan",
+      "configuration": "Release"
+    },
+    {
+      "name": "linux-asan",
+      "configurePreset": "linux-asan"
+    },
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-full-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-full-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-core-engine-debug",
+      "configurePreset": "windows-core-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "linux-debug",
+      "configurePreset": "linux-full-debug",
+      "configuration": "Debug"
     },
     {
       "name": "linux-core-engine-debug",
-      "configurePreset": "linux-core-engine"
+      "configurePreset": "linux-core-debug",
+      "configuration": "Debug"
     }
   ],
   "testPresets": [
     {
-      "name": "windows-test",
-      "configurePreset": "windows-release-tree",
-      "configuration": "Release",
-      "execution": {
-        "jobs": 8
+      "name": "windows-full-debug",
+      "configurePreset": "windows-full-debug",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
       },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
+    },
+    {
+      "name": "windows-full-release",
+      "configurePreset": "windows-full-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
+    },
+    {
+      "name": "windows-server-debug",
+      "configurePreset": "windows-server-debug",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
+    },
+    {
+      "name": "windows-server-release",
+      "configurePreset": "windows-server-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
+    },
+    {
+      "name": "windows-core-debug",
+      "configurePreset": "windows-core-debug",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
+    },
+    {
+      "name": "windows-core-release",
+      "configurePreset": "windows-core-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
+    },
+    {
+      "name": "linux-full-debug",
+      "configurePreset": "linux-full-debug",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
+    },
+    {
+      "name": "linux-full-release",
+      "configurePreset": "linux-full-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
+    },
+    {
+      "name": "linux-server-debug",
+      "configurePreset": "linux-server-debug",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
+    },
+    {
+      "name": "linux-server-release",
+      "configurePreset": "linux-server-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
+    },
+    {
+      "name": "linux-core-debug",
+      "configurePreset": "linux-core-debug",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
+    },
+    {
+      "name": "linux-core-release",
+      "configurePreset": "linux-core-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
+    },
+    {
+      "name": "macos-full-debug",
+      "configurePreset": "macos-full-debug",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
+    },
+    {
+      "name": "macos-full-release",
+      "configurePreset": "macos-full-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
+    },
+    {
+      "name": "macos-server-debug",
+      "configurePreset": "macos-server-debug",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
+    },
+    {
+      "name": "macos-server-release",
+      "configurePreset": "macos-server-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
+    },
+    {
+      "name": "macos-core-debug",
+      "configurePreset": "macos-core-debug",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
+    },
+    {
+      "name": "macos-core-release",
+      "configurePreset": "macos-core-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      }
+    },
+    {
+      "name": "windows-test",
+      "configurePreset": "windows-full-release",
+      "configuration": "Release",
       "output": {
         "outputOnFailure": true
       }
     },
     {
       "name": "windows-debug-test",
-      "configurePreset": "windows",
+      "configurePreset": "windows-full-debug",
       "configuration": "Debug",
-      "execution": {
-        "jobs": 8
-      },
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "linux-test",
-      "configurePreset": "linux",
-      "execution": {
-        "jobs": 8
-      },
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "windows-conan-test",
-      "configurePreset": "windows-conan",
-      "configuration": "Release",
-      "execution": {
-        "jobs": 8
-      },
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "linux-conan-test",
-      "configurePreset": "linux-conan",
-      "execution": {
-        "jobs": 8
-      },
       "output": {
         "outputOnFailure": true
       }
     },
     {
       "name": "windows-core-engine-test",
-      "configurePreset": "windows-core-engine",
+      "configurePreset": "windows-core-debug",
+      "configuration": "Debug",
       "output": {
         "outputOnFailure": true
-      },
-      "execution": {
-        "noTestsAction": "error",
-        "jobs": 4
-      },
-      "configuration": "Debug"
+      }
+    },
+    {
+      "name": "linux-test",
+      "configurePreset": "linux-full-debug",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
     },
     {
       "name": "linux-core-engine-test",
-      "configurePreset": "linux-core-engine",
+      "configurePreset": "linux-core-debug",
+      "configuration": "Debug",
       "output": {
         "outputOnFailure": true
-      },
-      "execution": {
-        "noTestsAction": "error",
-        "jobs": 4
       }
     }
   ]
