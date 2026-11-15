@@ -563,7 +563,3 @@ external-refs/
 # Internal docs
 tasks/
 tmp/
-
-# Retired dependency checkouts retained locally only
-external/luajit/
-external/sol2/
