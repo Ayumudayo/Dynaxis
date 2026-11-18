@@ -203,6 +203,7 @@ services:
       ADMIN_ENV_LABEL: "${ADMIN_ENV_LABEL:-LOCAL}"
       ADMIN_READ_ONLY: "${ADMIN_READ_ONLY:-1}"
       ADMIN_AUTH_MODE: "${ADMIN_AUTH_MODE:-development}"
+      ADMIN_DEV_ROLE: "${ADMIN_DEV_ROLE:-viewer}"
       ADMIN_VIEWER_TOKEN: "${ADMIN_VIEWER_TOKEN:-}"
       ADMIN_OPERATOR_TOKEN: "${ADMIN_OPERATOR_TOKEN:-}"
       ADMIN_TOKEN: "${ADMIN_TOKEN:-}"
@@ -218,8 +219,13 @@ services:
       ADMIN_PROMETHEUS_URL: "${ADMIN_PROMETHEUS_URL:-http://127.0.0.1:39090}"
       ADMIN_HAPROXY_URL: "${ADMIN_HAPROXY_URL:-http://127.0.0.1:8404/}"
       REDIS_URI: "${REDIS_URI:-tcp://redis:6379}"
+      REDIS_CHANNEL_PREFIX: "${REDIS_CHANNEL_PREFIX:-dynaxis:}"
+      REDIS_STREAM_KEY: "${REDIS_STREAM_KEY:-session_events}"
       DB_URI: "postgresql://${POSTGRES_USER:-dynaxis}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-dynaxis_db}"
       WB_DLQ_STREAM: "${WB_DLQ_STREAM:-session_events_dlq}"
+      WB_DEAD_STREAM: "${WB_DEAD_STREAM:-session_events_dead}"
+      WB_GROUP_DLQ: "${WB_GROUP_DLQ:-wb_dlq_group}"
+      WB_RETRY_MAX: "${WB_RETRY_MAX:-5}"
     ports:
       - "${ADMIN_HOST_PORT:-39200}:9200"
     volumes:

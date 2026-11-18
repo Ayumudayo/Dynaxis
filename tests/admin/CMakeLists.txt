@@ -5,6 +5,7 @@ if (BUILD_GTEST_TESTS)
 
     add_executable(admin_console_tests
         test_admin_console_v1.cpp
+        test_admin_console_v2.cpp
     )
 
     target_compile_features(admin_console_tests PRIVATE cxx_std_20)

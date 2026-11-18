@@ -1,6 +1,7 @@
 #include "admin/admin_http_server.hpp"
 #include "admin/admin_router.hpp"
 #include "admin/admin_types.hpp"
+#include "admin/chat_ops_backend.hpp"
 #include "admin/inventory_poller.hpp"
 #include "admin/service_catalog.hpp"
 
@@ -86,6 +87,15 @@ dynaxis::admin::AdminConfig load_admin_config_from_env() {
     cfg.auth_mode = (auth_mode_raw == "development") ? dynaxis::admin::AdminAuthMode::DEVELOPMENT
                                                      : dynaxis::admin::AdminAuthMode::TOKEN;
 
+    const std::string dev_role_raw = to_lower_copy(env_or_default("ADMIN_DEV_ROLE", "viewer"));
+    if (dev_role_raw == "admin") {
+        cfg.dev_default_role = dynaxis::admin::AdminRole::ADMIN;
+    } else if (dev_role_raw == "operator") {
+        cfg.dev_default_role = dynaxis::admin::AdminRole::OPERATOR;
+    } else {
+        cfg.dev_default_role = dynaxis::admin::AdminRole::VIEWER;
+    }
+
     cfg.viewer_token = env_or_default("ADMIN_VIEWER_TOKEN", {});
     cfg.operator_token = env_or_default("ADMIN_OPERATOR_TOKEN", {});
     cfg.admin_token = env_or_default("ADMIN_TOKEN", {});
@@ -107,7 +117,12 @@ dynaxis::admin::AdminConfig load_admin_config_from_env() {
 
     cfg.db_uri = env_or_default("DB_URI", {});
     cfg.redis_uri = env_or_default("REDIS_URI", {});
+    cfg.redis_channel_prefix = env_or_default("REDIS_CHANNEL_PREFIX", "dynaxis:");
+    cfg.wb_stream_key = env_or_default("REDIS_STREAM_KEY", "session_events");
     cfg.dlq_stream_key = env_or_default("WB_DLQ_STREAM", "session_events_dlq");
+    cfg.dead_stream_key = env_or_default("WB_DEAD_STREAM", "session_events_dead");
+    cfg.dlq_group = env_or_default("WB_GROUP_DLQ", "wb_dlq_group");
+    cfg.dlq_retry_max = env_u32_or_default("WB_RETRY_MAX", 5, 1, 100);
 
     cfg.redis_host_port = env_port_or_default("REDIS_HOST_PORT", 36379);
     cfg.postgres_host_port = env_port_or_default("POSTGRES_HOST_PORT", 35432);
@@ -125,7 +140,7 @@ dynaxis::admin::AdminConfig load_admin_config_from_env() {
 } // namespace
 
 /**
- * @brief 웹 관리 콘솔 v1 제어면(`admin_app`) 프로세스 진입점입니다.
+ * @brief 웹 관리 콘솔 v1/v2 제어면(`admin_app`) 프로세스 진입점입니다.
  * @param argc 커맨드라인 인자 개수
  * @param argv 커맨드라인 인자 배열 (`--smoke-check` 지원)
  * @return 종료 코드 (`0` 정상)
@@ -156,14 +171,15 @@ int main(int argc, char** argv) {
     dynaxis::admin::InventoryPoller poller(config, std::move(catalog));
     poller.start();
 
-    dynaxis::admin::AdminRouter router(config, poller);
+    auto chat_ops = std::make_shared<dynaxis::admin::PostgresRedisChatOpsBackend>(config);
+    dynaxis::admin::AdminRouter router(config, poller, chat_ops);
     dynaxis::admin::AdminHttpServer server(config.listen_port, [&router](const dynaxis::admin::AdminHttpRequest& req) {
         return router.handle(req);
     });
     server.start();
 
     server::core::log::info(
-        "Dynaxis Web Admin Console v1 listening on port " + std::to_string(server.bound_port()) +
+        "Dynaxis Web Admin Console v2 listening on port " + std::to_string(server.bound_port()) +
         " (env=" + config.env_label +
         ", auth=" + (config.auth_mode == dynaxis::admin::AdminAuthMode::DEVELOPMENT ? "development" : "token") +
         ", read_only=" + (config.read_only ? "1" : "0") + ")");

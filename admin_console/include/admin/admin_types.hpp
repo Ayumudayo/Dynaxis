@@ -144,6 +144,7 @@ struct AdminConfig {
     std::string env_label{"LOCAL"};
     bool read_only{true};
     AdminAuthMode auth_mode{AdminAuthMode::TOKEN};
+    AdminRole dev_default_role{AdminRole::VIEWER};
     std::string viewer_token;
     std::string operator_token;
     std::string admin_token;
@@ -161,7 +162,12 @@ struct AdminConfig {
     std::string haproxy_stats_url{"http://127.0.0.1:8404/"};
     std::string db_uri;
     std::string redis_uri;
+    std::string redis_channel_prefix{"dynaxis:"};
+    std::string wb_stream_key{"session_events"};
     std::string dlq_stream_key{"session_events_dlq"};
+    std::string dead_stream_key{"session_events_dead"};
+    std::string dlq_group{"wb_dlq_group"};
+    std::uint32_t dlq_retry_max{5};
     unsigned short redis_host_port{36379};
     unsigned short postgres_host_port{35432};
     unsigned short haproxy_stats_host_port{8404};

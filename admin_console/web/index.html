@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dynaxis Web Admin Console (v1)</title>
+    <title>Dynaxis Web Admin Console (v2)</title>
     <link rel="stylesheet" href="/styles/tokens.css">
     <link rel="stylesheet" href="/styles/app.css">
 </head>
@@ -16,7 +16,7 @@
                 <span class="brand-dot" aria-hidden="true"></span>
                 <span>Dynaxis Admin Console</span>
             </span>
-            <span id="meta-version" class="pill mono">v1</span>
+            <span id="meta-version" class="pill mono">v2</span>
             <span id="meta-env" class="pill mono">LOCAL</span>
             <span id="meta-readonly" class="pill pill--readonly">READ-ONLY</span>
             <span id="meta-auth" class="pill mono">ROLE: viewer</span>
@@ -40,7 +40,7 @@
             <div class="nav-scroll">
                 <div class="nav-group">
                     <div class="nav-group__label">관측 · v1</div>
-                    <button type="button" class="nav-item nav-item--active">
+                    <button type="button" class="nav-item nav-item--active" data-view="overview">
                         <span>Overview</span>
                         <span class="nav-stage-tag">v1</span>
                     </button>
@@ -48,15 +48,19 @@
 
                 <div class="nav-group">
                     <div class="nav-group__label">채팅 운영 · v2</div>
-                    <button type="button" class="nav-item" disabled title="v2 도입 예정 (현재 Read-Only v1)">
-                        <span>Sessions &amp; Rooms</span>
+                    <button type="button" class="nav-item" data-view="rooms">
+                        <span>Chat Rooms</span>
                         <span class="nav-stage-tag">v2</span>
                     </button>
-                    <button type="button" class="nav-item" disabled title="v2 도입 예정 (현재 Read-Only v1)">
-                        <span>Moderation</span>
+                    <button type="button" class="nav-item" data-view="users">
+                        <span>Users &amp; Sessions</span>
                         <span class="nav-stage-tag">v2</span>
                     </button>
-                    <button type="button" class="nav-item" disabled title="v2 도입 예정 (현재 Read-Only v1)">
+                    <button type="button" class="nav-item" data-view="moderation">
+                        <span>Moderation &amp; DLQ</span>
+                        <span class="nav-stage-tag">v2</span>
+                    </button>
+                    <button type="button" class="nav-item" data-view="audit">
                         <span>Audit Log</span>
                         <span class="nav-stage-tag">v2</span>
                     </button>
@@ -99,73 +103,82 @@
                     <button id="btn-retry-auth" type="button" class="btn">Token 설정</button>
                 </div>
 
-                <!-- 4 KPI Cards -->
-                <section class="kpi-grid" aria-label="핵심 운영 지표">
-                    <article class="kpi-card">
-                        <div class="kpi-card__title">가용 서비스 (Ready / Desired)</div>
-                        <div id="kpi-ready" class="kpi-card__value num">-- / --</div>
-                        <div id="kpi-ready-sub" class="kpi-card__sub">one_shot 작업 제외 상시 워크로드</div>
-                    </article>
-                    <article class="kpi-card">
-                        <div class="kpi-card__title">활성 세션 (Gateway / Server)</div>
-                        <div id="kpi-sessions" class="kpi-card__value num">-- / --</div>
-                        <div id="kpi-sessions-sub" class="kpi-card__sub num">Active Rooms: --</div>
-                    </article>
-                    <article class="kpi-card">
-                        <div class="kpi-card__title">Write-Behind Pending / DLQ</div>
-                        <div id="kpi-wb" class="kpi-card__value num">-- / --</div>
-                        <div id="kpi-wb-sub" class="kpi-card__sub num">DLQ Total Counter: --</div>
-                    </article>
-                    <article class="kpi-card">
-                        <div class="kpi-card__title">관측 신선도 (Snapshot Age)</div>
-                        <div id="kpi-freshness" class="kpi-card__value num">--</div>
-                        <div id="kpi-freshness-sub" class="kpi-card__sub num">TTL 임계 초과 시 ? Unknown 전환</div>
-                    </article>
-                </section>
+                <!-- View 1: v1 Overview -->
+                <div id="view-overview" class="view-stack">
+                    <!-- 4 KPI Cards -->
+                    <section class="kpi-grid" aria-label="핵심 운영 지표">
+                        <article class="kpi-card">
+                            <div class="kpi-card__title">가용 서비스 (Ready / Desired)</div>
+                            <div id="kpi-ready" class="kpi-card__value num">-- / --</div>
+                            <div id="kpi-ready-sub" class="kpi-card__sub">one_shot 작업 제외 상시 워크로드</div>
+                        </article>
+                        <article class="kpi-card">
+                            <div class="kpi-card__title">활성 세션 (Gateway / Server)</div>
+                            <div id="kpi-sessions" class="kpi-card__value num">-- / --</div>
+                            <div id="kpi-sessions-sub" class="kpi-card__sub num">Active Rooms: --</div>
+                        </article>
+                        <article class="kpi-card">
+                            <div class="kpi-card__title">Write-Behind Pending / DLQ</div>
+                            <div id="kpi-wb" class="kpi-card__value num">-- / --</div>
+                            <div id="kpi-wb-sub" class="kpi-card__sub num">DLQ Total Counter: --</div>
+                        </article>
+                        <article class="kpi-card">
+                            <div class="kpi-card__title">관측 신선도 (Snapshot Age)</div>
+                            <div id="kpi-freshness" class="kpi-card__value num">--</div>
+                            <div id="kpi-freshness-sub" class="kpi-card__sub num">TTL 임계 초과 시 ? Unknown 전환</div>
+                        </article>
+                    </section>
 
-                <!-- Topology Strip -->
-                <section class="panel-card" aria-label="서비스 토폴로지 스트립">
-                    <div class="panel-card__header">
-                        <h2 class="panel-card__title">Topology Strip (Edge → Gateway → Server → Worker → Data → Observability)</h2>
-                        <span class="panel-card__hint">노드를 클릭하면 우측 인스펙터 드로어가 열립니다</span>
-                    </div>
-                    <div id="topology-strip" class="topology-strip"></div>
-                </section>
+                    <!-- Topology Strip -->
+                    <section class="panel-card" aria-label="서비스 토폴로지 스트립">
+                        <div class="panel-card__header">
+                            <h2 class="panel-card__title">Topology Strip (Edge → Gateway → Server → Worker → Data → Observability)</h2>
+                            <span class="panel-card__hint">노드를 클릭하면 우측 인스펙터 드로어가 열립니다</span>
+                        </div>
+                        <div id="topology-strip" class="topology-strip"></div>
+                    </section>
 
-                <!-- Inventory Matrix -->
-                <section class="panel-card" aria-label="서비스 인벤토리 매트릭스">
-                    <div class="panel-card__header">
-                        <h2 class="panel-card__title">Service Inventory Matrix</h2>
-                        <span id="inventory-count" class="panel-card__hint num">0 services</span>
-                    </div>
-                    <div class="filter-toolbar">
-                        <div id="status-filter-chips" class="chip-row" aria-label="상태 필터"></div>
-                        <input id="search-input" class="search-input" type="search" placeholder="Filter service_id or name...">
-                    </div>
-                    <div class="table-wrap">
-                        <table class="inventory-table">
-                            <thead>
-                                <tr>
-                                    <th>Service ID</th>
-                                    <th>Display Name</th>
-                                    <th>Layer / Kind</th>
-                                    <th>Status</th>
-                                    <th>Ready / Desired</th>
-                                    <th>Latency</th>
-                                    <th>Observed Age</th>
-                                    <th>Domain Signal</th>
-                                    <th>Detail</th>
-                                </tr>
-                            </thead>
-                            <tbody id="inventory-tbody"></tbody>
-                        </table>
-                    </div>
-                    <div id="inventory-empty" class="empty-box hidden">필터 조건과 일치하는 서비스가 없습니다.</div>
-                </section>
+                    <!-- Inventory Matrix -->
+                    <section class="panel-card" aria-label="서비스 인벤토리 매트릭스">
+                        <div class="panel-card__header">
+                            <h2 class="panel-card__title">Service Inventory Matrix</h2>
+                            <span id="inventory-count" class="panel-card__hint num">0 services</span>
+                        </div>
+                        <div class="filter-toolbar">
+                            <div id="status-filter-chips" class="chip-row" aria-label="상태 필터"></div>
+                            <input id="search-input" class="search-input" type="search" placeholder="Filter service_id or name...">
+                        </div>
+                        <div class="table-wrap">
+                            <table class="inventory-table">
+                                <thead>
+                                    <tr>
+                                        <th>Service ID</th>
+                                        <th>Display Name</th>
+                                        <th>Layer / Kind</th>
+                                        <th>Status</th>
+                                        <th>Ready / Desired</th>
+                                        <th>Latency</th>
+                                        <th>Observed Age</th>
+                                        <th>Domain Signal</th>
+                                        <th>Detail</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="inventory-tbody"></tbody>
+                            </table>
+                        </div>
+                        <div id="inventory-empty" class="empty-box hidden">필터 조건과 일치하는 서비스가 없습니다.</div>
+                    </section>
+                </div>
+
+                <!-- View 2..5: v2 Chat Operations -->
+                <div id="view-rooms" class="view-stack hidden"></div>
+                <div id="view-users" class="view-stack hidden"></div>
+                <div id="view-moderation" class="view-stack hidden"></div>
+                <div id="view-audit" class="view-stack hidden"></div>
             </div>
 
             <!-- Right Slide-Over Context Drawer -->
-            <aside id="inspector-drawer" class="drawer hidden" aria-label="서비스 상세 인스펙터">
+            <aside id="inspector-drawer" class="drawer hidden" aria-label="상세 인스펙터">
                 <div class="drawer__header">
                     <div>
                         <h3 id="drawer-title" class="drawer__title">--</h3>
@@ -186,7 +199,7 @@
         <p id="auth-modal-desc" class="modal-card__desc">
             토큰은 브라우저 <span class="mono">sessionStorage</span>에만 보관되며 URL·디스크에 기록되지 않습니다.
         </p>
-        <input id="token-input" class="token-input" type="password" autocomplete="off" placeholder="ADMIN_TOKEN / VIEWER_TOKEN">
+        <input id="token-input" class="token-input" type="password" autocomplete="off" placeholder="ADMIN_TOKEN / OPERATOR_TOKEN / VIEWER_TOKEN">
         <div class="modal-actions">
             <button id="btn-clear-token" type="button" class="btn">토큰 삭제</button>
             <button id="btn-cancel-token" type="button" class="btn">취소</button>

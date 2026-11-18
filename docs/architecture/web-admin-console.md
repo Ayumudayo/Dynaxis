@@ -1,8 +1,8 @@
 # 웹 관리 콘솔 및 운영 제어면 설계
 
 > **문서 상태 구분**
-> - **현재 구현 상태(Baseline 4.0.0 + Step 2 `v1`)**: `admin_console/`(`admin_console_core`, `admin_app`)와 무빌드 정적 웹 UI(`admin_console/web/`)로 구성된 **v1 조회 전용 제어면**이 구현되었으며 Docker Compose (`admin`, 기본 호스트 포트 `39200:9200`)에 통합되었다. 각 서비스의 `/metrics`, `/healthz`, `/readyz` 및 Redis/Postgres 상태를 bounded probe로 집계한다([관측](../ops/observability.md), [운영 확인](../ops/runbook.md)).
-> - **후속 목표 설계(Target Design — v2/v3 미구현)**: 아래 문서의 **v2(채팅 운영) · v3(제한된 라이프사이클·설정 제어)** API와 화면은 향후 단계에서 순차 도입할 목표 규격이며 아직 구현·배포되지 않았다.
+> - **현재 구현 상태(Baseline 4.0.0 + Step 2 `v1` + Step 3 `v2`)**: `admin_console/`(`admin_console_core`, `admin_app`)와 무빌드 정적 웹 UI(`admin_console/web/`)로 구성된 **v1(조회 전용 인벤토리·bounded probe)** 및 **v2(채팅방/세션 진실 소스 대조, `mute`/`ban`/`kick`/방 종료, Write-Behind DLQ 재처리, 감사·멱등 원장)**가 구현되었으며 Docker Compose (`admin`, 기본 호스트 포트 `39200:9200`)와 마이그레이션(`0003_admin_control_plane_v2.sql`)에 통합되었다([관측](../ops/observability.md), [운영 확인](../ops/runbook.md)).
+> - **후속 목표 설계(Target Design — v3 미구현)**: 아래 문서의 **v3(제한된 라이프사이클·스키마 기반 설정 변경)** API와 화면은 향후 단계에서 도입할 목표 규격이며 아직 구현·배포되지 않았다.
 
 ## 목적과 아키텍처 경계
 
@@ -223,5 +223,5 @@ flowchart TB
 | 단계 | 범위 | 완료·검증 기준 |
 |---|---|---|
 | **v1 (Step 2, 구현 완료)** | 조회 전용 서비스 인벤토리 + bounded probe + Grafana 링크 (`admin_app`) | ① 정상/장애/지연(hung socket)/`migrator` 완료/관측 만료(`unknown`) 시나리오에서 정확한 상태 판정과 응답 상한 확인 (`tests/admin/test_admin_console_v1.cpp`) ② API 응답·로그에 비밀값/원시 env 미포함 검증 |
-| **v2 (Step 3)** | 채팅 운영·제재·DLQ 재처리·감사 로그 | ① 콘솔에서 부여/해제한 mute·ban·방 해산·`gkick`이 실제 클라이언트 세션과 재접속에 즉시 반영되는지 확인 ② `viewer` 및 `ADMIN_READ_ONLY=1` 차단, `idempotency_key` 중복/충돌, 감사 로그 기록 확인 |
+| **v2 (Step 3, 구현 완료)** | 채팅 운영·제재·DLQ 재처리·감사 로그 (`admin_console`, `0003_admin_control_plane_v2.sql`) | ① 콘솔에서 부여/해제한 mute·ban·방 해산·`gkick`이 실제 클라이언트 세션과 재접속에 즉시 반영되는지 확인 (`tests/admin/test_admin_console_v2.cpp` + 라이브 Docker 검증) ② `viewer` 및 `ADMIN_READ_ONLY=1` 차단, `idempotency_key` 중복/충돌, 감사 로그 기록 확인 |
 | **v3 (Step 4)** | 제한된 인스턴스 재시작 + 스키마 기반 설정 변경 | ① 표준 `deploy_docker.ps1`의 명시적 대상 인수를 통해 `server-1` 등 단일 노드 재시작 시 [재접속 계약](../ops/session-continuity-contract.md)에 따른 세션 연속성 유지 및 `/readyz` 복구 확인 뒤 `succeeded` 전환 확인 ② 허용 목록 외 타깃·범위 초과 설정 거절 확인 |

@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 
 project(dynaxis_admin_console)
 
+find_package(OpenSSL REQUIRED)
+
 if (NOT TARGET nlohmann_json::nlohmann_json)
     find_package(nlohmann_json CONFIG REQUIRED)
 endif()
@@ -43,6 +45,7 @@ add_library(admin_console_core STATIC
     src/inventory_poller.cpp
     src/admin_http_server.cpp
     src/admin_router.cpp
+    src/chat_ops_backend.cpp
 )
 
 target_include_directories(admin_console_core
@@ -58,6 +61,8 @@ target_link_libraries(admin_console_core
         server_core
     PRIVATE
         ${ADMIN_PQXX_TARGET}
+        infra_redis_factory
+        OpenSSL::Crypto
         nlohmann_json::nlohmann_json
 )
 
