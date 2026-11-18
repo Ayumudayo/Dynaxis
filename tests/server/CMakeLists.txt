@@ -3,7 +3,10 @@ if (BUILD_GTEST_TESTS)
         add_test(NAME ServerStartupFailure COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/python/verify_server_startup_failure.py $<TARGET_FILE:server_app>)
         set_tests_properties(ServerStartupFailure PROPERTIES TIMEOUT 15 LABELS "server-behavior;lifecycle")
     endif()
-    add_executable(chat_timeline_tests ../client/test_message_timeline.cpp)
+    add_executable(chat_timeline_tests
+        ../client/test_message_timeline.cpp
+        ${CMAKE_SOURCE_DIR}/client_gui/src/client_app.cpp
+    )
     target_include_directories(chat_timeline_tests PRIVATE ${CMAKE_SOURCE_DIR}/client_gui/include)
     target_link_libraries(chat_timeline_tests PRIVATE GTest::gtest_main)
     discover_labeled_gtests(chat_timeline_tests "client;chat-history")

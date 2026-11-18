@@ -1,6 +1,9 @@
 #include "client/client_app.hpp"
+#include "client/client_preferences.hpp"
 #include "client/gui_manager.hpp"
-#include <string_view>
+#include "client/net_client.hpp"
+
+#include <filesystem>
 
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
 #pragma comment(lib, "legacy_stdio_definitions")
@@ -9,25 +12,36 @@
 /**
  * @brief ImGui 개발용 클라이언트 진입점입니다.
  *
- * UI 수명주기(`GuiManager`)와 로직 수명주기(`ClientApp`)를 분리해,
- * 네트워크/상태 로직과 렌더링 계층을 독립적으로 유지합니다.
+ * 비비밀 로컬 환경설정을 로드하고 CLI 인자(`--host`, `--port`, `--user`, `--workbench`,
+ * `--messenger`, `--auto-resume`, `--no-auto-resume`, `--config`, `--smoke-test`)를 적용한 뒤
+ * `NetClient`, `ClientApp`, `GuiManager`를 조립해 실행합니다.
  */
 int main(int argc, char** argv)
 {
-    // 1. 비즈니스 로직 & 데이터 상태 관리자 생성
-    ClientApp app;
+    const ClientCliOptions cli = parse_client_cli_args(argc, argv);
 
-    // 2. UI 매니저 생성 (앱과 연결)
-    GuiManager gui(app);
+    std::filesystem::path persist_path;
+    if (!cli.config_path_override.empty()) {
+        persist_path = cli.config_path_override;
+    } else if (!cli.smoke_test) {
+        persist_path = default_client_preferences_path();
+    }
 
-    // 3. UI 초기화 (윈도우 생성 등)
-    if (!gui.init(1280, 720, "Dynaxis ImGui Client (Refactored)")) {
+    ClientPreferences prefs;
+    if (!persist_path.empty()) {
+        load_client_preferences_file(persist_path, prefs);
+    }
+    apply_cli_overrides(prefs, cli);
+
+    NetClient transport;
+    ClientApp app(transport);
+    GuiManager gui(app, prefs.workbench_mode ? UiMode::WORKBENCH : UiMode::MESSENGER);
+    gui.apply_preferences(prefs, persist_path);
+
+    if (!gui.init(1360, 820, "Dynaxis Client")) {
         return 1;
     }
 
-    // 4. 메인 루프 실행
-    const bool smoke = argc == 2 && std::string_view(argv[1]) == "--smoke-test";
-    gui.run(smoke ? 10u : 0u);
-
+    gui.run(cli.smoke_test ? 10u : 0u);
     return 0;
 }
