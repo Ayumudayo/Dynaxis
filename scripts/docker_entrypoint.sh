@@ -26,9 +26,12 @@ case "$CMD" in
   "migrate")
     exec ./migrations_runner "$@"
     ;;
+  "admin")
+    exec ./admin_app "$@"
+    ;;
   *)
     echo "Unknown command: $CMD"
-    echo "Usage: $0 {server|worker|replayer|gateway|migrate} [args...]"
+    echo "Usage: $0 {server|worker|replayer|gateway|migrate|admin} [args...]"
     exit 1
     ;;
 esac

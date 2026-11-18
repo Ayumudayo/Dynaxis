@@ -57,6 +57,7 @@ HEADER_SCAN_DIRS = (
     "server/include",
     "gateway/include",
     "client_gui/include",
+    "admin_console/include",
 )
 
 HEADER_SUFFIXES = {".hpp", ".h", ".hh"}

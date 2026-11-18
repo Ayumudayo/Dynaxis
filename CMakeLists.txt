@@ -10,6 +10,7 @@ option(BUILD_SERVER_STACK "Build server libraries and server_app" ON)
 option(BUILD_GATEWAY_APP "Build gateway_app" ON)
 option(BUILD_CORE_EXTENSIONS "Build MSA adapters, protocol and storage integration" ON)
 option(BUILD_CLIENT_GUI "Build the ImGui desktop client" ON)
+option(BUILD_ADMIN_CONSOLE "Build the web admin console control-plane and UI" ON)
 
 
 option(BUILD_SERVER_TESTS "Build server tests" ON)
@@ -54,7 +55,7 @@ endif()
 
 if (NOT BUILD_CORE_EXTENSIONS AND
     (BUILD_SERVER_STACK OR BUILD_GATEWAY_APP OR BUILD_WRITE_BEHIND_TOOLS OR
-     BUILD_MIGRATIONS_RUNNER OR BUILD_CLIENT_GUI))
+     BUILD_MIGRATIONS_RUNNER OR BUILD_CLIENT_GUI OR BUILD_ADMIN_CONSOLE))
     message(FATAL_ERROR "MSA apps/tools require BUILD_CORE_EXTENSIONS=ON; use a core-engine preset for the minimal runtime")
 endif()
 
@@ -163,6 +164,10 @@ endif()
 
 if (BUILD_WRITE_BEHIND_TOOLS OR BUILD_MIGRATIONS_RUNNER)
   add_subdirectory(tools)
+endif()
+
+if (BUILD_ADMIN_CONSOLE)
+  add_subdirectory(admin_console)
 endif()
 
 if (BUILD_SERVER_TESTS)

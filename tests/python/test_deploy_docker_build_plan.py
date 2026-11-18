@@ -37,6 +37,7 @@ def main() -> int:
         "dynaxis-gateway:local",
         "dynaxis-worker:local",
         "dynaxis-migrator:local",
+        "dynaxis-admin:local",
     ):
         require(
             script,

@@ -42,6 +42,17 @@ x-migrator-build: &migrator-build
     dockerfile: Dockerfile
     target: migrator-runtime
 
+x-admin: &admin
+  image: dynaxis-admin:local
+  pull_policy: never
+
+x-admin-build: &admin-build
+  <<: *admin
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+    target: admin-runtime
+
 services:
 
   postgres:
@@ -170,6 +181,50 @@ services:
       - "${HAPROXY_STATS_HOST_PORT:-8404}:8404"
     volumes:
       - ./haproxy/${HAPROXY_CONFIG:-haproxy.cfg}:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - dynaxis-stack
+
+  admin:
+    <<: *admin-build
+    command: ["admin"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+      gateway-1:
+        condition: service_started
+      gateway-2:
+        condition: service_started
+    environment:
+      ADMIN_LISTEN_PORT: "${ADMIN_LISTEN_PORT:-9200}"
+      ADMIN_ENV_LABEL: "${ADMIN_ENV_LABEL:-LOCAL}"
+      ADMIN_READ_ONLY: "${ADMIN_READ_ONLY:-1}"
+      ADMIN_AUTH_MODE: "${ADMIN_AUTH_MODE:-development}"
+      ADMIN_VIEWER_TOKEN: "${ADMIN_VIEWER_TOKEN:-}"
+      ADMIN_OPERATOR_TOKEN: "${ADMIN_OPERATOR_TOKEN:-}"
+      ADMIN_TOKEN: "${ADMIN_TOKEN:-}"
+      ADMIN_WEB_ROOT: "/app/web"
+      ADMIN_TOPOLOGY_PATH: "/app/topology.active.json"
+      MIGRATIONS_DIR: "/app/migrations"
+      ADMIN_TARGET_MODE: "docker"
+      ADMIN_POLL_INTERVAL_MS: "${ADMIN_POLL_INTERVAL_MS:-5000}"
+      ADMIN_PROBE_TIMEOUT_MS: "${ADMIN_PROBE_TIMEOUT_MS:-1500}"
+      ADMIN_STALE_TTL_MS: "${ADMIN_STALE_TTL_MS:-15000}"
+      ADMIN_OBSERVABILITY_ENABLED: "${ADMIN_OBSERVABILITY_ENABLED:-0}"
+      ADMIN_GRAFANA_URL: "${ADMIN_GRAFANA_URL:-http://127.0.0.1:33000}"
+      ADMIN_PROMETHEUS_URL: "${ADMIN_PROMETHEUS_URL:-http://127.0.0.1:39090}"
+      ADMIN_HAPROXY_URL: "${ADMIN_HAPROXY_URL:-http://127.0.0.1:8404/}"
+      REDIS_URI: "${REDIS_URI:-tcp://redis:6379}"
+      DB_URI: "postgresql://${POSTGRES_USER:-dynaxis}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-dynaxis_db}"
+      WB_DLQ_STREAM: "${WB_DLQ_STREAM:-session_events_dlq}"
+    ports:
+      - "${ADMIN_HOST_PORT:-39200}:9200"
+    volumes:
+      - ./topologies:/app/topologies:ro
+      - ./topology.active.json:/app/topology.active.json:ro
     networks:
       - dynaxis-stack
 

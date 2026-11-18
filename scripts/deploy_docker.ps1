@@ -1,4 +1,4 @@
-# deploy_docker.ps1
+﻿# deploy_docker.ps1
 param (
     [string]$Action = "up", # up, down, restart, build, logs, ps, clean, config
     [switch]$Detached = $false,
@@ -246,6 +246,13 @@ function Get-RuntimeImageBuildSpecs([string]$ProjectRoot) {
             Dockerfile = $dockerfilePath
             Context = $ProjectRoot
         }
+        @{
+            Name = "admin-runtime"
+            Image = "dynaxis-admin:local"
+            Target = "admin-runtime"
+            Dockerfile = $dockerfilePath
+            Context = $ProjectRoot
+        }
     )
 }
 
@@ -295,6 +302,9 @@ if ($ResolvedEnvFile) {
 
 if ($Observability) {
     $ComposeBaseArgs += @("--profile", "observability")
+    if ([string]::IsNullOrWhiteSpace($env:ADMIN_OBSERVABILITY_ENABLED)) {
+        $env:ADMIN_OBSERVABILITY_ENABLED = "1"
+    }
 }
 
 if ($Action -eq "build") {

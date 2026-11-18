@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynaxis Web Admin Console (v1)</title>
+    <link rel="stylesheet" href="/styles/tokens.css">
+    <link rel="stylesheet" href="/styles/app.css">
+</head>
+<body>
+<div class="app-shell">
+    <!-- Global Safety Top Bar -->
+    <header class="safety-bar">
+        <div class="safety-bar__group">
+            <span class="brand-mark">
+                <span class="brand-dot" aria-hidden="true"></span>
+                <span>Dynaxis Admin Console</span>
+            </span>
+            <span id="meta-version" class="pill mono">v1</span>
+            <span id="meta-env" class="pill mono">LOCAL</span>
+            <span id="meta-readonly" class="pill pill--readonly">READ-ONLY</span>
+            <span id="meta-auth" class="pill mono">ROLE: viewer</span>
+        </div>
+
+        <div class="safety-bar__group">
+            <span id="observed-age-pill" class="pill num">Observed: --</span>
+            <button id="btn-toggle-poll" type="button" class="btn">Auto-Poll: ON</button>
+            <button id="btn-refresh" type="button" class="btn">Refresh</button>
+            <a id="link-grafana" class="btn hidden" target="_blank" rel="noopener noreferrer">Grafana</a>
+            <a id="link-prometheus" class="btn hidden" target="_blank" rel="noopener noreferrer">Prometheus</a>
+            <a id="link-haproxy" class="btn hidden" target="_blank" rel="noopener noreferrer">HAProxy Stats</a>
+            <button id="btn-auth-modal" type="button" class="btn">Bearer Token</button>
+        </div>
+    </header>
+
+    <!-- Workspace Body -->
+    <div class="workspace-body">
+        <!-- Progressive Left Navigation -->
+        <aside class="side-nav" aria-label="Primary Navigation">
+            <div class="nav-scroll">
+                <div class="nav-group">
+                    <div class="nav-group__label">관측 · v1</div>
+                    <button type="button" class="nav-item nav-item--active">
+                        <span>Overview</span>
+                        <span class="nav-stage-tag">v1</span>
+                    </button>
+                </div>
+
+                <div class="nav-group">
+                    <div class="nav-group__label">채팅 운영 · v2</div>
+                    <button type="button" class="nav-item" disabled title="v2 도입 예정 (현재 Read-Only v1)">
+                        <span>Sessions &amp; Rooms</span>
+                        <span class="nav-stage-tag">v2</span>
+                    </button>
+                    <button type="button" class="nav-item" disabled title="v2 도입 예정 (현재 Read-Only v1)">
+                        <span>Moderation</span>
+                        <span class="nav-stage-tag">v2</span>
+                    </button>
+                    <button type="button" class="nav-item" disabled title="v2 도입 예정 (현재 Read-Only v1)">
+                        <span>Audit Log</span>
+                        <span class="nav-stage-tag">v2</span>
+                    </button>
+                </div>
+
+                <div class="nav-group">
+                    <div class="nav-group__label">라이프사이클 · v3</div>
+                    <button type="button" class="nav-item" disabled title="v3 도입 예정 (제한된 제어면)">
+                        <span>Drain &amp; Scale</span>
+                        <span class="nav-stage-tag">v3</span>
+                    </button>
+                    <button type="button" class="nav-item" disabled title="v3 도입 예정 (제한된 설정 롤백)">
+                        <span>Config &amp; Rollback</span>
+                        <span class="nav-stage-tag">v3</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="nav-footer">
+                <div class="nav-footer__row">
+                    <span>Poll Interval</span>
+                    <span id="meta-poll-interval" class="num">--</span>
+                </div>
+                <div class="nav-footer__row">
+                    <span>Stale TTL</span>
+                    <span id="meta-stale-ttl" class="num">--</span>
+                </div>
+                <div class="nav-footer__row">
+                    <span>Observability</span>
+                    <span id="meta-obs-flag" class="mono">--</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Single Scrollable Main Pane -->
+        <main class="main-pane">
+            <div class="main-scroll">
+                <div id="error-banner" class="error-banner hidden" role="alert">
+                    <span id="error-banner-text"></span>
+                    <button id="btn-retry-auth" type="button" class="btn">Token 설정</button>
+                </div>
+
+                <!-- 4 KPI Cards -->
+                <section class="kpi-grid" aria-label="핵심 운영 지표">
+                    <article class="kpi-card">
+                        <div class="kpi-card__title">가용 서비스 (Ready / Desired)</div>
+                        <div id="kpi-ready" class="kpi-card__value num">-- / --</div>
+                        <div id="kpi-ready-sub" class="kpi-card__sub">one_shot 작업 제외 상시 워크로드</div>
+                    </article>
+                    <article class="kpi-card">
+                        <div class="kpi-card__title">활성 세션 (Gateway / Server)</div>
+                        <div id="kpi-sessions" class="kpi-card__value num">-- / --</div>
+                        <div id="kpi-sessions-sub" class="kpi-card__sub num">Active Rooms: --</div>
+                    </article>
+                    <article class="kpi-card">
+                        <div class="kpi-card__title">Write-Behind Pending / DLQ</div>
+                        <div id="kpi-wb" class="kpi-card__value num">-- / --</div>
+                        <div id="kpi-wb-sub" class="kpi-card__sub num">DLQ Total Counter: --</div>
+                    </article>
+                    <article class="kpi-card">
+                        <div class="kpi-card__title">관측 신선도 (Snapshot Age)</div>
+                        <div id="kpi-freshness" class="kpi-card__value num">--</div>
+                        <div id="kpi-freshness-sub" class="kpi-card__sub num">TTL 임계 초과 시 ? Unknown 전환</div>
+                    </article>
+                </section>
+
+                <!-- Topology Strip -->
+                <section class="panel-card" aria-label="서비스 토폴로지 스트립">
+                    <div class="panel-card__header">
+                        <h2 class="panel-card__title">Topology Strip (Edge → Gateway → Server → Worker → Data → Observability)</h2>
+                        <span class="panel-card__hint">노드를 클릭하면 우측 인스펙터 드로어가 열립니다</span>
+                    </div>
+                    <div id="topology-strip" class="topology-strip"></div>
+                </section>
+
+                <!-- Inventory Matrix -->
+                <section class="panel-card" aria-label="서비스 인벤토리 매트릭스">
+                    <div class="panel-card__header">
+                        <h2 class="panel-card__title">Service Inventory Matrix</h2>
+                        <span id="inventory-count" class="panel-card__hint num">0 services</span>
+                    </div>
+                    <div class="filter-toolbar">
+                        <div id="status-filter-chips" class="chip-row" aria-label="상태 필터"></div>
+                        <input id="search-input" class="search-input" type="search" placeholder="Filter service_id or name...">
+                    </div>
+                    <div class="table-wrap">
+                        <table class="inventory-table">
+                            <thead>
+                                <tr>
+                                    <th>Service ID</th>
+                                    <th>Display Name</th>
+                                    <th>Layer / Kind</th>
+                                    <th>Status</th>
+                                    <th>Ready / Desired</th>
+                                    <th>Latency</th>
+                                    <th>Observed Age</th>
+                                    <th>Domain Signal</th>
+                                    <th>Detail</th>
+                                </tr>
+                            </thead>
+                            <tbody id="inventory-tbody"></tbody>
+                        </table>
+                    </div>
+                    <div id="inventory-empty" class="empty-box hidden">필터 조건과 일치하는 서비스가 없습니다.</div>
+                </section>
+            </div>
+
+            <!-- Right Slide-Over Context Drawer -->
+            <aside id="inspector-drawer" class="drawer hidden" aria-label="서비스 상세 인스펙터">
+                <div class="drawer__header">
+                    <div>
+                        <h3 id="drawer-title" class="drawer__title">--</h3>
+                        <div id="drawer-subtitle" class="drawer__subtitle mono">--</div>
+                    </div>
+                    <button id="btn-close-drawer" type="button" class="btn">Close</button>
+                </div>
+                <div id="drawer-body" class="drawer__body"></div>
+            </aside>
+        </main>
+    </div>
+</div>
+
+<!-- Bearer Token Modal (stored in sessionStorage only) -->
+<div id="auth-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
+    <div class="modal-card">
+        <h3 id="auth-modal-title" class="modal-card__title">Admin Bearer Token 입력</h3>
+        <p id="auth-modal-desc" class="modal-card__desc">
+            토큰은 브라우저 <span class="mono">sessionStorage</span>에만 보관되며 URL·디스크에 기록되지 않습니다.
+        </p>
+        <input id="token-input" class="token-input" type="password" autocomplete="off" placeholder="ADMIN_TOKEN / VIEWER_TOKEN">
+        <div class="modal-actions">
+            <button id="btn-clear-token" type="button" class="btn">토큰 삭제</button>
+            <button id="btn-cancel-token" type="button" class="btn">취소</button>
+            <button id="btn-save-token" type="button" class="btn btn--primary">적용</button>
+        </div>
+    </div>
+</div>
+
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>

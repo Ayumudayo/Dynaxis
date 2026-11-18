@@ -17,7 +17,7 @@ COPY . .
 
 # Dependencies are installed once per locked recipe; builds use the same native entry point.
 RUN --mount=type=cache,id=dynaxis-conan2,sharing=locked,target=/root/.conan2 \
-    python scripts/build.py --profile server --config Release --step all --jobs 4 --target server_app gateway_app wb_worker wb_dlq_replayer migrations_runner
+    python scripts/build.py --profile server --config Release --step all --jobs 4 --target server_app gateway_app wb_worker wb_dlq_replayer migrations_runner admin_app
 
 RUN mkdir -p /opt/dynaxis/bin /opt/dynaxis/migrations && \
     cp /app/build/linux/server/release/server/server_app /opt/dynaxis/bin/server_app && \
@@ -25,12 +25,14 @@ RUN mkdir -p /opt/dynaxis/bin /opt/dynaxis/migrations && \
     cp /app/build/linux/server/release/tools/wb_dlq_replayer /opt/dynaxis/bin/wb_dlq_replayer && \
     cp /app/build/linux/server/release/gateway/gateway_app /opt/dynaxis/bin/gateway_app && \
     cp /app/build/linux/server/release/tools/migrations_runner /opt/dynaxis/bin/migrations_runner && \
+    cp /app/build/linux/server/release/admin_console/admin_app /opt/dynaxis/bin/admin_app && \
     cp -r tools/migrations/. /opt/dynaxis/migrations/ && \
     strip --strip-unneeded /opt/dynaxis/bin/server_app && \
     strip --strip-unneeded /opt/dynaxis/bin/wb_worker && \
     strip --strip-unneeded /opt/dynaxis/bin/wb_dlq_replayer && \
     strip --strip-unneeded /opt/dynaxis/bin/gateway_app && \
     strip --strip-unneeded /opt/dynaxis/bin/migrations_runner && \
+    strip --strip-unneeded /opt/dynaxis/bin/admin_app && \
     true
 
 # ==============================================================================
@@ -81,6 +83,11 @@ FROM runtime-base AS migrator-runtime
 COPY --from=builder /opt/dynaxis/bin/migrations_runner /app/migrations_runner
 COPY --from=builder /opt/dynaxis/migrations /app/migrations
 
+FROM runtime-base AS admin-runtime
+COPY --from=builder /opt/dynaxis/bin/admin_app /app/admin_app
+COPY --from=builder /app/admin_console/web /app/web
+COPY --from=builder /opt/dynaxis/migrations /app/migrations
+
 # Legacy all-in-one runtime image (default target for manual builds)
 FROM runtime-base AS all-runtime
 COPY --from=builder /opt/dynaxis/bin/server_app /app/server_app
@@ -88,4 +95,6 @@ COPY --from=builder /opt/dynaxis/bin/wb_worker /app/wb_worker
 COPY --from=builder /opt/dynaxis/bin/wb_dlq_replayer /app/wb_dlq_replayer
 COPY --from=builder /opt/dynaxis/bin/gateway_app /app/gateway_app
 COPY --from=builder /opt/dynaxis/bin/migrations_runner /app/migrations_runner
+COPY --from=builder /opt/dynaxis/bin/admin_app /app/admin_app
+COPY --from=builder /app/admin_console/web /app/web
 COPY --from=builder /opt/dynaxis/migrations /app/migrations

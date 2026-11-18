@@ -71,7 +71,8 @@ def main():
         extensions = args.profile != 'core'
         flags = {'BUILD_CORE_EXTENSIONS': extensions, 'BUILD_SERVER_STACK': apps,
                  'BUILD_GATEWAY_APP': apps, 'BUILD_WRITE_BEHIND_TOOLS': apps,
-                 'BUILD_MIGRATIONS_RUNNER': apps, 'BUILD_CLIENT_GUI': args.profile in ('full', 'client'),
+                 'BUILD_MIGRATIONS_RUNNER': apps, 'BUILD_ADMIN_CONSOLE': apps,
+                 'BUILD_CLIENT_GUI': args.profile in ('full', 'client'),
                  'BUILD_SERVER_TESTS': args.profile != 'client', 'ENABLE_SANITIZERS': args.sanitize}
         command = ['cmake', '-S', ROOT, '-B', directory, '-G', generator,
                    f'-DCMAKE_TOOLCHAIN_FILE={toolchains[0]}', f'-DCMAKE_BUILD_TYPE={args.config}',
