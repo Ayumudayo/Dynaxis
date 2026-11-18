@@ -3,6 +3,7 @@
 #include "admin/admin_types.hpp"
 #include "admin/chat_ops_backend.hpp"
 #include "admin/inventory_poller.hpp"
+#include "admin/ops_config_backend.hpp"
 #include "admin/service_catalog.hpp"
 
 #include "server/core/util/log.hpp"
@@ -109,6 +110,7 @@ dynaxis::admin::AdminConfig load_admin_config_from_env() {
     cfg.poll_interval_ms = env_u32_or_default("ADMIN_POLL_INTERVAL_MS", 5000, 500, 60000);
     cfg.probe_timeout_ms = env_u32_or_default("ADMIN_PROBE_TIMEOUT_MS", 1500, 100, 10000);
     cfg.stale_ttl_ms = env_u32_or_default("ADMIN_STALE_TTL_MS", 15000, 1000, 120000);
+    cfg.operation_verify_timeout_ms = env_u32_or_default("ADMIN_OP_VERIFY_TIMEOUT_MS", 30000, 1000, 180000);
     cfg.observability_enabled = env_bool_or_default("ADMIN_OBSERVABILITY_ENABLED", false);
 
     cfg.grafana_base_url = env_or_default("ADMIN_GRAFANA_URL", "http://127.0.0.1:33000");
@@ -172,14 +174,15 @@ int main(int argc, char** argv) {
     poller.start();
 
     auto chat_ops = std::make_shared<dynaxis::admin::PostgresRedisChatOpsBackend>(config);
-    dynaxis::admin::AdminRouter router(config, poller, chat_ops);
+    auto ops_config = std::make_shared<dynaxis::admin::PostgresOpsConfigBackend>(config, poller);
+    dynaxis::admin::AdminRouter router(config, poller, chat_ops, ops_config);
     dynaxis::admin::AdminHttpServer server(config.listen_port, [&router](const dynaxis::admin::AdminHttpRequest& req) {
         return router.handle(req);
     });
     server.start();
 
     server::core::log::info(
-        "Dynaxis Web Admin Console v2 listening on port " + std::to_string(server.bound_port()) +
+        "Dynaxis Web Admin Console v3 listening on port " + std::to_string(server.bound_port()) +
         " (env=" + config.env_label +
         ", auth=" + (config.auth_mode == dynaxis::admin::AdminAuthMode::DEVELOPMENT ? "development" : "token") +
         ", read_only=" + (config.read_only ? "1" : "0") + ")");

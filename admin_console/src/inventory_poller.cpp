@@ -196,7 +196,9 @@ InventoryPoller::InventoryPoller(AdminConfig config,
     : config_(std::move(config)),
       catalog_(std::move(catalog)),
       pg_probe_(std::move(pg_probe)),
-      snapshot_(std::make_shared<InventorySnapshot>()) {
+      snapshot_(std::make_shared<InventorySnapshot>()),
+      poll_interval_ms_(std::clamp<std::uint32_t>(config_.poll_interval_ms, 500u, 60'000u)),
+      stale_ttl_ms_(static_cast<std::uint32_t>(std::clamp<std::uint64_t>(config_.stale_ttl_ms, 1000ULL, 120'000ULL))) {
     if (!pg_probe_) {
         pg_probe_ = std::make_shared<LibpqxxPostgresProbe>(config_.db_uri, config_.migrations_dir);
     }
@@ -214,7 +216,7 @@ void InventoryPoller::start() {
     worker_thread_ = std::thread([this]() {
         while (!stop_requested_.load()) {
             poll_once();
-            const std::uint32_t sleep_ms = std::clamp<std::uint32_t>(config_.poll_interval_ms, 500u, 60'000u);
+            const std::uint32_t sleep_ms = poll_interval_ms();
             std::uint32_t waited = 0;
             while (!stop_requested_.load() && waited < sleep_ms) {
                 const std::uint32_t chunk = std::min<std::uint32_t>(100u, sleep_ms - waited);
@@ -379,6 +381,23 @@ std::shared_ptr<const InventorySnapshot> InventoryPoller::snapshot() const {
 
 bool InventoryPoller::has_completed_initial_poll() const noexcept {
     return initial_poll_done_.load();
+}
+
+void InventoryPoller::update_runtime_tuning(std::uint32_t poll_interval_ms, std::uint32_t stale_ttl_ms) noexcept {
+    poll_interval_ms_.store(std::clamp<std::uint32_t>(poll_interval_ms, 500u, 60'000u));
+    stale_ttl_ms_.store(std::clamp<std::uint32_t>(stale_ttl_ms, 1000u, 120'000u));
+}
+
+std::uint32_t InventoryPoller::poll_interval_ms() const noexcept {
+    return poll_interval_ms_.load();
+}
+
+std::uint32_t InventoryPoller::stale_ttl_ms() const noexcept {
+    return stale_ttl_ms_.load();
+}
+
+const std::vector<ServiceTargetConfig>& InventoryPoller::catalog() const noexcept {
+    return catalog_;
 }
 
 } // namespace dynaxis::admin

@@ -166,6 +166,7 @@ std::string http_status_text(int code) {
     switch (code) {
         case 200: return "200 OK";
         case 201: return "201 Created";
+        case 202: return "202 Accepted";
         case 400: return "400 Bad Request";
         case 401: return "401 Unauthorized";
         case 403: return "403 Forbidden";
@@ -177,16 +178,17 @@ std::string http_status_text(int code) {
     }
 }
 
-json build_meta_json(const AdminConfig& config, AdminRole role) {
+json build_meta_json(const AdminConfig& config, const InventoryPoller& poller, AdminRole role) {
     return json{
-        {"version", "v2"},
+        {"version", "v3"},
         {"env_label", config.env_label},
         {"read_only", config.read_only},
         {"auth_mode", config.auth_mode == AdminAuthMode::DEVELOPMENT ? "development" : "token"},
         {"actor_role", std::string(admin_role_to_string(role))},
         {"mutating_allowed", (!config.read_only && role != AdminRole::VIEWER)},
-        {"poll_interval_ms", config.poll_interval_ms},
-        {"stale_ttl_ms", config.stale_ttl_ms},
+        {"v3_mutating_allowed", (!config.read_only && role == AdminRole::ADMIN)},
+        {"poll_interval_ms", poller.poll_interval_ms()},
+        {"stale_ttl_ms", poller.stale_ttl_ms()},
         {"observability_enabled", config.observability_enabled},
         {"links",
          {
@@ -255,7 +257,7 @@ struct StaticAssetSpec {
     std::string_view content_type;
 };
 
-constexpr std::array<StaticAssetSpec, 8> kStaticAssets{{
+constexpr std::array<StaticAssetSpec, 9> kStaticAssets{{
     {"/", "index.html", "text/html; charset=utf-8"},
     {"/index.html", "index.html", "text/html; charset=utf-8"},
     {"/styles/tokens.css", "styles/tokens.css", "text/css; charset=utf-8"},
@@ -263,6 +265,7 @@ constexpr std::array<StaticAssetSpec, 8> kStaticAssets{{
     {"/js/api.js", "js/api.js", "application/javascript; charset=utf-8"},
     {"/js/render.js", "js/render.js", "application/javascript; charset=utf-8"},
     {"/js/views_v2.js", "js/views_v2.js", "application/javascript; charset=utf-8"},
+    {"/js/views_v3.js", "js/views_v3.js", "application/javascript; charset=utf-8"},
     {"/js/app.js", "js/app.js", "application/javascript; charset=utf-8"},
 }};
 
@@ -270,8 +273,12 @@ constexpr std::array<StaticAssetSpec, 8> kStaticAssets{{
 
 AdminRouter::AdminRouter(AdminConfig config,
                          InventoryPoller& poller,
-                         std::shared_ptr<IChatOpsBackend> chat_ops)
-    : config_(std::move(config)), poller_(poller), chat_ops_(std::move(chat_ops)) {}
+                         std::shared_ptr<IChatOpsBackend> chat_ops,
+                         std::shared_ptr<IOpsConfigBackend> ops_config)
+    : config_(std::move(config)),
+      poller_(poller),
+      chat_ops_(std::move(chat_ops)),
+      ops_config_(std::move(ops_config)) {}
 
 AdminAuthDecision AdminRouter::authorize_api_request(const AdminHttpRequest& request) const {
     const auto presented = extract_presented_token(request);
@@ -408,23 +415,24 @@ AdminHttpResponse AdminRouter::handle(const AdminHttpRequest& request) const {
 
         const std::uint64_t now_ms = current_unix_ms();
         const auto snap = poller_.snapshot();
+        const std::uint32_t effective_stale_ttl_ms = poller_.stale_ttl_ms();
 
         if (is_read_method) {
             if (path == "/api/v1/meta") {
-                return make_json("200 OK", build_meta_json(config_, auth.role).dump());
+                return make_json("200 OK", build_meta_json(config_, poller_, auth.role).dump());
             }
 
             if (path == "/api/v1/services") {
                 json services_json = json::array();
                 if (snap) {
                     for (const auto& obs : snap->services) {
-                        services_json.push_back(serialize_service(obs, now_ms, config_.stale_ttl_ms));
+                        services_json.push_back(serialize_service(obs, now_ms, effective_stale_ttl_ms));
                     }
                 }
                 const json j{
                     {"captured_at_unix_ms", snap ? snap->captured_at_unix_ms : 0},
                     {"now_unix_ms", now_ms},
-                    {"stale_ttl_ms", config_.stale_ttl_ms},
+                    {"stale_ttl_ms", effective_stale_ttl_ms},
                     {"services", std::move(services_json)},
                 };
                 return make_json("200 OK", j.dump());
@@ -438,7 +446,7 @@ AdminHttpResponse AdminRouter::handle(const AdminHttpRequest& request) const {
                         if (obs.service_id == id) {
                             const json j{
                                 {"now_unix_ms", now_ms},
-                                {"service", serialize_service(obs, now_ms, config_.stale_ttl_ms)},
+                                {"service", serialize_service(obs, now_ms, effective_stale_ttl_ms)},
                             };
                             return make_json("200 OK", j.dump());
                         }
@@ -453,14 +461,14 @@ AdminHttpResponse AdminRouter::handle(const AdminHttpRequest& request) const {
                 json services_json = json::array();
                 if (snap) {
                     for (const auto& obs : snap->services) {
-                        const ServiceStatus eff = evaluate_effective_status(obs, now_ms, config_.stale_ttl_ms);
+                        const ServiceStatus eff = evaluate_effective_status(obs, now_ms, effective_stale_ttl_ms);
                         if (obs.kind != ServiceKind::ONE_SHOT) {
                             desired_effective += obs.desired_count;
                             if (eff == ServiceStatus::READY || eff == ServiceStatus::DEGRADED) {
                                 ready_effective += obs.ready_count;
                             }
                         }
-                        services_json.push_back(serialize_service(obs, now_ms, config_.stale_ttl_ms));
+                        services_json.push_back(serialize_service(obs, now_ms, effective_stale_ttl_ms));
                     }
                 }
 
@@ -470,7 +478,7 @@ AdminHttpResponse AdminRouter::handle(const AdminHttpRequest& request) const {
                         : 0ULL;
 
                 const json j{
-                    {"meta", build_meta_json(config_, auth.role)},
+                    {"meta", build_meta_json(config_, poller_, auth.role)},
                     {"captured_at_unix_ms", snap ? snap->captured_at_unix_ms : 0},
                     {"now_unix_ms", now_ms},
                     {"observed_age_ms", age_ms},
@@ -555,7 +563,39 @@ AdminHttpResponse AdminRouter::handle(const AdminHttpRequest& request) const {
                     query_size(qparams, "limit", 100, 1, 200)));
             }
 
-            return make_error_json("404 Not Found", "not_found", "Unknown API v1/v2 endpoint.");
+            auto require_ops_backend = [&]() -> std::optional<AdminHttpResponse> {
+                if (!ops_config_) {
+                    return make_error_json(
+                        "503 Service Unavailable",
+                        "backend_unavailable",
+                        "Operations and configuration backend is not configured.");
+                }
+                return std::nullopt;
+            };
+
+            if (path == "/api/v1/operations") {
+                if (auto err = require_ops_backend()) return *err;
+                return from_chat_op(ops_config_->list_operations(
+                    query_str(qparams, "status"),
+                    query_size(qparams, "limit", 50, 1, 100)));
+            }
+
+            constexpr std::string_view kOpsPrefix = "/api/v1/operations/";
+            if (path.rfind(kOpsPrefix, 0) == 0) {
+                const std::string_view seg = path.substr(kOpsPrefix.size());
+                if (!seg.empty() && seg.find('/') == std::string_view::npos) {
+                    if (auto err = require_ops_backend()) return *err;
+                    return from_chat_op(ops_config_->get_operation(url_decode(seg, false), true));
+                }
+                return make_error_json("404 Not Found", "not_found", "Unknown operation endpoint.");
+            }
+
+            if (path == "/api/v1/config") {
+                if (auto err = require_ops_backend()) return *err;
+                return from_chat_op(ops_config_->get_config());
+            }
+
+            return make_error_json("404 Not Found", "not_found", "Unknown API endpoint.");
         }
 
         // Mutating API methods (POST / DELETE)
@@ -584,24 +624,31 @@ AdminHttpResponse AdminRouter::handle(const AdminHttpRequest& request) const {
                 ? body_json["reason"].get<std::string>()
                 : query_str(qparams, "reason");
 
+        auto record_denied = [&](std::string_view capability,
+                                 std::string_view action,
+                                 std::string_view target,
+                                 std::string_view deny_code) {
+            if (chat_ops_) {
+                chat_ops_->record_denied_audit(
+                    auth.role, capability, action, target, reason, idem_key, deny_code);
+            } else if (ops_config_) {
+                ops_config_->record_denied_audit(
+                    auth.role, capability, action, target, reason, idem_key, deny_code);
+            }
+        };
+
         auto guard_mutating = [&](std::string_view capability,
                                   std::string_view action,
                                   std::string_view target) -> std::optional<AdminHttpResponse> {
             if (config_.read_only) {
-                if (chat_ops_) {
-                    chat_ops_->record_denied_audit(
-                        auth.role, capability, action, target, reason, idem_key, "read_only_mode");
-                }
+                record_denied(capability, action, target, "read_only_mode");
                 return make_error_json(
                     "403 Forbidden",
                     "read_only_mode",
                     "Mutating operations are disabled while ADMIN_READ_ONLY is enabled.");
             }
             if (auth.role == AdminRole::VIEWER) {
-                if (chat_ops_) {
-                    chat_ops_->record_denied_audit(
-                        auth.role, capability, action, target, reason, idem_key, "insufficient_role");
-                }
+                record_denied(capability, action, target, "insufficient_role");
                 return make_error_json(
                     "403 Forbidden",
                     "insufficient_role",
@@ -612,6 +659,32 @@ AdminHttpResponse AdminRouter::handle(const AdminHttpRequest& request) const {
                     "503 Service Unavailable",
                     "backend_unavailable",
                     "Chat operations backend is not configured.");
+            }
+            return std::nullopt;
+        };
+
+        auto guard_admin_mutating = [&](std::string_view capability,
+                                        std::string_view action,
+                                        std::string_view target) -> std::optional<AdminHttpResponse> {
+            if (config_.read_only) {
+                record_denied(capability, action, target, "read_only_mode");
+                return make_error_json(
+                    "403 Forbidden",
+                    "read_only_mode",
+                    "Mutating operations are disabled while ADMIN_READ_ONLY is enabled.");
+            }
+            if (auth.role != AdminRole::ADMIN) {
+                record_denied(capability, action, target, "insufficient_role");
+                return make_error_json(
+                    "403 Forbidden",
+                    "insufficient_role",
+                    "Admin role is required for v3 lifecycle and configuration operations.");
+            }
+            if (!ops_config_) {
+                return make_error_json(
+                    "503 Service Unavailable",
+                    "backend_unavailable",
+                    "Operations and configuration backend is not configured.");
             }
             return std::nullopt;
         };
@@ -670,6 +743,56 @@ AdminHttpResponse AdminRouter::handle(const AdminHttpRequest& request) const {
                 if (auto denied = guard_mutating("wb.dlq", "replay_dlq", config_.dlq_stream_key)) return *denied;
                 return from_chat_op(chat_ops_->replay_dlq(max_items, reason, idem_key, auth.role));
             }
+
+            if (path == "/api/v1/operations") {
+                const std::string op_type = body_json.value("operation_type", "service_restart");
+                const std::string target_svc = body_json.value("target_service", "");
+                const std::string confirm_target = body_json.value("confirmation_target", "");
+                if (auto denied = guard_admin_mutating("ops.lifecycle", op_type, target_svc)) return *denied;
+                if (op_type != "service_restart") {
+                    return make_error_json(
+                        "400 Bad Request",
+                        "unsupported_operation_type",
+                        "Only 'service_restart' is accepted at /api/v1/operations.");
+                }
+                return from_chat_op(ops_config_->create_restart_operation(
+                    target_svc, confirm_target, reason, idem_key, auth.role));
+            }
+
+            if (path == "/api/v1/operations/worker/claim") {
+                if (auto denied = guard_admin_mutating("ops.worker", "worker_claim", "queue")) return *denied;
+                return from_chat_op(ops_config_->claim_next_queued_operation(auth.role));
+            }
+
+            constexpr std::string_view kOpsPrefix = "/api/v1/operations/";
+            constexpr std::string_view kWorkerResultSuffix = "/worker-result";
+            if (path.rfind(kOpsPrefix, 0) == 0 &&
+                path.size() > kOpsPrefix.size() + kWorkerResultSuffix.size() &&
+                path.compare(path.size() - kWorkerResultSuffix.size(), kWorkerResultSuffix.size(), kWorkerResultSuffix) == 0) {
+                const std::string op_id = url_decode(
+                    path.substr(kOpsPrefix.size(), path.size() - kOpsPrefix.size() - kWorkerResultSuffix.size()), false);
+                if (op_id.find('/') == std::string::npos) {
+                    if (auto denied = guard_admin_mutating("ops.worker", "worker_result", op_id)) return *denied;
+                    return from_chat_op(ops_config_->report_worker_result(
+                        op_id, body_json.value("outcome", ""), body_json.value("summary", ""), auth.role));
+                }
+            }
+
+            if (path == "/api/v1/config/apply") {
+                if (auto denied = guard_admin_mutating("ops.config", "config_apply", "stack-config")) return *denied;
+                return from_chat_op(ops_config_->apply_config(request.body, reason, idem_key, auth.role));
+            }
+
+            if (path == "/api/v1/config/rollback") {
+                std::int64_t target_rev = 0;
+                if (body_json.contains("target_revision") && body_json["target_revision"].is_number_integer()) {
+                    target_rev = body_json["target_revision"].get<std::int64_t>();
+                }
+                const std::string confirm_target = body_json.value("confirmation_target", "");
+                if (auto denied = guard_admin_mutating("ops.config", "config_rollback", "stack-config")) return *denied;
+                return from_chat_op(ops_config_->rollback_config(
+                    target_rev, confirm_target, reason, idem_key, auth.role));
+            }
         }
 
         if (request.method == "DELETE") {
@@ -684,10 +807,7 @@ AdminHttpResponse AdminRouter::handle(const AdminHttpRequest& request) const {
         }
 
         if (config_.read_only) {
-            if (chat_ops_) {
-                chat_ops_->record_denied_audit(
-                    auth.role, "control_plane", request.method, path, reason, idem_key, "read_only_mode");
-            }
+            record_denied("control_plane", request.method, path, "read_only_mode");
             return make_error_json(
                 "403 Forbidden",
                 "read_only_mode",

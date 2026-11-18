@@ -58,12 +58,39 @@ public:
      */
     bool has_completed_initial_poll() const noexcept;
 
+    /**
+     * @brief v3 런타임 설정(`admin.poll_interval_ms`, `admin.stale_ttl_ms`)을 재시작 없이 즉시 반영합니다.
+     * @param poll_interval_ms 갱신할 폴링 주기(ms)
+     * @param stale_ttl_ms 갱신할 관측 stale 판정 TTL(ms)
+     */
+    void update_runtime_tuning(std::uint32_t poll_interval_ms, std::uint32_t stale_ttl_ms) noexcept;
+
+    /**
+     * @brief 현재 유효한 폴링 주기(ms)를 반환합니다.
+     * @return 원자적으로 관리되는 폴링 주기(ms)
+     */
+    std::uint32_t poll_interval_ms() const noexcept;
+
+    /**
+     * @brief 현재 유효한 관측 stale 판정 TTL(ms)을 반환합니다.
+     * @return 원자적으로 관리되는 stale TTL(ms)
+     */
+    std::uint32_t stale_ttl_ms() const noexcept;
+
+    /**
+     * @brief 기동 시 구성된 정적 서비스 대상 카탈로그를 반환합니다.
+     * @return `ServiceTargetConfig` 목록 상수 참조
+     */
+    const std::vector<ServiceTargetConfig>& catalog() const noexcept;
+
 private:
     AdminConfig config_;
     std::vector<ServiceTargetConfig> catalog_;
     std::shared_ptr<IPostgresProbe> pg_probe_;
     mutable std::mutex snapshot_mu_;
     std::shared_ptr<const InventorySnapshot> snapshot_;
+    std::atomic<std::uint32_t> poll_interval_ms_{5000};
+    std::atomic<std::uint32_t> stale_ttl_ms_{15000};
     std::atomic<bool> initial_poll_done_{false};
     std::atomic<bool> stop_requested_{false};
     std::thread worker_thread_;

@@ -46,6 +46,7 @@ add_library(admin_console_core STATIC
     src/admin_http_server.cpp
     src/admin_router.cpp
     src/chat_ops_backend.cpp
+    src/ops_config_backend.cpp
 )
 
 target_include_directories(admin_console_core

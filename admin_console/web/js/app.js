@@ -1,13 +1,18 @@
 import {
     ApiError,
+    applyConfigChanges,
     clearAuthToken,
     closeChatRoom,
+    createRestartOperation,
     createSanction,
     fetchAuditLogs,
     fetchChatRoomDetail,
     fetchChatRooms,
     fetchChatUserDetail,
     fetchChatUsers,
+    fetchConfigOverview,
+    fetchOperationDetail,
+    fetchOperations,
     fetchOverview,
     fetchSanctions,
     fetchServiceDetail,
@@ -17,6 +22,7 @@ import {
     kickChatUser,
     replayWbDlq,
     revokeSanction,
+    rollbackConfigRevision,
     setAuthToken,
 } from '/js/api.js';
 import {
@@ -36,6 +42,13 @@ import {
     renderUserDrawer,
     renderUsersView,
 } from '/js/views_v2.js';
+import {
+    renderConfigView,
+    renderOperationStepperDrawer,
+    renderOperationsView,
+    renderRestartConfirmDrawer,
+    renderRollbackDrawer,
+} from '/js/views_v3.js';
 
 const state = {
     activeView: 'overview',
@@ -87,6 +100,30 @@ const state = {
         dlqReason: '',
         dlqIdem: generateIdempotencyKey('dlq'),
         revokeReason: '',
+    },
+    v3: {
+        operations: [],
+        activeOperationId: '',
+        allowlistedTargets: [],
+        drawerKind: null,
+        selectedOperationDetail: null,
+        restartConfirmTarget: null,
+        restartConfirmInput: '',
+        restartReason: '',
+        restartIdem: generateIdempotencyKey('restart'),
+        opFeedback: null,
+        configData: null,
+        draftValues: null,
+        configConfirmInput: '',
+        configReason: '',
+        configIdem: generateIdempotencyKey('cfg'),
+        rollbackTargetRev: null,
+        rollbackConfirmInput: '',
+        rollbackReason: '',
+        rollbackIdem: generateIdempotencyKey('rb'),
+        cfgFeedback: null,
+        drawerFeedback: null,
+        opWatchTimerId: null,
     },
 };
 
@@ -177,6 +214,31 @@ function renderActiveDrawer() {
         );
         return;
     }
+    if (state.v3.drawerKind === 'restart_confirm' && state.v3.restartConfirmTarget) {
+        openCustomDrawer(
+            `Restart: ${state.v3.restartConfirmTarget.service_id}`,
+            '2-Step Blast Radius Confirmation',
+            (bodyEl) =>
+                renderRestartConfirmDrawer(bodyEl, state.v3.restartConfirmTarget, meta, state.v3, v3Handlers),
+        );
+        return;
+    }
+    if (state.v3.drawerKind === 'op_stepper' && state.v3.selectedOperationDetail) {
+        openCustomDrawer(
+            `Operation: ${state.v3.selectedOperationDetail.target_service || ''}`,
+            state.v3.selectedOperationDetail.operation_id || '',
+            (bodyEl) => renderOperationStepperDrawer(bodyEl, state.v3.selectedOperationDetail, v3Handlers),
+        );
+        return;
+    }
+    if (state.v3.drawerKind === 'rollback_confirm' && state.v3.rollbackTargetRev) {
+        openCustomDrawer(
+            `Rollback to #${state.v3.rollbackTargetRev.revision}`,
+            'Schema Config Revision Rollback',
+            (bodyEl) => renderRollbackDrawer(bodyEl, state.v3.rollbackTargetRev, meta, state.v3, v3Handlers),
+        );
+        return;
+    }
     renderInspectorDrawer(null, isObservabilityEnabled());
 }
 
@@ -195,7 +257,7 @@ function renderOverviewSection() {
 }
 
 function renderActiveViewOnly() {
-    const viewIds = ['overview', 'rooms', 'users', 'moderation', 'audit'];
+    const viewIds = ['overview', 'rooms', 'users', 'moderation', 'audit', 'operations', 'config'];
     for (const id of viewIds) {
         const el = document.getElementById(`view-${id}`);
         if (el) {
@@ -215,6 +277,10 @@ function renderActiveViewOnly() {
         renderModerationView(document.getElementById('view-moderation'), meta, state.v2, v2Handlers);
     } else if (state.activeView === 'audit') {
         renderAuditView(document.getElementById('view-audit'), state.v2, v2Handlers);
+    } else if (state.activeView === 'operations') {
+        renderOperationsView(document.getElementById('view-operations'), meta, state.v3, v3Handlers);
+    } else if (state.activeView === 'config') {
+        renderConfigView(document.getElementById('view-config'), meta, state.v3, v3Handlers);
     }
     renderActiveDrawer();
 }
@@ -308,6 +374,15 @@ function handleCloseDrawer() {
     state.v2.selectedRoomDetail = null;
     state.v2.selectedUserDetail = null;
     state.v2.drawerFeedback = null;
+    state.v3.drawerKind = null;
+    state.v3.restartConfirmTarget = null;
+    state.v3.selectedOperationDetail = null;
+    state.v3.rollbackTargetRev = null;
+    state.v3.drawerFeedback = null;
+    if (state.v3.opWatchTimerId !== null) {
+        window.clearTimeout(state.v3.opWatchTimerId);
+        state.v3.opWatchTimerId = null;
+    }
     renderOverviewSection();
     renderActiveViewOnly();
 }
@@ -370,6 +445,66 @@ async function loadAuditViewData() {
     }
 }
 
+async function loadOperationsViewData() {
+    try {
+        const res = await fetchOperations({ limit: 50 });
+        state.v3.operations = Array.isArray(res && res.operations) ? res.operations : [];
+        state.v3.activeOperationId = res && typeof res.active_operation_id === 'string' ? res.active_operation_id : '';
+        state.v3.allowlistedTargets = Array.isArray(res && res.allowlisted_targets) ? res.allowlisted_targets : [];
+        hideErrorBanner();
+        renderActiveViewOnly();
+        scheduleOperationWatch();
+    } catch (err) {
+        handleApiError(err, true);
+    }
+}
+
+async function loadConfigViewData(resetDraft = false) {
+    try {
+        const res = await fetchConfigOverview();
+        state.v3.configData = res || null;
+        if (resetDraft || !state.v3.draftValues) {
+            state.v3.draftValues = { ...(res && res.current_values ? res.current_values : {}) };
+        }
+        hideErrorBanner();
+        renderActiveViewOnly();
+    } catch (err) {
+        handleApiError(err, true);
+    }
+}
+
+function scheduleOperationWatch() {
+    if (state.v3.opWatchTimerId !== null) {
+        window.clearTimeout(state.v3.opWatchTimerId);
+        state.v3.opWatchTimerId = null;
+    }
+    const selOp = state.v3.selectedOperationDetail;
+    const selActive = selOp && ['queued', 'running', 'verifying'].includes(selOp.status);
+    if (!selActive && !state.v3.activeOperationId) {
+        return;
+    }
+    if (state.activeView !== 'operations' && !(state.v3.drawerKind === 'op_stepper' && selActive)) {
+        return;
+    }
+    state.v3.opWatchTimerId = window.setTimeout(async () => {
+        try {
+            if (state.v3.drawerKind === 'op_stepper' && state.v3.selectedOperationDetail) {
+                const detailRes = await fetchOperationDetail(state.v3.selectedOperationDetail.operation_id);
+                if (detailRes && detailRes.operation) {
+                    state.v3.selectedOperationDetail = detailRes.operation;
+                }
+            }
+            if (state.activeView === 'operations') {
+                await loadOperationsViewData();
+            } else {
+                renderActiveDrawer();
+                scheduleOperationWatch();
+            }
+        } catch (_err) {
+        }
+    }, 1000);
+}
+
 async function refreshActiveView() {
     if (state.activeView === 'rooms') {
         await loadRoomsViewData();
@@ -379,6 +514,10 @@ async function refreshActiveView() {
         await loadModerationViewData();
     } else if (state.activeView === 'audit') {
         await loadAuditViewData();
+    } else if (state.activeView === 'operations') {
+        await loadOperationsViewData();
+    } else if (state.activeView === 'config') {
+        await loadConfigViewData(false);
     }
 }
 
@@ -637,16 +776,165 @@ async function refreshOverview(fromUserAction) {
     }
 }
 
+function regenerateV3Key(field, prefix) {
+    const next = generateIdempotencyKey(prefix);
+    state.v3[field] = next;
+    return next;
+}
+
+const v3Handlers = {
+    onRegenerateV3Key(field, prefix) {
+        return regenerateV3Key(field, prefix);
+    },
+    onRefreshOperations() {
+        loadOperationsViewData();
+    },
+    onOpenRestartConfirm(targetObj) {
+        state.selectedServiceId = null;
+        state.selectedDetail = null;
+        state.v2.selectedType = null;
+        state.v3.drawerKind = 'restart_confirm';
+        state.v3.restartConfirmTarget = targetObj;
+        state.v3.restartConfirmInput = '';
+        state.v3.drawerFeedback = null;
+        renderActiveDrawer();
+    },
+    async onSubmitRestart(serviceId) {
+        try {
+            const res = await createRestartOperation({
+                targetService: serviceId,
+                confirmationTarget: state.v3.restartConfirmInput,
+                reason: state.v3.restartReason,
+                idempotencyKey: state.v3.restartIdem,
+            });
+            regenerateV3Key('restartIdem', 'restart');
+            state.v3.restartConfirmInput = '';
+            state.v3.opFeedback = {
+                ok: true,
+                message: `재시작 작업 접수(202): ${serviceId}${res.idempotent_replay ? ' [idempotent replay]' : ''}`,
+            };
+            if (res && res.operation) {
+                state.v3.drawerKind = 'op_stepper';
+                state.v3.selectedOperationDetail = res.operation;
+            }
+            await loadOperationsViewData();
+        } catch (err) {
+            state.v3.drawerFeedback = { ok: false, message: err.message };
+            renderActiveDrawer();
+        }
+    },
+    async onSelectOperation(opId) {
+        state.selectedServiceId = null;
+        state.selectedDetail = null;
+        state.v2.selectedType = null;
+        state.v3.drawerFeedback = null;
+        try {
+            const res = await fetchOperationDetail(opId);
+            if (res && res.operation) {
+                state.v3.drawerKind = 'op_stepper';
+                state.v3.selectedOperationDetail = res.operation;
+                renderActiveViewOnly();
+                scheduleOperationWatch();
+            }
+        } catch (err) {
+            handleApiError(err, true);
+        }
+    },
+    onUpdateConfigDraft(key, val) {
+        if (!state.v3.draftValues) {
+            state.v3.draftValues = {};
+        }
+        state.v3.draftValues[key] = val;
+        renderActiveViewOnly();
+    },
+    onResetConfigDraft() {
+        if (state.v3.configData && state.v3.configData.current_values) {
+            state.v3.draftValues = { ...state.v3.configData.current_values };
+        }
+        state.v3.configConfirmInput = '';
+        state.v3.cfgFeedback = null;
+        renderActiveViewOnly();
+    },
+    async onApplyConfig() {
+        try {
+            const cfg = state.v3.configData;
+            const res = await applyConfigChanges({
+                expectedRevision: cfg ? cfg.current_revision : 0,
+                values: state.v3.draftValues || {},
+                confirmationTarget: state.v3.configConfirmInput,
+                reason: state.v3.configReason,
+                idempotencyKey: state.v3.configIdem,
+            });
+            regenerateV3Key('configIdem', 'cfg');
+            state.v3.configConfirmInput = '';
+            state.v3.cfgFeedback = {
+                ok: true,
+                message: `설정 리비전 #${res.revision} 적용 접수 (${res.apply_mode})${res.idempotent_replay ? ' [idempotent replay]' : ''}`,
+            };
+            if (res && res.operation) {
+                state.v3.drawerKind = 'op_stepper';
+                state.v3.selectedOperationDetail = res.operation;
+            }
+            await refreshOverview(false);
+            await loadConfigViewData(true);
+            scheduleOperationWatch();
+        } catch (err) {
+            state.v3.cfgFeedback = { ok: false, message: err.message };
+            renderActiveViewOnly();
+        }
+    },
+    onOpenRollbackDrawer(revObj) {
+        state.selectedServiceId = null;
+        state.selectedDetail = null;
+        state.v2.selectedType = null;
+        state.v3.drawerKind = 'rollback_confirm';
+        state.v3.rollbackTargetRev = revObj;
+        state.v3.rollbackConfirmInput = '';
+        state.v3.drawerFeedback = null;
+        renderActiveDrawer();
+    },
+    async onSubmitRollback(targetRevision) {
+        try {
+            const res = await rollbackConfigRevision({
+                targetRevision,
+                confirmationTarget: state.v3.rollbackConfirmInput,
+                reason: state.v3.rollbackReason,
+                idempotencyKey: state.v3.rollbackIdem,
+            });
+            regenerateV3Key('rollbackIdem', 'rb');
+            state.v3.rollbackConfirmInput = '';
+            state.v3.cfgFeedback = {
+                ok: true,
+                message: `롤백 리비전 #${res.revision} 생성 (대상 #${targetRevision}, mode=${res.apply_mode})`,
+            };
+            if (res && res.operation) {
+                state.v3.drawerKind = 'op_stepper';
+                state.v3.selectedOperationDetail = res.operation;
+            }
+            await refreshOverview(false);
+            await loadConfigViewData(true);
+            scheduleOperationWatch();
+        } catch (err) {
+            state.v3.drawerFeedback = { ok: false, message: err.message };
+            renderActiveDrawer();
+        }
+    },
+};
+
 function switchView(viewName) {
     state.activeView = viewName;
     if (viewName !== 'overview' && state.selectedServiceId) {
         state.selectedServiceId = null;
         state.selectedDetail = null;
-    } else if (viewName === 'overview' && state.v2.selectedType) {
+    } else if (viewName === 'overview') {
         state.v2.selectedType = null;
         state.v2.selectedId = null;
         state.v2.selectedRoomDetail = null;
         state.v2.selectedUserDetail = null;
+        state.v3.drawerKind = null;
+        state.v3.restartConfirmTarget = null;
+        state.v3.selectedOperationDetail = null;
+        state.v3.rollbackTargetRev = null;
     }
     renderActiveViewOnly();
     refreshActiveView();
@@ -739,7 +1027,7 @@ function bindEvents() {
                 closeAuthModal();
                 return;
             }
-            if (state.selectedServiceId || state.v2.selectedType) {
+            if (state.selectedServiceId || state.v2.selectedType || state.v3.drawerKind) {
                 handleCloseDrawer();
             }
         }

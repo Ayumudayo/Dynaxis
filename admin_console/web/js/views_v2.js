@@ -166,15 +166,22 @@ export function renderRoomsView(container, state, handlers) {
             rm.is_locked ? makePill('pill--warn', 'Locked') : makePill('', 'Public'),
         );
 
+        const tdName = el('td', 'mono cell-clip', rm.name || '');
+        tdName.title = rm.name || '';
+        const tdOwner = el('td', 'mono cell-clip', rm.owner || '—');
+        tdOwner.title = rm.owner || '';
+        const tdRoomId = el('td', 'mono cell-clip', rm.room_id || '');
+        tdRoomId.title = rm.room_id || '';
+
         tr.append(
-            el('td', 'mono', rm.name || ''),
+            tdName,
             tdStatus,
             tdLock,
-            el('td', 'mono', rm.owner || '—'),
+            tdOwner,
             el('td', 'num', String(rm.online_count ?? 0)),
             el('td', 'num', String(rm.db_member_count ?? 0)),
             el('td', 'num', String(rm.watermark ?? 0)),
-            el('td', 'mono', rm.room_id || ''),
+            tdRoomId,
         );
         tbody.appendChild(tr);
     }
@@ -883,15 +890,26 @@ export function renderAuditView(container, state, handlers) {
             tdStatus.appendChild(makePill('', item.status || 'unknown'));
         }
 
+        const tdCap = el('td', 'mono cell-clip', item.capability || '');
+        tdCap.title = item.capability || '';
+        const tdAct = el('td', 'mono cell-clip', item.action || '');
+        tdAct.title = item.action || '';
+        const tdTarget = el('td', 'mono cell-clip', item.target || '');
+        tdTarget.title = item.target || '';
+        const tdIdem = el('td', 'mono cell-clip', item.idempotency_key || '—');
+        tdIdem.title = item.idempotency_key || '';
+        const tdReason = el('td', 'cell-detail', item.reason || '—');
+        tdReason.title = item.reason || '';
+
         tr.append(
             el('td', 'mono', formatTimestampMs(item.created_at_unix_ms)),
             el('td', 'mono', item.actor_role || ''),
-            el('td', 'mono', item.capability || ''),
-            el('td', 'mono', item.action || ''),
-            el('td', 'mono', item.target || ''),
+            tdCap,
+            tdAct,
+            tdTarget,
             tdStatus,
-            el('td', 'mono', item.idempotency_key || '—'),
-            el('td', 'cell-detail', item.reason || '—'),
+            tdIdem,
+            tdReason,
         );
         tbody.appendChild(tr);
     }

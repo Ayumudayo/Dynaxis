@@ -4,6 +4,7 @@
 #include "admin/admin_types.hpp"
 #include "admin/chat_ops_backend.hpp"
 #include "admin/inventory_poller.hpp"
+#include "admin/ops_config_backend.hpp"
 
 #include <memory>
 #include <optional>
@@ -23,7 +24,7 @@ struct AdminAuthDecision {
 };
 
 /**
- * @brief 웹 관리 콘솔 v1/v2의 정적 UI, API v1 조회·제어 엔드포인트, 인가·읽기 전용 가드를 처리하는 라우터입니다.
+ * @brief 웹 관리 콘솔 v1/v2/v3의 정적 UI, API v1 조회·제어 엔드포인트, 인가·읽기 전용 가드를 처리하는 라우터입니다.
  *
  * UI 버튼 숨김에 의존하지 않고 서버 측 핸들러에서 토큰 인증(`TOKEN`/`DEVELOPMENT`), 역할(`VIEWER`/`OPERATOR`/`ADMIN`),
  * `ADMIN_READ_ONLY` 차단을 직접 강제하며, 모든 JSON 응답·오류에서 비밀값을 배제합니다.
@@ -31,14 +32,16 @@ struct AdminAuthDecision {
 class AdminRouter {
 public:
     /**
-     * @brief 설정, 인벤토리 폴러 참조, 선택적 v2 채팅 운영 백엔드를 받아 `AdminRouter`를 구성합니다.
+     * @brief 설정, 인벤토리 폴러 참조, v2 채팅 운영 백엔드, v3 작업·설정 백엔드를 받아 `AdminRouter`를 구성합니다.
      * @param config 인증 모드, 읽기 전용 여부, `web_root`, 딥링크 설정을 담은 `AdminConfig`
      * @param poller 최신 서비스 인벤토리 스냅샷을 제공하는 `InventoryPoller` 참조
      * @param chat_ops v2 채팅 방/사용자/제재/DLQ/감사 조회·제어를 수행할 백엔드 (미지정 시 503 응답)
+     * @param ops_config v3 비동기 서비스 재시작·스키마 설정/롤백을 수행할 백엔드 (미지정 시 503 응답)
      */
     AdminRouter(AdminConfig config,
                 InventoryPoller& poller,
-                std::shared_ptr<IChatOpsBackend> chat_ops = nullptr);
+                std::shared_ptr<IChatOpsBackend> chat_ops = nullptr,
+                std::shared_ptr<IOpsConfigBackend> ops_config = nullptr);
 
     /**
      * @brief 단일 HTTP 요청을 라우팅·인가하고 `AdminHttpResponse`를 생성합니다.
@@ -63,6 +66,7 @@ private:
     AdminConfig config_;
     InventoryPoller& poller_;
     std::shared_ptr<IChatOpsBackend> chat_ops_;
+    std::shared_ptr<IOpsConfigBackend> ops_config_;
 };
 
 } // namespace dynaxis::admin

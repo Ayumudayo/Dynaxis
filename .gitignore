@@ -545,6 +545,7 @@ log.txt
 
 # Env
 .env
+docker/stack/.env.managed
 docker/stack/docker-compose.topology.generated.yml
 docker/stack/topology.active.json
 

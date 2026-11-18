@@ -155,6 +155,7 @@ struct AdminConfig {
     std::uint32_t poll_interval_ms{5000};
     std::uint32_t probe_timeout_ms{1500};
     std::uint64_t stale_ttl_ms{15000};
+    std::uint32_t operation_verify_timeout_ms{30000};
     std::int64_t wb_pending_warn{500};
     bool observability_enabled{false};
     std::string grafana_base_url{"http://127.0.0.1:33000"};

@@ -190,3 +190,59 @@ export function fetchAuditLogs({ actor = '', action = '', target = '', status = 
     params.set('limit', String(limit));
     return requestJson(`/api/v1/audit-logs?${params.toString()}`);
 }
+
+export function fetchOperations({ status = '', limit = 50 } = {}) {
+    const params = new URLSearchParams();
+    if (status) params.set('status', status);
+    params.set('limit', String(limit));
+    return requestJson(`/api/v1/operations?${params.toString()}`);
+}
+
+export function fetchOperationDetail(opId) {
+    return requestJson(`/api/v1/operations/${encodeURIComponent(opId)}`);
+}
+
+export function createRestartOperation({ targetService, confirmationTarget, reason, idempotencyKey }) {
+    return requestJson('/api/v1/operations', {
+        method: 'POST',
+        body: {
+            operation_type: 'service_restart',
+            target_service: targetService,
+            confirmation_target: confirmationTarget,
+            reason,
+            idempotency_key: idempotencyKey,
+        },
+        idempotencyKey,
+    });
+}
+
+export function fetchConfigOverview() {
+    return requestJson('/api/v1/config');
+}
+
+export function applyConfigChanges({ expectedRevision, values, confirmationTarget, reason, idempotencyKey }) {
+    return requestJson('/api/v1/config/apply', {
+        method: 'POST',
+        body: {
+            expected_revision: expectedRevision,
+            values,
+            confirmation_target: confirmationTarget,
+            reason,
+            idempotency_key: idempotencyKey,
+        },
+        idempotencyKey,
+    });
+}
+
+export function rollbackConfigRevision({ targetRevision, confirmationTarget, reason, idempotencyKey }) {
+    return requestJson('/api/v1/config/rollback', {
+        method: 'POST',
+        body: {
+            target_revision: targetRevision,
+            confirmation_target: confirmationTarget,
+            reason,
+            idempotency_key: idempotencyKey,
+        },
+        idempotencyKey,
+    });
+}
