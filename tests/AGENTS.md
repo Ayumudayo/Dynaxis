@@ -3,25 +3,20 @@
 GTest unit tests + small Python integration checks.
 
 ## C++ (GTest)
-- Definitions: `tests/CMakeLists.txt`, `tests/core/CMakeLists.txt`, `tests/gateway/CMakeLists.txt`, `tests/server/CMakeLists.txt`, `tests/contracts/CMakeLists.txt`, `tests/policy/CMakeLists.txt`
+- Definitions: `tests/CMakeLists.txt`, `tests/core/CMakeLists.txt`, `tests/gateway/CMakeLists.txt`, `tests/server/CMakeLists.txt`, `tests/admin/CMakeLists.txt`, `tests/contracts/CMakeLists.txt`, `tests/policy/CMakeLists.txt`
 - Key targets:
   - `core_general_tests`, `core_concurrency_tests`
   - `server_general_tests`, `server_state_tests`
-  - `chat_history_tests`, `storage_basic_tests`
-  - `admin_http_client_tests` (`tests/admin/`, admin HTTP probe 실패 경계)
+  - `chat_history_tests`, `storage_basic_tests`, `chat_timeline_tests`
+  - `admin_console_tests` (`tests/admin/`, bounded probes, poller isolation, auth/redaction)
 
-Build (recommended on Windows):
+Build & run (Windows / Linux):
 ```powershell
-pwsh scripts/build.ps1 -Config Debug -Target server_general_tests
-pwsh scripts/build.ps1 -Config Debug -Target chat_history_tests
+python scripts/build.py --profile full --config Debug --step all
+python scripts/build.py --profile full --config Debug --step test
 ```
 
-Run:
-```powershell
-ctest --preset windows-test
-```
-
-Note: `ctest` does not rebuild binaries. If a test executable fails to start with an error like "entry point not found" (often after vcpkg updates or branch switches), rebuild the affected test target(s) or do a clean rebuild of `build-windows/`.
+Note: `ctest` does not rebuild binaries. If dependencies changed, rerun `python scripts/build.py --profile full --config Debug --step deps` followed by `configure` and `build`.
 
 ## Python
 - `tests/python/verify_signed_chat.py --manage-stack`: signed identity, direct-backend rejection, cross-node delivery and resume binding; restores original deployment environment.

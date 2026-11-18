@@ -26,13 +26,13 @@ Shared C++20 library used by `server_app`, `gateway_app`, tools, and the Windows
 - The default full profile retains the MSA chat server and the 4.0 Stable API.
 - Ownership and migration limits: `docs/architecture/core-and-msa.md`.
 
-## Build / Test (Windows)
+## Build / Test (Windows / Linux)
 ```powershell
-pwsh scripts/build.ps1 -Config Debug -Target server_core
-ctest --preset windows-test
+python scripts/build.py --profile core --config Debug --step all
+python scripts/build.py --profile core --config Debug --step test
 ```
 
-- Keep host modules domain-agnostic: no `server/` or `gateway/` implementation coupling from `core/src`.
+- Keep host modules domain-agnostic: no `server/`, `gateway/`, `client_gui/`, or `admin_console/` implementation coupling from `core/src`.
 
 ## Local Constraints
 - Keep dependencies one-way: `server/` and `gateway/` depend on `core/`, not the other way around.

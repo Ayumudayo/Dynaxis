@@ -10,3 +10,5 @@
 - [명명 규칙](naming-conventions.md) · [이름 변경 경계](rename_boundary.md)
 
 - [기초 상태·전달·복구 계약](architecture/foundation-contracts.md)
+- [클라이언트 워크벤치 설계](architecture/client-workbench-design.md) · [웹 관리 콘솔 설계](architecture/web-admin-console.md)
+- [에이전트 워크플로우·작업 기조](agent-guides/workflow-and-ethos.md) · [프론트엔드·UI 공통 디자인 시스템](agent-guides/frontend-design-system.md)

@@ -45,9 +45,9 @@ Aux binaries + code generation.
 - `wb_flush_commit_ms_last`, `wb_flush_commit_ms_max` (gauges)
 - `wb_flush_commit_ms_sum`, `wb_flush_commit_ms_count` (counters)
 
-## Build (Windows)
+## Build (Windows / Linux)
 ```powershell
-pwsh scripts/build.ps1 -Config Debug -Target wb_worker
+python scripts/build.py --profile full --config Debug --step build --target wb_worker
 ```
 
 ## Notes
