@@ -7,6 +7,7 @@
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/post.hpp>
 #include <boost/asio/write.hpp>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -458,17 +459,22 @@ public:
         : reply_(std::move(scripted_reply)),
           acceptor_(ioc_, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0)),
           port_(acceptor_.local_endpoint().port()) {
-        worker_ = std::thread([this]() { run(); });
+        do_accept();
+        worker_ = std::thread([this]() { ioc_.run(); });
     }
 
     ~ScopedRespPipelineMock() {
         if (!stopped_.exchange(true)) {
-            boost::system::error_code ec;
-            acceptor_.close(ec);
-            ioc_.stop();
+            asio::post(ioc_, [this]() {
+                boost::system::error_code ec;
+                acceptor_.cancel(ec);
+                acceptor_.close(ec);
+            });
             if (worker_.joinable()) {
                 worker_.join();
             }
+            boost::system::error_code ec;
+            acceptor_.close(ec);
         }
     }
 
@@ -477,18 +483,28 @@ public:
     }
 
 private:
-    void run() {
-        while (!stopped_.load()) {
-            tcp::socket socket(ioc_);
-            boost::system::error_code ec;
-            acceptor_.accept(socket, ec);
-            if (ec) break;
-            std::array<char, 1024> buf{};
-            (void)socket.read_some(asio::buffer(buf), ec);
-            asio::write(socket, asio::buffer(reply_), ec);
-            socket.shutdown(tcp::socket::shutdown_both, ec);
-            socket.close(ec);
+    void do_accept() {
+        if (stopped_.load()) {
+            return;
         }
+        auto socket = std::make_shared<tcp::socket>(ioc_);
+        acceptor_.async_accept(*socket, [this, socket](const boost::system::error_code& ec) {
+            if (!ec && !stopped_.load()) {
+                handle_client(*socket);
+            }
+            if (!stopped_.load()) {
+                do_accept();
+            }
+        });
+    }
+
+    void handle_client(tcp::socket& socket) {
+        boost::system::error_code ec;
+        std::array<char, 1024> buf{};
+        (void)socket.read_some(asio::buffer(buf), ec);
+        asio::write(socket, asio::buffer(reply_), ec);
+        socket.shutdown(tcp::socket::shutdown_both, ec);
+        socket.close(ec);
     }
 
     std::string reply_;

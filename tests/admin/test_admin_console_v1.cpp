@@ -8,6 +8,7 @@
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/post.hpp>
 #include <boost/asio/read.hpp>
 #include <boost/asio/read_until.hpp>
 #include <boost/asio/streambuf.hpp>
@@ -15,6 +16,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -44,7 +46,8 @@ public:
         : handler_(std::move(handler)),
           acceptor_(ioc_, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0)),
           port_(acceptor_.local_endpoint().port()) {
-        worker_ = std::thread([this]() { run(); });
+        do_accept();
+        worker_ = std::thread([this]() { ioc_.run(); });
     }
 
     ~ScopedHttpMockServer() {
@@ -59,47 +62,58 @@ public:
         if (stopped_.exchange(true)) {
             return;
         }
-        boost::system::error_code ec;
-        acceptor_.close(ec);
-        ioc_.stop();
+        asio::post(ioc_, [this]() {
+            boost::system::error_code ec;
+            acceptor_.cancel(ec);
+            acceptor_.close(ec);
+        });
         if (worker_.joinable()) {
             worker_.join();
         }
+        boost::system::error_code ec;
+        acceptor_.close(ec);
     }
 
 private:
-    void run() {
-        while (!stopped_.load()) {
-            tcp::socket socket(ioc_);
-            boost::system::error_code ec;
-            acceptor_.accept(socket, ec);
-            if (ec) {
-                break;
+    void do_accept() {
+        if (stopped_.load()) {
+            return;
+        }
+        auto socket = std::make_shared<tcp::socket>(ioc_);
+        acceptor_.async_accept(*socket, [this, socket](const boost::system::error_code& ec) {
+            if (!ec && !stopped_.load()) {
+                handle_client(*socket);
             }
-
-            try {
-                asio::streambuf buf;
-                asio::read_until(socket, buf, "\r\n\r\n");
-                std::istream req_stream(&buf);
-                std::string method;
-                std::string target;
-                req_stream >> method >> target;
-
-                const HttpReply reply = handler_(target);
-                std::ostringstream oss;
-                oss << "HTTP/1.1 " << reply.status << "\r\n"
-                    << "Content-Type: text/plain; charset=utf-8\r\n"
-                    << "Content-Length: " << reply.body.size() << "\r\n"
-                    << "Connection: close\r\n\r\n"
-                    << reply.body;
-                const std::string raw = oss.str();
-                asio::write(socket, asio::buffer(raw), ec);
-                socket.shutdown(tcp::socket::shutdown_both, ec);
-                socket.close(ec);
-            } catch (...) {
-                boost::system::error_code close_ec;
-                socket.close(close_ec);
+            if (!stopped_.load()) {
+                do_accept();
             }
+        });
+    }
+
+    void handle_client(tcp::socket& socket) {
+        boost::system::error_code ec;
+        try {
+            asio::streambuf buf;
+            asio::read_until(socket, buf, "\r\n\r\n");
+            std::istream req_stream(&buf);
+            std::string method;
+            std::string target;
+            req_stream >> method >> target;
+
+            const HttpReply reply = handler_(target);
+            std::ostringstream oss;
+            oss << "HTTP/1.1 " << reply.status << "\r\n"
+                << "Content-Type: text/plain; charset=utf-8\r\n"
+                << "Content-Length: " << reply.body.size() << "\r\n"
+                << "Connection: close\r\n\r\n"
+                << reply.body;
+            const std::string raw = oss.str();
+            asio::write(socket, asio::buffer(raw), ec);
+            socket.shutdown(tcp::socket::shutdown_both, ec);
+            socket.close(ec);
+        } catch (...) {
+            boost::system::error_code close_ec;
+            socket.close(close_ec);
         }
     }
 
@@ -121,9 +135,13 @@ public:
     }
 
     ~ScopedHungTcpServer() {
-        boost::system::error_code ec;
-        acceptor_.close(ec);
-        {
+        if (stopped_.exchange(true)) {
+            return;
+        }
+        asio::post(ioc_, [this]() {
+            boost::system::error_code ec;
+            acceptor_.cancel(ec);
+            acceptor_.close(ec);
             std::lock_guard<std::mutex> lock(mu_);
             for (auto& sock : held_sockets_) {
                 if (sock) {
@@ -131,11 +149,12 @@ public:
                 }
             }
             held_sockets_.clear();
-        }
-        ioc_.stop();
+        });
         if (worker_.joinable()) {
             worker_.join();
         }
+        boost::system::error_code ec;
+        acceptor_.close(ec);
     }
 
     unsigned short port() const noexcept {
@@ -144,9 +163,12 @@ public:
 
 private:
     void do_accept() {
+        if (stopped_.load()) {
+            return;
+        }
         auto sock = std::make_shared<tcp::socket>(ioc_);
         acceptor_.async_accept(*sock, [this, sock](const boost::system::error_code& ec) {
-            if (!ec) {
+            if (!ec && !stopped_.load()) {
                 {
                     std::lock_guard<std::mutex> lock(mu_);
                     held_sockets_.push_back(sock);
@@ -159,6 +181,7 @@ private:
     asio::io_context ioc_;
     tcp::acceptor acceptor_;
     unsigned short port_{0};
+    std::atomic<bool> stopped_{false};
     std::mutex mu_;
     std::vector<std::shared_ptr<tcp::socket>> held_sockets_;
     std::thread worker_;
@@ -170,18 +193,24 @@ public:
         : response_(std::move(response_payload)),
           acceptor_(ioc_, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0)),
           port_(acceptor_.local_endpoint().port()) {
-        worker_ = std::thread([this]() { run(); });
+        do_accept();
+        worker_ = std::thread([this]() { ioc_.run(); });
     }
 
     ~ScopedRespMockServer() {
-        if (!stopped_.exchange(true)) {
-            boost::system::error_code ec;
-            acceptor_.close(ec);
-            ioc_.stop();
-            if (worker_.joinable()) {
-                worker_.join();
-            }
+        if (stopped_.exchange(true)) {
+            return;
         }
+        asio::post(ioc_, [this]() {
+            boost::system::error_code ec;
+            acceptor_.cancel(ec);
+            acceptor_.close(ec);
+        });
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+        boost::system::error_code ec;
+        acceptor_.close(ec);
     }
 
     unsigned short port() const noexcept {
@@ -189,32 +218,40 @@ public:
     }
 
 private:
-    void run() {
-        while (!stopped_.load()) {
-            tcp::socket socket(ioc_);
-            boost::system::error_code ec;
-            acceptor_.accept(socket, ec);
-            if (ec) {
-                break;
+    void do_accept() {
+        if (stopped_.load()) {
+            return;
+        }
+        auto socket = std::make_shared<tcp::socket>(ioc_);
+        acceptor_.async_accept(*socket, [this, socket](const boost::system::error_code& ec) {
+            if (!ec && !stopped_.load()) {
+                handle_client(*socket);
             }
-            std::string accumulated;
-            std::array<char, 512> buf{};
-            while (!stopped_.load()) {
-                const std::size_t n = socket.read_some(asio::buffer(buf), ec);
-                if (n > 0) {
-                    accumulated.append(buf.data(), n);
-                    if (accumulated.find("XLEN") != std::string::npos) {
-                        asio::write(socket, asio::buffer(response_), ec);
-                        break;
-                    }
-                }
-                if (ec) {
+            if (!stopped_.load()) {
+                do_accept();
+            }
+        });
+    }
+
+    void handle_client(tcp::socket& socket) {
+        boost::system::error_code ec;
+        std::string accumulated;
+        std::array<char, 512> buf{};
+        while (!stopped_.load()) {
+            const std::size_t n = socket.read_some(asio::buffer(buf), ec);
+            if (n > 0) {
+                accumulated.append(buf.data(), n);
+                if (accumulated.find("XLEN") != std::string::npos) {
+                    asio::write(socket, asio::buffer(response_), ec);
                     break;
                 }
             }
-            socket.shutdown(tcp::socket::shutdown_both, ec);
-            socket.close(ec);
+            if (ec) {
+                break;
+            }
         }
+        socket.shutdown(tcp::socket::shutdown_both, ec);
+        socket.close(ec);
     }
 
     std::string response_;
