@@ -13,34 +13,6 @@ namespace server::core::runtime_metrics {
 
 /** @brief dispatch `processing_place` 분류 개수입니다. 배열 크기와 라벨 수를 같은 상수로 묶어 드리프트를 막습니다. */
 inline constexpr std::size_t kDispatchProcessingPlaceCount = 3;
-/** @brief RUDP fallback reason 라벨 개수입니다. 이유 enum과 메트릭 직렬화 테이블이 같은 크기를 보게 합니다. */
-inline constexpr std::size_t kRudpFallbackReasonCount = 6;
-
-/** @brief RUDP RTT 히스토그램 버킷 상한(ms)입니다. 지나치게 촘촘하면 비용이 늘고, 너무 성기면 tail 해석력이 떨어지므로 운영 구간만 남깁니다. */
-inline constexpr std::array<std::uint64_t, 11> kRudpRttBucketUpperBoundsMs = {
-    1,
-    2,
-    5,
-    10,
-    20,
-    50,
-    100,
-    200,
-    500,
-    1000,
-    2000,
-};
-
-/** @brief RUDP가 기본 경로를 포기한 이유 분류입니다. 단순 실패 총합보다 "왜 포기했는가"를 남겨야 튜닝 방향이 보입니다. */
-enum class RudpFallbackReason : std::uint8_t {
-    kHandshakeTimeout = 0,
-    kIdleTimeout,
-    kProtocolError,
-    kInflightLimit,
-    kDisabled,
-    kOther,
-};
-
 /** @brief 프로세스 전역 liveness 상태 모델입니다. */
 enum class LivenessState : std::uint8_t {
     kBootstrapping = 0,
@@ -167,11 +139,6 @@ struct Snapshot {
     std::uint64_t http_header_oversize_total{0};
     std::uint64_t http_body_oversize_total{0};
     std::uint64_t http_bad_request_total{0};
-    std::uint64_t runtime_setting_reload_attempt_total{0};
-    std::uint64_t runtime_setting_reload_success_total{0};
-    std::uint64_t runtime_setting_reload_failure_total{0};
-    std::uint64_t runtime_setting_reload_latency_sum_ns{0};
-    std::uint64_t runtime_setting_reload_latency_max_ns{0};
     std::uint64_t watchdog_total{0};
     std::uint64_t watchdog_unhealthy_total{0};
     std::uint64_t watchdog_transition_total{0};
@@ -181,15 +148,6 @@ struct Snapshot {
     std::uint64_t detailed_telemetry_capture_budget_remaining{0};
     std::uint64_t detailed_telemetry_captured_exception_total{0};
     std::uint64_t detailed_telemetry_captured_dispatch_latency_max_ns{0};
-    std::uint64_t rudp_handshake_ok_total{0};
-    std::uint64_t rudp_handshake_fail_total{0};
-    std::uint64_t rudp_retransmit_total{0};
-    std::uint64_t rudp_inflight_packets{0};
-    std::uint64_t rudp_rtt_ms_sum{0};
-    std::uint64_t rudp_rtt_ms_count{0};
-    std::uint64_t rudp_rtt_ms_max{0};
-    std::array<std::uint64_t, kRudpRttBucketUpperBoundsMs.size()> rudp_rtt_ms_bucket_counts{};
-    std::array<std::uint64_t, kRudpFallbackReasonCount> rudp_fallback_total{};
     std::vector<std::pair<std::uint16_t, std::uint64_t>> opcode_counts;
 };
 
@@ -328,15 +286,6 @@ void record_http_body_oversize();
 /** @brief HTTP bad request 거절 건수를 기록합니다. */
 void record_http_bad_request();
 
-/** @brief 런타임 설정 리로드 시도 건수를 기록합니다. */
-void record_runtime_setting_reload_attempt();
-/** @brief 런타임 설정 리로드 성공 건수를 기록합니다. */
-void record_runtime_setting_reload_success();
-/** @brief 런타임 설정 리로드 실패 건수를 기록합니다. */
-void record_runtime_setting_reload_failure();
-/** @brief 런타임 설정 리로드 지연을 기록합니다. */
-void record_runtime_setting_reload_latency(std::chrono::nanoseconds elapsed);
-
 /** @brief 프로세스 전역 liveness 상태를 갱신합니다. */
 void set_liveness_state(LivenessState state);
 
@@ -360,16 +309,6 @@ void record_watchdog_freeze_suspect(std::string_view name,
                                     std::chrono::nanoseconds threshold,
                                     std::string_view detail = {});
 
-/** @brief RUDP handshake 결과를 기록합니다. */
-void record_rudp_handshake_result(bool ok);
-/** @brief RUDP 재전송 건수를 누적합니다. */
-void record_rudp_retransmit(std::uint64_t count = 1);
-/** @brief 현재 RUDP inflight 패킷 수를 기록합니다. */
-void set_rudp_inflight_packets(std::size_t packets);
-/** @brief RUDP RTT 샘플(ms)을 기록합니다. */
-void record_rudp_rtt_ms(std::uint32_t rtt_ms);
-/** @brief RUDP fallback 원인을 기록합니다. */
-void record_rudp_fallback(RudpFallbackReason reason);
 
 /**
  * @brief 현재 런타임 카운터 스냅샷을 반환합니다.

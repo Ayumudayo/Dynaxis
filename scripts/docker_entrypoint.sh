@@ -22,18 +22,16 @@ case "$CMD" in
     exec ./gateway_app "$@"
     ;;
 
-  "admin")
-    ls -l ./admin_app
-    ldd ./admin_app
-    exec ./admin_app "$@"
-    ;;
 
   "migrate")
     exec ./migrations_runner "$@"
     ;;
+  "admin")
+    exec ./admin_app "$@"
+    ;;
   *)
     echo "Unknown command: $CMD"
-    echo "Usage: $0 {server|worker|replayer|gateway|admin|migrate} [args...]"
+    echo "Usage: $0 {server|worker|replayer|gateway|migrate|admin} [args...]"
     exit 1
     ;;
 esac

@@ -1,4 +1,5 @@
 #include "server/app/core_internal_adapter.hpp"
+#include "server/core/app/engine_runtime.hpp"
 
 #include <atomic>
 
@@ -11,7 +12,6 @@
 #include "server/core/storage_execution/db_worker_pool.hpp"
 #include "server/core/storage/redis/client.hpp"
 #include "server/core/discovery/instance_registry.hpp"
-#include "server/core/util/service_registry.hpp"
 #include "server/core/util/crash_handler.hpp"
 #include "server/storage/connection_pool.hpp"
 #include "server/storage/postgres/connection_pool.hpp"
@@ -25,6 +25,10 @@
  * 앱 부트스트랩 코드가 구체 core 구현 상세와 직접 결합되지 않도록 유지합니다.
  */
 namespace server::app::core_internal {
+void set_connection_runtime_state(server::core::app::EngineRuntime& runtime,
+    const std::shared_ptr<server::core::net::ConnectionRuntimeState>& state) {
+    runtime.set_service(state);
+}
 
 std::shared_ptr<server::core::net::ConnectionRuntimeState> make_connection_runtime_state() {
     return std::make_shared<server::core::net::ConnectionRuntimeState>();
@@ -154,26 +158,6 @@ std::uint64_t connection_count(
         return 0;
     }
     return state->connection_count.load(std::memory_order_relaxed);
-}
-
-void register_connection_runtime_state_service(
-    const std::shared_ptr<server::core::net::ConnectionRuntimeState>& state) {
-    server::core::util::services::set(state);
-}
-
-void register_connection_pool_service(
-    const std::shared_ptr<server::core::storage_execution::IConnectionPool>& connection_pool) {
-    server::core::util::services::set(connection_pool);
-}
-
-void register_repository_connection_pool_service(
-    const std::shared_ptr<server::storage::IRepositoryConnectionPool>& connection_pool) {
-    server::core::util::services::set(connection_pool);
-}
-
-void register_db_worker_pool_service(
-    const std::shared_ptr<server::core::storage_execution::DbWorkerPool>& worker_pool) {
-    server::core::util::services::set(worker_pool);
 }
 
 void install_crash_handler() {

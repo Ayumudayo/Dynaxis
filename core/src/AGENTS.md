@@ -21,8 +21,8 @@ core/src/
 
 ## Conventions
 - Add new files to `core/CMakeLists.txt` explicitly (no `file(GLOB ...)`).
-- Keep build portability: Docker/Linux uses system deps; Windows uses vcpkg feature `windows-dev`.
+- Keep build portability: Windows, Linux, and Docker all use the locked Conan 2 recipe (`conanfile.py` + `conan.lock`) via `scripts/build.py`.
 
 ## Anti-Patterns
-- No references to `server/*` or `gateway/*` code from `core/src`.
+- No references to `server/*`, `gateway/*`, `client_gui/*`, or `admin_console/*` code from `core/src`.
 - Avoid blocking work on metrics server thread; keep callbacks fast.

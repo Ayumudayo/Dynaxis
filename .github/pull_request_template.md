@@ -3,7 +3,7 @@
 
 ## Validation
 - REQUIRED
-- Large change pre-push local CI(Act) result: REQUIRED (`docs/ops/local-ci-with-act.md`)
+- Windows/Linux native and Docker validation results: REQUIRED ([test guide](../docs/tests.md))
 
 ## Core API Impact (required when touching core/include/server/core/**)
 - API boundary classification touched: REQUIRED

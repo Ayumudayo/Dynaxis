@@ -2,9 +2,6 @@
 
 #include "chat_service_state.hpp"
 
-#include "server/core/discovery/world_lifecycle_policy.hpp"
-#include "server/core/worlds/migration.hpp"
-#include "server/core/worlds/topology.hpp"
 #include "wire.pb.h"
 
 #include <memory>
@@ -13,10 +10,7 @@
 
 namespace server::app::chat {
 
-struct ChatServiceAppMigrationRoomHandoff {
-    bool recognized{false};
-    std::string room;
-};
+
 
 struct ChatServicePersistedMessage {
     std::string room_id;
@@ -77,24 +71,6 @@ struct ChatServicePrivateAccess {
     static std::optional<ChatService::ContinuityLease> try_resume_continuity_lease(
         ChatService& service,
         std::string_view token);
-
-    static std::string make_continuity_world_owner_key(const ChatService& service, const std::string& world_id);
-    static std::string make_continuity_world_policy_key(const ChatService& service, const std::string& world_id);
-    static std::string make_continuity_world_migration_key(const ChatService& service, const std::string& world_id);
-
-    static std::optional<server::core::discovery::WorldLifecyclePolicy> load_continuity_world_policy(
-        ChatService& service,
-        const std::string& world_id);
-
-    static std::optional<server::core::worlds::WorldMigrationEnvelope> load_continuity_world_migration(
-        ChatService& service,
-        const std::string& world_id);
-
-    static std::optional<server::core::worlds::TopologyActuationRuntimeAssignmentItem>
-    load_topology_runtime_assignment(const ChatService& service);
-
-    static ChatServiceAppMigrationRoomHandoff resolve_app_world_migration_room_handoff(
-        const server::core::worlds::WorldMigrationEnvelope& migration);
 
     static std::optional<std::string> lookup_room_owner(
         ChatService& service,

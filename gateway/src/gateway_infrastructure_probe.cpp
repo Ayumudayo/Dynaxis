@@ -5,6 +5,7 @@
 #include "gateway/gateway_app.hpp"
 
 #include <chrono>
+#include <algorithm>
 #include <exception>
 #include <string>
 #include <thread>
@@ -39,6 +40,16 @@ void GatewayAppAccess::start_infrastructure_probe(GatewayApp& app) {
             }
 
             app.impl_->app_host_.set_dependency_ok("redis", ok);
+            bool backend_ready = false;
+            if (ok && app.impl_->backend_registry_) {
+                try {
+                    const auto records = app.impl_->backend_registry_->list_instances();
+                    backend_ready = std::any_of(records.begin(), records.end(), [](const auto& record) {
+                        return record.ready && !record.instance_id.empty() && !record.host.empty() && record.port != 0;
+                    });
+                } catch (...) { backend_ready = false; }
+            }
+            app.impl_->app_host_.set_dependency_ok("backend", backend_ready);
 
             if (ok != last_ok) {
                 if (ok) {
@@ -58,6 +69,7 @@ void GatewayAppAccess::start_infrastructure_probe(GatewayApp& app) {
             }
         }
         app.impl_->app_host_.set_dependency_ok("redis", false);
+        app.impl_->app_host_.set_dependency_ok("backend", false);
     });
 }
 

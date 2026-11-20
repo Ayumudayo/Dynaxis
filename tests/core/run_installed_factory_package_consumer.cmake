@@ -6,7 +6,16 @@ foreach(required_var BUILD_DIR CONSUMER_SOURCE_DIR CONSUMER_BUILD_DIR INSTALL_PR
     endif()
 endforeach()
 
+foreach(target CONSUMER_BUILD_DIR INSTALL_PREFIX)
+    cmake_path(ABSOLUTE_PATH ${target} NORMALIZE OUTPUT_VARIABLE resolved_target)
+    cmake_path(ABSOLUTE_PATH BUILD_DIR NORMALIZE OUTPUT_VARIABLE resolved_build)
+    cmake_path(IS_PREFIX resolved_build "${resolved_target}" NORMALIZE target_is_local)
+    if(NOT target_is_local OR resolved_target STREQUAL resolved_build)
+        message(FATAL_ERROR "Consumer cleanup target must be below BUILD_DIR")
+    endif()
+endforeach()
 file(REMOVE_RECURSE "${CONSUMER_BUILD_DIR}")
+file(REMOVE_RECURSE "${INSTALL_PREFIX}")
 file(MAKE_DIRECTORY "${CONSUMER_BUILD_DIR}")
 
 execute_process(

@@ -7,20 +7,15 @@
 #include <string_view>
 #include <vector>
 #include <cstdint>
+#include <functional>
 
 #include <boost/asio.hpp>
 
 #include "server/core/net/session.hpp"
 #include "server/chat/chat_metrics.hpp"
-#include "server/scripting/chat_lua_bindings.hpp"
 
-enum class SessionEventKindV2 : std::uint32_t;
 
 namespace server::core { class JobQueue; }
-namespace server::core::scripting {
-class LuaRuntime;
-struct LuaHookContext;
-}
 namespace server::core::storage::redis { class IRedisClient; }
 namespace server::storage { class IRepositoryConnectionPool; }
 
@@ -32,7 +27,7 @@ struct ChatServicePrivateAccess;
  * @brief `server_app`의 채팅 런타임을 한곳에서 조율하는 앱-로컬 서비스입니다.
  *
  * 이 타입은 단순히 opcode별 함수를 모아 둔 클래스가 아니라, 세션 상태, 방 상태,
- * Redis 분산 전파(fan-out), write-behind 적재, 관리자 제어, Lua/플러그인 훅을 한 요청 수명주기 안에서
+ * Redis 분산 전파(fan-out), write-behind 적재, 채팅 정책을 한 요청 수명주기 안에서
  * 묶어 주는 조정층(orchestration layer)입니다.
  *
  * 왜 한곳에 모으는가:
@@ -50,13 +45,29 @@ struct ChatServicePrivateAccess;
  *   외부 진입 계약은 유지한 채 내부 구조만 점진적으로 정리할 수 있습니다.
  *
  * 동시성 규칙:
- * - 상태 변경은 `job_queue_` 또는 room별 `Strand`를 통해 순서를 보장하거나,
- *   공용 상태 컨테이너의 `mutex`로 보호해야 합니다.
+ * - 명령과 close는 세션별 FIFO에서 실행하고 다른 세션은 worker pool에서 병렬 처리합니다.
+ * - 로컬 컨테이너는 mutex, 공유 권한과 메시지 commit 순서는 DB 트랜잭션 잠금으로 보호합니다.
  * - 이 규칙을 깨면 중복 로그인 정리, 방 멤버십, 스팸 제재, refresh 스냅샷이 서로 다른 시점을 보게 됩니다.
  */
-class ChatService : private server::app::scripting::ChatLuaHost {
+class ChatService {
 public:
     using NetSession = server::core::net::Session;
+
+    /** @brief 실제 앱은 명시적 의존성으로 구성하며 null을 전역 Registry로 대체하지 않습니다. */
+    struct Dependencies {
+        std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool;
+        std::shared_ptr<server::core::storage::redis::IRedisClient> redis;
+        bool require_auth{false};
+        std::string auth_signing_secret;
+    };
+
+    /**
+     * @brief 의존성을 명시해 다른 runtime의 전역 서비스와 격리합니다. 종료 전 worker를 drain해야 합니다.
+     * @param io 앱 I/O 실행 문맥
+     * @param job_queue 이 서비스의 작업 큐
+     * @param dependencies 명시적 의존성과 인증 설정
+     */
+    ChatService(boost::asio::io_context& io, server::core::JobQueue& job_queue, Dependencies dependencies);
 
     /**
      * @brief 채팅 서비스가 의존하는 런타임 자원을 묶어 초기화합니다.
@@ -76,8 +87,11 @@ public:
                 std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool = {},
                 std::shared_ptr<server::core::storage::redis::IRedisClient> redis = {});
 
-    /** @brief 구독, 플러그인, 보조 런타임을 정리해 종료 시 잔여 비동기 작업이 남지 않게 합니다. */
+    /** @brief 채팅 상태를 해제합니다. 호출 전에 worker와 구독을 종료해야 합니다. */
     ~ChatService();
+
+    /** @brief 공유 권한 변경 알림 뒤 로컬 세션을 재검증합니다. 알림 유실 시에도 다음 명령에서 검증합니다. */
+    void enforce_shared_state();
 
     // ======================================================================
     // 패킷 핸들러
@@ -125,7 +139,7 @@ public:
     /**
      * @brief 채팅 전송 요청(`MSG_CHAT_SEND`)을 처리합니다.
      *
-     * 이 경로는 스팸 제어, 훅 체인, write-behind 적재, 방 단위 순서 보장을 함께 다룹니다.
+     * 이 경로는 스팸 제어, write-behind 적재, 방 단위 순서 보장을 함께 다룹니다.
      * 메시지 저장과 브로드캐스트를 완전히 분리해 버리면 "방에는 보였지만 기록은 누락된 메시지" 또는
      * "저장은 됐지만 사용자에게는 순서가 뒤틀려 보이는 메시지"가 생기므로 한 흐름에서 조율해야 합니다.
      *
@@ -249,98 +263,21 @@ public:
      */
     void deliver_remote_whisper(const std::vector<std::uint8_t>& body);
 
-    /**
-     * @brief 관리자 제어면이 지정한 사용자 세션을 강제 종료합니다.
-     *
-     * 제어면 경로를 일반 채팅 명령과 분리해 두어야 권한 모델과 감사 로그 관점을 명확히 유지할 수 있습니다.
-     * 그렇지 않으면 운영 명령이 일반 사용자 흐름과 같은 검증 경로를 타면서 우회 또는 누락이 생길 수 있습니다.
-     *
-     * @param users 종료 대상 사용자 식별자 목록
-     * @param reason 종료 사유(클라이언트 공지용, 선택)
-     */
-    void admin_disconnect_users(const std::vector<std::string>& users, const std::string& reason);
-
-    /**
-     * @brief 관리자 공지를 현재 런타임의 로컬 세션들에 보냅니다.
-     *
-     * 공지는 일반 채팅 메시지와 다르게 room membership 없이 전송되어야 하므로
-     * 별도 진입점을 유지합니다. 이를 일반 브로드캐스트로 섞으면 차단/방 범위 규칙과 충돌합니다.
-     *
-     * @param text 공지 본문
-     */
-    void admin_broadcast_notice(const std::string& text);
-
-    /**
-     * @brief 런타임 변경 가능한 채팅 설정을 적용합니다.
-     *
-     * 이 진입점은 운영 중 값을 빠르게 조정하되, 코드 재배포 없이 스팸/캐시/presence 거동을
-     * 다듬을 수 있게 하기 위한 제어점입니다. 설정 변경 경로를 여기저기 흩어 놓으면
-     * 어떤 값이 즉시 반영되고 어떤 값이 재시작 후 반영되는지 구분하기 어려워집니다.
-     *
-     * 지원 키:
-     * - `presence_ttl_sec`
-     * - `recent_history_limit`
-     * - `room_recent_maxlen`
-     * - `chat_spam_threshold`
-     * - `chat_spam_window_sec`
-     * - `chat_spam_mute_sec`
-     * - `chat_spam_ban_sec`
-     * - `chat_spam_ban_violations`
-     * @param key 설정 키
-     * @param value 설정 값(문자열)
-     */
-    void admin_apply_runtime_setting(const std::string& key, const std::string& value);
-
-    /**
-     * @brief 관리자 제재 명령(`mute/unmute/ban/unban/kick`)을 적용합니다.
-     *
-     * 제재는 메모리 상태, 현재 연결, 후속 알림이 함께 묶이는 행위입니다.
-     * 단순 플래그 저장으로 끝내면 이미 붙어 있는 세션에는 적용되지 않거나,
-     * 반대로 연결만 끊기고 제재 상태는 남지 않는 반쪽 처리로 끝날 수 있습니다.
-     *
-     * @param op 제재 연산자
-     * @param users 대상 사용자 목록
-     * @param duration_sec 기간(초, mute/ban에서만 사용)
-     * @param reason 사유(선택)
-     */
-    void admin_apply_user_moderation(const std::string& op,
-                                     const std::vector<std::string>& users,
-                                     std::uint32_t duration_sec,
-                                     const std::string& reason);
-
-private:
-    std::optional<std::string> lua_get_user_name(std::uint32_t session_id) override;
-    std::optional<std::string> lua_get_user_room(std::uint32_t session_id) override;
-    std::vector<std::string> lua_get_room_users(std::string_view room_name) override;
-    std::vector<std::string> lua_get_room_list() override;
-    std::optional<std::string> lua_get_room_owner(std::string_view room_name) override;
-    bool lua_is_user_muted(std::string_view nickname) override;
-    bool lua_is_user_banned(std::string_view nickname) override;
-    std::size_t lua_get_online_count() override;
-    std::size_t lua_get_room_count() override;
-    bool lua_send_notice(std::uint32_t session_id, std::string_view text) override;
-    bool lua_broadcast_room(std::string_view room_name, std::string_view text) override;
-    bool lua_broadcast_all(std::string_view text) override;
-    bool lua_kick_user(std::uint32_t session_id, std::string_view reason) override;
-    bool lua_mute_user(std::string_view nickname,
-                       std::uint32_t duration_sec,
-                       std::string_view reason) override;
-    bool lua_ban_user(std::string_view nickname,
-                      std::uint32_t duration_sec,
-                      std::string_view reason) override;
-
-public:
-    /**
-     * @brief 현재 플러그인 로더 상태를 읽기 전용 스냅샷으로 반환합니다.
-     * @return 플러그인 활성화 여부, 로드 모드, 개별 재로드 집계가 담긴 값 객체
-     */
-    ChatHookPluginsMetrics chat_hook_plugins_metrics() const;
-
-    LuaHooksMetrics lua_hooks_metrics() const;
-
     ContinuityMetrics continuity_metrics() const;
 
 private:
+    // 세션의 명령과 close를 같은 FIFO에서 실행한다. closing은 정리 작업을 거절하지 않는다.
+    bool enqueue_session(std::shared_ptr<NetSession> session, std::function<void()> job, bool closing = false);
+    bool claim_shared_login(NetSession& session, const std::string& user, const std::string& resume_logical_id);
+    bool renew_shared_login(NetSession& session, const std::string& logical_id = {});
+    bool release_shared_login(NetSession& session);
+    bool admit_shared_room(NetSession& session, std::string& room, const std::string& password, bool resume = false);
+    bool handle_shared_room_command(std::shared_ptr<NetSession> session, const std::string& room, const std::string& text);
+    void persist_shared_penalty(const std::string& user, bool ban, std::uint32_t seconds);
+    void persist_shared_blacklist(const std::string& user);
+    void deliver_verified(std::shared_ptr<NetSession> target, std::uint16_t opcode, std::vector<std::uint8_t> body,
+                          std::string sender, std::string room = {});
+    void publish_control_change();
     using Session = NetSession;
 
     /** @brief 채팅 런타임의 config/state/dispatch 세부 배치를 숨기는 단일 비공개 구현 상태입니다. */
@@ -396,7 +333,6 @@ private:
         std::string resume_token;
         std::string user_id;
         std::string effective_user;
-        std::string world_id;
         std::string room;
         std::uint64_t expires_unix_ms{0};
         bool resumed{false};
@@ -405,29 +341,15 @@ private:
     // Redis 키 생성 규칙을 흩어 놓으면 읽기/쓰기 경로가 다른 네이밍을 써서 복원이 깨지기 쉽습니다.
     // 키 구성은 helper로 고정해 continuity와 캐시 스키마를 한곳에서 관리합니다.
     std::string make_continuity_room_key(const std::string& logical_session_id) const;
-    std::string make_continuity_world_key(const std::string& logical_session_id) const;
-    std::string make_continuity_world_owner_key(const std::string& world_id) const;
-    std::string make_continuity_world_policy_key(const std::string& world_id) const;
-    std::string make_continuity_world_migration_key(const std::string& world_id) const;
     bool continuity_enabled() const;
     std::optional<std::string> extract_resume_token(std::string_view token) const;
     std::optional<std::string> load_continuity_room(const std::string& logical_session_id);
-    std::optional<std::string> load_continuity_world(const std::string& logical_session_id);
-    std::optional<std::string> load_continuity_world_owner(const std::string& world_id);
-    std::string current_runtime_default_world_id() const;
     void persist_continuity_room(const std::string& logical_session_id,
                                  const std::string& room,
                                  std::uint64_t expires_unix_ms);
-    void persist_continuity_world(const std::string& logical_session_id,
-                                  const std::string& world_id,
-                                  std::uint64_t expires_unix_ms);
-    void persist_continuity_world_owner(const std::string& world_id,
-                                        const std::string& owner_id,
-                                        std::uint64_t expires_unix_ms);
     std::optional<ContinuityLease> try_resume_continuity_lease(std::string_view token);
     std::optional<ContinuityLease> issue_continuity_lease(const std::string& user_id,
                                                           const std::string& effective_user,
-                                                          const std::string& world_id,
                                                           const std::string& room,
                                                           const std::optional<std::string>& client_ip);
 
@@ -435,46 +357,8 @@ private:
     // 최근 메시지 캐시는 스냅샷 비용을 낮추되, TTL/길이를 제한해 메모리와 정합성 균형을 맞춥니다.
     void handle_refresh(std::shared_ptr<Session> session);
 
-    /** @brief Lua cold-hook 호출 결과를 기본 경로 제어용으로 정규화한 값입니다. */
-    struct LuaColdHookOutcome {
-        bool stop_default{false};
-        std::string deny_reason;
-        std::vector<std::string> notices;
-    };
-
-    LuaColdHookOutcome invoke_lua_cold_hook(
-        std::string_view hook_name,
-        const server::core::scripting::LuaHookContext& context);
-
-    // 플러그인이 메시지를 처리/차단했으면 true를 반환합니다.
-    // 이 규칙을 명확히 두지 않으면 "플러그인도 처리했고 기본 경로도 다시 처리한" 중복 전송이 생깁니다.
-    bool maybe_handle_chat_hook_plugin(Session& s,
-                                       const std::string& room,
-                                       const std::string& sender,
-                                       std::string& text);
-
-    bool maybe_handle_login_hook(Session& s, const std::string& user);
-    bool maybe_handle_join_hook(Session& s, const std::string& user, const std::string& room);
-    bool maybe_handle_leave_hook(Session& s, const std::string& user, const std::string& room);
-    void notify_session_event_hook(std::uint32_t session_id,
-                                   SessionEventKindV2 kind,
-                                   const std::string& user,
-                                   const std::string& reason);
-    bool maybe_handle_admin_command_hook(std::string_view command,
-                                         std::string_view issuer,
-                                         std::string_view payload_json,
-                                         std::string_view args,
-                                         std::string& deny_reason);
-
     friend struct ChatServicePrivateAccess;
 
-    std::shared_ptr<Session> find_session_by_id_locked(std::uint32_t session_id);
-    std::vector<std::uint8_t> make_system_chat_body(std::string_view room, std::string_view text) const;
-    bool broadcast_notice_to_all_sessions(std::string notice);
-    bool apply_user_moderation_without_hook(const std::string& op,
-                                            const std::vector<std::string>& users,
-                                            std::uint32_t duration_sec,
-                                            const std::string& reason);
     unsigned int presence_ttl() const;
     std::string make_presence_key(std::string_view category, const std::string& id) const;
     void touch_user_presence(const std::string& uid);

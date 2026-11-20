@@ -34,8 +34,16 @@ class IRepositoryConnectionPool;
 namespace server::core::net {
 struct ConnectionRuntimeState;
 }
+namespace server::core::app { class EngineRuntime; }
 
 namespace server::app::core_internal {
+/**
+ * @brief 내부 connection state를 해당 runtime context에만 등록합니다.
+ * @param runtime 소유 runtime
+ * @param state 등록할 연결 상태
+ */
+void set_connection_runtime_state(server::core::app::EngineRuntime& runtime,
+    const std::shared_ptr<server::core::net::ConnectionRuntimeState>& state);
 
 /** @brief core 세션 종료 시 app-local 후처리를 연결하기 위한 콜백 타입입니다. */
 using SessionCloseCallback = std::function<void(std::shared_ptr<server::core::Session>)>;
@@ -158,30 +166,6 @@ void stop_db_worker_pool(
  */
 std::uint64_t connection_count(
     const std::shared_ptr<server::core::net::ConnectionRuntimeState>& state) noexcept;
-
-/**
- * @brief 런타임 연결 상태를 서비스 레지스트리에 등록합니다.
- * @param state 런타임 연결 상태 서비스 인스턴스
- */
-void register_connection_runtime_state_service(
-    const std::shared_ptr<server::core::net::ConnectionRuntimeState>& state);
-
-/**
- * @brief DB 커넥션 풀을 서비스 레지스트리에 등록합니다.
- * @param connection_pool 커넥션 풀 서비스 인스턴스
- */
-void register_connection_pool_service(
-    const std::shared_ptr<server::core::storage_execution::IConnectionPool>& connection_pool);
-
-void register_repository_connection_pool_service(
-    const std::shared_ptr<server::storage::IRepositoryConnectionPool>& connection_pool);
-
-/**
- * @brief DB worker 풀을 서비스 레지스트리에 등록합니다.
- * @param worker_pool DB worker 풀 서비스 인스턴스
- */
-void register_db_worker_pool_service(
-    const std::shared_ptr<server::core::storage_execution::DbWorkerPool>& worker_pool);
 
 /** @brief `server_core` 유틸리티의 프로세스 크래시 핸들러를 설치합니다. app이 구현 세부를 직접 알지 않게 하는 브리지 함수입니다. */
 void install_crash_handler();

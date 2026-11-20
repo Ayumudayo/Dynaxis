@@ -1,7 +1,7 @@
 # 원클릭 실행 스크립트: 서버 + 워커(+옵션 DLQ/클라이언트) 기동 및 스모크
 param(
   [string]$Config = 'Debug',
-  [string]$BuildDir = 'build-windows',
+  [string]$BuildDir = '',
   [int]$Port = 5000,
   [switch]$RunDLQ,
   [switch]$WithClient,
@@ -9,6 +9,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $BuildDir) { $BuildDir = "build/windows/full/$($Config.ToLowerInvariant())" }
 try { chcp 65001 | Out-Null } catch {}
 
 function Info($m){ Write-Host "[info] $m" -ForegroundColor Cyan }

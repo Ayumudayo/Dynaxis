@@ -72,28 +72,6 @@ def server_by_instance(topology: dict, instance_id: str) -> dict | None:
     return None
 
 
-def servers_for_world(topology: dict, world_id: str) -> list[dict]:
-    out: list[dict] = []
-    for server in topology.get("servers", []):
-        if isinstance(server, dict) and server.get("world_id") == world_id:
-            out.append(server)
-    return out
-
-
-def same_world_peer(topology: dict, instance_id: str, world_id: str) -> dict | None:
-    for server in servers_for_world(topology, world_id):
-        if server.get("instance_id") != instance_id:
-            return server
-    return None
-
-
-def first_server_for_other_world(topology: dict, excluded_world_id: str) -> dict | None:
-    for server in topology.get("servers", []):
-        if isinstance(server, dict) and server.get("world_id") != excluded_world_id:
-            return server
-    return None
-
-
 def server_ready_ports(topology: dict) -> dict[str, int]:
     out: dict[str, int] = {}
     for server in topology.get("servers", []):

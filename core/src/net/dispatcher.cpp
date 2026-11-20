@@ -118,6 +118,9 @@ void run_handler_with_guard(const Dispatcher::handler_t& handler,
 
 } // namespace
 
+Dispatcher::Dispatcher(std::shared_ptr<JobQueue> worker_queue)
+    : worker_queue_(std::move(worker_queue)), use_legacy_worker_queue_(false) {}
+
 void Dispatcher::register_handler(std::uint16_t msg_id, handler_t handler, policy_t policy) {
     // msg_id는 protocol/opcodes.json에서 정의된 메시지 ID입니다.
     // 이 함수는 서버 시작 시점에 호출되어 메시지 ID와 처리 함수를 매핑합니다.
@@ -205,7 +208,8 @@ bool Dispatcher::dispatch(std::uint16_t msg_id,
         return true;
     }
 
-    auto job_queue = services::get<server::core::JobQueue>();
+    auto job_queue = use_legacy_worker_queue_
+        ? services::get<server::core::JobQueue>() : worker_queue_;
     if (!job_queue) {
         runtime_metrics::record_dispatch_processing_place_reject(place_index);
         server::core::log::warn(

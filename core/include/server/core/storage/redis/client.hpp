@@ -58,6 +58,9 @@ public:
     virtual bool publish(const std::string& channel, const std::string& message) = 0;
     virtual bool start_psubscribe(const std::string& pattern,
                                   std::function<void(const std::string& channel, const std::string& message)> on_message) = 0;
+    /** @brief 서버가 현재 Pub/Sub 구독을 확인했는지 조회합니다.
+     * @return PSUBSCRIBE 응답을 받은 연결이면 true. 미지원 adapter는 false입니다. */
+    virtual bool subscription_ready() const { return false; }
     virtual void stop_psubscribe() = 0;
     virtual bool xgroup_create_mkstream(const std::string& key, const std::string& group) = 0;
     virtual bool xadd(const std::string& key,

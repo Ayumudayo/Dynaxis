@@ -1,4 +1,5 @@
 #include "server/app/metrics_server.hpp"
+#include "server/chat/chat_service.hpp"
 #include "chat_metrics_text.hpp"
 #include "runtime_metrics_text.hpp"
 #include "server_runtime_state.hpp"
@@ -38,7 +39,7 @@ std::string render_logs_impl() {
     return body_stream.str();
 }
 
-std::string render_metrics_impl() {
+std::string render_metrics_impl(server::core::app::EngineRuntime* runtime = nullptr, server::app::chat::ChatService* chat = nullptr) {
     auto snap = server::core::runtime_metrics::snapshot();
     std::ostringstream stream;
     MetricsTextWriter writer{stream};
@@ -51,16 +52,14 @@ std::string render_metrics_impl() {
     server::core::metrics::append_prometheus_metrics(stream);
 
     append_chat_bootstrap_metrics(writer, bootstrap_metrics_snapshot());
-    append_chat_continuity_metrics(writer, stream, server_chat_continuity_metrics());
+    append_chat_continuity_metrics(writer, stream, (chat ? std::optional(chat->continuity_metrics()) : server_chat_continuity_metrics()));
     append_chat_runtime_metrics(writer, stream, snap);
 
-    append_chat_hook_plugin_metrics(stream, server_chat_hook_plugin_metrics());
-    append_chat_lua_hook_metrics(stream, server_chat_lua_hooks_metrics());
 
-    stream << server_dependency_metrics_text();
-    stream << server_lifecycle_metrics_text();
-    const auto runtime_snapshot = server_runtime_snapshot();
-    const auto modules = server_runtime_module_snapshot();
+    stream << (runtime ? runtime->host().dependency_metrics_text() : server_dependency_metrics_text());
+    stream << (runtime ? runtime->host().lifecycle_metrics_text() : server_lifecycle_metrics_text());
+    const auto runtime_snapshot = (runtime ? std::optional(runtime->snapshot()) : server_runtime_snapshot());
+    const auto modules = (runtime ? runtime->module_snapshot() : server_runtime_module_snapshot());
     append_server_runtime_module_metrics(writer, stream, runtime_snapshot, modules);
     return stream.str();
 }
@@ -79,6 +78,13 @@ void start_server_admin_http(server::core::app::EngineRuntime& runtime, unsigned
     runtime.start_admin_http(
         port,
         []() { return render_metrics_text(); },
+        []() { return render_logs_text(); });
+}
+
+void start_server_admin_http(server::core::app::EngineRuntime& runtime,
+                             server::app::chat::ChatService& chat, unsigned short port) {
+    runtime.start_admin_http(port,
+        [&runtime, &chat]() { return render_metrics_impl(&runtime, &chat); },
         []() { return render_logs_text(); });
 }
 

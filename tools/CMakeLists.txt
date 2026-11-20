@@ -50,69 +50,6 @@ if (BUILD_WRITE_BEHIND_TOOLS)
   endif()
 endif()
 
-if (BUILD_LOADGEN_TOOLS)
-  if (NOT TARGET nlohmann_json::nlohmann_json)
-    message(FATAL_ERROR "nlohmann_json target not found ? stack_loadgen requires nlohmann_json")
-  endif()
-
-  add_executable(stack_loadgen
-    loadgen/main.cpp
-    loadgen/report_writer.cpp
-    loadgen/scenario_loader.cpp
-    loadgen/scenario_runner.cpp
-    loadgen/session_client.cpp
-  )
-  target_include_directories(stack_loadgen PRIVATE
-    ${CMAKE_BINARY_DIR}/proto
-  )
-  target_link_libraries(stack_loadgen PRIVATE
-    server_core
-    wire_proto
-    nlohmann_json::nlohmann_json
-  )
-
-  add_custom_target(tcp_loadgen DEPENDS stack_loadgen)
-
-  if (WIN32 AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.21")
-    add_custom_command(TARGET stack_loadgen POST_BUILD
-      COMMAND ${CMAKE_COMMAND}
-              -Druntime_dlls=$<TARGET_RUNTIME_DLLS:stack_loadgen>
-              -Dtarget_dir=$<TARGET_FILE_DIR:stack_loadgen>
-              -P ${CMAKE_SOURCE_DIR}/cmake/copy_runtime_dlls_if_any.cmake
-      COMMAND_EXPAND_LISTS)
-  endif()
-endif()
-
-if (BUILD_ADMIN_APP)
-  add_library(admin_app_backends STATIC admin_app/redis_client_factory.cpp)
-  target_link_libraries(admin_app_backends PUBLIC server_core)
-  target_link_libraries(admin_app_backends PRIVATE infra_redis_factory)
-
-  add_executable(admin_app admin_app/main.cpp)
-  target_link_libraries(admin_app PRIVATE server_core)
-  target_include_directories(admin_app PRIVATE ${CMAKE_SOURCE_DIR}/server/include)
-  if (TARGET nlohmann_json::nlohmann_json)
-    target_link_libraries(admin_app PRIVATE nlohmann_json::nlohmann_json)
-  else()
-    message(WARNING "nlohmann_json target not found ? admin_app may fail to compile")
-  endif()
-  target_link_libraries(admin_app PRIVATE admin_app_backends)
-
-  add_custom_command(TARGET admin_app POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/tools/admin_app/admin_ui.html"
-            "$<TARGET_FILE_DIR:admin_app>/admin_ui.html")
-
-  if (WIN32 AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.21")
-    add_custom_command(TARGET admin_app POST_BUILD
-      COMMAND ${CMAKE_COMMAND}
-              -Druntime_dlls=$<TARGET_RUNTIME_DLLS:admin_app>
-              -Dtarget_dir=$<TARGET_FILE_DIR:admin_app>
-              -P ${CMAKE_SOURCE_DIR}/cmake/copy_runtime_dlls_if_any.cmake
-      COMMAND_EXPAND_LISTS)
-  endif()
-endif()
-
 if (BUILD_MIGRATIONS_RUNNER)
   add_executable(migrations_runner migrations/runner.cpp)
   target_include_directories(migrations_runner PRIVATE ${CMAKE_SOURCE_DIR}/core/include)

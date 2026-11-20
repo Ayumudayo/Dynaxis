@@ -66,7 +66,7 @@ def parse_login_res(payload: bytes) -> dict:
         "resume_token": "",
         "resume_expires_unix_ms": 0,
         "resumed": False,
-        "world_id": "",
+        "principal_id": "", "auth_session_id": "", "display_name": "",
     }
     offset = 0
     while offset < len(payload):
@@ -74,7 +74,7 @@ def parse_login_res(payload: bytes) -> dict:
         field_number = tag >> 3
         wire_type = tag & 0x07
 
-        if wire_type == 2 and field_number in {1, 3, 5, 6, 9}:
+        if wire_type == 2 and field_number in {1, 3, 5, 6, 10, 11, 12}:
             length, offset = read_varint(payload, offset)
             raw = payload[offset:offset + length]
             offset += length
@@ -87,8 +87,8 @@ def parse_login_res(payload: bytes) -> dict:
                 result["logical_session_id"] = value
             elif field_number == 6:
                 result["resume_token"] = value
-            elif field_number == 9:
-                result["world_id"] = value
+            elif field_number in {10, 11, 12}:
+                result[{10: "principal_id", 11: "auth_session_id", 12: "display_name"}[field_number]] = value
             continue
 
         if wire_type == 0 and field_number in {2, 4, 7, 8}:
@@ -209,6 +209,15 @@ class ChatClient:
         self.send_frame(MSG_JOIN_ROOM, lp_utf8(room) + lp_utf8(password))
         self.wait_for_join_confirmation(room, user, timeout_sec)
 
+    def invite(self, room: str, user: str) -> None:
+        self.send_frame(MSG_CHAT_SEND, lp_utf8(room) + lp_utf8("/invite " + user))
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            opcode, _, _, _, payload = self.recv_frame(deadline - time.monotonic())
+            if opcode == MSG_CHAT_BROADCAST and ("invited user: " + user).encode() in payload:
+                return
+        raise AssertionError("invite not acknowledged")
+
     def wait_for_self_chat(self, room: str, text: str, timeout_sec: float) -> None:
         deadline = time.monotonic() + timeout_sec
         while True:
@@ -238,3 +247,7 @@ class ChatClient:
             message_len = int.from_bytes(payload[2:4], byteorder="big", signed=False)
             message = payload[4:4 + message_len].decode("utf-8")
             return code, message
+
+
+def safe_login_summary(login: dict) -> dict:
+    return {key: value for key, value in login.items() if key != "resume_token"}

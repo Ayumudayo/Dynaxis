@@ -41,7 +41,7 @@ void ChatService::on_whisper(Session& s, std::span<const std::uint8_t> payload) 
     auto session_sp = s.shared_from_this();
     // whisper는 타 세션 조회와 저장소 접근이 섞이므로 job_queue로 넘긴다.
     // I/O 스레드에서 직접 처리하면 느린 조회 하나가 다른 클라이언트의 패킷 수신까지 막을 수 있다.
-    if (!job_queue_.TryPush([this, session_sp, target = std::move(target), text = std::move(text)]() {
+    if (!enqueue_session(session_sp, [this, session_sp, target = std::move(target), text = std::move(text)]() {
         dispatch_whisper(session_sp, target, text);
     })) {
         session_sp->send_error(proto::errc::SERVER_BUSY, "server busy");
@@ -64,13 +64,13 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
     std::string room, text;
     auto sp = std::span<const std::uint8_t>(payload.data(), payload.size());
     // 페이로드 파싱: 방 이름, 메시지 내용
-    if (!proto::read_lp_utf8(sp, room) || !proto::read_lp_utf8(sp, text)) { 
-        s.send_error(proto::errc::INVALID_PAYLOAD, "bad chat payload"); 
-        return; 
+    if (!proto::read_lp_utf8(sp, room) || !proto::read_lp_utf8(sp, text)) {
+        s.send_error(proto::errc::INVALID_PAYLOAD, "bad chat payload");
+        return;
     }
 
     auto session_sp = s.shared_from_this();
-    if (!job_queue_.TryPush([this, session_sp, room = std::move(room), text = std::move(text)]() mutable {
+    if (!enqueue_session(session_sp, [this, session_sp, room = std::move(room), text = std::move(text)]() mutable {
         // /refresh는 상태 스냅샷을 강제로 다시 받게 하는 관리 명령이다.
         // 클라이언트 상태가 꼬였을 때 유용합니다.
         // 예: 네트워크 끊김 후 재접속 시 UI 갱신용
@@ -84,14 +84,14 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
         std::string current_room = room;
         {
             std::lock_guard<std::mutex> lk(impl_->state.mu);
-            if (!impl_->state.authed.count(session_sp.get())) { 
-                session_sp->send_error(proto::errc::UNAUTHORIZED, "unauthorized"); 
-                return; 
+            if (!impl_->state.authed.count(session_sp.get())) {
+                session_sp->send_error(proto::errc::UNAUTHORIZED, "unauthorized");
+                return;
             }
-            auto it = impl_->state.cur_room.find(session_sp.get()); 
-            if (it == impl_->state.cur_room.end()) { 
-                session_sp->send_error(proto::errc::NO_ROOM, "no current room"); 
-                return; 
+            auto it = impl_->state.cur_room.find(session_sp.get());
+            if (it == impl_->state.cur_room.end()) {
+                session_sp->send_error(proto::errc::NO_ROOM, "no current room");
+                return;
             }
             const std::string& authoritative_room = it->second;
             if (!current_room.empty() && current_room != authoritative_room) {
@@ -127,6 +127,7 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
             return;
         }
         if (moderation.spam_escalated) {
+            persist_shared_penalty(moderation.sender, moderation.spam_escalated_to_ban, moderation.spam_escalated_to_ban ? impl_->runtime.spam_ban_sec : impl_->runtime.spam_mute_sec);
             send_system_notice(*session_sp, moderation.moderation_reason);
             session_sp->send_error(proto::errc::FORBIDDEN, moderation.moderation_reason);
             if (moderation.spam_escalated_to_ban) {
@@ -135,12 +136,6 @@ void ChatService::on_chat_send(Session& s, std::span<const std::uint8_t> payload
                     penalized->stop();
                 }
             }
-            return;
-        }
-
-        // 플러그인은 내장 slash command 다음, 실제 fan-out 직전에 탄다.
-        // 그래야 기본 명령 체계는 유지하면서도 마지막 정책 게이트로 moderation/변환을 덧댈 수 있다.
-        if (maybe_handle_chat_hook_plugin(*session_sp, current_room, moderation.sender, text)) {
             return;
         }
 
@@ -194,7 +189,7 @@ void ChatService::handle_refresh(std::shared_ptr<Session> session_sp) {
 
 void ChatService::on_rooms_request(Session& s, std::span<const std::uint8_t>) {
     auto session_sp = s.shared_from_this();
-    if (!job_queue_.TryPush([this, session_sp]() {
+    if (!enqueue_session(session_sp, [this, session_sp]() {
         send_rooms_list(*session_sp);
     })) {
         session_sp->send_error(proto::errc::SERVER_BUSY, "server busy");
@@ -207,7 +202,7 @@ void ChatService::on_room_users_request(Session& s, std::span<const std::uint8_t
     auto sp = std::span<const std::uint8_t>(payload.data(), payload.size());
     proto::read_lp_utf8(sp, requested);
     auto session_sp = s.shared_from_this();
-    if (!job_queue_.TryPush([this, session_sp, requested = std::move(requested)]() mutable {
+    if (!enqueue_session(session_sp, [this, session_sp, requested = std::move(requested)]() mutable {
         std::string target = requested;
         if (target.empty()) {
             std::lock_guard<std::mutex> lk(impl_->state.mu);
@@ -223,7 +218,7 @@ void ChatService::on_room_users_request(Session& s, std::span<const std::uint8_t
 
 void ChatService::on_refresh_request(Session& s, std::span<const std::uint8_t>) {
     auto session_sp = s.shared_from_this();
-    if (!job_queue_.TryPush([this, session_sp]() {
+    if (!enqueue_session(session_sp, [this, session_sp]() {
         handle_refresh(session_sp);
     })) {
         session_sp->send_error(proto::errc::SERVER_BUSY, "server busy");
@@ -232,4 +227,3 @@ void ChatService::on_refresh_request(Session& s, std::span<const std::uint8_t>) 
 }
 
 } // namespace server::app::chat
-

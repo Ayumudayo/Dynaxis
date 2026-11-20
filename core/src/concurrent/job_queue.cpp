@@ -33,7 +33,7 @@ void JobQueue::Push(Job job) {
 
         if (max_size_ > 0 && jobs_.size() >= max_size_) {
             const auto wait_begin = std::chrono::steady_clock::now();
-            cv_.wait(lock, [this] { return stopping_ || jobs_.size() < max_size_; });
+            not_full_.wait(lock, [this] { return stopping_ || jobs_.size() < max_size_; });
             const auto waited = std::chrono::steady_clock::now() - wait_begin;
             runtime_metrics::record_job_queue_push_wait(waited);
             if (stopping_) {
@@ -46,7 +46,7 @@ void JobQueue::Push(Job job) {
         runtime_metrics::record_job_queue_depth(jobs_.size());
     }
     // 대기 중인 워커 스레드 하나를 깨웁니다.
-    cv_.notify_one();
+    not_empty_.notify_one();
 }
 
 bool JobQueue::TryPush(Job job) {
@@ -68,14 +68,14 @@ bool JobQueue::TryPush(Job job) {
         jobs_.push(std::move(job));
         runtime_metrics::record_job_queue_depth(jobs_.size());
     }
-    cv_.notify_one();
+    not_empty_.notify_one();
     return true;
 }
 
 Job JobQueue::Pop() {
     std::unique_lock<std::mutex> lock(mutex_);
     // 큐에 작업이 들어오거나 종료 신호가 올 때까지 대기합니다.
-    cv_.wait(lock, [this] { return !jobs_.empty() || stopping_; });
+    not_empty_.wait(lock, [this] { return !jobs_.empty() || stopping_; });
 
     if (stopping_ && jobs_.empty()) {
         runtime_metrics::record_job_queue_depth(jobs_.size());
@@ -88,7 +88,7 @@ Job JobQueue::Pop() {
     lock.unlock();
     // 큐가 bounded 상태라면 대기 중인 생산자를 깨웁니다.
     if (max_size_ > 0) {
-        cv_.notify_one();
+        not_full_.notify_one();
     }
     return job;
 }
@@ -99,7 +99,8 @@ void JobQueue::Stop() {
         stopping_ = true;
         runtime_metrics::record_job_queue_depth(jobs_.size());
     }
-    cv_.notify_all();
+    not_empty_.notify_all();
+    not_full_.notify_all();
 }
 
 std::size_t JobQueue::max_size() const {

@@ -545,6 +545,7 @@ log.txt
 
 # Env
 .env
+docker/stack/.env.managed
 docker/stack/docker-compose.topology.generated.yml
 docker/stack/topology.active.json
 
@@ -555,9 +556,6 @@ opencode.json
 
 # Documentation
 *_deep_dive.md
-!core/core_architecture_deep_dive.md
-!gateway/gateway_architecture_deep_dive.md
-!server/server_architecture_deep_dive.md
 !server/server_write_behind_deep_dive.md
 
 # External references
@@ -566,3 +564,6 @@ external-refs/
 # Internal docs
 tasks/
 tmp/
+
+# Dear ImGui runtime layout
+imgui.ini

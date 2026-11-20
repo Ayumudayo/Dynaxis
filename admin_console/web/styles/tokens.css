@@ -1,0 +1,51 @@
+:root {
+    /* Slate Dark surface & canvas palette */
+    --bg-app: #16181D;
+    --bg-surface: #1E2028;
+    --bg-elevated: #262A36;
+    --bg-hover: #2E3444;
+    --border-subtle: #2A2E39;
+
+    /* Single blue primary accent */
+    --accent-primary: #3B82F6;
+    --accent-hover: #2563EB;
+    --accent-soft: rgba(59, 130, 246, 0.14);
+
+    /* Text hierarchy */
+    --text-primary: #ECF0F7;
+    --text-secondary: #9AA4B8;
+    --text-muted: #6E788C;
+
+    /* 5-state operational semantics */
+    --status-ready: #22C55E;
+    --status-ready-bg: rgba(34, 197, 94, 0.14);
+    --status-ready-border: rgba(34, 197, 94, 0.34);
+
+    --status-degraded: #F59E0B;
+    --status-degraded-bg: rgba(245, 158, 11, 0.14);
+    --status-degraded-border: rgba(245, 158, 11, 0.34);
+
+    --status-not-ready: #EF4444;
+    --status-not-ready-bg: rgba(239, 68, 68, 0.14);
+    --status-not-ready-border: rgba(239, 68, 68, 0.34);
+
+    --status-completed: #94A3B8;
+    --status-completed-bg: rgba(148, 163, 184, 0.14);
+    --status-completed-border: rgba(148, 163, 184, 0.32);
+
+    --status-unknown: #6B7280;
+    --status-unknown-bg: rgba(107, 114, 128, 0.16);
+    --status-unknown-border: rgba(107, 114, 128, 0.34);
+
+    /* Typography */
+    --font-sans: -apple-system, BlinkMacSystemFont, "Pretendard", "Malgun Gothic", "Noto Sans KR", "Segoe UI", sans-serif;
+    --font-mono: ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+
+    /* Layout geometry */
+    --topbar-height: 48px;
+    --sidebar-width: 224px;
+    --drawer-width: 400px;
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+}

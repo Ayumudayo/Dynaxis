@@ -29,9 +29,4 @@ PreparedChatBroadcast prepare_chat_broadcast(std::string_view room,
                                              std::string_view text,
                                              std::uint32_t sender_session_id);
 
-void send_local_chat_broadcast(
-    const std::shared_ptr<server::core::net::Session>& sender_session,
-    const std::vector<std::shared_ptr<server::core::net::Session>>& targets,
-    const std::vector<std::uint8_t>& body);
-
 } // namespace server::app::chat

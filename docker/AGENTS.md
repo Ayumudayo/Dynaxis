@@ -5,7 +5,7 @@ Linux(Docker) full-stack runtime.
 Prefer `scripts/deploy_docker.ps1` over raw `docker compose` so base image building and compose profiles stay consistent.
 
 ## Entry Points
-- `docker/stack/docker-compose.yml`: verification stack (HAProxy -> gateway -> server, plus Redis/Postgres).
+- `docker/stack/docker-compose.yml`: verification stack (HAProxy -> gateway -> server, Redis/Postgres, `wb_worker`, `migrator`, `admin`).
 - `docker/stack/haproxy/haproxy.cfg`: TCP LB + stats/metrics endpoint.
 - `docker/observability/prometheus/prometheus.yml`: Prometheus scrape config (observability profile).
 - `docker/observability/grafana/provisioning/`: Grafana provisioning.

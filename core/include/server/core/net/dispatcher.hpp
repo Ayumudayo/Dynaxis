@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <unordered_map>
 #include <span>
 
@@ -10,6 +11,7 @@
 namespace server::core {
 
 class Session;
+class JobQueue;
 
 /**
  * @brief opcode 기반으로 비즈니스 핸들러를 찾는 얇은 라우팅 테이블입니다.
@@ -27,6 +29,19 @@ class Dispatcher {
 public:
     using handler_t = std::function<void(Session&, std::span<const std::uint8_t>)>;
     using policy_t = server::core::protocol::OpcodePolicy;
+
+    /**
+     * @brief 전역 Registry의 worker queue를 사용하는 기존 호환 dispatcher를 생성합니다.
+     * @details 새 앱 조립 코드는 queue를 명시하는 생성자를 사용합니다.
+     */
+    Dispatcher() = default;
+
+    /**
+     * @brief 이 dispatcher에 속한 worker queue를 주입합니다.
+     * @param worker_queue 공유 소유할 queue. null이면 worker 요청을 거절하며 전역 queue를 사용하지 않습니다.
+     * @details handler 등록과 생성은 dispatch를 시작하기 전에 완료해야 합니다.
+     */
+    explicit Dispatcher(std::shared_ptr<JobQueue> worker_queue);
 
     /**
      * @brief 특정 msg_id에 대한 핸들러와 transport 정책을 함께 등록합니다.
@@ -82,6 +97,8 @@ private:
     };
 
     std::unordered_map<std::uint16_t, Entry> table_;
+    std::shared_ptr<JobQueue> worker_queue_;
+    bool use_legacy_worker_queue_{true};
 };
 
 } // namespace server::core

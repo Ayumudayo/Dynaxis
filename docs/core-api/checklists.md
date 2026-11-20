@@ -17,7 +17,6 @@
 - [ ] 파괴적 변경이면 마이그레이션 노트가 추가되어 있다.
 - [ ] `docs/core-api/` 하위 도메인 문서가 같은 PR에서 함께 갱신되었다.
 - [ ] 공개 API 스모크 소비자 build/run 검증이 성공한다.
-- [ ] 확장 ABI 영향이 있다면 `docs/core-api/extensions.md`와 `docs/extensibility/*` 문서까지 함께 정합성이 맞는다.
 
 이 체크리스트가 필요한 이유는, public API 변경이 코드 한 군데에서만 끝나지 않기 때문이다. 체크를 건너뛰면 문서는 옛 기준을 말하고 테스트는 새 기준을 기대하는 식의 drift가 생긴다.
 
@@ -42,12 +41,7 @@
 - [ ] 공개 소비자 타깃 build/run 검증이 성공한다.
   - `core_public_api_smoke`
   - `core_public_api_headers_compile`
-  - `core_public_api_stable_header_scenarios`
-  - `core_public_api_extensibility_smoke`
-  - `core_public_api_realtime_capability_smoke`
-  - `core_public_api_worlds_aws_smoke`
   - `CoreInstalledPackageConsumer`
-  - `pwsh scripts/run_linux_installed_consumer.ps1`
 - [ ] API 거버넌스 검증이 통과한다.
   - `python tools/check_core_api_contracts.py --check-boundary`
   - `python tools/check_core_api_contracts.py --check-boundary-fixtures`
@@ -58,29 +52,20 @@
 ### 검증 명령
 
 ```powershell
-cmake --build build-windows --config Debug --target `
+cmake --build build/windows/full/debug --config Debug --target `
   core_public_api_smoke `
   core_public_api_headers_compile `
-  core_public_api_stable_header_scenarios `
-  core_public_api_extensibility_smoke `
-  core_public_api_realtime_capability_smoke `
-  core_public_api_worlds_aws_smoke `
   --parallel
 
-build-windows/tests/Debug/core_public_api_smoke.exe
-build-windows/tests/Debug/core_public_api_headers_compile.exe
-build-windows/tests/Debug/core_public_api_stable_header_scenarios.exe
-build-windows/tests/Debug/core_public_api_extensibility_smoke.exe
-build-windows/tests/Debug/core_public_api_realtime_capability_smoke.exe
-build-windows/tests/Debug/core_public_api_worlds_aws_smoke.exe
+build/windows/full/debug/tests/contracts/Debug/core_public_api_smoke.exe
+build/windows/full/debug/tests/contracts/Debug/core_public_api_headers_compile.exe
 
 python tools/check_core_api_contracts.py --check-boundary
 python tools/check_core_api_contracts.py --check-boundary-fixtures
 python tools/check_core_api_contracts.py --check-stable-governance-fixtures
 
-ctest --test-dir build-windows -C Debug -R "CoreInstalledPackageConsumer|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure
+ctest --test-dir build/windows/full/debug -C Debug -R "CoreInstalledPackageConsumer|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure
 
-pwsh scripts/run_linux_installed_consumer.ps1
 ```
 
 ### 승인 기록

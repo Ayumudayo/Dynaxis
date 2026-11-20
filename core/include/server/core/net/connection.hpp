@@ -76,7 +76,9 @@ public:
      * @brief 데이터를 비동기 송신 큐에 넣습니다.
      *
      * 데이터는 즉시 쓰기되지 않을 수 있으며, 내부 쓰기 큐에 저장된 뒤 strand를 통해
-     * 순차적으로 전송됩니다. 이 구조 덕분에 여러 호출 지점이 동시에 전송을 요청해도
+     * 순차적으로 전송됩니다. 상한에는 executor 대기, 쓰기 큐, 진행 중 쓰기의 바이트를 모두 포함합니다.
+     * 초과 시 해당 payload를 적재하지 않고 오류를 알린 뒤 연결을 종료합니다. 빈 데이터는 무시합니다.
+     * 이 구조 덕분에 여러 호출 지점이 동시에 전송을 요청해도
      * 쓰기 순서와 큐 상한을 한곳에서 관리할 수 있습니다.
      *
      * @param data 전송할 바이트 배열
@@ -157,8 +159,10 @@ private:
     std::array<std::uint8_t, 4096> read_buffer_{};
     
     // 송신 큐: 전송 대기 중인 패킷들을 저장합니다.
-    std::deque<std::shared_ptr<std::vector<std::uint8_t>>> write_queue_;
-    std::size_t queued_bytes_{0};
+    struct PendingWrite;
+    std::deque<std::shared_ptr<PendingWrite>> write_queue_;
+    std::shared_ptr<std::atomic<std::size_t>> pending_bytes_{std::make_shared<std::atomic<std::size_t>>(0)};
+    std::atomic<bool> send_overflow_{false};
     std::size_t send_queue_max_bytes_{k_default_send_queue_max};
     
     std::atomic<bool> stopped_{false};

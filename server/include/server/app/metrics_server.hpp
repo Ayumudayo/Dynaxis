@@ -5,11 +5,15 @@
 #include "server/core/app/engine_runtime.hpp"
 #include "server/core/metrics/http_server.hpp"
 
+namespace server::app::chat { class ChatService; }
+
 namespace server::app {
 
 std::string render_metrics_text();
 std::string render_logs_text();
 void start_server_admin_http(server::core::app::EngineRuntime& runtime, unsigned short port);
+/** @brief 명시적 runtime/chat 참조로 관측 HTTP를 구성합니다. HTTP 종료가 chat 파괴보다 먼저여야 합니다. */
+void start_server_admin_http(server::core::app::EngineRuntime& runtime, server::app::chat::ChatService& chat, unsigned short port);
 
 /**
  * @brief Prometheus 메트릭 및 로그를 제공하는 간단한 HTTP 서버입니다.

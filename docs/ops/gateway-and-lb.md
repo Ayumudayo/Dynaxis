@@ -25,7 +25,7 @@ server 역할 요약:
 
 이 구분이 중요한 이유는 room 상태와 사용자 의미론까지 gateway 쪽으로 끌어오면 edge 계층이 비대해지기 때문이다. 반대로 server가 연결과 분산까지 떠안으면 수평 확장과 장애 격리가 어려워진다.
 
-> 구현 경계: shared instance-discovery 계약(`InstanceRecord`, selector, backend interface)과 world lifecycle policy 계약은 `server_core`의 stable `core::discovery` 표면에 있고, Redis/Consul adapter와 sticky `SessionDirectory` 구현은 여전히 internal, app-owned 경계에 남아 있다.
+> 구현 경계: shared instance-discovery 계약(`InstanceRecord`, selector, backend interface)은 `server_core`의 stable `core::discovery` 표면에 있고, Redis adapter와 sticky `SessionDirectory` 구현은 여전히 internal, app-owned 경계에 남아 있다.
 
 ## 2. Gateway 세부
 
@@ -56,7 +56,7 @@ server 역할 요약:
 | `GATEWAY_INGRESS_TOKENS_PER_SEC` | ingress token bucket 초당 토큰 | `200` |
 | `GATEWAY_INGRESS_BURST_TOKENS` | ingress token bucket burst | `400` |
 | `GATEWAY_INGRESS_MAX_ACTIVE_SESSIONS` | 동시 backend 세션 상한 | `50000` |
-| `ALLOW_ANONYMOUS`, `AUTH_PROVIDER` | 인증 정책 | `1`, 빈 값 |
+| `ALLOW_ANONYMOUS` | development 모드의 빈 토큰/anonymous 허용 정책. signed 인증 설정은 `docs/ops/authenticated-chat.md` 참고 | `1` |
 
 이 표는 단순 옵션 목록이 아니라 보호 장치 목록에 가깝다. connect timeout, send queue 상한, circuit breaker, retry budget이 왜 필요한지를 이해해야 gateway 장애를 "네트워크 문제"와 "과부하 제어 문제"로 나눠 볼 수 있다.
 

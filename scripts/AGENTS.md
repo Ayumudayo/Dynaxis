@@ -3,7 +3,9 @@
 Canonical entry points for building and running the stack.
 
 ## Key Scripts
-- `scripts/build.ps1`: CMake preset configure/build; `-Target <name>` builds a single target.
+- `scripts/build.py`: common Conan2/CMake path on Windows/Linux/macOS; deps/configure/build/test steps, canonical build/<os>/<profile>/<config>.
+- `scripts/conan_cli.py`: pinned Conan CLI from the selected Python, independent of PATH.
+- `scripts/build.ps1`: delegates to shared Python configure/build; `-Target <name>` builds a single target.
 - `scripts/configure_windows_ninja.ps1`: configures `windows-ninja` preset (for clangd/`compile_commands.json`).
 - `scripts/check_observability.ps1`: sanity-check Prometheus targets (and Grafana health).
 - `scripts/check_prometheus_rules.ps1`: validate Prometheus alert syntax + rule tests via promtool(Docker).
@@ -11,7 +13,6 @@ Canonical entry points for building and running the stack.
 - `scripts/deploy_docker.ps1`: manage `docker/stack` compose (`up/down/restart/build/logs/ps/clean/config`) with optional `-EnvFile` override.
 - `scripts/run_full_stack_observability.ps1`: wrapper for `deploy_docker.ps1 -Observability`.
 - `scripts/smoke_wb.ps1`: end-to-end smoke test for the write-behind pipeline (expects the Docker stack up).
-- `scripts/rehearse_udp_rollout_rollback.ps1`: execute UDP canary -> TCP-only rollback rehearsal and verify completion within 10 minutes.
 
 ## Examples
 ```powershell

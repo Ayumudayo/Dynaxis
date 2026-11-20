@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   linux-hardening:
-    name: Sanitizer, Fuzz, and Soak Checks (Linux)
+    name: Core and Chat Sanitizers (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -49,92 +49,6 @@ jobs:
         run: |
           docker image inspect dynaxis-base:latest > /dev/null
 
-      - name: ASan/UBSan Build (server_app) + Core Lua runtime gate
+      - name: ASan Core and Chat Regression Tests
         run: |
-          docker run --rm \
-            -v "${GITHUB_WORKSPACE}:/app" \
-            -w /app \
-            dynaxis-base:latest \
-            bash -lc "set -e; apt-get update && apt-get install -y ninja-build libgtest-dev; \
-            cmake --preset linux-asan -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=OFF; \
-            cmake --build --preset linux-asan --target server_app --parallel; \
-            cmake --preset linux -DBUILD_GTEST_TESTS=ON -DBUILD_CONTRACT_TESTS=OFF; \
-            cmake --build --preset linux-debug --target core_plugin_runtime_tests --parallel; \
-            ctest --test-dir build-linux -R 'LuaRuntimeTest|LuaSandboxTest' --output-on-failure --no-tests=error"
-
-      - name: ASan Protocol Fuzz Harness
-        run: |
-          docker run --rm \
-            -v "${GITHUB_WORKSPACE}:/app" \
-            -w /app \
-            -e FUZZ_ITERATIONS=200000 \
-            dynaxis-base:latest \
-            bash -lc "set -e; apt-get update && apt-get install -y ninja-build; \
-            cmake --preset linux-asan -DBUILD_GTEST_TESTS=OFF -DBUILD_CONTRACT_TESTS=OFF; \
-            cmake --build --preset linux-asan --target protocol_fuzz_harness --parallel; \
-            ctest --test-dir build-linux -R 'ProtocolFuzzHarness' --output-on-failure --no-tests=error"
-
-      - name: Start Stack (Detached, Runtime On)
-        shell: pwsh
-        env:
-          DOCKER_BUILDKIT: "0"
-          CHAT_HOOK_ENABLED: "1"
-          LUA_ENABLED: "1"
-        run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/deploy_docker.ps1 -Action up -Detached -Build
-
-      - name: Wait For HAProxy
-        run: |
-          python3 - <<'PY'
-          import socket, time
-          host, port = '127.0.0.1', 6000
-          deadline = time.time() + 60
-          last_err = None
-          while time.time() < deadline:
-              try:
-                  with socket.create_connection((host, port), timeout=1.0):
-                      print('HAProxy is ready')
-                      raise SystemExit(0)
-              except Exception as e:
-                  last_err = e
-                  time.sleep(1)
-          raise SystemExit(f'HAProxy not ready: {last_err}')
-          PY
-
-      - name: Soak + Performance Regression Gate
-        run: |
-          PERF_P95_MAX_MS=300 PERF_P99_MAX_MS=700 PERF_MIN_THROUGHPUT_RPS=10 python3 tests/python/verify_soak_perf_gate.py
-
-      - name: Set Phase 5 Run ID
-        id: phase5-run
-        run: |
-          echo "run_id=$(date -u +%Y%m%d-%H%M%SZ)-gha-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
-
-      - name: Capture Phase 5 Budget Evidence (Linux Hostnet)
-        run: |
-          python3 tests/python/capture_phase5_evidence.py \
-            --run-id "${{ steps.phase5-run.outputs.run_id }}" \
-            --include-budget-hardening \
-            --execution-mode hostnet-container
-
-      - name: Upload Phase 5 Budget Evidence Artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: phase5-budget-evidence-${{ steps.phase5-run.outputs.run_id }}
-          if-no-files-found: warn
-          path: |
-            build/phase5-evidence/${{ steps.phase5-run.outputs.run_id }}/
-            build/loadgen/*.${{ steps.phase5-run.outputs.run_id }}*.json
-
-      - name: Dump Stack Logs (On Failure)
-        if: failure()
-        run: |
-          docker compose --project-name dynaxis-stack --project-directory docker/stack -f docker/stack/docker-compose.yml ps
-          docker compose --project-name dynaxis-stack --project-directory docker/stack -f docker/stack/docker-compose.yml logs --no-color --tail 200
-
-      - name: Stop Stack
-        if: always()
-        shell: pwsh
-        run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/deploy_docker.ps1 -Action down
+          docker run --rm -v "${GITHUB_WORKSPACE}:/app" -v dynaxis-sanitizer-conan:/root/.conan2 -w /app dynaxis-base:latest bash -lc "set -e; python scripts/build.py --profile full --config Debug --build-dir build/linux/full/asan --sanitize --step all; python scripts/build.py --profile full --config Debug --build-dir build/linux/full/asan --sanitize --step test"

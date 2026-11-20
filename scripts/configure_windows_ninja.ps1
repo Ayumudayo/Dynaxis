@@ -143,27 +143,16 @@ try {
     $conanConfig = 'Release'
   }
 
-  $buildDir = Join-Path $repoRoot.Path 'build-windows-ninja'
-  if (Test-Path $buildDir) {
-    Info "Resetting build-windows-ninja for clean Conan configure."
-    Remove-Item -Path $buildDir -Recurse -Force
-  }
-
-  $setupConanScript = Join-Path $repoRoot.Path 'scripts\setup_conan.ps1'
-  if (-not (Test-Path $setupConanScript)) {
-    Fail "setup_conan.ps1 not found: $setupConanScript"
-  }
-  Info "Preparing Conan toolchain: config=$conanConfig, buildDir=build-windows-ninja"
-  & $setupConanScript -Config $conanConfig -Feature windows-dev -BuildDir build-windows-ninja -ToolchainGenerator Ninja | Out-Null
+  $buildDir = "build/windows/full/ninja-$($conanConfig.ToLowerInvariant())"
+  $ninjaDir = Split-Path -Parent $ninja
+  $env:PATH = "$ninjaDir;$env:PATH"
+  & python scripts/build.py --profile full --config $conanConfig --build-dir $buildDir --generator Ninja --step deps
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-  Info "Configuring with preset: $Preset"
-
-  & cmake --preset $Preset -D "CMAKE_MAKE_PROGRAM=$ninja"
+  & python scripts/build.py --profile full --config $conanConfig --build-dir $buildDir --generator Ninja --step configure
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   if ($CopyCompileCommands) {
-    $src = Join-Path $repoRoot.Path 'build-windows-ninja\compile_commands.json'
+    $src = Join-Path $repoRoot.Path "$buildDir/compile_commands.json"
     $dst = Join-Path $repoRoot.Path 'compile_commands.json'
     if (Test-Path $src) {
       Copy-Item -Path $src -Destination $dst -Force

@@ -8,8 +8,6 @@
 
 | 도구 | 경로 | 역할 |
 | --- | --- | --- |
-| 부하 생성기 | `tools/loadgen/` | transport-aware soak, latency, proof 시나리오를 실행한다 |
-| 관리자 앱 | `tools/admin_app/` | admin/control-plane API와 UI를 제공한다 |
 | 마이그레이션 도구 | `tools/migrations/` | 스키마 migration runner를 제공한다 |
 | 초기 설정 도구 | `tools/provisioning/` | DB/bootstrap SQL helper를 제공한다 |
 | 쓰기 지연 워커 | `tools/wb_worker/` | Redis Streams -> Postgres 영속화 워커 |

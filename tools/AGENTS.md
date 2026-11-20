@@ -3,18 +3,15 @@
 Aux binaries + code generation.
 
 ## Entry Points
+- `tools/issue_chat_token.py`: trusted offline signed-chat credential issuer; writes a new private file and never prints credentials. Contract: `docs/ops/authenticated-chat.md`.
 - `tools/wb_worker/main.cpp` + `tools/wb_worker/README.md`: Redis Streams -> Postgres write-behind worker.
 - `tools/wb_emit/main.cpp` + `tools/wb_emit/README.md`: emit test events into Redis Streams (`XADD`).
 - `tools/wb_check/main.cpp` + `tools/wb_check/README.md`: verify Postgres `session_events` contains an `event_id`.
 - `tools/wb_dlq_replayer/main.cpp` + `tools/wb_dlq_replayer/README.md`: replay DLQ stream -> Postgres (and/or dead stream).
-- `tools/admin_app/main.cpp` + `tools/admin_app/admin_ui.html`: admin control-plane; canonical doc is `tools/admin_app/README.md` (`/metrics`, `/healthz`, `/readyz`, `/admin`, `/api/v1/auth/context`, `/api/v1/overview`, `/api/v1/instances`, `/api/v1/instances/{instance_id}`, `/api/v1/users`, `/api/v1/sessions/{client_id}`, `/api/v1/users/disconnect`, `/api/v1/users/{mute|unmute|ban|unban|kick}`, `/api/v1/announcements`, `/api/v1/settings`, `/api/v1/ext/inventory`, `/api/v1/ext/precheck`, `/api/v1/ext/deployments`, `/api/v1/ext/schedules`, `/api/v1/worker/write-behind`, `/api/v1/metrics/links`).
 - `tools/migrations/runner.cpp` + `tools/migrations/*.sql`: schema migrations.
 - `tools/gen_opcodes.py`: generates opcode headers from JSON specs (grouping + `opcode_name()` helpers).
 - `tools/gen_opcode_docs.py`: validates opcode specs and generates `docs/protocol/opcodes.md` (system/game share the same 16-bit space).
 - `tools/gen_wire_codec.py`: generates build/install payload under `build/generated/include/server/generated/wire/codec.generated.hpp` from `protocol/wire_map.json`. The tracked forwarding entrypoint remains `core/include/server/wire/codec.hpp`.
-- `tools/new_plugin.py`: scaffold generator for ChatHook ABI v2 plugin source + manifest.
-- `tools/new_script.py`: scaffold generator for Lua cold-hook script + manifest.
-- `tools/ext_inventory.py`: manifest inventory scanner/validator for plugin/script artifacts.
 
 ## Opcode Codegen
 - Specs (JSON): `core/protocol/system_opcodes.json`, `server/protocol/game_opcodes.json`
@@ -28,7 +25,6 @@ Aux binaries + code generation.
 - `tools/wb_check/README.md`: verify Postgres state after write-behind.
 - `tools/wb_dlq_replayer/README.md`: reprocess DLQ stream.
 - `tools/migrations/README.md`: migration order + operational notes.
-- `tools/admin_app/README.md`: canonical admin control-plane API/role/runtime surface.
 
 ## Write-behind Pipeline (Streams -> Postgres)
 - Produce: `wb_emit` writes events to `REDIS_STREAM_KEY` (default `session_events`).
@@ -49,9 +45,9 @@ Aux binaries + code generation.
 - `wb_flush_commit_ms_last`, `wb_flush_commit_ms_max` (gauges)
 - `wb_flush_commit_ms_sum`, `wb_flush_commit_ms_count` (counters)
 
-## Build (Windows)
+## Build (Windows / Linux)
 ```powershell
-pwsh scripts/build.ps1 -Config Debug -Target wb_worker
+python scripts/build.py --profile full --config Debug --step build --target wb_worker
 ```
 
 ## Notes

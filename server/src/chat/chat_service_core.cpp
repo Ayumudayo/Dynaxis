@@ -2,21 +2,14 @@
 #include "chat_room_state.hpp"
 #include "chat_service_private_access.hpp"
 #include "chat_service_state.hpp"
-#include "server/app/topology_runtime_assignment.hpp"
 #include "server/protocol/game_opcodes.hpp"
-#include "server/core/config/runtime_settings.hpp"
 #include "server/core/protocol/packet.hpp"
 #include "server/core/protocol/protocol_errors.hpp"
 #include "server/core/runtime_metrics.hpp"
-#include "server/core/scripting/lua_runtime.hpp"
 #include "server/core/trace/context.hpp"
 #include "server/core/util/log.hpp"
-#include "server/core/util/service_registry.hpp"
-#include "server/core/concurrent/task_scheduler.hpp"
 #include "server/core/concurrent/job_queue.hpp"
-#include "server/scripting/chat_lua_bindings.hpp"
 #include "server/wire/codec.hpp"
-#include "chat_hook_plugin_chain.hpp"
 // 저장소 연동 헤더
 #include "server/storage/connection_pool.hpp"
 #include "server/core/storage/redis/client.hpp"
@@ -40,21 +33,15 @@ using namespace server::core;
 namespace proto = server::core::protocol;
 namespace game_proto = server::protocol;
 namespace corelog = server::core::log;
-namespace services = server::core::util::services;
 
 /**
- * @brief ChatService 코어 상태, 설정, 플러그인 초기화 구현입니다.
+ * @brief ChatService 코어 상태, 설정, 의존성 초기화 구현입니다.
  *
  * DB, Redis, write-behind, 프레즌스, 히스토리 설정을 한곳에서 해석해,
  * 핸들러 로직이 환경별 분기 없이 동일 인터페이스를 사용하도록 만듭니다.
  */
 namespace server::app::chat {
 
-struct ChatServiceHookPluginState {
-    explicit ChatServiceHookPluginState(ChatHookPluginChain::Config cfg)
-        : chain(std::move(cfg)) {}
-    ChatHookPluginChain chain;
-};
 
 ChatServiceRuntimeState::ChatServiceRuntimeState() = default;
 ChatServiceRuntimeState::~ChatServiceRuntimeState() = default;
@@ -64,7 +51,6 @@ ChatServiceRuntimeState& ChatServiceRuntimeState::operator=(ChatServiceRuntimeSt
 namespace {
 
 constexpr std::string_view kRoomPasswordHashPrefix = "sha256:";
-constexpr std::string_view kAppMigrationPayloadRoomKind = "chat-room-v1";
 
 std::string make_recent_list_key(const std::string& room_id) {
     return std::string("room:") + room_id + ":recent";
@@ -102,68 +88,8 @@ bool has_room_password_hash_prefix(std::string_view value) {
     return value.rfind(kRoomPasswordHashPrefix, 0) == 0;
 }
 
-std::string json_escape(std::string_view value) {
-    std::string out;
-    out.reserve(value.size() + 8);
-    for (const unsigned char ch : value) {
-        switch (ch) {
-        case '\\':
-            out += "\\\\";
-            break;
-        case '"':
-            out += "\\\"";
-            break;
-        case '\n':
-            out += "\\n";
-            break;
-        case '\r':
-            out += "\\r";
-            break;
-        case '\t':
-            out += "\\t";
-            break;
-        default:
-            out.push_back(static_cast<char>(ch));
-            break;
-        }
-    }
-    return out;
-}
 
-std::string json_array_of_strings(const std::vector<std::string>& values) {
-    std::string out = "[";
-    bool first = true;
-    for (const auto& value : values) {
-        if (!first) {
-            out += ',';
-        }
-        first = false;
-        out += '"';
-        out += json_escape(value);
-        out += '"';
-    }
-    out += ']';
-    return out;
-}
 
-std::string lua_session_event_name(SessionEventKindV2 kind) {
-    switch (kind) {
-    case SessionEventKindV2::kOpen:
-        return "open";
-    case SessionEventKindV2::kClose:
-        return "close";
-    default:
-        return "unknown";
-    }
-}
-
-std::optional<std::string> extract_world_tag(std::string_view value) {
-    static constexpr std::string_view kWorldPrefix = "world:";
-    if (value.rfind(kWorldPrefix, 0) != 0 || value.size() <= kWorldPrefix.size()) {
-        return std::nullopt;
-    }
-    return std::string(value.substr(kWorldPrefix.size()));
-}
 
 } // namespace
 
@@ -171,34 +97,18 @@ std::optional<std::string> extract_world_tag(std::string_view value) {
 // 이후 핸들러는 "무엇이 켜져 있는가"를 매번 다시 해석하지 않고 공용 상태만 보면 된다.
 ChatService::ChatService(boost::asio::io_context& io,
                          server::core::JobQueue& job_queue,
-    std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool,
-    std::shared_ptr<server::core::storage::redis::IRedisClient> redis)
-    : impl_(std::make_unique<Impl>())
-    , io_(&io)
-    , job_queue_(job_queue) {
-    impl_->runtime.db_pool = std::move(db_pool);
-    impl_->runtime.redis = std::move(redis);
+                         std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool,
+                         std::shared_ptr<server::core::storage::redis::IRedisClient> redis)
+    : ChatService(io, job_queue, Dependencies{
+        std::move(db_pool),
+        std::move(redis),
+        false, {}}) {}
 
-    // 명시 주입이 없으면 레지스트리 폴백(fallback)을 사용한다.
-    // 부트스트랩은 간단해지지만, 어떤 의존성이 빠졌는지 추적 가능한 seam은 유지한다.
-    if (!impl_->runtime.db_pool) {
-        impl_->runtime.db_pool = services::get<server::storage::IRepositoryConnectionPool>();
-    }
-    if (!impl_->runtime.redis) {
-        impl_->runtime.redis = services::get<server::core::storage::redis::IRedisClient>();
-    }
-    impl_->runtime.lua_runtime = services::get<server::core::scripting::LuaRuntime>();
-    impl_->dispatch.lua_execution_strand = services::get<ChatStrand>();
-    if (!impl_->dispatch.lua_execution_strand && impl_->runtime.lua_runtime && io_) {
-        impl_->dispatch.lua_execution_strand = std::make_shared<ChatStrand>(boost::asio::make_strand(*io_));
-    }
-    if (impl_->runtime.lua_runtime) {
-        const auto bindings = server::app::scripting::register_chat_lua_bindings(*impl_->runtime.lua_runtime, *this);
-        corelog::info("Lua host bindings initialised attempted="
-                      + std::to_string(bindings.attempted)
-                      + " registered=" + std::to_string(bindings.registered));
-    }
-
+ChatService::ChatService(boost::asio::io_context& io, server::core::JobQueue& job_queue, Dependencies dependencies)
+    : impl_(std::make_unique<Impl>()), io_(&io), job_queue_(job_queue) {
+    impl_->runtime.db_pool = std::move(dependencies.db_pool);
+    impl_->runtime.redis = std::move(dependencies.redis);
+    impl_->runtime.auth = {dependencies.require_auth, std::move(dependencies.auth_signing_secret)};
     // 게이트웨이 ID는 분산 전파(fan-out) 루프를 식별하는 최소 표식이다.
     // 이 값이 없으면 자기 자신이 보낸 메시지를 다시 받은 상황을 추적하기 어려워진다.
     if (const char* gw = std::getenv("GATEWAY_ID"); gw && *gw) {
@@ -304,32 +214,6 @@ ChatService::ChatService(boost::asio::io_context& io,
         return out;
     };
 
-    if (const char* world_default = std::getenv("WORLD_ADMISSION_DEFAULT"); world_default && *world_default) {
-        impl_->continuity.default_world_id = world_default;
-    } else if (const char* tags_env = std::getenv("SERVER_TAGS"); tags_env && *tags_env) {
-        for (const auto& tag : split_csv(tags_env)) {
-            if (auto world_id = extract_world_tag(tag); world_id.has_value()) {
-                impl_->continuity.default_world_id = *world_id;
-                break;
-            }
-        }
-    }
-    if (const char* owner_id = std::getenv("SERVER_INSTANCE_ID"); owner_id && *owner_id) {
-        impl_->continuity.current_owner_id = owner_id;
-    } else if (const char* owner_id = std::getenv("GATEWAY_ID"); owner_id && *owner_id) {
-        impl_->continuity.current_owner_id = owner_id;
-    } else {
-        impl_->continuity.current_owner_id = "server-owner-" + std::to_string(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count());
-    }
-    if (const char* assignment_key = std::getenv("TOPOLOGY_RUNTIME_ASSIGNMENT_KEY");
-        assignment_key && *assignment_key) {
-        impl_->continuity.topology_runtime_assignment_key = assignment_key;
-    } else {
-        impl_->continuity.topology_runtime_assignment_key = "dynaxis:topology:actuation:runtime-assignment";
-    }
-
     if (const char* admins_env = read_env("CHAT_ADMIN_USERS", "ADMIN_USERS"); admins_env && *admins_env) {
         for (const auto& user : split_csv(admins_env)) {
             impl_->runtime.admin_users.insert(user);
@@ -356,14 +240,6 @@ ChatService::ChatService(boost::asio::io_context& io,
     impl_->runtime.spam_mute_sec = parse_u32_bounded(std::getenv("CHAT_SPAM_MUTE_SEC"), 30, 5, 86400);
     impl_->runtime.spam_ban_sec = parse_u32_bounded(std::getenv("CHAT_SPAM_BAN_SEC"), 600, 10, 604800);
     impl_->runtime.spam_ban_violation_threshold = parse_u32_bounded(std::getenv("CHAT_SPAM_BAN_VIOLATIONS"), 3, 1, 20);
-    impl_->runtime.lua_auto_disable_threshold = parse_u32_bounded(std::getenv("LUA_AUTO_DISABLE_THRESHOLD"), 3, 1, 1'000'000);
-    impl_->runtime.lua_hook_warn_budget_us = parse_u32_bounded(std::getenv("LUA_HOOK_WARN_BUDGET_US"), 0, 0, 60'000'000);
-    const std::uint32_t chat_hook_warn_budget_us = parse_u32_bounded(
-        std::getenv("CHAT_HOOK_WARN_BUDGET_US"),
-        0,
-        0,
-        60'000'000);
-
     // 최근 대화 내역(History) 관련 설정
     if (const char* limit_env = read_env("RECENT_HISTORY_LIMIT", "SNAPSHOT_RECENT_LIMIT")) {
         char* end = nullptr;
@@ -405,276 +281,9 @@ ChatService::ChatService(boost::asio::io_context& io,
         corelog::warn("Write-behind disabled (set WRITE_BEHIND_ENABLED=1 to enable)");
     }
 
-    // Optional chat-hook plugins (hot-reloadable shared libraries)
-    {
-        ChatHookPluginChain::Config cfg;
-
-        const auto split_paths = [](const char* raw) -> std::vector<std::filesystem::path> {
-            std::vector<std::filesystem::path> out;
-            if (!raw || !*raw) {
-                return out;
-            }
-
-            auto trim = [](std::string& s) {
-                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
-                    s.erase(s.begin());
-                }
-                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
-                    s.pop_back();
-                }
-            };
-
-            std::string cur;
-            for (const char* p = raw; *p; ++p) {
-                const char c = *p;
-                if (c == ';' || c == ',') {
-                    trim(cur);
-                    if (!cur.empty()) {
-                        out.emplace_back(cur);
-                    }
-                    cur.clear();
-                    continue;
-                }
-                cur.push_back(c);
-            }
-            trim(cur);
-            if (!cur.empty()) {
-                out.emplace_back(cur);
-            }
-            return out;
-        };
-
-        bool configured = false;
-        bool plugins_dir_from_env = false;
-        if (const char* list = std::getenv("CHAT_HOOK_PLUGIN_PATHS"); list && *list) {
-            cfg.plugin_paths = split_paths(list);
-            configured = !cfg.plugin_paths.empty();
-        }
-
-        if (!configured) {
-            if (const char* dir = std::getenv("CHAT_HOOK_PLUGINS_DIR"); dir && *dir) {
-                cfg.plugins_dir = std::filesystem::path(dir);
-                configured = true;
-                plugins_dir_from_env = true;
-            }
-        }
-
-        if (!configured) {
-            if (const char* val = std::getenv("CHAT_HOOK_PLUGIN_PATH"); val && *val) {
-                cfg.plugin_paths.emplace_back(val);
-                configured = true;
-            }
-        }
-
-        bool chat_hook_enabled = true;
-        bool chat_hook_enabled_overridden = false;
-        if (const char* hook_enabled = std::getenv("CHAT_HOOK_ENABLED"); hook_enabled && *hook_enabled) {
-            chat_hook_enabled_overridden = true;
-            chat_hook_enabled = (std::strcmp(hook_enabled, "0") != 0);
-        }
-
-        if (!chat_hook_enabled && configured) {
-            corelog::info("CHAT_HOOK_ENABLED=0; chat hook plugins are configured but runtime path is disabled");
-        }
-        if (chat_hook_enabled_overridden && chat_hook_enabled && !configured) {
-            corelog::warn("CHAT_HOOK_ENABLED=1 but no plugin path/directory is configured");
-        }
-
-        const bool enabled = configured && chat_hook_enabled;
-
-        if (enabled && plugins_dir_from_env) {
-            if (const char* fallback = std::getenv("CHAT_HOOK_FALLBACK_PLUGINS_DIR"); fallback && *fallback) {
-                cfg.fallback_plugins_dir = std::filesystem::path(fallback);
-            }
-        }
-
-        if (enabled) {
-            cfg.hook_warn_budget_us = chat_hook_warn_budget_us;
-            if (const char* cache = std::getenv("CHAT_HOOK_CACHE_DIR"); cache && *cache) {
-                cfg.cache_dir = cache;
-            }
-            if (const char* lock = std::getenv("CHAT_HOOK_LOCK_PATH"); lock && *lock) {
-                cfg.single_lock_path = lock;
-            }
-
-            impl_->runtime.hook_plugin = std::make_unique<ChatServiceHookPluginState>(std::move(cfg));
-            impl_->runtime.hook_plugin->chain.poll_reload();
-
-            unsigned long interval_ms = 500;
-            if (const char* interval = std::getenv("CHAT_HOOK_RELOAD_INTERVAL_MS"); interval && *interval) {
-                interval_ms = std::strtoul(interval, nullptr, 10);
-            }
-            if (interval_ms > 0) {
-                if (auto scheduler = services::get<server::core::concurrent::TaskScheduler>()) {
-                    server::core::concurrent::TaskScheduler::RepeatPolicy policy{};
-                    policy.interval = std::chrono::milliseconds{static_cast<long long>(interval_ms)};
-                    (void)scheduler->schedule_every_controlled([this](const server::core::concurrent::TaskScheduler::RepeatContext&) {
-                        if (!impl_->runtime.hook_plugin) {
-                            return server::core::concurrent::TaskScheduler::RepeatDecision::kStop;
-                        }
-                        (void)job_queue_.TryPush([this]() {
-                            if (impl_->runtime.hook_plugin) {
-                                impl_->runtime.hook_plugin->chain.poll_reload();
-                            }
-                        });
-                        return server::core::concurrent::TaskScheduler::RepeatDecision::kContinue;
-                    }, policy);
-                }
-            }
-        }
-    }
 }
 
 ChatService::~ChatService() = default;
-
-ChatHookPluginsMetrics ChatService::chat_hook_plugins_metrics() const {
-    ChatHookPluginsMetrics out{};
-    if (!impl_->runtime.hook_plugin) {
-        out.enabled = false;
-        out.mode = "none";
-        return out;
-    }
-
-    const auto snap = impl_->runtime.hook_plugin->chain.metrics_snapshot();
-    out.enabled = snap.configured;
-    out.mode = snap.mode;
-    out.plugins.reserve(snap.plugins.size());
-    for (const auto& p : snap.plugins) {
-        ChatHookPluginMetric m{};
-        m.file = p.plugin_path.filename().string();
-        m.loaded = p.loaded;
-        m.name = p.name;
-        m.version = p.version;
-        m.reload_attempt_total = p.reload_attempt_total;
-        m.reload_success_total = p.reload_success_total;
-        m.reload_failure_total = p.reload_failure_total;
-        m.hook_metrics.reserve(p.hook_metrics.size());
-        for (const auto& hm : p.hook_metrics) {
-            ChatHookPluginMetric::HookMetric metric{};
-            metric.hook_name = hm.hook_name;
-            metric.calls_total = hm.calls_total;
-            metric.errors_total = hm.errors_total;
-            metric.duration_count = hm.duration_count;
-            metric.duration_sum_ns = hm.duration_sum_ns;
-            metric.duration_bucket_counts = hm.duration_bucket_counts;
-            m.hook_metrics.push_back(std::move(metric));
-        }
-        out.plugins.push_back(std::move(m));
-    }
-    return out;
-}
-
-LuaHooksMetrics ChatService::lua_hooks_metrics() const {
-    LuaHooksMetrics out{};
-    out.enabled = static_cast<bool>(impl_->runtime.lua_runtime);
-    out.auto_disable_threshold = impl_->runtime.lua_auto_disable_threshold;
-
-    if (!impl_->runtime.lua_runtime) {
-        return out;
-    }
-
-    const auto runtime_snapshot = impl_->runtime.lua_runtime->metrics_snapshot();
-    out.reload_epoch = runtime_snapshot.reload_epoch;
-    out.loaded_scripts = runtime_snapshot.loaded_scripts;
-    out.memory_used_bytes = runtime_snapshot.memory_used_bytes;
-    out.calls_total = runtime_snapshot.calls_total;
-    out.errors_total = runtime_snapshot.errors_total;
-    out.instruction_limit_hits = runtime_snapshot.instruction_limit_hits;
-    out.memory_limit_hits = runtime_snapshot.memory_limit_hits;
-
-    std::lock_guard<std::mutex> lock(impl_->lua_metrics.mu);
-    out.hooks.reserve(
-        impl_->lua_metrics.consecutive_failures.size()
-        + impl_->lua_metrics.auto_disable_total.size()
-        + impl_->lua_metrics.calls_total.size()
-        + impl_->lua_metrics.errors_total.size()
-        + impl_->lua_metrics.instruction_limit_hits.size()
-        + impl_->lua_metrics.memory_limit_hits.size()
-        + impl_->lua_metrics.disabled.size());
-
-    auto append_or_get = [&](const std::string& hook_name) -> LuaHookMetric& {
-        for (auto& metric : out.hooks) {
-            if (metric.hook_name == hook_name) {
-                return metric;
-            }
-        }
-        out.hooks.push_back(LuaHookMetric{hook_name, false, 0, 0});
-        return out.hooks.back();
-    };
-
-    for (const auto& [hook_name, failures] : impl_->lua_metrics.consecutive_failures) {
-        auto& metric = append_or_get(hook_name);
-        metric.consecutive_failures = failures;
-    }
-
-    for (const auto& [hook_name, total] : impl_->lua_metrics.auto_disable_total) {
-        auto& metric = append_or_get(hook_name);
-        metric.auto_disable_total = total;
-    }
-
-    for (const auto& [hook_name, total] : impl_->lua_metrics.calls_total) {
-        auto& metric = append_or_get(hook_name);
-        metric.calls_total = total;
-    }
-
-    for (const auto& [hook_name, total] : impl_->lua_metrics.errors_total) {
-        auto& metric = append_or_get(hook_name);
-        metric.errors_total = total;
-    }
-
-    for (const auto& [hook_name, total] : impl_->lua_metrics.instruction_limit_hits) {
-        auto& metric = append_or_get(hook_name);
-        metric.instruction_limit_hits = total;
-    }
-
-    for (const auto& [hook_name, total] : impl_->lua_metrics.memory_limit_hits) {
-        auto& metric = append_or_get(hook_name);
-        metric.memory_limit_hits = total;
-    }
-
-    for (const auto& hook_name : impl_->lua_metrics.disabled) {
-        auto& metric = append_or_get(hook_name);
-        metric.disabled = true;
-    }
-
-    auto append_or_get_script_metric = [&](const std::string& hook_name,
-                                           const std::string& script_name) -> LuaScriptCallMetric& {
-        for (auto& metric : out.script_calls) {
-            if (metric.hook_name == hook_name && metric.script_name == script_name) {
-                return metric;
-            }
-        }
-        out.script_calls.push_back(LuaScriptCallMetric{hook_name, script_name, 0, 0});
-        return out.script_calls.back();
-    };
-
-    for (const auto& [hook_name, script_map] : impl_->lua_metrics.script_calls_total) {
-        for (const auto& [script_name, total] : script_map) {
-            auto& metric = append_or_get_script_metric(hook_name, script_name);
-            metric.calls_total = total;
-        }
-    }
-
-    for (const auto& [hook_name, script_map] : impl_->lua_metrics.script_errors_total) {
-        for (const auto& [script_name, total] : script_map) {
-            auto& metric = append_or_get_script_metric(hook_name, script_name);
-            metric.errors_total = total;
-        }
-    }
-
-    std::sort(out.hooks.begin(), out.hooks.end(), [](const LuaHookMetric& lhs, const LuaHookMetric& rhs) {
-        return lhs.hook_name < rhs.hook_name;
-    });
-
-    std::sort(out.script_calls.begin(), out.script_calls.end(), [](const LuaScriptCallMetric& lhs, const LuaScriptCallMetric& rhs) {
-        if (lhs.hook_name == rhs.hook_name) {
-            return lhs.script_name < rhs.script_name;
-        }
-        return lhs.hook_name < rhs.hook_name;
-    });
-
-    return out;
-}
 
 ContinuityMetrics ChatService::continuity_metrics() const {
     ContinuityMetrics out{};
@@ -686,39 +295,6 @@ ContinuityMetrics ChatService::continuity_metrics() const {
     out.state_write_fail_total = impl_->continuity_metrics.state_write_fail_total.load(std::memory_order_relaxed);
     out.state_restore_total = impl_->continuity_metrics.state_restore_total.load(std::memory_order_relaxed);
     out.state_restore_fallback_total = impl_->continuity_metrics.state_restore_fallback_total.load(std::memory_order_relaxed);
-    out.world_write_total = impl_->continuity_metrics.world_write_total.load(std::memory_order_relaxed);
-    out.world_write_fail_total = impl_->continuity_metrics.world_write_fail_total.load(std::memory_order_relaxed);
-    out.world_restore_total = impl_->continuity_metrics.world_restore_total.load(std::memory_order_relaxed);
-    out.world_restore_fallback_total = impl_->continuity_metrics.world_restore_fallback_total.load(std::memory_order_relaxed);
-    out.world_restore_fallback_missing_world_total =
-        impl_->continuity_metrics.world_restore_fallback_missing_world_total.load(std::memory_order_relaxed);
-    out.world_restore_fallback_missing_owner_total =
-        impl_->continuity_metrics.world_restore_fallback_missing_owner_total.load(std::memory_order_relaxed);
-    out.world_restore_fallback_owner_mismatch_total =
-        impl_->continuity_metrics.world_restore_fallback_owner_mismatch_total.load(std::memory_order_relaxed);
-    out.world_restore_fallback_draining_replacement_unhonored_total =
-        impl_->continuity_metrics.world_restore_fallback_draining_replacement_unhonored_total.load(std::memory_order_relaxed);
-    out.world_owner_write_total = impl_->continuity_metrics.world_owner_write_total.load(std::memory_order_relaxed);
-    out.world_owner_write_fail_total = impl_->continuity_metrics.world_owner_write_fail_total.load(std::memory_order_relaxed);
-    out.world_owner_restore_total = impl_->continuity_metrics.world_owner_restore_total.load(std::memory_order_relaxed);
-    out.world_owner_restore_fallback_total = impl_->continuity_metrics.world_owner_restore_fallback_total.load(std::memory_order_relaxed);
-    out.world_migration_restore_total = impl_->continuity_metrics.world_migration_restore_total.load(std::memory_order_relaxed);
-    out.world_migration_restore_fallback_total =
-        impl_->continuity_metrics.world_migration_restore_fallback_total.load(std::memory_order_relaxed);
-    out.world_migration_restore_fallback_target_world_missing_total =
-        impl_->continuity_metrics.world_migration_restore_fallback_target_world_missing_total.load(std::memory_order_relaxed);
-    out.world_migration_restore_fallback_target_owner_missing_total =
-        impl_->continuity_metrics.world_migration_restore_fallback_target_owner_missing_total.load(std::memory_order_relaxed);
-    out.world_migration_restore_fallback_target_owner_not_ready_total =
-        impl_->continuity_metrics.world_migration_restore_fallback_target_owner_not_ready_total.load(std::memory_order_relaxed);
-    out.world_migration_restore_fallback_target_owner_mismatch_total =
-        impl_->continuity_metrics.world_migration_restore_fallback_target_owner_mismatch_total.load(std::memory_order_relaxed);
-    out.world_migration_restore_fallback_source_not_draining_total =
-        impl_->continuity_metrics.world_migration_restore_fallback_source_not_draining_total.load(std::memory_order_relaxed);
-    out.world_migration_payload_room_handoff_total =
-        impl_->continuity_metrics.world_migration_payload_room_handoff_total.load(std::memory_order_relaxed);
-    out.world_migration_payload_room_handoff_fallback_total =
-        impl_->continuity_metrics.world_migration_payload_room_handoff_fallback_total.load(std::memory_order_relaxed);
     return out;
 }
 
@@ -834,44 +410,14 @@ std::string ChatService::make_continuity_room_key(const std::string& logical_ses
     return impl_->continuity.redis_prefix + "room:" + logical_session_id;
 }
 
-std::string ChatService::make_continuity_world_key(const std::string& logical_session_id) const {
-    return impl_->continuity.redis_prefix + "world:" + logical_session_id;
-}
-
-std::string ChatService::make_continuity_world_owner_key(const std::string& world_id) const {
-    return impl_->continuity.redis_prefix + "world-owner:" + world_id;
-}
-
-std::string ChatService::make_continuity_world_policy_key(const std::string& world_id) const {
-    return impl_->continuity.redis_prefix + "world-policy:" + world_id;
-}
-
-std::string ChatService::make_continuity_world_migration_key(const std::string& world_id) const {
-    return impl_->continuity.redis_prefix + "world-migration:" + world_id;
-}
-
-std::string ChatServicePrivateAccess::make_continuity_world_owner_key(
-    const ChatService& service,
-    const std::string& world_id) {
-    return service.make_continuity_world_owner_key(world_id);
-}
-
-std::string ChatServicePrivateAccess::make_continuity_world_policy_key(
-    const ChatService& service,
-    const std::string& world_id) {
-    return service.make_continuity_world_policy_key(world_id);
-}
-
-std::string ChatServicePrivateAccess::make_continuity_world_migration_key(
-    const ChatService& service,
-    const std::string& world_id) {
-    return service.make_continuity_world_migration_key(world_id);
-}
 
 std::optional<std::string> ChatServicePrivateAccess::lookup_room_owner(
     ChatService& service,
     std::string_view room_name) {
-    return service.lua_get_room_owner(room_name);
+    std::lock_guard lock(service.impl_->state.mu);
+    auto it = service.impl_->state.room_owners.find(std::string(room_name));
+    if (it == service.impl_->state.room_owners.end()) { return std::nullopt; }
+    return it->second;
 }
 
 bool ChatService::continuity_enabled() const {
@@ -905,94 +451,6 @@ std::optional<std::string> ChatService::load_continuity_room(const std::string& 
     return impl_->runtime.redis->get(make_continuity_room_key(logical_session_id));
 }
 
-std::optional<std::string> ChatService::load_continuity_world(const std::string& logical_session_id) {
-    if (!impl_->runtime.redis || logical_session_id.empty()) {
-        return std::nullopt;
-    }
-    return impl_->runtime.redis->get(make_continuity_world_key(logical_session_id));
-}
-
-std::optional<std::string> ChatService::load_continuity_world_owner(const std::string& world_id) {
-    if (!impl_->runtime.redis || world_id.empty()) {
-        return std::nullopt;
-    }
-    return impl_->runtime.redis->get(make_continuity_world_owner_key(world_id));
-}
-
-std::optional<server::core::discovery::WorldLifecyclePolicy>
-ChatServicePrivateAccess::load_continuity_world_policy(ChatService& service, const std::string& world_id) {
-    if (!service.impl_->runtime.redis || world_id.empty()) {
-        return std::nullopt;
-    }
-
-    const auto payload = service.impl_->runtime.redis->get(service.make_continuity_world_policy_key(world_id));
-    if (!payload.has_value() || payload->empty()) {
-        return std::nullopt;
-    }
-    return server::core::discovery::parse_world_lifecycle_policy(*payload);
-}
-
-std::optional<server::core::worlds::WorldMigrationEnvelope>
-ChatServicePrivateAccess::load_continuity_world_migration(ChatService& service, const std::string& world_id) {
-    if (!service.impl_->runtime.redis || world_id.empty()) {
-        return std::nullopt;
-    }
-
-    const auto payload = service.impl_->runtime.redis->get(service.make_continuity_world_migration_key(world_id));
-    if (!payload.has_value() || payload->empty()) {
-        return std::nullopt;
-    }
-    return server::core::worlds::parse_world_migration_envelope(*payload);
-}
-
-std::optional<server::core::worlds::TopologyActuationRuntimeAssignmentItem>
-ChatServicePrivateAccess::load_topology_runtime_assignment(const ChatService& service) {
-    if (!service.impl_->runtime.redis
-        || service.impl_->continuity.topology_runtime_assignment_key.empty()
-        || service.impl_->continuity.current_owner_id.empty()) {
-        return std::nullopt;
-    }
-
-    try {
-        const auto payload = service.impl_->runtime.redis->get(service.impl_->continuity.topology_runtime_assignment_key);
-        if (!payload.has_value() || payload->empty()) {
-            return std::nullopt;
-        }
-
-        const auto document = server::app::parse_topology_actuation_runtime_assignment_document(*payload);
-        if (!document.has_value()) {
-            return std::nullopt;
-        }
-
-        return server::app::find_topology_actuation_runtime_assignment_for_instance(
-            *document,
-            service.impl_->continuity.current_owner_id);
-    } catch (...) {
-        return std::nullopt;
-    }
-}
-
-std::string ChatService::current_runtime_default_world_id() const {
-    const std::string fallback_world_id =
-        impl_->continuity.default_world_id.empty() ? std::string("default") : impl_->continuity.default_world_id;
-    const auto assignment = ChatServicePrivateAccess::load_topology_runtime_assignment(*this);
-    const auto resolved =
-        server::app::resolve_topology_runtime_assignment_world_id(fallback_world_id, assignment);
-    return resolved.empty() ? std::string("default") : resolved;
-}
-
-ChatServiceAppMigrationRoomHandoff
-ChatServicePrivateAccess::resolve_app_world_migration_room_handoff(
-    const server::core::worlds::WorldMigrationEnvelope& migration) {
-    ChatServiceAppMigrationRoomHandoff handoff{};
-    if (migration.payload_kind != kAppMigrationPayloadRoomKind) {
-        return handoff;
-    }
-
-    handoff.recognized = true;
-    handoff.room = migration.payload_ref;
-    return handoff;
-}
 
 void ChatService::persist_continuity_room(const std::string& logical_session_id,
                                           const std::string& room,
@@ -1018,53 +476,6 @@ void ChatService::persist_continuity_room(const std::string& logical_session_id,
     }
 }
 
-void ChatService::persist_continuity_world(const std::string& logical_session_id,
-                                           const std::string& world_id,
-                                           std::uint64_t expires_unix_ms) {
-    if (!impl_->runtime.redis || logical_session_id.empty() || world_id.empty() || expires_unix_ms == 0) {
-        (void)impl_->continuity_metrics.world_write_fail_total.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
-
-    const auto now_ms = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count());
-    if (expires_unix_ms <= now_ms) {
-        (void)impl_->runtime.redis->del(make_continuity_world_key(logical_session_id));
-        return;
-    }
-
-    const auto ttl_ms = expires_unix_ms - now_ms;
-    const auto ttl_sec = static_cast<unsigned int>(std::max<std::uint64_t>(1, (ttl_ms + 999) / 1000));
-    if (impl_->runtime.redis->setex(make_continuity_world_key(logical_session_id), world_id, ttl_sec)) {
-        (void)impl_->continuity_metrics.world_write_total.fetch_add(1, std::memory_order_relaxed);
-    } else {
-        (void)impl_->continuity_metrics.world_write_fail_total.fetch_add(1, std::memory_order_relaxed);
-    }
-}
-
-void ChatService::persist_continuity_world_owner(const std::string& world_id,
-                                                 const std::string& owner_id,
-                                                 std::uint64_t expires_unix_ms) {
-    if (!impl_->runtime.redis || world_id.empty() || owner_id.empty() || expires_unix_ms == 0) {
-        (void)impl_->continuity_metrics.world_owner_write_fail_total.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
-
-    const auto now_ms = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count());
-    if (expires_unix_ms <= now_ms) {
-        (void)impl_->runtime.redis->del(make_continuity_world_owner_key(world_id));
-        return;
-    }
-
-    const auto ttl_ms = expires_unix_ms - now_ms;
-    const auto ttl_sec = static_cast<unsigned int>(std::max<std::uint64_t>(1, (ttl_ms + 999) / 1000));
-    if (impl_->runtime.redis->setex(make_continuity_world_owner_key(world_id), owner_id, ttl_sec)) {
-        (void)impl_->continuity_metrics.world_owner_write_total.fetch_add(1, std::memory_order_relaxed);
-    } else {
-        (void)impl_->continuity_metrics.world_owner_write_fail_total.fetch_add(1, std::memory_order_relaxed);
-    }
-}
 
 std::optional<ChatService::ContinuityLease> ChatService::try_resume_continuity_lease(std::string_view token) {
     if (!continuity_enabled()) {
@@ -1108,133 +519,13 @@ std::optional<ChatService::ContinuityLease> ChatService::try_resume_continuity_l
         lease.resume_token = *raw_token;
         lease.user_id = session->user_id;
         lease.effective_user = user->name;
-        const std::string fallback_world_id = current_runtime_default_world_id();
-        bool world_restore_ok = false;
-        bool preserve_room_on_restore = false;
-        std::optional<std::string> migration_payload_room;
-        const auto continuity_world = load_continuity_world(session->id);
-        if (continuity_world.has_value() && !continuity_world->empty()) {
-            const auto continuity_world_policy =
-                ChatServicePrivateAccess::load_continuity_world_policy(*this, *continuity_world);
-            const bool world_draining =
-                continuity_world_policy.has_value() && continuity_world_policy->draining;
-            const bool replacement_owner_matches_current =
-                continuity_world_policy.has_value()
-                && continuity_world_policy->replacement_owner_instance_id == impl_->continuity.current_owner_id;
-            const auto continuity_world_owner = load_continuity_world_owner(*continuity_world);
-            const bool owner_present =
-                continuity_world_owner.has_value() && !continuity_world_owner->empty();
-            const bool owner_matches_current = continuity_world_owner.has_value()
-                && !continuity_world_owner->empty()
-                && *continuity_world_owner == impl_->continuity.current_owner_id;
-            if (owner_matches_current && (!world_draining || replacement_owner_matches_current)) {
-                lease.world_id = *continuity_world;
-                world_restore_ok = true;
-                preserve_room_on_restore = true;
-                (void)impl_->continuity_metrics.world_restore_total.fetch_add(1, std::memory_order_relaxed);
-                (void)impl_->continuity_metrics.world_owner_restore_total.fetch_add(1, std::memory_order_relaxed);
-            } else {
-                bool migration_restored = false;
-                if (const auto migration =
-                        ChatServicePrivateAccess::load_continuity_world_migration(*this, *continuity_world);
-                    migration.has_value()) {
-                    const bool source_draining_for_migration = world_draining;
-                    const bool target_owner_matches_current =
-                        migration->target_owner_instance_id == impl_->continuity.current_owner_id;
-                    const bool current_backend_hosts_target_world =
-                        current_runtime_default_world_id() == migration->target_world_id;
-                    const auto target_world_owner = load_continuity_world_owner(migration->target_world_id);
-                    const bool target_world_owner_matches_current =
-                        target_world_owner.has_value()
-                        && !target_world_owner->empty()
-                        && *target_world_owner == impl_->continuity.current_owner_id;
-
-                    if (!source_draining_for_migration) {
-                        (void)impl_->continuity_metrics.world_migration_restore_fallback_total.fetch_add(
-                            1,
-                            std::memory_order_relaxed);
-                        (void)impl_->continuity_metrics.world_migration_restore_fallback_source_not_draining_total.fetch_add(
-                            1,
-                            std::memory_order_relaxed);
-                    } else if (!target_owner_matches_current) {
-                        (void)impl_->continuity_metrics.world_migration_restore_fallback_total.fetch_add(
-                            1,
-                            std::memory_order_relaxed);
-                        (void)impl_->continuity_metrics.world_migration_restore_fallback_target_owner_mismatch_total.fetch_add(
-                            1,
-                            std::memory_order_relaxed);
-                    } else if (!current_backend_hosts_target_world && !target_world_owner_matches_current) {
-                        (void)impl_->continuity_metrics.world_migration_restore_fallback_total.fetch_add(
-                            1,
-                            std::memory_order_relaxed);
-                        (void)impl_->continuity_metrics.world_migration_restore_fallback_target_world_missing_total.fetch_add(
-                            1,
-                            std::memory_order_relaxed);
-                    } else {
-                        lease.world_id = migration->target_world_id;
-                        world_restore_ok = true;
-                        preserve_room_on_restore = migration->preserve_room;
-                        const auto room_handoff =
-                            ChatServicePrivateAccess::resolve_app_world_migration_room_handoff(*migration);
-                        if (room_handoff.recognized) {
-                            if (!room_handoff.room.empty()) {
-                                migration_payload_room = room_handoff.room;
-                            } else {
-                                (void)impl_->continuity_metrics.world_migration_payload_room_handoff_fallback_total.fetch_add(
-                                    1,
-                                    std::memory_order_relaxed);
-                            }
-                        }
-                        migration_restored = true;
-                        (void)impl_->continuity_metrics.world_migration_restore_total.fetch_add(
-                            1,
-                            std::memory_order_relaxed);
-                    }
-                }
-
-                if (!migration_restored) {
-                    lease.world_id = fallback_world_id;
-                    (void)impl_->continuity_metrics.world_restore_fallback_total.fetch_add(1, std::memory_order_relaxed);
-                    if (world_draining && !replacement_owner_matches_current) {
-                        (void)impl_->continuity_metrics.world_restore_fallback_draining_replacement_unhonored_total.fetch_add(
-                            1,
-                            std::memory_order_relaxed);
-                    } else if (!owner_present) {
-                        (void)impl_->continuity_metrics.world_restore_fallback_missing_owner_total.fetch_add(
-                            1,
-                            std::memory_order_relaxed);
-                        (void)impl_->continuity_metrics.world_owner_restore_fallback_total.fetch_add(1, std::memory_order_relaxed);
-                    } else if (!owner_matches_current) {
-                        (void)impl_->continuity_metrics.world_restore_fallback_owner_mismatch_total.fetch_add(
-                            1,
-                            std::memory_order_relaxed);
-                        (void)impl_->continuity_metrics.world_owner_restore_fallback_total.fetch_add(1, std::memory_order_relaxed);
-                    }
-                }
-            }
-        } else {
-            lease.world_id = fallback_world_id;
-            (void)impl_->continuity_metrics.world_restore_fallback_total.fetch_add(1, std::memory_order_relaxed);
-            (void)impl_->continuity_metrics.world_restore_fallback_missing_world_total.fetch_add(
-                1,
-                std::memory_order_relaxed);
-        }
-
-        const auto continuity_room = load_continuity_room(session->id);
-        if (world_restore_ok && migration_payload_room.has_value() && !migration_payload_room->empty()) {
-            lease.room = *migration_payload_room;
-            (void)impl_->continuity_metrics.world_migration_payload_room_handoff_total.fetch_add(
-                1,
-                std::memory_order_relaxed);
-        } else if (world_restore_ok
-                   && preserve_room_on_restore
-                   && continuity_room.has_value()
-                   && !continuity_room->empty()) {
-            lease.room = *continuity_room;
-            (void)impl_->continuity_metrics.state_restore_total.fetch_add(1, std::memory_order_relaxed);
+        const auto room = load_continuity_room(session->id);
+        if (room && !room->empty()) {
+            lease.room = *room;
+            ++impl_->continuity_metrics.state_restore_total;
         } else {
             lease.room = "lobby";
-            (void)impl_->continuity_metrics.state_restore_fallback_total.fetch_add(1, std::memory_order_relaxed);
+            ++impl_->continuity_metrics.state_restore_fallback_total;
         }
         lease.expires_unix_ms = static_cast<std::uint64_t>(session->expires_at_ms);
         lease.resumed = true;
@@ -1258,7 +549,6 @@ std::optional<ChatService::ContinuityLease> ChatServicePrivateAccess::try_resume
 
 std::optional<ChatService::ContinuityLease> ChatService::issue_continuity_lease(const std::string& user_id,
                                                                                  const std::string& effective_user,
-                                                                                 const std::string& world_id,
                                                                                  const std::string& room,
                                                                                  const std::optional<std::string>& client_ip) {
     if (!continuity_enabled() || user_id.empty() || effective_user.empty()) {
@@ -1284,12 +574,9 @@ std::optional<ChatService::ContinuityLease> ChatService::issue_continuity_lease(
         lease.resume_token = raw_token;
         lease.user_id = user_id;
         lease.effective_user = effective_user;
-        lease.world_id = world_id.empty() ? current_runtime_default_world_id() : world_id;
         lease.room = room.empty() ? "lobby" : room;
         lease.expires_unix_ms = static_cast<std::uint64_t>(session.expires_at_ms);
         lease.resumed = false;
-        persist_continuity_world(lease.logical_session_id, lease.world_id, lease.expires_unix_ms);
-        persist_continuity_world_owner(lease.world_id, impl_->continuity.current_owner_id, lease.expires_unix_ms);
         persist_continuity_room(lease.logical_session_id, lease.room, lease.expires_unix_ms);
         (void)impl_->continuity_metrics.lease_issue_total.fetch_add(1, std::memory_order_relaxed);
         return lease;
@@ -1328,7 +615,7 @@ std::string ChatService::ensure_unique_or_error(Session& s, const std::string& d
         if (itset != impl_->state.by_user.end()) {
             bool taken = false;
             for (auto wit = itset->second.begin(); wit != itset->second.end(); ) {
-                if (auto p = wit->lock()) { taken = true; break; }
+                if (auto p = wit->lock()) { if (p.get() != &s) { taken = true; break; } ++wit; }
                 else { wit = itset->second.erase(wit); }
             }
             if (taken) {
@@ -1384,7 +671,7 @@ void ChatService::send_rooms_list(Session& s) {
         const bool users_count_batch_loaded = !user_count_keys.empty()
             && impl_->runtime.redis->scard_many(user_count_keys, user_counts)
             && user_counts.size() == user_count_keys.size();
-        
+
         bool lobby_found = false;
 
         for (std::size_t i = 0; i < redis_rooms_list.size(); ++i) {
@@ -1402,7 +689,7 @@ void ChatService::send_rooms_list(Session& s) {
                     users_count = users.size();
                 }
             }
-            
+
             bool locked = false;
             if (password_batch_loaded) {
                 locked = password_values[i].has_value();
@@ -1410,10 +697,10 @@ void ChatService::send_rooms_list(Session& s) {
                 auto pw = impl_->runtime.redis->get("room:password:" + r);
                 locked = pw.has_value();
             }
-            
+
             redis_rooms.push_back({r, users_count, locked});
         }
-        
+
         if (!lobby_found) {
             std::size_t users_count = 0;
             if (!impl_->runtime.redis->scard("room:users:lobby", users_count)) {
@@ -1622,7 +909,7 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
                     users_count = users.size();
                 }
             }
-            
+
             bool locked = false;
             if (password_batch_loaded) {
                 locked = password_values[i].has_value();
@@ -1630,10 +917,10 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
                 auto pw = impl_->runtime.redis->get("room:password:" + r);
                 locked = pw.has_value();
             }
-            
+
             redis_rooms.push_back({r, users_count, locked});
         }
-        
+
         if (!lobby_found) {
             std::size_t users_count = 0;
             if (!impl_->runtime.redis->scard("room:users:lobby", users_count)) {
@@ -1730,117 +1017,36 @@ void ChatService::send_snapshot(Session& s, const std::string& current) {
         rid = ensure_room_id_ci(current);
     }
 
-    std::unordered_set<std::uint64_t> added_ids;
-    bool loaded_from_cache = false;
-    std::size_t cached_messages = 0;
-    if (impl_->runtime.redis && !rid.empty()) {
-        std::vector<server::wire::v1::StateSnapshot::SnapshotMessage> cached;
-        if (ChatServicePrivateAccess::load_recent_messages_from_cache(*this, rid, cached)) {
-            for (auto& message : cached) {
-                if (added_ids.count(message.id())) continue; // 중복 제거
-                auto* sm = pb.add_messages();
-                *sm = message;
-                added_ids.insert(message.id());
-            }
-            cached_messages = cached.size();
-            loaded_from_cache = (cached_messages >= impl_->history.recent_limit);
-        }
-    }
-
-    std::uint64_t last_seen_value = 0;
-    bool last_seen_loaded = false;
+    pb.set_room_id(rid);
+    pb.set_history_limit(static_cast<std::uint32_t>(impl_->history.recent_limit));
     if (impl_->runtime.db_pool && !rid.empty()) {
         try {
+            auto work = impl_->runtime.db_pool->make_repository_unit_of_work();
+            work->chat_state().lock("message:" + rid);
+            // 같은 방 writer와 잠금을 공유한다. ID 할당 중인 transaction을 wm 앞에 남기지 않는다.
+            const auto watermark = work->messages().get_last_id(rid);
+            const auto messages = work->messages().fetch_recent_by_room(rid, 0, impl_->history.recent_limit);
             std::string uid;
-            {
-                std::lock_guard<std::mutex> lk(impl_->state.mu);
-                auto itu = impl_->state.user_uuid.find(&s);
-                if (itu != impl_->state.user_uuid.end()) uid = itu->second;
+            { std::lock_guard lock(impl_->state.mu); uid = impl_->state.user_uuid[&s]; }
+            if (!uid.empty()) pb.set_last_seen_id(work->memberships().get_last_seen(uid, rid).value_or(0));
+            work->commit();
+            pb.set_watermark(watermark);
+            pb.set_history_available(true);
+            for (const auto& message : messages) {
+                auto* item = pb.add_messages();
+                item->set_id(message.id);
+                item->set_sender(message.user_name.value_or("guest"));
+                item->set_text(message.content);
+                item->set_ts_ms(message.created_at_ms);
             }
-
-            auto uow = impl_->runtime.db_pool->make_repository_unit_of_work();
-            if (!uid.empty()) {
-                auto opt = uow->memberships().get_last_seen(uid, rid);
-                last_seen_value = opt.value_or(0);
-            }
-            last_seen_loaded = true;
-            pb.set_last_seen_id(last_seen_value);
-
-            // 캐시된 메시지가 부족하면 DB에서 추가로 조회합니다.
-            if (!loaded_from_cache || cached_messages < impl_->history.recent_limit) {
-                const std::size_t limit = impl_->history.recent_limit;
-                const std::size_t fetch_factor = impl_->history.fetch_factor;
-                const std::size_t fetch_span = limit * fetch_factor;
-                const std::size_t fetch_count = std::min(impl_->history.max_list_len, std::max(limit, fetch_span));
-
-                auto last_id = uow->messages().get_last_id(rid);
-                std::uint64_t since_id = 0;
-                // 마지막으로 읽은 메시지(last_seen)를 기준으로 가져올 범위를 계산합니다.
-                    if (last_id > 0) {
-                        // last_seen_value(마지막으로 읽은 메시지)를 기준으로 Fetch 범위를 결정합니다.
-                        // 1. last_seen이 없으면(0) 최신 N개를 가져옵니다.
-                        // 2. last_seen이 너무 오래되어 Gap이 크면, 중간을 건너뛰고 최신 메시지 위주로 가져옵니다.
-                        // 3. 정상적인 경우 last_seen 직후부터 가져옵니다.
-                        if (last_seen_value == 0) {
-                            since_id = (last_id > limit) ? (last_id - limit) : 0;
-                        } else if (last_seen_value >= last_id) {
-                            since_id = (last_id > limit) ? (last_id - limit) : 0;
-                        } else {
-                            std::uint64_t context = static_cast<std::uint64_t>(limit) * static_cast<std::uint64_t>(fetch_factor);
-                            if (last_id > context) {
-                                std::uint64_t cut = last_id - context;
-                                since_id = (last_seen_value > cut) ? last_seen_value : cut;
-                            } else {
-                                since_id = last_seen_value;
-                            }
-                        }
-                    }
-
-                auto msgs = uow->messages().fetch_recent_by_room(rid, since_id, fetch_count);
-                // DB에서 가져온 것 중 이미 캐시에 있는 것은 제외
-                std::vector<server::storage::Message> filtered;
-                filtered.reserve(msgs.size());
-                for (const auto& m : msgs) {
-                    if (added_ids.find(m.id) == added_ids.end()) {
-                        server::storage::Message m_copy = m;
-                        filtered.push_back(std::move(m_copy));
-                    }
-                }
-                msgs = std::move(filtered);
-
-                if (msgs.size() > limit) {
-                    msgs.erase(msgs.begin(), msgs.end() - static_cast<std::ptrdiff_t>(limit));
-                }
-                std::size_t budget = (cached_messages >= limit) ? 0 : (limit - cached_messages);
-                if (budget == 0) {
-                    msgs.clear();
-                } else if (msgs.size() > budget) {
-                    msgs.erase(msgs.begin(), msgs.end() - static_cast<std::ptrdiff_t>(budget));
-                }
-                for (const auto& m : msgs) {
-                    auto* sm = pb.add_messages();
-                    sm->set_id(m.id);
-                    std::string sender;
-                    if (m.user_name && !m.user_name->empty()) sender = *m.user_name;
-                    else sender = std::string("(system)");
-                    sm->set_sender(sender);
-                    sm->set_text(m.content);
-                    sm->set_ts_ms(static_cast<std::uint64_t>(m.created_at_ms));
-                    // DB에서 가져온 메시지를 Redis 캐시에 채워넣습니다 (Read-Repair).
-                    if (impl_->runtime.redis) {
-                        ChatServicePrivateAccess::cache_recent_message(*this, rid, *sm);
-                    }
-                    added_ids.insert(m.id);
-                }
-            }
-        } catch (const std::exception& e) {
-            corelog::warn(std::string("recent history DB fallback failed: ") + e.what());
-        } catch (...) {
-            corelog::warn("recent history DB fallback failed: unknown error");
-        }
+        } catch (...) { corelog::warn("recent history DB unavailable"); }
     }
-    if (!last_seen_loaded) {
-        pb.set_last_seen_id(last_seen_value);
+    if (!pb.history_available() && impl_->runtime.redis && !rid.empty()) {
+        std::vector<server::wire::v1::StateSnapshot::SnapshotMessage> cached;
+        if (ChatServicePrivateAccess::load_recent_messages_from_cache(*this, rid, cached)) {
+            for (auto& message : cached) *pb.add_messages() = message;
+            // Cache fallback is partial: never present its max ID as a complete DB boundary.
+        }
     }
 
     // 현재 세션의 이름(닉네임)을 클라이언트에게 알려줌 (Guest 식별용)
@@ -1878,8 +1084,7 @@ void ChatService::broadcast_room(const std::string& room, const std::vector<std:
         targets = collect_room_targets_locked(impl_->state, room, sender);
     }
     for (auto& t : targets) {
-        int f = 0; // 재전파에서는 self 플래그를 사용하지 않는다.
-        t->async_send(game_proto::MSG_CHAT_BROADCAST, body, f);
+        deliver_verified(t, game_proto::MSG_CHAT_BROADCAST, body, sender, room);
     }
 }
 
@@ -1899,1168 +1104,11 @@ void ChatService::send_system_notice(Session& s, const std::string& text) {
     s.async_send(game_proto::MSG_CHAT_BROADCAST, body, 0);
 }
 
-ChatService::LuaColdHookOutcome ChatService::invoke_lua_cold_hook(
-    std::string_view hook_name,
-    const server::core::scripting::LuaHookContext& context) {
-    LuaColdHookOutcome outcome{};
-    if (!impl_->runtime.lua_runtime) {
-        return outcome;
-    }
 
-    const auto runtime_metrics = impl_->runtime.lua_runtime->metrics_snapshot();
-    {
-        std::lock_guard<std::mutex> lock(impl_->lua_metrics.mu);
-        if (runtime_metrics.reload_epoch != impl_->lua_metrics.reload_epoch) {
-            impl_->lua_metrics.reload_epoch = runtime_metrics.reload_epoch;
-            impl_->lua_metrics.consecutive_failures.clear();
-            impl_->lua_metrics.disabled.clear();
-            corelog::info("lua cold hook state reset after script reload epoch=" + std::to_string(impl_->lua_metrics.reload_epoch));
-        }
 
-        if (impl_->lua_metrics.disabled.count(std::string(hook_name)) > 0) {
-            return outcome;
-        }
-    }
 
-    const auto call_started_at = std::chrono::steady_clock::now();
-    server::core::scripting::LuaRuntime::CallAllResult call_result{};
-    if (impl_->dispatch.lua_execution_strand && !impl_->dispatch.lua_execution_strand->running_in_this_thread()) {
-        auto promise = std::make_shared<std::promise<server::core::scripting::LuaRuntime::CallAllResult>>();
-        auto future = promise->get_future();
-        asio::post(*impl_->dispatch.lua_execution_strand,
-                   [this, hook = std::string(hook_name), context, promise]() mutable {
-            promise->set_value(impl_->runtime.lua_runtime->call_all(hook, context));
-        });
-        while (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
-            if (io_ == nullptr || io_->poll_one() == 0) {
-                std::this_thread::yield();
-            }
-        }
-        call_result = future.get();
-    } else {
-        call_result = impl_->runtime.lua_runtime->call_all(std::string(hook_name), context);
-    }
-    const auto call_elapsed_ns = static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now() - call_started_at)
-            .count());
 
-    const bool call_failed = (!call_result.error.empty() || call_result.failed != 0);
-    {
-        std::lock_guard<std::mutex> lock(impl_->lua_metrics.mu);
-        const std::string hook_key(hook_name);
-        impl_->lua_metrics.calls_total[hook_key] += call_result.attempted;
-        impl_->lua_metrics.errors_total[hook_key] += call_result.failed;
 
-        if (call_result.failed == 0 && !call_result.error.empty()) {
-            ++impl_->lua_metrics.errors_total[hook_key];
-        }
-
-        auto& script_calls = impl_->lua_metrics.script_calls_total[hook_key];
-        auto& script_errors = impl_->lua_metrics.script_errors_total[hook_key];
-        for (const auto& script_result : call_result.script_results) {
-            const std::string script_name = script_result.env_name.empty()
-                ? std::string("(unknown)")
-                : script_result.env_name;
-            ++script_calls[script_name];
-            if (script_result.failed) {
-                ++script_errors[script_name];
-            }
-
-            switch (script_result.failure_kind) {
-            case server::core::scripting::LuaRuntime::ScriptFailureKind::kInstructionLimit:
-                ++impl_->lua_metrics.instruction_limit_hits[hook_key];
-                break;
-            case server::core::scripting::LuaRuntime::ScriptFailureKind::kMemoryLimit:
-                ++impl_->lua_metrics.memory_limit_hits[hook_key];
-                break;
-            case server::core::scripting::LuaRuntime::ScriptFailureKind::kNone:
-            case server::core::scripting::LuaRuntime::ScriptFailureKind::kOther:
-            default:
-                break;
-            }
-        }
-
-        auto& consecutive = impl_->lua_metrics.consecutive_failures[hook_key];
-        if (call_failed) {
-            ++consecutive;
-            if (impl_->runtime.lua_auto_disable_threshold > 0
-                && consecutive >= impl_->runtime.lua_auto_disable_threshold
-                && impl_->lua_metrics.disabled.count(hook_key) == 0) {
-                impl_->lua_metrics.disabled.insert(hook_key);
-                ++impl_->lua_metrics.auto_disable_total[hook_key];
-                corelog::warn(
-                    "lua cold hook auto-disabled hook=" + hook_key
-                    + " consecutive_failures=" + std::to_string(consecutive)
-                    + " threshold=" + std::to_string(impl_->runtime.lua_auto_disable_threshold));
-            }
-        } else {
-            consecutive = 0;
-        }
-    }
-
-    if (!call_result.error.empty()) {
-        corelog::warn(
-            "lua cold hook call failed hook=" + std::string(hook_name)
-            + " reason=" + call_result.error);
-    }
-
-    if (call_result.failed != 0) {
-        corelog::warn(
-            "lua cold hook call had failures hook=" + std::string(hook_name)
-            + " failed=" + std::to_string(call_result.failed));
-    }
-
-    if (impl_->runtime.lua_hook_warn_budget_us > 0 && call_elapsed_ns > impl_->runtime.lua_hook_warn_budget_us * 1'000ULL) {
-        corelog::warn(
-            "lua cold hook latency budget exceeded hook=" + std::string(hook_name)
-            + " elapsed_us=" + std::to_string(call_elapsed_ns / 1'000ULL)
-            + " budget_us=" + std::to_string(impl_->runtime.lua_hook_warn_budget_us));
-    }
-
-    outcome.notices = call_result.notices;
-
-    switch (call_result.decision) {
-    case server::core::scripting::LuaHookDecision::kPass:
-    case server::core::scripting::LuaHookDecision::kAllow:
-    case server::core::scripting::LuaHookDecision::kModify:
-    case server::core::scripting::LuaHookDecision::kHandled:
-        break;
-    case server::core::scripting::LuaHookDecision::kBlock:
-    case server::core::scripting::LuaHookDecision::kDeny:
-        outcome.stop_default = true;
-        outcome.deny_reason = call_result.reason;
-        break;
-    default:
-        break;
-    }
-
-    return outcome;
-}
-
-bool ChatService::maybe_handle_chat_hook_plugin(Session& s,
-                                                const std::string& room,
-                                                const std::string& sender,
-                                                std::string& text) {
-    if (!impl_->runtime.hook_plugin) {
-        return false;
-    }
-
-    auto out = impl_->runtime.hook_plugin->chain.on_chat_send(s.session_id(), room, sender, text);
-    for (const auto& notice : out.notices) {
-        if (!notice.empty()) {
-            send_system_notice(s, notice);
-        }
-    }
-    return out.stop_default;
-}
-
-bool ChatService::maybe_handle_login_hook(Session& s, const std::string& user) {
-    server::core::scripting::LuaHookContext ctx{};
-    ctx.session_id = s.session_id();
-    ctx.user = user;
-
-    if (!impl_->runtime.hook_plugin) {
-        const auto lua_out = invoke_lua_cold_hook("on_login", ctx);
-        for (const auto& notice : lua_out.notices) {
-            if (!notice.empty()) {
-                send_system_notice(s, notice);
-            }
-        }
-        if (!lua_out.stop_default) {
-            return false;
-        }
-
-        const std::string reason = lua_out.deny_reason.empty() ? "login denied by lua script" : lua_out.deny_reason;
-        s.send_error(proto::errc::FORBIDDEN, reason);
-        return true;
-    }
-
-    const auto out = impl_->runtime.hook_plugin->chain.on_login(s.session_id(), user);
-    for (const auto& notice : out.notices) {
-        if (!notice.empty()) {
-            send_system_notice(s, notice);
-        }
-    }
-
-    if (!out.stop_default) {
-        const auto lua_out = invoke_lua_cold_hook("on_login", ctx);
-        for (const auto& notice : lua_out.notices) {
-            if (!notice.empty()) {
-                send_system_notice(s, notice);
-            }
-        }
-        if (!lua_out.stop_default) {
-            return false;
-        }
-
-        const std::string reason = lua_out.deny_reason.empty() ? "login denied by lua script" : lua_out.deny_reason;
-        s.send_error(proto::errc::FORBIDDEN, reason);
-        return true;
-    }
-
-    const std::string reason = out.deny_reason.empty() ? "login denied by plugin" : out.deny_reason;
-    s.send_error(proto::errc::FORBIDDEN, reason);
-    return true;
-}
-
-bool ChatService::maybe_handle_join_hook(Session& s, const std::string& user, const std::string& room) {
-    server::core::scripting::LuaHookContext ctx{};
-    ctx.session_id = s.session_id();
-    ctx.user = user;
-    ctx.room = room;
-
-    if (!impl_->runtime.hook_plugin) {
-        const auto lua_out = invoke_lua_cold_hook("on_join", ctx);
-        for (const auto& notice : lua_out.notices) {
-            if (!notice.empty()) {
-                send_system_notice(s, notice);
-            }
-        }
-        if (!lua_out.stop_default) {
-            return false;
-        }
-
-        const std::string reason = lua_out.deny_reason.empty() ? "join denied by lua script" : lua_out.deny_reason;
-        s.send_error(proto::errc::FORBIDDEN, reason);
-        return true;
-    }
-
-    const auto out = impl_->runtime.hook_plugin->chain.on_join(s.session_id(), user, room);
-    for (const auto& notice : out.notices) {
-        if (!notice.empty()) {
-            send_system_notice(s, notice);
-        }
-    }
-
-    if (!out.stop_default) {
-        const auto lua_out = invoke_lua_cold_hook("on_join", ctx);
-        for (const auto& notice : lua_out.notices) {
-            if (!notice.empty()) {
-                send_system_notice(s, notice);
-            }
-        }
-        if (!lua_out.stop_default) {
-            return false;
-        }
-
-        const std::string reason = lua_out.deny_reason.empty() ? "join denied by lua script" : lua_out.deny_reason;
-        s.send_error(proto::errc::FORBIDDEN, reason);
-        return true;
-    }
-
-    const std::string reason = out.deny_reason.empty() ? "join denied by plugin" : out.deny_reason;
-    s.send_error(proto::errc::FORBIDDEN, reason);
-    return true;
-}
-
-bool ChatService::maybe_handle_leave_hook(Session& s, const std::string& user, const std::string& room) {
-    server::core::scripting::LuaHookContext ctx{};
-    ctx.session_id = s.session_id();
-    ctx.user = user;
-    ctx.room = room;
-
-    if (!impl_->runtime.hook_plugin) {
-        const auto lua_out = invoke_lua_cold_hook("on_leave", ctx);
-        for (const auto& notice : lua_out.notices) {
-            if (!notice.empty()) {
-                send_system_notice(s, notice);
-            }
-        }
-        if (!lua_out.stop_default) {
-            return false;
-        }
-
-        const std::string reason = lua_out.deny_reason.empty() ? "leave denied by lua script" : lua_out.deny_reason;
-        s.send_error(proto::errc::FORBIDDEN, reason);
-        return true;
-    }
-
-    const auto out = impl_->runtime.hook_plugin->chain.on_leave(s.session_id(), user, room);
-    for (const auto& notice : out.notices) {
-        if (!notice.empty()) {
-            send_system_notice(s, notice);
-        }
-    }
-
-    if (!out.stop_default) {
-        const auto lua_out = invoke_lua_cold_hook("on_leave", ctx);
-        for (const auto& notice : lua_out.notices) {
-            if (!notice.empty()) {
-                send_system_notice(s, notice);
-            }
-        }
-        if (!lua_out.stop_default) {
-            return false;
-        }
-
-        const std::string reason = lua_out.deny_reason.empty() ? "leave denied by lua script" : lua_out.deny_reason;
-        s.send_error(proto::errc::FORBIDDEN, reason);
-        return true;
-    }
-
-    const std::string reason = out.deny_reason.empty() ? "leave denied by plugin" : out.deny_reason;
-    s.send_error(proto::errc::FORBIDDEN, reason);
-    return true;
-}
-
-void ChatService::notify_session_event_hook(std::uint32_t session_id,
-                                            SessionEventKindV2 kind,
-                                            const std::string& user,
-                                            const std::string& reason) {
-    server::core::scripting::LuaHookContext ctx{};
-    ctx.session_id = session_id;
-    ctx.user = user;
-    ctx.reason = reason;
-    ctx.event = lua_session_event_name(kind);
-
-    if (!impl_->runtime.hook_plugin) {
-        const auto lua_out = invoke_lua_cold_hook("on_session_event", ctx);
-        for (const auto& notice : lua_out.notices) {
-            if (!notice.empty()) {
-                corelog::info("lua session_event notice: " + notice);
-            }
-        }
-        if (lua_out.stop_default) {
-            corelog::warn("lua on_session_event requested stop_default; ignored for cleanup safety");
-        }
-        return;
-    }
-
-    const auto out = impl_->runtime.hook_plugin->chain.on_session_event(session_id, kind, user, reason);
-    for (const auto& notice : out.notices) {
-        if (!notice.empty()) {
-            corelog::info("chat_hook session_event notice: " + notice);
-        }
-    }
-    if (out.stop_default) {
-        corelog::warn("chat_hook session_event requested stop_default; skipping lua cold hook because native did not pass");
-        return;
-    }
-
-    const auto lua_out = invoke_lua_cold_hook("on_session_event", ctx);
-    for (const auto& notice : lua_out.notices) {
-        if (!notice.empty()) {
-            corelog::info("lua session_event notice: " + notice);
-        }
-    }
-    if (lua_out.stop_default) {
-        corelog::warn("lua on_session_event requested stop_default; ignored for cleanup safety");
-    }
-}
-
-bool ChatService::maybe_handle_admin_command_hook(std::string_view command,
-                                                  std::string_view issuer,
-                                                  std::string_view payload_json,
-                                                  std::string_view args,
-                                                  std::string& deny_reason) {
-    deny_reason.clear();
-    server::core::scripting::LuaHookContext ctx{};
-    ctx.command = std::string(command);
-    ctx.issuer = std::string(issuer);
-    ctx.payload_json = std::string(payload_json);
-    ctx.args = std::string(args);
-
-    if (!impl_->runtime.hook_plugin) {
-        const auto lua_out = invoke_lua_cold_hook("on_admin_command", ctx);
-        for (const auto& notice : lua_out.notices) {
-            if (!notice.empty()) {
-                corelog::info("lua admin notice: " + notice);
-            }
-        }
-        if (!lua_out.stop_default) {
-            return false;
-        }
-
-        deny_reason = lua_out.deny_reason.empty() ? "admin command denied by lua script" : lua_out.deny_reason;
-        return true;
-    }
-
-    const auto out = impl_->runtime.hook_plugin->chain.on_admin_command(command, issuer, payload_json);
-    for (const auto& notice : out.notices) {
-        if (!notice.empty()) {
-            corelog::info("chat_hook admin notice: " + notice);
-        }
-    }
-    if (!out.response_json.empty()) {
-        corelog::info("chat_hook admin response_json: " + out.response_json);
-    }
-
-    if (!out.stop_default) {
-        const auto lua_out = invoke_lua_cold_hook("on_admin_command", ctx);
-        for (const auto& notice : lua_out.notices) {
-            if (!notice.empty()) {
-                corelog::info("lua admin notice: " + notice);
-            }
-        }
-        if (!lua_out.stop_default) {
-            return false;
-        }
-
-        deny_reason = lua_out.deny_reason.empty() ? "admin command denied by lua script" : lua_out.deny_reason;
-        return true;
-    }
-
-    deny_reason = out.deny_reason.empty() ? "admin command denied by plugin" : out.deny_reason;
-    return true;
-}
-
-void ChatService::admin_disconnect_users(const std::vector<std::string>& users, const std::string& reason) {
-    if (users.empty()) {
-        return;
-    }
-
-    std::vector<std::string> targets;
-    targets.reserve(users.size());
-    for (const auto& user : users) {
-        if (!user.empty()) {
-            targets.push_back(user);
-        }
-    }
-    if (targets.empty()) {
-        return;
-    }
-
-    {
-        std::string deny_reason;
-        const std::string payload_json =
-            std::string("{\"users\":") + json_array_of_strings(targets) +
-            ",\"reason\":\"" + json_escape(reason) + "\"}";
-        if (maybe_handle_admin_command_hook("disconnect_users", "control-plane", payload_json, {}, deny_reason)) {
-            corelog::warn("admin disconnect denied by plugin: " + deny_reason);
-            return;
-        }
-    }
-
-    const std::string notice = reason;
-    if (!job_queue_.TryPush([this, targets = std::move(targets), notice]() {
-        std::vector<std::shared_ptr<Session>> sessions;
-        std::unordered_set<Session*> seen;
-
-        {
-            std::lock_guard<std::mutex> lk(impl_->state.mu);
-            for (const auto& user : targets) {
-                auto itset = impl_->state.by_user.find(user);
-                if (itset == impl_->state.by_user.end()) {
-                    continue;
-                }
-
-                for (auto wit = itset->second.begin(); wit != itset->second.end();) {
-                    if (auto session = wit->lock()) {
-                        if (!impl_->state.authed.count(session.get()) || impl_->state.guest.count(session.get())) {
-                            ++wit;
-                            continue;
-                        }
-                        if (seen.insert(session.get()).second) {
-                            sessions.push_back(std::move(session));
-                        }
-                        ++wit;
-                    } else {
-                        wit = itset->second.erase(wit);
-                    }
-                }
-            }
-        }
-
-        for (auto& session : sessions) {
-            if (!notice.empty()) {
-                send_system_notice(*session, notice);
-            }
-            session->stop();
-        }
-
-        corelog::info("admin disconnect applied: requested=" + std::to_string(targets.size()) +
-                      " disconnected=" + std::to_string(sessions.size()));
-    })) {
-        corelog::warn("admin disconnect dropped: job queue full");
-    }
-}
-
-void ChatService::admin_broadcast_notice(const std::string& text) {
-    if (text.empty()) {
-        return;
-    }
-
-    {
-        std::string deny_reason;
-        const std::string payload_json =
-            std::string("{\"text\":\"") + json_escape(text) + "\"}";
-        if (maybe_handle_admin_command_hook("announce", "control-plane", payload_json, text, deny_reason)) {
-            corelog::warn("admin broadcast denied by plugin: " + deny_reason);
-            return;
-        }
-    }
-
-    const std::string notice = text;
-    if (!job_queue_.TryPush([this, notice]() {
-        std::vector<std::shared_ptr<Session>> sessions;
-
-        {
-            std::lock_guard<std::mutex> lk(impl_->state.mu);
-            sessions = collect_authenticated_session_targets_locked(impl_->state);
-        }
-
-        for (auto& session : sessions) {
-            send_system_notice(*session, notice);
-        }
-
-        corelog::info("admin announcement delivered: sessions=" + std::to_string(sessions.size()));
-    })) {
-        corelog::warn("admin announcement dropped: job queue full");
-    }
-}
-
-void ChatService::admin_apply_runtime_setting(const std::string& key, const std::string& value) {
-    if (key.empty() || value.empty()) {
-        return;
-    }
-
-    {
-        std::string deny_reason;
-        const std::string payload_json =
-            std::string("{\"key\":\"") + json_escape(key) +
-            "\",\"value\":\"" + json_escape(value) + "\"}";
-        const std::string args = key + "=" + value;
-        if (maybe_handle_admin_command_hook("apply_runtime_setting", "control-plane", payload_json, args, deny_reason)) {
-            corelog::warn("admin runtime setting denied by plugin: " + deny_reason);
-            return;
-        }
-    }
-
-    const auto request_started_at = std::chrono::steady_clock::now();
-    server::core::runtime_metrics::record_runtime_setting_reload_attempt();
-
-    if (!job_queue_.TryPush([this, key, value, request_started_at]() {
-        auto trim_ascii_local = [](std::string_view input) {
-            std::size_t begin = 0;
-            while (begin < input.size() && std::isspace(static_cast<unsigned char>(input[begin])) != 0) {
-                ++begin;
-            }
-            std::size_t end = input.size();
-            while (end > begin && std::isspace(static_cast<unsigned char>(input[end - 1])) != 0) {
-                --end;
-            }
-            return std::string(input.substr(begin, end - begin));
-        };
-
-        auto to_lower_ascii_local = [](std::string_view input) {
-            std::string out(input);
-            std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
-                return static_cast<char>(std::tolower(c));
-            });
-            return out;
-        };
-
-        auto parse_u32 = [](std::string_view raw) -> std::optional<std::uint32_t> {
-            if (raw.empty()) {
-                return std::nullopt;
-            }
-            try {
-                std::size_t pos = 0;
-                const auto parsed = std::stoull(std::string(raw), &pos, 10);
-                if (pos != raw.size() || parsed > std::numeric_limits<std::uint32_t>::max()) {
-                    return std::nullopt;
-                }
-                return static_cast<std::uint32_t>(parsed);
-            } catch (...) {
-                server::core::runtime_metrics::record_exception_ignored();
-                return std::nullopt;
-            }
-        };
-
-        const auto finalize_failure = [&](const std::string& reason, std::string_view key_name) {
-            server::core::runtime_metrics::record_runtime_setting_reload_failure();
-            server::core::runtime_metrics::record_runtime_setting_reload_latency(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - request_started_at));
-            corelog::warn("admin setting rejected: key=" + std::string(key_name) + " reason=" + reason);
-        };
-
-        const auto finalize_success = [&](std::string_view key_name, std::uint32_t applied_value) {
-            server::core::runtime_metrics::record_runtime_setting_reload_success();
-            server::core::runtime_metrics::record_runtime_setting_reload_latency(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - request_started_at));
-            corelog::info(
-                "admin setting applied: key=" + std::string(key_name) + " value=" + std::to_string(applied_value));
-        };
-
-        const std::string normalized_key = to_lower_ascii_local(trim_ascii_local(key));
-        const std::string normalized_value = trim_ascii_local(value);
-        const auto parsed = parse_u32(normalized_value);
-        if (!parsed) {
-            finalize_failure("invalid_value", normalized_key);
-            return;
-        }
-
-        const auto* setting_rule = server::core::config::find_runtime_setting_rule(normalized_key);
-        if (setting_rule == nullptr) {
-            finalize_failure("unsupported_key", normalized_key);
-            return;
-        }
-
-        std::uint32_t min_allowed = setting_rule->min_value;
-        if (setting_rule->key_id == server::core::config::RuntimeSettingKey::kRoomRecentMaxlen) {
-            min_allowed = std::max(min_allowed, static_cast<std::uint32_t>(impl_->history.recent_limit));
-        }
-
-        if (*parsed < min_allowed || *parsed > setting_rule->max_value) {
-            finalize_failure("out_of_range", setting_rule->key_name);
-            return;
-        }
-
-        switch (setting_rule->key_id) {
-        case server::core::config::RuntimeSettingKey::kPresenceTtlSec:
-            impl_->presence.ttl = *parsed;
-            break;
-        case server::core::config::RuntimeSettingKey::kRecentHistoryLimit:
-            impl_->history.recent_limit = static_cast<std::size_t>(*parsed);
-            if (impl_->history.max_list_len < impl_->history.recent_limit) {
-                impl_->history.max_list_len = impl_->history.recent_limit;
-            }
-            break;
-        case server::core::config::RuntimeSettingKey::kRoomRecentMaxlen:
-            impl_->history.max_list_len = static_cast<std::size_t>(*parsed);
-            break;
-        case server::core::config::RuntimeSettingKey::kChatSpamThreshold:
-            impl_->runtime.spam_message_threshold = static_cast<std::size_t>(*parsed);
-            break;
-        case server::core::config::RuntimeSettingKey::kChatSpamWindowSec:
-            impl_->runtime.spam_window_sec = *parsed;
-            break;
-        case server::core::config::RuntimeSettingKey::kChatSpamMuteSec:
-            impl_->runtime.spam_mute_sec = *parsed;
-            break;
-        case server::core::config::RuntimeSettingKey::kChatSpamBanSec:
-            impl_->runtime.spam_ban_sec = *parsed;
-            break;
-        case server::core::config::RuntimeSettingKey::kChatSpamBanViolations:
-            impl_->runtime.spam_ban_violation_threshold = *parsed;
-            break;
-        }
-
-        finalize_success(setting_rule->key_name, *parsed);
-    })) {
-        server::core::runtime_metrics::record_runtime_setting_reload_failure();
-        server::core::runtime_metrics::record_runtime_setting_reload_latency(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - request_started_at));
-        corelog::warn("admin setting dropped: job queue full");
-    }
-}
-
-void ChatService::admin_apply_user_moderation(const std::string& op,
-                                              const std::vector<std::string>& users,
-                                              std::uint32_t duration_sec,
-                                              const std::string& reason) {
-    if (op.empty() || users.empty()) {
-        return;
-    }
-
-    const auto trim_ascii_local = [](std::string_view input) {
-        std::size_t begin = 0;
-        while (begin < input.size() && std::isspace(static_cast<unsigned char>(input[begin])) != 0) {
-            ++begin;
-        }
-        std::size_t end = input.size();
-        while (end > begin && std::isspace(static_cast<unsigned char>(input[end - 1])) != 0) {
-            --end;
-        }
-        return std::string(input.substr(begin, end - begin));
-    };
-
-    const auto to_lower_ascii_local = [](std::string_view input) {
-        std::string out(input);
-        std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
-            return static_cast<char>(std::tolower(c));
-        });
-        return out;
-    };
-
-    std::vector<std::string> targets;
-    targets.reserve(users.size());
-    for (const auto& user : users) {
-        const std::string trimmed = trim_ascii_local(user);
-        if (!trimmed.empty()) {
-            targets.push_back(trimmed);
-        }
-    }
-    if (targets.empty()) {
-        return;
-    }
-
-    {
-        std::string deny_reason;
-        const std::string payload_json =
-            std::string("{\"op\":\"") + json_escape(op) +
-            "\",\"users\":" + json_array_of_strings(targets) +
-            ",\"duration_sec\":" + std::to_string(duration_sec) +
-            ",\"reason\":\"" + json_escape(reason) + "\"}";
-        if (maybe_handle_admin_command_hook("apply_user_moderation", "control-plane", payload_json, op, deny_reason)) {
-            corelog::warn("admin moderation denied by plugin: " + deny_reason);
-            return;
-        }
-    }
-
-    std::string normalized_op = to_lower_ascii_local(trim_ascii_local(op));
-    std::string normalized_reason = trim_ascii_local(reason);
-
-    if (!job_queue_.TryPush([this,
-                             normalized_op = std::move(normalized_op),
-                             targets = std::move(targets),
-                             duration_sec,
-                             normalized_reason = std::move(normalized_reason)]() {
-        const auto now = std::chrono::steady_clock::now();
-        std::vector<std::shared_ptr<Session>> affected_sessions;
-        std::unordered_set<Session*> seen;
-
-        auto add_user_sessions = [&](const std::string& user) {
-            auto itset = impl_->state.by_user.find(user);
-            if (itset == impl_->state.by_user.end()) {
-                return;
-            }
-            for (auto wit = itset->second.begin(); wit != itset->second.end();) {
-                if (auto session = wit->lock()) {
-                    if (seen.insert(session.get()).second) {
-                        affected_sessions.push_back(std::move(session));
-                    }
-                    ++wit;
-                } else {
-                    wit = itset->second.erase(wit);
-                }
-            }
-        };
-
-        {
-            std::lock_guard<std::mutex> lk(impl_->state.mu);
-            for (const auto& user : targets) {
-                if (normalized_op == "mute") {
-                    const std::uint32_t seconds = duration_sec > 0 ? duration_sec : impl_->runtime.spam_mute_sec;
-                    const std::string applied_reason = normalized_reason.empty() ? "muted by administrator" : normalized_reason;
-                    impl_->state.muted_users[user] = {now + std::chrono::seconds(seconds), applied_reason};
-                } else if (normalized_op == "unmute") {
-                    impl_->state.muted_users.erase(user);
-                } else if (normalized_op == "ban") {
-                    const std::uint32_t seconds = duration_sec > 0 ? duration_sec : impl_->runtime.spam_ban_sec;
-                    const auto expires_at = now + std::chrono::seconds(seconds);
-                    const std::string applied_reason = normalized_reason.empty() ? "banned by administrator" : normalized_reason;
-                    impl_->state.banned_users[user] = {expires_at, applied_reason};
-
-                    if (auto ip_it = impl_->state.user_last_ip.find(user); ip_it != impl_->state.user_last_ip.end() && !ip_it->second.empty()) {
-                        impl_->state.banned_ips[ip_it->second] = expires_at;
-                    }
-                    if (auto hwid_it = impl_->state.user_last_hwid_hash.find(user); hwid_it != impl_->state.user_last_hwid_hash.end() && !hwid_it->second.empty()) {
-                        impl_->state.banned_hwid_hashes[hwid_it->second] = expires_at;
-                    }
-                    add_user_sessions(user);
-                } else if (normalized_op == "unban") {
-                    impl_->state.banned_users.erase(user);
-                    if (auto ip_it = impl_->state.user_last_ip.find(user); ip_it != impl_->state.user_last_ip.end() && !ip_it->second.empty()) {
-                        impl_->state.banned_ips.erase(ip_it->second);
-                    }
-                    if (auto hwid_it = impl_->state.user_last_hwid_hash.find(user); hwid_it != impl_->state.user_last_hwid_hash.end() && !hwid_it->second.empty()) {
-                        impl_->state.banned_hwid_hashes.erase(hwid_it->second);
-                    }
-                } else if (normalized_op == "kick") {
-                    add_user_sessions(user);
-                }
-            }
-        }
-
-        if (normalized_op == "ban" || normalized_op == "kick") {
-            const std::string notice = normalized_reason.empty()
-                ? (normalized_op == "ban" ? "temporarily banned" : "disconnected by administrator")
-                : normalized_reason;
-            for (auto& session : affected_sessions) {
-                send_system_notice(*session, notice);
-                session->stop();
-            }
-        }
-
-        corelog::info("admin moderation applied: op=" + normalized_op +
-                      " requested=" + std::to_string(targets.size()) +
-                      " sessions=" + std::to_string(affected_sessions.size()));
-    })) {
-        corelog::warn("admin moderation dropped: job queue full");
-    }
-}
-
-std::shared_ptr<ChatService::Session> ChatService::find_session_by_id_locked(std::uint32_t session_id) {
-    if (session_id == 0) {
-        return {};
-    }
-
-    const auto it = impl_->state.by_session_id.find(session_id);
-    if (it == impl_->state.by_session_id.end()) {
-        return {};
-    }
-
-    auto session = it->second.lock();
-    if (!session) {
-        impl_->state.by_session_id.erase(it);
-    }
-    return session;
-}
-
-std::vector<std::uint8_t> ChatService::make_system_chat_body(std::string_view room, std::string_view text) const {
-    server::wire::v1::ChatBroadcast pb;
-    pb.set_room(std::string(room));
-    pb.set_sender("(system)");
-    pb.set_text(std::string(text));
-    pb.set_sender_sid(0);
-    const auto now64 = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-    pb.set_ts_ms(static_cast<std::uint64_t>(now64));
-
-    std::string bytes;
-    pb.SerializeToString(&bytes);
-    return std::vector<std::uint8_t>(bytes.begin(), bytes.end());
-}
-
-bool ChatService::broadcast_notice_to_all_sessions(std::string notice) {
-    if (notice.empty()) {
-        return false;
-    }
-
-    if (!job_queue_.TryPush([this, notice = std::move(notice)]() {
-        std::vector<std::shared_ptr<Session>> sessions;
-
-        {
-            std::lock_guard<std::mutex> lk(impl_->state.mu);
-            sessions = collect_authenticated_session_targets_locked(impl_->state);
-        }
-
-        for (auto& session : sessions) {
-            send_system_notice(*session, notice);
-        }
-    })) {
-        corelog::warn("lua broadcast_all dropped: job queue full");
-        return false;
-    }
-    return true;
-}
-
-bool ChatService::apply_user_moderation_without_hook(const std::string& op,
-                                                     const std::vector<std::string>& users,
-                                                     std::uint32_t duration_sec,
-                                                     const std::string& reason) {
-    if (op.empty() || users.empty()) {
-        return false;
-    }
-
-    const auto trim_ascii_local = [](std::string_view input) {
-        std::size_t begin = 0;
-        while (begin < input.size() && std::isspace(static_cast<unsigned char>(input[begin])) != 0) {
-            ++begin;
-        }
-        std::size_t end = input.size();
-        while (end > begin && std::isspace(static_cast<unsigned char>(input[end - 1])) != 0) {
-            --end;
-        }
-        return std::string(input.substr(begin, end - begin));
-    };
-
-    const auto to_lower_ascii_local = [](std::string_view input) {
-        std::string out(input);
-        std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
-            return static_cast<char>(std::tolower(c));
-        });
-        return out;
-    };
-
-    std::vector<std::string> targets;
-    targets.reserve(users.size());
-    for (const auto& user : users) {
-        const std::string trimmed = trim_ascii_local(user);
-        if (!trimmed.empty()) {
-            targets.push_back(trimmed);
-        }
-    }
-    if (targets.empty()) {
-        return false;
-    }
-
-    std::string normalized_op = to_lower_ascii_local(trim_ascii_local(op));
-    std::string normalized_reason = trim_ascii_local(reason);
-
-    if (!job_queue_.TryPush([this,
-                             normalized_op = std::move(normalized_op),
-                             targets = std::move(targets),
-                             duration_sec,
-                             normalized_reason = std::move(normalized_reason)]() {
-        const auto now = std::chrono::steady_clock::now();
-        std::vector<std::shared_ptr<Session>> affected_sessions;
-        std::unordered_set<Session*> seen;
-
-        auto add_user_sessions = [&](const std::string& user) {
-            auto itset = impl_->state.by_user.find(user);
-            if (itset == impl_->state.by_user.end()) {
-                return;
-            }
-            for (auto wit = itset->second.begin(); wit != itset->second.end();) {
-                if (auto session = wit->lock()) {
-                    if (seen.insert(session.get()).second) {
-                        affected_sessions.push_back(std::move(session));
-                    }
-                    ++wit;
-                } else {
-                    wit = itset->second.erase(wit);
-                }
-            }
-        };
-
-        {
-            std::lock_guard<std::mutex> lk(impl_->state.mu);
-            for (const auto& user : targets) {
-                if (normalized_op == "mute") {
-                    const std::uint32_t seconds = duration_sec > 0 ? duration_sec : impl_->runtime.spam_mute_sec;
-                    const std::string applied_reason = normalized_reason.empty() ? "muted by administrator" : normalized_reason;
-                    impl_->state.muted_users[user] = {now + std::chrono::seconds(seconds), applied_reason};
-                } else if (normalized_op == "unmute") {
-                    impl_->state.muted_users.erase(user);
-                } else if (normalized_op == "ban") {
-                    const std::uint32_t seconds = duration_sec > 0 ? duration_sec : impl_->runtime.spam_ban_sec;
-                    const auto expires_at = now + std::chrono::seconds(seconds);
-                    const std::string applied_reason = normalized_reason.empty() ? "banned by administrator" : normalized_reason;
-                    impl_->state.banned_users[user] = {expires_at, applied_reason};
-
-                    if (auto ip_it = impl_->state.user_last_ip.find(user); ip_it != impl_->state.user_last_ip.end() && !ip_it->second.empty()) {
-                        impl_->state.banned_ips[ip_it->second] = expires_at;
-                    }
-                    if (auto hwid_it = impl_->state.user_last_hwid_hash.find(user); hwid_it != impl_->state.user_last_hwid_hash.end() && !hwid_it->second.empty()) {
-                        impl_->state.banned_hwid_hashes[hwid_it->second] = expires_at;
-                    }
-                    add_user_sessions(user);
-                } else if (normalized_op == "unban") {
-                    impl_->state.banned_users.erase(user);
-                    if (auto ip_it = impl_->state.user_last_ip.find(user); ip_it != impl_->state.user_last_ip.end() && !ip_it->second.empty()) {
-                        impl_->state.banned_ips.erase(ip_it->second);
-                    }
-                    if (auto hwid_it = impl_->state.user_last_hwid_hash.find(user); hwid_it != impl_->state.user_last_hwid_hash.end() && !hwid_it->second.empty()) {
-                        impl_->state.banned_hwid_hashes.erase(hwid_it->second);
-                    }
-                } else if (normalized_op == "kick") {
-                    add_user_sessions(user);
-                }
-            }
-        }
-
-        if (normalized_op == "ban" || normalized_op == "kick") {
-            const std::string notice = normalized_reason.empty()
-                ? (normalized_op == "ban" ? "temporarily banned" : "disconnected by administrator")
-                : normalized_reason;
-            for (auto& session : affected_sessions) {
-                send_system_notice(*session, notice);
-                session->stop();
-            }
-        }
-    })) {
-        corelog::warn("lua moderation dropped: job queue full");
-        return false;
-    }
-    return true;
-}
-
-std::optional<std::string> ChatService::lua_get_user_name(std::uint32_t session_id) {
-    std::lock_guard<std::mutex> lk(impl_->state.mu);
-    auto session = find_session_by_id_locked(session_id);
-    if (!session) {
-        return std::nullopt;
-    }
-
-    const auto it = impl_->state.user.find(session.get());
-    if (it == impl_->state.user.end()) {
-        return std::nullopt;
-    }
-    return it->second;
-}
-
-std::optional<std::string> ChatService::lua_get_user_room(std::uint32_t session_id) {
-    std::lock_guard<std::mutex> lk(impl_->state.mu);
-    auto session = find_session_by_id_locked(session_id);
-    if (!session) {
-        return std::nullopt;
-    }
-
-    const auto it = impl_->state.cur_room.find(session.get());
-    if (it == impl_->state.cur_room.end()) {
-        return std::nullopt;
-    }
-    return it->second;
-}
-
-std::vector<std::string> ChatService::lua_get_room_users(std::string_view room_name) {
-    std::vector<std::string> users;
-    if (room_name.empty()) {
-        return users;
-    }
-
-    std::lock_guard<std::mutex> lk(impl_->state.mu);
-    users = collect_authenticated_room_user_names_locked(impl_->state, room_name);
-    return users;
-}
-
-std::vector<std::string> ChatService::lua_get_room_list() {
-    std::lock_guard<std::mutex> lk(impl_->state.mu);
-    return collect_sorted_room_names_locked(impl_->state);
-}
-
-std::optional<std::string> ChatService::lua_get_room_owner(std::string_view room_name) {
-    if (room_name.empty()) {
-        return std::nullopt;
-    }
-
-    std::lock_guard<std::mutex> lk(impl_->state.mu);
-    return find_room_owner_locked(impl_->state, room_name);
-}
-
-bool ChatService::lua_is_user_muted(std::string_view nickname) {
-    if (nickname.empty()) {
-        return false;
-    }
-
-    const auto now = std::chrono::steady_clock::now();
-    std::lock_guard<std::mutex> lk(impl_->state.mu);
-    const auto it = impl_->state.muted_users.find(std::string(nickname));
-    if (it == impl_->state.muted_users.end()) {
-        return false;
-    }
-    if (it->second.expires_at <= now) {
-        impl_->state.muted_users.erase(it);
-        return false;
-    }
-    return true;
-}
-
-bool ChatService::lua_is_user_banned(std::string_view nickname) {
-    if (nickname.empty()) {
-        return false;
-    }
-
-    const auto now = std::chrono::steady_clock::now();
-    std::lock_guard<std::mutex> lk(impl_->state.mu);
-    const auto it = impl_->state.banned_users.find(std::string(nickname));
-    if (it == impl_->state.banned_users.end()) {
-        return false;
-    }
-    if (it->second.expires_at <= now) {
-        impl_->state.banned_users.erase(it);
-        return false;
-    }
-    return true;
-}
-
-std::size_t ChatService::lua_get_online_count() {
-    std::unordered_set<std::string> names;
-    std::lock_guard<std::mutex> lk(impl_->state.mu);
-    for (const auto& [session, user] : impl_->state.user) {
-        if (impl_->state.authed.count(session) == 0 || impl_->state.guest.count(session) > 0) {
-            continue;
-        }
-        if (!user.empty()) {
-            names.insert(user);
-        }
-    }
-    return names.size();
-}
-
-std::size_t ChatService::lua_get_room_count() {
-    std::lock_guard<std::mutex> lk(impl_->state.mu);
-    return count_local_rooms_locked(impl_->state);
-}
-
-bool ChatService::lua_send_notice(std::uint32_t session_id, std::string_view text) {
-    if (session_id == 0 || text.empty()) {
-        return false;
-    }
-
-    std::shared_ptr<Session> session;
-    {
-        std::lock_guard<std::mutex> lk(impl_->state.mu);
-        session = find_session_by_id_locked(session_id);
-    }
-    if (!session) {
-        return false;
-    }
-
-    send_system_notice(*session, std::string(text));
-    return true;
-}
-
-bool ChatService::lua_broadcast_room(std::string_view room_name, std::string_view text) {
-    if (room_name.empty() || text.empty()) {
-        return false;
-    }
-
-    {
-        std::lock_guard<std::mutex> lk(impl_->state.mu);
-        if (!room_exists_locked(impl_->state, room_name)) {
-            return false;
-        }
-    }
-
-    broadcast_room(std::string(room_name), make_system_chat_body(room_name, text), nullptr);
-    return true;
-}
-
-bool ChatService::lua_broadcast_all(std::string_view text) {
-    if (text.empty()) {
-        return false;
-    }
-
-    return broadcast_notice_to_all_sessions(std::string(text));
-}
-
-bool ChatService::lua_kick_user(std::uint32_t session_id, std::string_view reason) {
-    if (session_id == 0) {
-        return false;
-    }
-
-    std::shared_ptr<Session> session;
-    {
-        std::lock_guard<std::mutex> lk(impl_->state.mu);
-        session = find_session_by_id_locked(session_id);
-    }
-    if (!session) {
-        return false;
-    }
-
-    if (!reason.empty()) {
-        send_system_notice(*session, std::string(reason));
-    }
-    session->stop();
-    return true;
-}
-
-bool ChatService::lua_mute_user(std::string_view nickname,
-                                std::uint32_t duration_sec,
-                                std::string_view reason) {
-    if (nickname.empty()) {
-        return false;
-    }
-
-    return apply_user_moderation_without_hook(
-        "mute",
-        {std::string(nickname)},
-        duration_sec,
-        std::string(reason));
-}
-
-bool ChatService::lua_ban_user(std::string_view nickname,
-                               std::uint32_t duration_sec,
-                               std::string_view reason) {
-    if (nickname.empty()) {
-        return false;
-    }
-
-    return apply_user_moderation_without_hook(
-        "ban",
-        {std::string(nickname)},
-        duration_sec,
-        std::string(reason));
-}
-
-// 귓속말 전송 결과를 클라이언트에게 알립니다.
 void ChatService::send_whisper_result(Session& s, bool ok, const std::string& reason) {
     server::wire::v1::WhisperResult pb;
     pb.set_ok(ok);
@@ -3124,7 +1172,7 @@ void ChatService::deliver_remote_whisper(const std::vector<std::uint8_t>& body) 
     }
     std::vector<std::uint8_t> incoming(incoming_bytes.begin(), incoming_bytes.end());
     for (auto& target : targets) {
-        target->async_send(game_proto::MSG_WHISPER_BROADCAST, incoming, 0);
+        deliver_verified(target, game_proto::MSG_WHISPER_BROADCAST, incoming, notice.sender());
     }
 
     corelog::debug("[whisper] sender=" + notice.sender() +
@@ -3287,7 +1335,7 @@ void ChatService::dispatch_whisper(std::shared_ptr<Session> session_sp, const st
     notice.SerializeToString(&incoming_bytes);
     std::vector<std::uint8_t> incoming(incoming_bytes.begin(), incoming_bytes.end());
     for (auto& target : targets) {
-        target->async_send(game_proto::MSG_WHISPER_BROADCAST, incoming, 0);
+        deliver_verified(target, game_proto::MSG_WHISPER_BROADCAST, incoming, notice.sender());
     }
 
     send_outgoing();
@@ -3343,6 +1391,7 @@ std::string ChatService::ensure_room_id_ci(const std::string& room_name) {
     }
     try {
         auto uow = impl_->runtime.db_pool->make_repository_unit_of_work();
+        uow->chat_state().lock("room:" + room_name);
         auto found = uow->rooms().find_by_name_exact_ci(room_name);
         std::string id;
         if (found) {

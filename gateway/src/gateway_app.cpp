@@ -16,8 +16,7 @@ GatewayApp::Impl::Impl()
     : hive_(std::make_shared<server::core::net::Hive>(io_))
     , engine_(server::core::app::EngineBuilder("gateway_app").build())
     , app_host_(engine_.host())
-    , authenticator_(std::make_shared<auth::NoopAuthenticator>())
-    , rudp_config_(std::make_unique<server::core::net::rudp::RudpConfig>()) {}
+    , authenticator_(std::make_shared<auth::NoopAuthenticator>()) {}
 
 GatewayApp::Impl::~Impl() = default;
 

@@ -1,6 +1,7 @@
 # 구성 가이드
 
-Dynaxis 프로젝트는 실행 환경에서 주입되는 **환경 변수**를 사용해 구성 요소를 설정한다. `.env` 파일은 예시/편의 용도로만 제공되며, 실제 로딩은 Docker Compose의 `env_file`, Kubernetes ConfigMap/Secret, 시스템 서비스 설정 등을 통해 수행하는 것을 전제로 한다.
+인증 모드와 자격 발급은 [인증된 MSA 채팅 실행](ops/authenticated-chat.md)을 따른다. 독립 gateway/server는 기본 signed 모드에서 key 없이는 시작하지 않고, 로컬 Docker compose는 development 모드를 명시한다.
+
 
 ## 1. 구성 로딩 순서
 1. 커맨드라인 인자(예: 포트)가 있으면 우선 적용한다.
@@ -21,7 +22,6 @@ Dynaxis 프로젝트는 실행 환경에서 주입되는 **환경 변수**를 �
 | `USE_REDIS_PUBSUB` | Redis Pub/Sub 브로드캐스트 활성화 |
 | `REDIS_CHANNEL_PREFIX` | Pub/Sub 채널 접두어(`dynaxis:` 등) |
 | `GATEWAY_ID` | Gateway/Server 식별자 (Presence, Pub/Sub self-echo에 사용) |
-| `ADMIN_COMMAND_SIGNING_SECRET` | admin command fanout payload HMAC-SHA256 서명 키 (admin_app/server_app 공통) |
 | `RUNTIME_TRACING_ENABLED` | 경량 트레이싱/상관키 전파 활성화 (`1`/`0`) |
 | `RUNTIME_TRACING_SAMPLE_PERCENT` | 트레이싱 샘플링 비율(0~100) |
 | `LOG_ASYNC_QUEUE_CAPACITY` | 비동기 로거 큐 상한(기본 8192) |
@@ -36,45 +36,21 @@ Dynaxis 프로젝트는 실행 환경에서 주입되는 **환경 변수**를 �
 | `PORT` | `5000` | 서버 리스닝 포트(또는 실행 인자 argv[1]) |
 | `SERVER_ADVERTISE_HOST` | `127.0.0.1` | Gateway가 backend를 찾을 때 사용하는 광고 호스트(예: Pod IP, 노드 IP, VIP) |
 | `SERVER_ADVERTISE_PORT` | listen 포트 | Gateway가 접속할 포트(포트 매핑 시 외부 포트 지정) |
-| `SERVER_INSTANCE_ID` | `server-<timestamp>` | Instance Registry에 등록되는 고유 서버 ID. `engine-roadmap-mmorpg`에서는 world-residency owner boundary의 현재 owner identity로도 사용한다 |
+| `SERVER_INSTANCE_ID` | `server-<timestamp>` | Instance Registry에 등록되는 고유 서버 ID |
 | `SERVER_ROLE` | `server` | 서버 역할 메타데이터(제어면 selector의 `roles` 필터 기준) |
 | `SERVER_REGION` | `global` | 서버 지역 메타데이터(제어면 selector의 `regions` 필터 기준) |
 | `SERVER_SHARD` | `default` | 서버 샤드 메타데이터(제어면 selector의 `shards` 필터 기준) |
-| `SERVER_TAGS` | (unset) | 서버 태그 목록(CSV, 예: `canary,vip,world:starter-a`, selector의 `tags` 필터 기준). `engine-roadmap-mmorpg` first slice에서는 `world:<id>` convention을 world admission metadata로 사용한다 |
-| `WORLD_ADMISSION_DEFAULT` | (unset) | world residency key가 없을 때 사용할 safe default world. 미설정이면 `SERVER_TAGS`의 `world:<id>`를 우선 사용한다 |
+| `SERVER_TAGS` | (unset) | 서버 태그 목록(CSV, 예: `canary,vip`). selector의 `tags` 필터에 사용 |
 | `SERVER_REGISTRY_PREFIX` | `gateway/instances/` | Redis Instance Registry prefix. server_app과 gateway_app이 동일한 prefix를 사용해야 한다. |
 | `SERVER_REGISTRY_TTL` | `30` | Instance Registry TTL(초) |
 | `SERVER_HEARTBEAT_INTERVAL` | `5` | Instance Registry heartbeat 주기(초) |
 | `METRICS_PORT` | `0` | HTTP 관리 포트(`/metrics`, `/healthz`, `/readyz`; `server_app`는 `/logs`도 제공). 0이면 비활성 |
-| `FPS_TICK_RATE_HZ` | `30` | FPS fixed-step authoritative tick 주기(Hz) |
-| `FPS_SNAPSHOT_REFRESH_TICKS` | `30` | TCP authoritative snapshot 강제 refresh 간격(tick) |
-| `FPS_INTEREST_CELL_SIZE_MM` | `10000` | coarse interest-management 2D cell 크기(mm) |
-| `FPS_INTEREST_RADIUS_CELLS` | `1` | self actor 기준 관심 반경(cell) |
-| `FPS_MAX_INTEREST_RECIPIENTS_PER_TICK` | `64` | viewer당 tick fanout 상한 actor 수 |
-| `FPS_MAX_DELTA_ACTORS_PER_TICK` | `32` | viewer당 delta path가 담을 수 있는 dirty actor 상한. 초과 시 snapshot fallback으로 전환 |
-| `FPS_HISTORY_TICKS` | `64` | actor authoritative transform history ring buffer 길이 |
 | `METRICS_HTTP_MAX_CONNECTIONS` | `64` | metrics/admin HTTP 동시 연결 상한(초과 시 503) |
 | `METRICS_HTTP_HEADER_TIMEOUT_MS` | `5000` | metrics/admin HTTP header read timeout(ms, 초과 시 연결 종료 + timeout 카운터 증가) |
 | `METRICS_HTTP_BODY_TIMEOUT_MS` | `5000` | metrics/admin HTTP body read timeout(ms, 초과 시 연결 종료 + timeout 카운터 증가) |
 | `METRICS_HTTP_MAX_BODY_BYTES` | `65536` | metrics/admin HTTP 요청 body 최대 크기(바이트, 초과 시 413) |
 | `METRICS_HTTP_AUTH_TOKEN` | (unset) | 설정 시 `/metrics` 계열 요청에 bearer 또는 `X-Metrics-Token` 인증 강제 |
 | `METRICS_HTTP_ALLOWLIST` | (unset) | 콤마 구분 IP allowlist(미일치 요청 403) |
-| `CHAT_HOOK_PLUGINS_DIR` | (unset) | (실험) 채팅 훅 플러그인 디렉터리. 존재하는 `.so/.dll`을 파일명 순으로 로드 |
-| `CHAT_HOOK_PLUGIN_PATHS` | (unset) | (실험) 플러그인 경로 목록(순서 고정, 구분자 `;` 또는 `,`) |
-| `CHAT_HOOK_PLUGIN_PATH` | (unset) | (실험, 레거시) 단일 플러그인 경로 |
-| `CHAT_HOOK_ENABLED` | `0` | 채팅 훅 플러그인 런타임 활성화 (`1`/`0`). `0`이면 경로가 설정돼 있어도 훅 체인을 초기화하지 않음 |
-| `CHAT_HOOK_CACHE_DIR` | (unset) | cache-copy 로딩용 캐시 디렉터리 |
-| `CHAT_HOOK_RELOAD_INTERVAL_MS` | `500` | 핫 리로드 폴링 주기(ms) |
-| `CHAT_HOOK_WARN_BUDGET_US` | `0` | 플러그인 hook 호출 경고 예산(마이크로초). 0이면 비활성 |
-| `LUA_ENABLED` | `0` | Lua 스크립팅 경로 런타임 활성화 (`1`/`0`). 공식 빌드/런타임 이미지는 Lua capability를 항상 포함하며, 실제 사용 여부는 이 값으로 결정한다 |
-| `LUA_SCRIPTS_DIR` | (unset) | Lua 스크립트 디렉터리 (예: `/app/scripts`) |
-| `LUA_FALLBACK_SCRIPTS_DIR` | (unset) | `LUA_SCRIPTS_DIR`가 비어 있거나 읽기 실패일 때 사용할 fallback 스크립트 디렉터리 (예: `/app/scripts_builtin`) |
-| `LUA_LOCK_PATH` | (unset) | Lua 스크립트 리로드 lock/sentinel 파일 경로 (존재 시 watcher poll/reload 스킵) |
-| `LUA_RELOAD_INTERVAL_MS` | `1000` | Lua 스크립트 리로드 폴링 주기(ms) |
-| `LUA_INSTRUCTION_LIMIT` | `100000` | Lua 호출 1회당 instruction 제한 |
-| `LUA_MEMORY_LIMIT_BYTES` | `1048576` | Lua 런타임 메모리 상한(바이트) |
-| `LUA_AUTO_DISABLE_THRESHOLD` | `3` | 연속 오류 N회 도달 시 자동 비활성화 임계치 |
-| `LUA_HOOK_WARN_BUDGET_US` | `0` | Lua cold hook 호출 경고 예산(마이크로초). 0이면 비활성 |
 | `SESSION_CONTINUITY_ENABLED` | `0` | capability-first session continuity lease/runtime 활성화 (`1`/`0`). 켜면 login 응답에 logical session / resume lease 정보가 포함된다 |
 | `SESSION_CONTINUITY_LEASE_TTL_SEC` | `900` | continuity resume lease TTL(초). persisted logical session lease와 Redis room snapshot의 만료 윈도우를 함께 결정한다 |
 | `CHAT_ADMIN_USERS` | (unset) | 관리자 사용자 목록(구분자 `,` 또는 `;`) |
@@ -83,22 +59,11 @@ Dynaxis 프로젝트는 실행 환경에서 주입되는 **환경 변수**를 �
 | `CHAT_SPAM_MUTE_SEC` | `30` | 1차 스팸 위반 시 뮤트 지속 시간(초) |
 | `CHAT_SPAM_BAN_SEC` | `600` | 누적 위반 시 밴 지속 시간(초) |
 | `CHAT_SPAM_BAN_VIOLATIONS` | `3` | 밴으로 승격되는 누적 위반 횟수 |
-| `ADMIN_COMMAND_TTL_MS` | `60000` | admin command payload 허용 TTL(ms). `issued_at + ttl` 초과 시 거부 |
-| `ADMIN_COMMAND_FUTURE_SKEW_MS` | `5000` | admin command payload 미래 시각 허용치(ms). 초과 시 거부 |
 | `SERVER_DRAIN_TIMEOUT_MS` | `15000` | shutdown drain 대기 상한(ms). timeout 초과 시 남은 연결은 강제 종료 경로로 정리 |
 | `SERVER_DRAIN_POLL_MS` | `100` | shutdown drain 진행률(남은 연결 수) 폴링 주기(ms) |
 | `WB_*` | - | write-behind 배치/지연/DLQ 등 세부 옵션 |
 | `RUNTIME_TRACING_ENABLED` | `0` | tracing context 생성/로그 상관키 주입 활성화 |
 | `RUNTIME_TRACING_SAMPLE_PERCENT` | `100` | tracing 샘플링 비율(0~100) |
-
-Lua cold-hook 작성 기준:
-
-- 권장 형식은 function-style hook + `ctx`다.
-- 예: `function on_login(ctx) ... return { decision = "pass" } end`
-- `server/scripts/`는 runtime image builtin fallback(`/app/scripts_builtin`) 소스이고, `docker/stack/scripts/`는 compose mount(`/app/scripts`) 샘플 경로다.
-- return-table(`return { hook = "...", decision = "..." }`)와 directive(`-- hook=... decision=...`)는 fallback/testing aid로 유지한다.
-- limit 시뮬레이션은 `-- hook=on_admin_command limit=instruction|memory` 형식을 사용한다.
-- decision 우선순위는 `block/deny > handled > modify > pass/allow`이다.
 
 ### 2.3 `gateway_app` 전용
 | 변수 | 기본값 | 설명 |
@@ -120,40 +85,6 @@ Lua cold-hook 작성 기준:
 | `GATEWAY_INGRESS_BURST_TOKENS` | `400` | ingress 토큰 버킷 burst 용량 |
 | `GATEWAY_INGRESS_MAX_ACTIVE_SESSIONS` | `50000` | gateway의 동시 backend 세션 상한 |
 | `ALLOW_ANONYMOUS` | `1` | `0`이면 토큰 없는/anonymous 로그인 거부 |
-
-#### 2.3.1 UDP 인그레스(현재)
-
-| 변수 | 기본값 | 설명 |
-| --- | --- | --- |
-| `GATEWAY_UDP_LISTEN` | (unset) | 설정 시 gateway UDP 인그레스 리스너 활성화 (`host:port`) |
-| `GATEWAY_UDP_BIND_SECRET` | (unset) | UDP bind ticket 검증 비밀키 |
-| `GATEWAY_UDP_BIND_TTL_MS` | `5000` | bind ticket TTL(ms) |
-| `GATEWAY_UDP_BIND_FAIL_WINDOW_MS` | `10000` | bind 실패 누적 윈도우(ms) |
-| `GATEWAY_UDP_BIND_FAIL_LIMIT` | `5` | 윈도우 내 실패 허용 횟수 |
-| `GATEWAY_UDP_BIND_BLOCK_MS` | `60000` | 실패 한도 초과 endpoint block 시간(ms) |
-| `GATEWAY_UDP_BIND_RETRY_BACKOFF_MS` | `200` | 세션별 bind 실패 재시도 backoff 시작값(ms) |
-| `GATEWAY_UDP_BIND_RETRY_BACKOFF_MAX_MS` | `2000` | 세션별 bind 실패 재시도 backoff 상한(ms) |
-| `GATEWAY_UDP_BIND_RETRY_MAX_ATTEMPTS` | `6` | 세션별 bind 재시도 backoff 지수 증가 상한 attempt |
-| `GATEWAY_UDP_OPCODE_ALLOWLIST` | (unset) | UDP 인그레스 허용 opcode CSV. 미설정/빈 값이면 최소 고정 allowlist(`MSG_UDP_BIND_REQ`)만 허용. FPS 입력 검증에서는 `MSG_FPS_INPUT (0x0206)`를 추가한다 |
-
-#### 2.3.2 코어 RUDP(기본 OFF)
-
-아래 키는 gateway RUDP 어댑터 및 core RUDP 엔진 튜닝값이다. 런타임 기본값은 OFF이며,
-`GATEWAY_RUDP_ENABLE=1` + `GATEWAY_RUDP_CANARY_PERCENT>0` + `GATEWAY_RUDP_OPCODE_ALLOWLIST`가 함께 설정되어야 실제 세션 경로에 적용된다.
-
-| 변수/옵션 | 기본값 | 설명 |
-| --- | --- | --- |
-| `GATEWAY_RUDP_ENABLE` | `0` | gateway의 RUDP handshake/data path 활성화 게이트 |
-| `GATEWAY_RUDP_CANARY_PERCENT` | `0` | 신규 세션 중 RUDP canary 비율(0~100) |
-| `GATEWAY_RUDP_OPCODE_ALLOWLIST` | (empty) | RUDP 허용 opcode 목록(콤마 구분, 기본 비활성). FPS 입력 검증에서는 `MSG_FPS_INPUT (0x0206)`를 추가한다 |
-| `GATEWAY_RUDP_HANDSHAKE_TIMEOUT_MS` | `1500` | RUDP HELLO/ACK 완료 타임아웃(ms) |
-| `GATEWAY_RUDP_IDLE_TIMEOUT_MS` | `10000` | 유휴 상태 timeout(ms) |
-| `GATEWAY_RUDP_ACK_DELAY_MS` | `10` | delayed ACK 기본 지연(ms) |
-| `GATEWAY_RUDP_MAX_INFLIGHT_PACKETS` | `256` | 세션별 최대 in-flight 패킷 수 |
-| `GATEWAY_RUDP_MAX_INFLIGHT_BYTES` | `262144` | 세션별 최대 in-flight 바이트 |
-| `GATEWAY_RUDP_MTU_PAYLOAD_BYTES` | `1200` | datagram payload 상한 |
-| `GATEWAY_RUDP_RTO_MIN_MS` | `50` | 재전송 RTO 하한(ms) |
-| `GATEWAY_RUDP_RTO_MAX_MS` | `2000` | 재전송 RTO 상한(ms) |
 
 ### 2.4 HAProxy(외부 TCP LB)
 HAProxy는 본 리포의 실행 파일이 아니며, 설정 파일(`haproxy.cfg`)로 Gateway 인스턴스 목록을 관리한다.
@@ -233,20 +164,20 @@ Docker 스택 검증용 설정은 `docker/stack/haproxy/haproxy.cfg` 를 참고�
   - 운영 기본 권장값은 DLQ 보존(`WB_DLQ_ON_ERROR=1`)이며, ACK 정책은 데이터 보존 우선순위에 맞춰 결정한다.
 
 ## 3. 멀티 인스턴스 구성 팁
-1. **Gateway 다중화**  
-   - 각 인스턴스에 고유한 `GATEWAY_ID`를 부여한다.  
+1. **Gateway 다중화**
+   - 각 인스턴스에 고유한 `GATEWAY_ID`를 부여한다.
    - HAProxy는 여러 Gateway 인스턴스로 TCP 연결을 분산한다.
    - 동일 Redis를 사용한다면 `REDIS_CHANNEL_PREFIX`를 일치시켜야 self-echo 필터가 동작한다.
 
-3. **Server 설정**  
+3. **Server 설정**
    - 모든 서버 인스턴스에서 DB_URI, REDIS_URI, REDIS_CHANNEL_PREFIX를 일관되게 맞춰 세션/브로드캐스트 경로가 섞이지 않도록 한다.
    - SERVER_ADVERTISE_HOST/PORT는 Gateway가 접속하는 주소이며 SERVER_REGISTRY_PREFIX도 Gateway 설정과 일치해야 heartbeat가 정상적으로 갱신된다.
    - USE_REDIS_PUBSUB=1인 경우 브로드캐스트가 Redis에 의존하므로 채널 prefix와 self-echo 정책을 점검한다.
     - METRICS_PORT는 관측 도구만 접근하도록 방화벽·보안그룹을 설정한다.
     - 외부 노출 환경이면 `METRICS_HTTP_AUTH_TOKEN` 또는 `METRICS_HTTP_ALLOWLIST`를 함께 설정해 제어면 접근을 제한한다.
 
-4. **환경 파일 분리**  
-    - 개발 단계에서는 루트 `.env` 하나를 공유해도 되지만, 운영에서는 구성 요소별 `.env.gateway`, `.env.server` 등을 만들어 필요한 값만 포함하도록 분리한다.  
+4. **환경 파일 분리**
+    - 개발 단계에서는 루트 `.env` 하나를 공유해도 되지만, 운영에서는 구성 요소별 `.env.gateway`, `.env.server` 등을 만들어 필요한 값만 포함하도록 분리한다.
    - 운영에서는 `.env.server`, `.env.gateway`처럼 역할 단위로 분리하고, 실행 환경에서 환경 변수를 주입한다.
 
 ## 4. 검증 체크리스트
@@ -256,6 +187,8 @@ Docker 스택 검증용 설정은 `docker/stack/haproxy/haproxy.cfg` 를 참고�
 - `.env`에 민감한 정보(DB 비밀번호 등)가 포함될 경우 운영 환경에서는 별도 비밀 관리(예: Azure Key Vault, AWS Secrets Manager)를 사용한다.
 
 ## 5. 참고 문서
+
+- `SOAK_MAX_ERROR_RATE`: 검증 스크립트의 요청 오류 허용 비율, 기본 `0`, 유효 범위 `0..1`. 서버 런타임 설정은 아니다.
 - 서버 구조 개요: `README.md`, `docs/core-design.md`, `docs/ops/gateway-and-lb.md`
 - Gateway & Load Balancer 운영: `docs/ops/gateway-and-lb.md`
 - 문서 진입점: `docs/README.md`

@@ -10,11 +10,9 @@
 #include <vector>
 
 #include <boost/asio/io_context.hpp>
-#include <boost/asio/ip/udp.hpp>
 
 #include "gateway/transport_session.hpp"
 #include "server/core/discovery/instance_registry.hpp"
-#include "server/core/realtime/direct_bind.hpp"
 
 namespace gateway {
 
@@ -35,7 +33,6 @@ struct GatewayAppAccess {
         bool sticky_hit{false};
     };
 
-    using UdpBindTicket = server::core::realtime::DirectBindTicket;
 
     struct CreatedBackendSession {
         TransportSessionPtr session;
@@ -43,7 +40,6 @@ struct GatewayAppAccess {
         std::string backend_instance_id;
     };
 
-    using ParsedUdpBindRequest = server::core::realtime::DirectBindRequest;
 
     static boost::asio::io_context& io_context(GatewayApp& app);
     static std::string gateway_id(const GatewayApp& app);
@@ -68,7 +64,6 @@ struct GatewayAppAccess {
 
     static bool consume_backend_retry_budget(GatewayApp& app);
     static std::chrono::milliseconds backend_retry_delay(const GatewayApp& app, std::uint32_t attempt);
-    static std::uint32_t udp_bind_retry_delay_ms(const GatewayApp& app, std::uint32_t attempt);
 
     static void start_infrastructure_probe(GatewayApp& app);
     static void stop_infrastructure_probe(GatewayApp& app);
@@ -78,44 +73,6 @@ struct GatewayAppAccess {
         const std::string& client_id,
         std::weak_ptr<GatewayConnection> connection);
     static void close_backend_connection(GatewayApp& app, const std::string& session_id);
-
-    static std::string make_udp_bind_token(const GatewayApp& app,
-                                           std::string_view session_id,
-                                           std::uint64_t nonce,
-                                           std::uint64_t expires_unix_ms);
-    static std::vector<std::uint8_t> make_udp_bind_res_frame(const GatewayApp& app,
-                                                             std::uint16_t code,
-                                                             const UdpBindTicket& ticket,
-                                                             std::string_view message,
-                                                             std::uint32_t seq = 0);
-    static std::vector<std::uint8_t> make_udp_bind_res_frame(const GatewayApp& app,
-                                                             std::uint16_t code,
-                                                             std::string_view session_id,
-                                                             std::uint64_t nonce,
-                                                             std::uint64_t expires_unix_ms,
-                                                             std::string_view token,
-                                                             std::string_view message,
-                                                             std::uint32_t seq = 0);
-    static std::optional<std::vector<std::uint8_t>> make_udp_bind_ticket_frame(GatewayApp& app,
-                                                                                const std::string& session_id);
-    static bool parse_udp_bind_req(const GatewayApp& app,
-                                   std::span<const std::uint8_t> payload,
-                                   ParsedUdpBindRequest& out);
-    static std::uint16_t apply_udp_bind_request(GatewayApp& app,
-                                                const ParsedUdpBindRequest& req,
-                                                const boost::asio::ip::udp::endpoint& endpoint,
-                                                UdpBindTicket& applied_ticket,
-                                                std::string& message);
-    static void send_udp_datagram(GatewayApp& app,
-                                  std::vector<std::uint8_t> frame,
-                                  const boost::asio::ip::udp::endpoint& endpoint);
-    static bool try_send_direct_client_frame(GatewayApp& app,
-                                             std::string_view session_id,
-                                             std::uint16_t msg_id,
-                                             std::span<const std::uint8_t> frame);
-    static void trace_udp_bind_send(const GatewayApp& app,
-                                    std::span<const std::uint8_t> frame,
-                                    const boost::asio::ip::udp::endpoint& endpoint);
 
     static std::optional<SelectedBackend> select_best_server(GatewayApp& app,
                                                              const std::string& client_id = "");
@@ -137,9 +94,6 @@ struct GatewayAppAccess {
     static void configure_gateway(GatewayApp& app);
     static void configure_infrastructure(GatewayApp& app);
     static void start_listener(GatewayApp& app);
-    static void start_udp_listener(GatewayApp& app);
-    static void stop_udp_listener(GatewayApp& app);
-    static void do_udp_receive(GatewayApp& app);
 };
 
 } // namespace gateway

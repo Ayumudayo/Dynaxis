@@ -24,7 +24,8 @@ public:
      * 계약:
      * - `num_threads <= 0`이면 no-op 입니다.
      * - 이미 시작된 상태에서 재호출하면 no-op 입니다.
-     * - 큐에 들어가는 작업은 예외를 밖으로 던지지 않는 것을 권장합니다.
+     * - 작업 예외는 기록한 뒤 다음 작업을 처리합니다. 실패 결과 전달은 작업의 future 등으로 구성합니다.
+     * - Start/Stop 수명주기 호출은 외부 소유자가 직렬화해야 합니다.
      */
     void Start(int num_threads);
 
@@ -33,6 +34,8 @@ public:
      *
      * 계약:
      * - 여러 번 호출해도 안전합니다(idempotent).
+     * - 새 enqueue를 거절하고 이미 접수한 작업은 모두 소비한 뒤 join합니다.
+     * - 자신의 worker 안에서 호출하면 std::logic_error를 던집니다. 외부 소유자가 종료해야 합니다.
      */
     void Stop();
 

@@ -1,4 +1,4 @@
-# deploy_docker.ps1
+﻿# deploy_docker.ps1
 param (
     [string]$Action = "up", # up, down, restart, build, logs, ps, clean, config
     [switch]$Detached = $false,
@@ -8,10 +8,21 @@ param (
     [string]$ProjectName = "",
     [switch]$NoBase = $false,
     [string]$EnvFile = "",
-    [string]$TopologyConfig = ""
+    [string]$TopologyConfig = "",
+    [string]$Service = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+$TargetService = if ($Service) { $Service.Trim() } else { "" }
+if ($TargetService -ne "") {
+    if ($TargetService -notmatch '^[a-z0-9][a-z0-9_-]{0,62}$') {
+        Write-Error "Invalid -Service identifier: '$TargetService'."
+    }
+    if ($Action -notin @("restart", "up", "logs")) {
+        Write-Error "-Service is only supported with -Action restart, up, or logs."
+    }
+}
 
 # 스크립트 위치를 기준으로 프로젝트 루트(상위 디렉토리) 경로 설정
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
@@ -197,11 +208,17 @@ function Test-ComposeConfiguration([string[]]$ComposeArgs) {
 }
 
 function Needs-BaseImage([string]$ComposePath) {
-    return (-not $NoBase)
+    return $true
 }
 
 function Ensure-BaseImage {
-    if ($NoCache -or -not (Test-DockerImageExists "dynaxis-base")) {
+    if ($NoBase) {
+        $dependencyLabel = docker image inspect dynaxis-base --format '{{index .Config.Labels "org.dynaxis.dependencies"}}' 2>$null
+        if ($LASTEXITCODE -ne 0 -or $dependencyLabel -ne 'conan-2.29.1') {
+            throw 'Conan base image required. Run docker build -f Dockerfile.base -t dynaxis-base . first.'
+        }
+    }
+    if (-not $NoBase) {
         Write-Host "Building base image 'dynaxis-base'..." -ForegroundColor Yellow
         $BuildArgs = @("build", "-f", "Dockerfile.base", "-t", "dynaxis-base", ".")
         if ($NoCache) { $BuildArgs += "--no-cache" }
@@ -234,16 +251,16 @@ function Get-RuntimeImageBuildSpecs([string]$ProjectRoot) {
             Context = $ProjectRoot
         },
         @{
-            Name = "admin-runtime"
-            Image = "dynaxis-admin:local"
-            Target = "admin-runtime"
-            Dockerfile = $dockerfilePath
-            Context = $ProjectRoot
-        },
-        @{
             Name = "migrator-runtime"
             Image = "dynaxis-migrator:local"
             Target = "migrator-runtime"
+            Dockerfile = $dockerfilePath
+            Context = $ProjectRoot
+        }
+        @{
+            Name = "admin-runtime"
+            Image = "dynaxis-admin:local"
+            Target = "admin-runtime"
             Dockerfile = $dockerfilePath
             Context = $ProjectRoot
         }
@@ -296,6 +313,9 @@ if ($ResolvedEnvFile) {
 
 if ($Observability) {
     $ComposeBaseArgs += @("--profile", "observability")
+    if ([string]::IsNullOrWhiteSpace($env:ADMIN_OBSERVABILITY_ENABLED)) {
+        $env:ADMIN_OBSERVABILITY_ENABLED = "1"
+    }
 }
 
 if ($Action -eq "build") {
@@ -323,7 +343,12 @@ elseif ($Action -eq "up") {
     Write-Host "Starting services..." -ForegroundColor Cyan
     $DockerArgs = $ComposeBaseArgs + @("up")
     if ($Detached) { $DockerArgs += "-d" }
-    $DockerArgs += "--remove-orphans"
+    if ($TargetService -ne "") {
+        $DockerArgs += @("--no-deps", $TargetService)
+    }
+    else {
+        $DockerArgs += "--remove-orphans"
+    }
     Invoke-DockerCommand -Args $DockerArgs -FailureMessage "Docker Compose up failed."
 }
 elseif ($Action -eq "down") {
@@ -332,10 +357,18 @@ elseif ($Action -eq "down") {
 }
 elseif ($Action -eq "restart") {
     Write-Host "Restarting services..." -ForegroundColor Cyan
-    Invoke-DockerCommand -Args ($ComposeBaseArgs + @("restart")) -FailureMessage "Docker Compose restart failed."
+    $RestartArgs = $ComposeBaseArgs + @("restart")
+    if ($TargetService -ne "") {
+        $RestartArgs += $TargetService
+    }
+    Invoke-DockerCommand -Args $RestartArgs -FailureMessage "Docker Compose restart failed."
 }
 elseif ($Action -eq "logs") {
-    Invoke-DockerCommand -Args ($ComposeBaseArgs + @("logs", "-f")) -FailureMessage "Docker Compose logs failed."
+    $LogsArgs = $ComposeBaseArgs + @("logs", "-f")
+    if ($TargetService -ne "") {
+        $LogsArgs += $TargetService
+    }
+    Invoke-DockerCommand -Args $LogsArgs -FailureMessage "Docker Compose logs failed."
 }
 elseif ($Action -eq "ps") {
     Invoke-DockerCommand -Args ($ComposeBaseArgs + @("ps")) -FailureMessage "Docker Compose ps failed."

@@ -4,6 +4,16 @@
 .git
 .gitignore
 .gitattributes
+.worktrees/
+.cache/
+.codex/
+.opencode/
+.sisyphus/
+.ruff_cache/
+__pycache__/
+tasks/
+artifacts/
+tmp/
 
 # ==============================================================================
 # Build Artifacts (Local Builds)
@@ -65,10 +75,20 @@ verify_*.py
 docs/
 Sapphire/
 external/
-!external/luajit/
-!external/luajit/**
-!external/sol2/
-!external/sol2/**
 external-refs/
 *.md
 !README.md
+
+# Shared desktop source is also compiled by the Linux verification stage.
+!external/
+external/*
+!external/imgui/
+external/imgui/.git
+
+# Contract checks use the same checked-in documents and Python helpers.
+!docs/
+!docs/**
+!tests/python/*.py
+
+# Build-stage regression checks use the same Python test sources as native CI.
+!tests/python/**

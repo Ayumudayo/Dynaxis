@@ -13,7 +13,11 @@ message LoginRes {
   string resume_token = 6;
   uint64 resume_expires_unix_ms = 7;
   bool resumed = 8;
-  string world_id = 9;
+  reserved 9;
+  reserved "world_id";
+  string principal_id = 10;
+  string auth_session_id = 11;
+  string display_name = 12;
 }
 
 message ChatBroadcast {
@@ -22,6 +26,8 @@ message ChatBroadcast {
   string text = 3;
   uint32 sender_sid = 4;   // 0 if unknown
   uint64 ts_ms = 5;        // UTC epoch milliseconds
+  uint64 message_id = 6;   // committed durable message; 0 is an ephemeral system notice
+  string room_id = 7;
 }
 
 message StateSnapshot {
@@ -43,6 +49,10 @@ message StateSnapshot {
   uint64 last_seen_id = 5;              // membership.last_seen_msg_id (0 if unknown)
   // 클라이언트에게 할당된 이름 (Guest 식별용)
   string your_name = 6;
+  uint64 watermark = 7;    // committed room high-water mark, independent of last_seen_id
+  bool history_available = 8;
+  string room_id = 9;
+  uint32 history_limit = 10; // bounded recent window; not unlimited replay
 }
 message RoomUsers {
   string room = 1;
@@ -60,34 +70,4 @@ message WhisperNotice {
 message WhisperResult {
   bool ok = 1;
   string reason = 2;
-}
-
-message FpsInput {
-  uint32 input_seq = 1;
-  sint32 move_x_mm = 2;
-  sint32 move_y_mm = 3;
-  sint32 yaw_mdeg = 4;
-}
-
-message FpsActorTransform {
-  uint32 actor_id = 1;
-  sint32 x_mm = 2;
-  sint32 y_mm = 3;
-  sint32 yaw_mdeg = 4;
-  uint32 last_applied_input_seq = 5;
-  uint32 server_tick = 6;
-}
-
-message FpsStateSnapshot {
-  uint32 server_tick = 1;
-  uint32 self_actor_id = 2;
-  repeated FpsActorTransform actors = 3;
-  repeated uint32 removed_actor_ids = 4;
-}
-
-message FpsStateDelta {
-  uint32 server_tick = 1;
-  uint32 self_actor_id = 2;
-  repeated FpsActorTransform actors = 3;
-  repeated uint32 removed_actor_ids = 4;
 }

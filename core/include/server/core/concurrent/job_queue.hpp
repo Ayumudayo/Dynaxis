@@ -18,6 +18,7 @@ using Job = std::function<void()>;
  * - `Pop()`은 작업이 들어오거나 `Stop()` 호출 시까지 block 됩니다.
  * - `Stop()` 이후 `Pop()`은 큐 소진 후 빈 `Job`(nullptr)을 반환해 소비자 종료 신호로 사용됩니다.
  * - 빈 `Job` enqueue는 허용되지 않습니다.
+ * - 생산자의 공간 대기와 소비자의 작업 대기는 독립적으로 깨우며 MPMC 진행을 보장합니다.
  */
 class JobQueue {
 public:
@@ -49,7 +50,8 @@ public:
 private:
     std::queue<Job> jobs_;
     std::mutex mutex_;
-    std::condition_variable cv_;
+    std::condition_variable not_empty_;
+    std::condition_variable not_full_;
     bool stopping_ = false;
     std::size_t max_size_ = 0; // 0이면 무제한
 };

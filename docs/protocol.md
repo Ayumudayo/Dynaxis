@@ -1,13 +1,11 @@
 # 프로토콜 설계
 
-이 문서는 Dynaxis wire/runtime 프로토콜의 대표 진입 문서다. 세부 프로토콜 계약을 한 파일에 모두 몰아넣지 않고, 실제 저장소에서 유지하는 세 갈래 문서로 나누어 관리한다. 이렇게 나누는 이유는 전송 계층 문제, opcode 목록 문제, 스냅샷/상태 문제의 변경 속도와 검증 방식이 서로 다르기 때문이다. 모든 내용을 한 문서에 섞어 두면 변경 한 번마다 전체 문서를 다시 읽어야 하고, 어느 부분이 단일 기준 문서인지도 흐려진다.
+이 문서는 Dynaxis wire/runtime 프로토콜의 대표 진입 문서다. 세부 프로토콜 계약을 한 파일에 모두 몰아넣지 않고, 실제 저장소에서 유지하는 두 문서로 나누어 관리한다. 이렇게 나누는 이유는 전송 계층 문제, opcode 목록 문제, 스냅샷/상태 문제의 변경 속도와 검증 방식이 서로 다르기 때문이다. 모든 내용을 한 문서에 섞어 두면 변경 한 번마다 전체 문서를 다시 읽어야 하고, 어느 부분이 단일 기준 문서인지도 흐려진다.
 
 현재 상태에서 세부 계약은 아래 문서를 기준으로 본다.
 
 - `docs/protocol/opcodes.md`
   - 생성된 opcode 목록 문서
-- `docs/protocol/rudp.md`
-  - UDP/RUDP 전송 동작
 - `docs/protocol/snapshot.md`
   - room snapshot, recent-history cache, join-to-fanout 흐름
 
@@ -37,7 +35,7 @@
 
 flag 표준 정의는 `core/include/server/core/protocol/protocol_flags.hpp`를 따른다.
 
-헤더를 작고 고정된 형태로 유지하는 이유는 파서, 로거, 테스트 도구, loadgen이 모두 같은 전제를 공유해야 하기 때문이다. 헤더가 상황별로 달라지기 시작하면 디코더는 복잡해지고, 잘못된 입력을 방어하는 비용도 커진다.
+헤더를 작고 고정된 형태로 유지하는 이유는 파서, 로거, 테스트 도구이 모두 같은 전제를 공유해야 하기 때문이다. 헤더가 상황별로 달라지기 시작하면 디코더는 복잡해지고, 잘못된 입력을 방어하는 비용도 커진다.
 
 ## Opcode 단일 기준
 
@@ -64,11 +62,8 @@ Dynaxis가 opcode를 JSON 원본에서 생성하는 이유는 식별자, 설명,
 
 ### 전송 계층
 
-- 기본 신뢰 경로는 TCP다.
-- direct UDP/RUDP 동작과 rollout/fallback 계약은 `docs/protocol/rudp.md`를 따른다.
-- 현재 gameplay-frequency 검증 표면은 direct `MSG_PING`, `MSG_FPS_INPUT`, `MSG_FPS_STATE_DELTA`까지 확장되어 있다.
-
-전송 문서를 따로 두는 이유는 전송 계층이 다른 계층보다 실패 형태가 훨씬 많기 때문이다. handshake, retransmit, fallback, allowlist, canary, NAT/edge 문제는 opcode 목록만 봐서는 이해할 수 없다. 그래서 전송 계층은 별도 계약으로 관리한다.
+- 외부 연결과 gateway-backend 연결은 TCP를 사용한다.
+- 송신 큐 상한, connect timeout, 요청 크기와 opcode 검증을 적용한다.
 
 ### 상태와 스냅샷
 

@@ -4,7 +4,7 @@
 
 namespace server::core { class Dispatcher; }
 namespace server::app::chat { class ChatService; }
-namespace server::app::fps { class FpsService; }
+
 
 namespace server::app {
 
@@ -14,7 +14,6 @@ namespace server::app {
  * @param chat 채팅 서비스 구현체
  */
 void register_routes(server::core::Dispatcher& d,
-                     server::app::chat::ChatService& chat,
-                     server::app::fps::FpsService& fps);
+                     server::app::chat::ChatService& chat);
 
 } // namespace server::app

@@ -8,16 +8,16 @@ Dynaxis 저장소는 기존 프로젝트명 토큰을 전수 제거하고, 새 �
 
 다음 표면은 제품명 또는 배포명에 해당하므로 `Dynaxis` 기준으로 즉시 교체한다.
 
-- 사용자와 운영자에게 노출되는 텍스트: 루트 README, 서브 README, 관리자 UI, 클라이언트 창 제목, crash handler 문자열
-- 배포 artifact: Conan package `dynaxis`, Docker 이미지 `dynaxis-base`, `dynaxis-server`, `dynaxis-gateway`, `dynaxis-worker`, `dynaxis-admin`, `dynaxis-migrator`
+- 사용자와 운영자에게 노출되는 텍스트: 루트 README, 서브 README, 클라이언트 창 제목, crash handler 문자열
+- 배포 artifact: Conan package `dynaxis`, Docker 이미지 `dynaxis-base`, `dynaxis-server`, `dynaxis-gateway`, `dynaxis-worker`, `dynaxis-migrator`
 - compose/stack 식별자: project, network, volume 이름인 `dynaxis-stack`, `dynaxis_stack_postgres_data`, `dynaxis_stack_redis_data`
 - 기본 예시 값: Postgres `dynaxis`, `dynaxis_db`, Redis channel prefix `dynaxis:`
-- 운영 문서와 CI 예시: 이미지명, 컨테이너명, compose project name, loadgen network 예시
+- 운영 문서와 CI 예시: 이미지명, 컨테이너명, compose project name
 
 대표 경로:
 
 - `README.md`, `docs/README.md`, `docs/build.md`, `docs/configuration.md`, `docs/core-design.md`
-- `tools/admin_app/admin_ui.html`, `tools/admin_app/main.cpp`, `client_gui/src/gui_manager.cpp`, `client_gui/src/main.cpp`
+- `client_gui/src/gui_manager.cpp`, `client_gui/src/main.cpp`
 - `Dockerfile`, `Dockerfile.base`, `docker/stack/docker-compose.yml`, `scripts/deploy_docker.ps1`, `.github/workflows/*.yml`
 
 이 표면을 즉시 바꾸는 이유는 사용자가 실제로 보는 이름과 배포 이름이 여기에 있기 때문이다. 이 계층에서 이름이 섞이면 운영과 문서, 빌드 결과가 서로 다른 제품처럼 보일 수 있다.
@@ -26,20 +26,15 @@ Dynaxis 저장소는 기존 프로젝트명 토큰을 전수 제거하고, 새 �
 
 다음 표면은 새 브랜드 이름으로 치환하지 않고, 역할 기반 이름으로 정리한다.
 
-- 빌드 옵션과 캐시 키: `build_profile`, `ENABLE_SANITIZERS`, `ENABLE_IPO`, `LUAJIT_SUBMODULE_DIR`, `SOL2_SUBMODULE_DIR`
-- CMake helper와 파일명: `configure_luajit_submodule`, `configure_sol2_submodule`, `luajit_submodule.cmake`, `sol2_submodule.cmake`
 - build-info 매크로: `BUILD_GIT_HASH`, `BUILD_GIT_DESCRIBE`, `BUILD_TIME_UTC`
 - runtime 관측/설정 계약: `runtime_build_info`, `runtime_dependency_ready`, `runtime_dependencies_ok`, `runtime_lifecycle_phase`, `runtime_lifecycle_phase_code`, `RUNTIME_TRACING_ENABLED`, `RUNTIME_TRACING_SAMPLE_PERCENT`
 - 내부 프로세스 공유 env: `SERVER_CORE_SERVICE_REGISTRY`
-- 테스트 harness: `tests::plugin`, `TEST_PLUGIN_EXPORT`, `test_plugin_api_v1`, 중립적 temp/cache/script path 접두사
 - 샘플 문구: 제품명을 박아 넣지 않고 `welcome to the server` 같은 generic 문구 사용
 - 보조 스크립트 경로: machine-local absolute path 대신 repo-relative path 사용
 
 대표 경로:
 
 - `conanfile.py`, `CMakeLists.txt`, `core/CMakeLists.txt`, `core/include/server/core/build_info.hpp`, `core/src/trace/context.cpp`, `core/src/util/service_registry.cpp`
-- `tests/core/*`, `tests/server/*`, `tests/python/run_stack_test.py`
-- `tools/reorganize_dashboard.py`, `server/scripts/on_login_welcome.lua`, `docker/stack/scripts/on_login_welcome.lua`
 
 이 표면에서 역할 기반 이름을 유지하는 이유는 브랜드보다 의미가 더 중요하기 때문이다. 빌드 플래그, runtime contract, 테스트 harness는 재사용성과 해석 가능성이 우선이고, 제품명은 오히려 잡음을 늘릴 수 있다.
 

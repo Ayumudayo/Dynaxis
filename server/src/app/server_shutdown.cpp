@@ -7,7 +7,6 @@
 #include "server/core/concurrent/thread_manager.hpp"
 #include "server/core/discovery/instance_registry.hpp"
 #include "server/core/runtime_metrics.hpp"
-#include "server/core/scripting/lua_runtime.hpp"
 #include "server/core/storage/redis/client.hpp"
 #include "server/core/util/log.hpp"
 
@@ -89,11 +88,7 @@ void register_server_shutdown_steps(server::core::app::EngineRuntime& engine,
         core_internal::stop_db_worker_pool(db_workers);
     });
 
-    engine.add_shutdown_step("reset lua runtime", [lua_runtime = context.lua_runtime]() {
-        if (lua_runtime) {
-            lua_runtime->reset();
-        }
-    });
+
 
     engine.add_shutdown_step("stop redis pubsub", [redis = context.redis]() {
         try {

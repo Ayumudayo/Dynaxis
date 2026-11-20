@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <limits>
 
+#include "server/core/runtime_metrics.hpp"
+#include "server/core/util/log.hpp"
+
 /**
  * @brief TaskScheduler의 지연/반복 작업 스케줄링 구현입니다.
  *
@@ -312,64 +315,80 @@ std::size_t TaskScheduler::poll(std::size_t max_tasks) {
             continue;
         }
 
-        if (!record->repeating) {
-            if (record->validator && !record->validator()) {
+        try {
+            if (!record->repeating) {
+                if (record->validator && !record->validator()) {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    tasks_.erase(record->id);
+                    record->canceled = true;
+                    continue;
+                }
+
+                if (record->one_shot) {
+                    record->one_shot();
+                    ++executed;
+                }
+
                 std::lock_guard<std::mutex> lock(mutex_);
                 tasks_.erase(record->id);
                 record->canceled = true;
                 continue;
             }
 
-            if (record->one_shot) {
-                record->one_shot();
-                ++executed;
+            auto context = record->repeat_context;
+            if (record->repeat_validator && !record->repeat_validator(context)) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (record->canceled) {
+                    continue;
+                }
+                ++record->repeat_context.validator_skip_count;
+                ++record->generation;
+                const auto delay = next_repeat_delay(*record);
+                const auto next_due = Clock::now() + delay;
+                record->repeat_context.current_interval = delay;
+                record->repeat_context.last_due = next_due;
+                delayed_.push(DelayedTask{next_due, record, record->generation});
+                continue;
             }
 
-            std::lock_guard<std::mutex> lock(mutex_);
-            tasks_.erase(record->id);
-            record->canceled = true;
-            continue;
-        }
+            if (record->repeat) {
+                const auto decision = record->repeat(context);
+                ++executed;
 
-        auto context = record->repeat_context;
-        if (record->repeat_validator && !record->repeat_validator(context)) {
+                if (decision == RepeatDecision::kStop) {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    tasks_.erase(record->id);
+                    record->canceled = true;
+                    continue;
+                }
+            }
+
             std::lock_guard<std::mutex> lock(mutex_);
             if (record->canceled) {
                 continue;
             }
-            ++record->repeat_context.validator_skip_count;
+            ++record->repeat_context.run_count;
             ++record->generation;
             const auto delay = next_repeat_delay(*record);
             const auto next_due = Clock::now() + delay;
             record->repeat_context.current_interval = delay;
             record->repeat_context.last_due = next_due;
             delayed_.push(DelayedTask{next_due, record, record->generation});
-            continue;
-        }
-
-        if (record->repeat) {
-            const auto decision = record->repeat(context);
-            ++executed;
-
-            if (decision == RepeatDecision::kStop) {
+        } catch (...) {
+            // 실패한 작업만 취소한다. 이미 꺼낸 나머지 batch와 다음 poll은 살아 있어야 한다.
+            {
                 std::lock_guard<std::mutex> lock(mutex_);
                 tasks_.erase(record->id);
                 record->canceled = true;
-                continue;
+                ++record->generation;
+            }
+            server::core::runtime_metrics::record_exception_recoverable();
+            try {
+                server::core::log::error("component=task_scheduler task or validator threw; task cancelled");
+            } catch (...) {
+                // 로깅 실패도 나머지 작업을 잃게 해서는 안 된다.
             }
         }
-
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (record->canceled) {
-            continue;
-        }
-        ++record->repeat_context.run_count;
-        ++record->generation;
-        const auto delay = next_repeat_delay(*record);
-        const auto next_due = Clock::now() + delay;
-        record->repeat_context.current_interval = delay;
-        record->repeat_context.last_due = next_due;
-        delayed_.push(DelayedTask{next_due, record, record->generation});
     }
 
     return executed;

@@ -1,6 +1,7 @@
 #include <atomic>
 #include <thread>
 #include <vector>
+#include <stdexcept>
 
 #include <gtest/gtest.h>
 
@@ -8,6 +9,31 @@
 
 using namespace std::chrono_literals;
 using server::core::concurrent::TaskScheduler;
+
+TEST(TaskSchedulerTests, ThrowingTaskDoesNotLoseFollowingBatch) {
+    TaskScheduler scheduler;
+    bool following_ran = false;
+    scheduler.post([] { throw std::runtime_error("task failure"); });
+    scheduler.post([&] { following_ran = true; });
+    EXPECT_EQ(scheduler.poll(), 1u);
+    EXPECT_TRUE(following_ran);
+    EXPECT_TRUE(scheduler.empty());
+}
+
+TEST(TaskSchedulerTests, ThrowingValidatorsAndRepeatTasksAreCancelled) {
+    TaskScheduler scheduler;
+    TaskScheduler::TaskOptions options;
+    options.validator = []() -> bool { throw std::runtime_error("validator failure"); };
+    (void)scheduler.post_controlled([] { FAIL(); }, options);
+    TaskScheduler::RepeatPolicy policy;
+    policy.interval = 1ms;
+    (void)scheduler.schedule_every_controlled([](const auto&) -> TaskScheduler::RepeatDecision {
+        throw std::runtime_error("repeat failure");
+    }, policy);
+    std::this_thread::sleep_for(5ms);
+    EXPECT_EQ(scheduler.poll(), 0u);
+    EXPECT_TRUE(scheduler.empty());
+}
 
 /**
  * @brief TaskScheduler 즉시/지연/주기 실행 및 shutdown 동작을 검증합니다.

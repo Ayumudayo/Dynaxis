@@ -28,24 +28,11 @@
 | `server/core/app/engine_runtime.hpp` | Stable | `AppHost`와 `EngineContext`를 묶어 수명주기, 의존성, 종료, admin-http 제어를 공통화하고, `snapshot()`과 런타임 소유 compatibility bridge 정리까지 제공하는 런타임 조립 표면 |
 | `server/core/app/termination_signals.hpp` | Stable | non-Asio 루프 및 공용 종료 시그널링을 위한 프로세스 전역 종료 폴링 계약 |
 | `server/core/build_info.hpp` | Stable | 모든 바이너리가 사용하는 빌드 메타데이터 계약 |
-| `server/core/realtime/direct_bind.hpp` | Stable | direct UDP bind 요청과 응답 payload, bind ticket 데이터 계약을 정의하는 기준 realtime ingress 표면 |
-| `server/core/realtime/direct_delivery.hpp` | Stable | direct UDP/RUDP delta 전달 경로 선택 정책을 app-local opcode 판별과 분리해 노출하는 기준 realtime 전송 정책 표면 |
-| `server/core/realtime/simulation_phase.hpp` | Stable | fixed-step authoritative tick 내부의 결정론적 phase 어휘와 관측용 observer 계약을 노출하는 기준 realtime orchestration 표면 |
-| `server/core/realtime/transport_quality.hpp` | Stable | direct UDP sequenced ingress의 loss, jitter, reorder, duplicate 품질 신호 계약을 노출하는 기준 realtime 전송 품질 표면 |
-| `server/core/realtime/transport_policy.hpp` | Stable | direct UDP/RUDP rollout 활성화, canary 선택, opcode allowlist 해석을 정의하는 기준 realtime 전송 정책 표면 |
-| `server/core/realtime/runtime.hpp` | Stable | 고정 주기 authoritative tick, 공용 snapshot/delta shaping, 거친 관심 범위, rewind/history 조회를 제공하는 기준 realtime 엔진 능력 표면 |
 | `server/core/discovery/instance_registry.hpp` | Stable | shared instance record, selector, backend interface와 in-memory discovery backend를 노출하는 기준 discovery 표면 |
-| `server/core/discovery/world_lifecycle_policy.hpp` | Stable | world drain과 replacement owner 정책의 serialization, parse 계약을 노출하는 기준 discovery shared-state 표면 |
 | `server/core/storage_execution/unit_of_work.hpp` | Stable | 도메인 repository accessor를 포함하지 않는 기준 storage execution 트랜잭션 경계 |
 | `server/core/storage_execution/connection_pool.hpp` | Stable | 공용 unit-of-work factory, pool tuning 옵션, health-check adapter 경계를 노출하는 기준 storage execution 표면 |
 | `server/core/storage_execution/db_worker_pool.hpp` | Stable | 공용 transaction seam 위에서 비동기 storage task를 실행하는 기준 worker-pool 표면 |
 | `server/core/storage_execution/retry_backoff.hpp` | Stable | linear, exponential-full-jitter retry backoff 계산을 공용화하는 기준 storage execution 재시도 helper 표면 |
-| `server/core/worlds/migration.hpp` | Stable | draining source world에서 target world owner로 이동하는 migration envelope와 status 평가를 정의하는 world migration 런타임 표면 |
-| `server/core/worlds/aws.hpp` | Stable | Kubernetes-first pool binding을 AWS 전용 world identity, load balancer attachment, managed Redis/Postgres naming, region/zone placement metadata로 해석하는 provider adapter 계약 |
-| `server/core/worlds/kubernetes.hpp` | Stable | desired topology, adapter lease, runtime assignment, drain orchestration을 Kubernetes workload lifecycle 어휘로 해석하는 Kubernetes 우선 world orchestration 계약 |
-| `server/core/worlds/world_drain.hpp` | Stable | 실시간 world drain phase와 progress 평가를 정의하는 world-drain 런타임 표면 |
-| `server/core/worlds/topology.hpp` | Stable | desired topology 문서, observed topology pool 집계, desired-vs-observed reconciliation 상태, 읽기 전용 topology actuation 계획, revision이 있는 actuation request/status 평가, executor용 execution progress/status 평가, observed-topology realization/adoption 평가, adapter용 lease/status 평가, runtime-assignment 문서와 instance 조회 helper를 정의하는 world topology 제어면 표면 |
-| `server/core/worlds/world_transfer.hpp` | Stable | 실시간 world owner handoff의 phase와 status 평가 계약을 정의하는 world owner-transfer 런타임 표면 |
 | `server/core/compression/compressor.hpp` | Stable | 비정상/손상 입력에 대한 명시적 오류 신호를 포함한 LZ4 압축/해제 계약 |
 | `server/core/concurrent/job_queue.hpp` | Stable | 명시적 stop 및 backpressure 동작을 포함한 bounded/unbounded FIFO 큐 계약 |
 | `server/core/concurrent/locked_queue.hpp` | Internal | 내부 worker 배선에 사용하는 저수준 큐 기본 구성요소 |
@@ -62,29 +49,16 @@
 | `server/core/net/hive.hpp` | Stable | transport 모듈이 공유하는 `io_context` 수명주기 래퍼 |
 | `server/core/net/listener.hpp` | Stable | connection factory 주입과 멱등 stop 의미를 갖는 범용 accept 루프 계약 |
 | `server/core/net/transport_router.hpp` | Stable | `ITransportSession`만 요구하는 domain-neutral higher-level transport/session routing seam |
-| `server/core/net/rudp/ack_window.hpp` | Internal | gateway canary RUDP 경로에서 사용하는 실험/튜닝 대상 ACK window 구성요소 |
-| `server/core/net/rudp/retransmission_queue.hpp` | Internal | 재전송 타이머/ACK 마스크 세부 동작이 안정화 전인 internal 큐 계약 |
-| `server/core/net/rudp/rudp_engine.hpp` | Internal | gateway 통합 전개 단계의 실험적 RUDP 엔진 API(기본 OFF) |
-| `server/core/net/rudp/rudp_packet.hpp` | Internal | RUDP wire 헤더/프레이밍 실험 스펙 보조 타입 |
-| `server/core/net/rudp/rudp_peer_state.hpp` | Internal | RUDP peer 상태 추적용 내부 상태 구조체 |
 | `server/core/net/connection_runtime_state.hpp` | Internal | 연결 수 가드레일 및 랜덤 세션 ID seed를 위한 내부 세션 런타임 상태 계약 |
 | `server/core/net/session.hpp` | Internal | dispatcher/options/shared runtime state에 결합된 서버 패킷 세션 구현 |
 | `server/core/protocol/packet.hpp` | Stable | 와이어 헤더 인코드/디코드 계약 |
 | `server/core/protocol/protocol_errors.hpp` | Stable | 프로토콜 응답 공용 오류 코드 상수 |
 | `server/core/protocol/protocol_flags.hpp` | Stable | 프로토콜 플래그/기능 비트 공용 상수 |
 | `server/core/protocol/system_opcodes.hpp` | Stable | server/client 경로에서 소비하는 생성 opcode 계약 |
-| `server/core/plugin/shared_library.hpp` | Stable | 서비스 중립적 확장 메커니즘. 동적 로더 RAII wrapper로 안정된 plugin loading 기반을 제공하는 core 플랫폼 능력 |
-| `server/core/plugin/plugin_host.hpp` | Stable | cache-copy, validator, lock/sentinel 의미를 제공하는 단일 플러그인 로드/리로드 host 계약 |
-| `server/core/plugin/plugin_chain_host.hpp` | Stable | 다중 플러그인 체인의 스캔, 정렬, 리로드 orchestration 계약 |
 | `server/core/runtime_metrics.hpp` | Stable | server/gateway/tools 관측 경로가 사용하는 프로세스 전역 런타임 카운터/스냅샷 계약 |
 | `server/core/state/instance_registry.hpp` | Internal | `InstanceRecord`, selector, backend-interface 같은 shared discovery 계약과 가깝지만 discovery adapter와 sticky routing 안정화가 끝나지 않은 internal 경계 |
-| `server/core/state/world_lifecycle_policy.hpp` | Internal | 기준 discovery wrapper 아래에 남겨 둔 실제 world lifecycle policy 구현 헤더 |
 | `server/core/state/redis_instance_registry.hpp` | Internal | Redis 기반 discovery adapter와 runtime seam의 기준 헤더. ownership은 core로 옮겼지만 아직 Stable 승격 전인 transitional/internal 경계 |
 | `server/core/state/redis_backend_factory.hpp` | Internal | Redis 기반 discovery backend factory seam의 기준 헤더. gateway, server, tools가 공유하지만 compatibility와 promotion 전략이 아직 고정되지 않은 internal 경계 |
-| `server/core/scripting/script_watcher.hpp` | Stable | 파일 감시와 sentinel 정책을 제공하는 core extensibility watcher 계약 |
-| `server/core/scripting/lua_runtime.hpp` | Stable | Lua script load, call, reload, host API 등록, metric 노출을 제공하는 안정된 core runtime 능력 |
-| `server/core/scripting/lua_sandbox.hpp` | Stable | instruction, memory 제한과 허용 라이브러리 정책을 정의하는 안정된 core sandbox 계약 |
-| `server/core/security/admin_command_auth.hpp` | Internal | admin control-plane 서명 검증/nonce replay 보호를 위한 내부 인증 helper |
 | `server/core/security/cipher.hpp` | Stable | 키/IV 크기 검증과 인증 실패 신호를 포함한 AES-256-GCM 암복호화 계약 |
 | `server/core/trace/context.hpp` | Internal | 로그/상관관계 추적 컨텍스트의 구현 결합 helper |
 | `server/core/storage/connection_pool.hpp` | Internal | 실제 generic transaction/UoW factory와 health-check SPI 헤더. 안정된 소비 표면은 `server/core/storage_execution/connection_pool.hpp` |
@@ -107,3 +81,5 @@
 - `Transitional` 헤더는 릴리스마다 축소하고, 안정화가 끝난 표면은 `Stable`로 승격하거나 `Internal`로 재분류합니다.
 - 공개 예제가 `Stable` 헤더만으로 컴파일되도록 CI 가드를 추가합니다.
 - `docs/core-api/compatibility-matrix.json`를 `Stable` 헤더 인벤토리와 API 버전에 맞춰 동기화합니다.
+
+현재 API는 4.0.0이다. 제거된 확장 계약은 [migration](core-api/foundation-v4-migration.md)을 참고한다.

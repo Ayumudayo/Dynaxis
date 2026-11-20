@@ -74,24 +74,24 @@ target_link_libraries(app PRIVATE server_core::server_core)
 
 ```powershell
 pwsh scripts/build.ps1 -Config Debug -Target server_core
-cmake --install build-windows --config Debug --prefix build-windows/install-smoke
+cmake --install build/windows/full/debug --config Debug --prefix build/windows/full/debug/install-smoke
 ```
 
 소비자 configure/build (의존성 prefix 포함):
 
 ```powershell
-cmake -S build-windows/package-smoke -B build-windows/package-smoke/build --fresh `
-  -DCMAKE_PREFIX_PATH="${PWD}/build-windows/install-smoke" `
-  -DCMAKE_TOOLCHAIN_FILE="${PWD}/build-windows/conan/build/generators/conan_toolchain.cmake"
-cmake --build build-windows/package-smoke/build --config Debug
+cmake -S build/windows/full/debug/package-smoke -B build/windows/full/debug/package-smoke/build --fresh `
+  -DCMAKE_PREFIX_PATH="${PWD}/build/windows/full/debug/install-smoke" `
+  -DCMAKE_TOOLCHAIN_FILE="${PWD}/build/windows/full/debug/conan/build/generators/conan_toolchain.cmake"
+cmake --build build/windows/full/debug/package-smoke/build --config Debug
 ```
 
 의존성 탐색에 실패하면 현재 build tree의 Conan generator 출력과 install prefix가 모두 존재하는지 확인합니다.
 
-자동화된 계약 검증에서는 같은 흐름을 `CoreInstalledPackageConsumer` 테스트로 실행합니다. 이 테스트는 install prefix를 만든 뒤 별도 consumer configure/build를 수행하고, `server_core_installed_consumer`와 `server_core_extensibility_consumer` 실행까지 확인합니다.
+자동화된 계약 검증에서는 같은 흐름을 `CoreInstalledPackageConsumer` 테스트로 실행합니다. 이 테스트는 install prefix를 만든 뒤 별도 consumer configure/build를 수행하고, `server_core_installed_consumer` 실행까지 확인합니다.
 
 ```powershell
-ctest --test-dir build-windows -C Debug -R "CoreInstalledPackageConsumer|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure
+ctest --test-dir build/windows/full/debug -C Debug -R "CoreInstalledPackageConsumer|CoreApiBoundaryFixtures|CoreApiStableGovernanceFixtures" --output-on-failure
 ```
 
 ### 로컬 Linux package parity smoke (Docker-backed)

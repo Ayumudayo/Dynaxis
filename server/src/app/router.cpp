@@ -4,7 +4,6 @@
 #include "server/core/protocol/opcode_policy.hpp"
 #include "server/core/protocol/system_opcodes.hpp"
 #include "server/core/util/log.hpp"
-#include "server/fps/fps_service.hpp"
 #include "server/protocol/game_opcodes.hpp"
 #include "server/chat/chat_service.hpp"
 
@@ -23,8 +22,7 @@ namespace server::app {
 // 이 표는 "dispatcher가 알아야 하는 마지막 app-local 사실"만 담는다.
 // 세부 비즈니스 규칙까지 이 파일로 끌어오면 opcode 표가 곧 서비스 구현이 되어 버려 유지보수가 급격히 나빠진다.
 void register_routes(server::core::Dispatcher& dispatcher,
-                     server::app::chat::ChatService& chat,
-                     server::app::fps::FpsService& fps) {
+                     server::app::chat::ChatService& chat) {
     using NetSession = server::app::chat::ChatService::NetSession;
     using server::core::protocol::TransportMask;
     using server::core::protocol::MSG_PING;
@@ -37,7 +35,6 @@ void register_routes(server::core::Dispatcher& dispatcher,
     using server::protocol::MSG_ROOMS_REQ;
     using server::protocol::MSG_ROOM_USERS_REQ;
     using server::protocol::MSG_REFRESH_REQ;
-    using server::protocol::MSG_FPS_INPUT;
 
     auto register_core = [&dispatcher](std::uint16_t msg_id, auto&& handler) {
         const auto policy = server::core::protocol::opcode_policy(msg_id);
@@ -87,8 +84,7 @@ void register_routes(server::core::Dispatcher& dispatcher,
     register_game(MSG_REFRESH_REQ,
         [&chat](NetSession& s, std::span<const std::uint8_t> payload) { chat.on_refresh_request(s, payload); });
 
-    register_game(MSG_FPS_INPUT,
-        [&fps](NetSession& s, std::span<const std::uint8_t> payload) { fps.on_input(s, payload); });
+
 }
 
 } // namespace server::app

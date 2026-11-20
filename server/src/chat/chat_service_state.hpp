@@ -1,6 +1,7 @@
 #pragma once
 
 #include "server/chat/chat_service.hpp"
+#include "server/auth/session_token.hpp"
 
 #include <chrono>
 #include <atomic>
@@ -17,13 +18,10 @@
 
 namespace server::app::chat {
 
-struct ChatServiceHookPluginState;
 
 using ChatWeakSession = std::weak_ptr<server::core::net::Session>;
 using ChatWeakLess = std::owner_less<ChatWeakSession>;
 using ChatRoomSet = std::set<ChatWeakSession, ChatWeakLess>;
-using ChatExec = boost::asio::io_context::executor_type;
-using ChatStrand = boost::asio::strand<ChatExec>;
 
 /** @brief `ChatService`가 사용하는 비공개 세션/방/제재 메모리 상태입니다. */
 struct ChatServiceState {
@@ -48,7 +46,6 @@ struct ChatServiceState {
     std::unordered_map<server::core::net::Session*, std::string> session_uuid;
     std::unordered_map<server::core::net::Session*, std::string> logical_session_id;
     std::unordered_map<server::core::net::Session*, std::uint64_t> logical_session_expires_unix_ms;
-    std::unordered_map<server::core::net::Session*, std::string> cur_world;
     std::unordered_map<server::core::net::Session*, std::string> cur_room;
     std::unordered_map<server::core::net::Session*, std::string> session_ip;
     std::unordered_map<server::core::net::Session*, std::string> session_hwid_hash;
@@ -73,10 +70,10 @@ struct ChatServiceState {
     std::unordered_map<std::string, std::unordered_set<std::string>> user_blacklists;
 };
 
-/** @brief Lua hook 실행기와 room-local strand 테이블을 묶는 비공개 dispatch 상태입니다. */
 struct ChatServiceDispatchState {
-    std::shared_ptr<ChatStrand> lua_execution_strand{};
-    std::unordered_map<std::string, std::shared_ptr<ChatStrand>> room_strands;
+    std::mutex mu;
+    std::unordered_map<server::core::net::Session*, std::deque<std::function<void()>>> sessions;
+    std::size_t pending{0};
 };
 
 /** @brief write-behind 파라미터 묶음입니다. */
@@ -98,9 +95,6 @@ struct ChatServiceContinuityConfig {
     bool enabled{false};
     unsigned int lease_ttl_sec{15 * 60};
     std::string redis_prefix;
-    std::string default_world_id;
-    std::string current_owner_id;
-    std::string topology_runtime_assignment_key;
 };
 
 /** @brief 최근 메시지 캐시 설정입니다. */
@@ -122,7 +116,7 @@ struct ChatServiceRuntimeState {
 
     std::shared_ptr<server::storage::IRepositoryConnectionPool> db_pool{};
     std::shared_ptr<server::core::storage::redis::IRedisClient> redis{};
-    std::shared_ptr<server::core::scripting::LuaRuntime> lua_runtime{};
+    server::auth::Config auth;
     std::string gateway_id{"gw-default"};
     bool redis_pubsub_enabled{false};
     std::unordered_set<std::string> admin_users{};
@@ -131,9 +125,6 @@ struct ChatServiceRuntimeState {
     std::uint32_t spam_mute_sec{30};
     std::uint32_t spam_ban_sec{600};
     std::uint32_t spam_ban_violation_threshold{3};
-    std::uint64_t lua_auto_disable_threshold{3};
-    std::uint64_t lua_hook_warn_budget_us{0};
-    std::unique_ptr<ChatServiceHookPluginState> hook_plugin{};
 };
 
 /** @brief continuity 관련 Prometheus 카운터를 한곳에 모은 비공개 상태입니다. */
@@ -146,43 +137,9 @@ struct ChatServiceContinuityMetricsState {
     std::atomic<std::uint64_t> state_write_fail_total{0};
     std::atomic<std::uint64_t> state_restore_total{0};
     std::atomic<std::uint64_t> state_restore_fallback_total{0};
-    std::atomic<std::uint64_t> world_write_total{0};
-    std::atomic<std::uint64_t> world_write_fail_total{0};
-    std::atomic<std::uint64_t> world_restore_total{0};
-    std::atomic<std::uint64_t> world_restore_fallback_total{0};
-    std::atomic<std::uint64_t> world_restore_fallback_missing_world_total{0};
-    std::atomic<std::uint64_t> world_restore_fallback_missing_owner_total{0};
-    std::atomic<std::uint64_t> world_restore_fallback_owner_mismatch_total{0};
-    std::atomic<std::uint64_t> world_restore_fallback_draining_replacement_unhonored_total{0};
-    std::atomic<std::uint64_t> world_owner_write_total{0};
-    std::atomic<std::uint64_t> world_owner_write_fail_total{0};
-    std::atomic<std::uint64_t> world_owner_restore_total{0};
-    std::atomic<std::uint64_t> world_owner_restore_fallback_total{0};
-    std::atomic<std::uint64_t> world_migration_restore_total{0};
-    std::atomic<std::uint64_t> world_migration_restore_fallback_total{0};
-    std::atomic<std::uint64_t> world_migration_restore_fallback_target_world_missing_total{0};
-    std::atomic<std::uint64_t> world_migration_restore_fallback_target_owner_missing_total{0};
-    std::atomic<std::uint64_t> world_migration_restore_fallback_target_owner_not_ready_total{0};
-    std::atomic<std::uint64_t> world_migration_restore_fallback_target_owner_mismatch_total{0};
-    std::atomic<std::uint64_t> world_migration_restore_fallback_source_not_draining_total{0};
-    std::atomic<std::uint64_t> world_migration_payload_room_handoff_total{0};
-    std::atomic<std::uint64_t> world_migration_payload_room_handoff_fallback_total{0};
 };
 
-/** @brief Lua hook 계측과 auto-disable bookkeeping 상태입니다. */
-struct ChatServiceLuaMetricsState {
-    std::mutex mu;
-    std::unordered_map<std::string, std::uint64_t> consecutive_failures;
-    std::unordered_map<std::string, std::uint64_t> auto_disable_total;
-    std::unordered_map<std::string, std::uint64_t> calls_total;
-    std::unordered_map<std::string, std::uint64_t> errors_total;
-    std::unordered_map<std::string, std::uint64_t> instruction_limit_hits;
-    std::unordered_map<std::string, std::uint64_t> memory_limit_hits;
-    std::unordered_map<std::string, std::unordered_map<std::string, std::uint64_t>> script_calls_total;
-    std::unordered_map<std::string, std::unordered_map<std::string, std::uint64_t>> script_errors_total;
-    std::unordered_set<std::string> disabled;
-    std::uint64_t reload_epoch{0};
-};
+
 
 /** @brief `ChatService` 내부 config/state/dispatch 묶음을 숨기는 단일 구현 상태입니다. */
 struct ChatService::Impl {
@@ -192,7 +149,6 @@ struct ChatService::Impl {
     ChatServiceContinuityConfig continuity{};
     ChatServiceHistoryConfig history{};
     ChatServiceContinuityMetricsState continuity_metrics{};
-    ChatServiceLuaMetricsState lua_metrics{};
     ChatServiceDispatchState dispatch{};
     ChatServiceState state{};
 };

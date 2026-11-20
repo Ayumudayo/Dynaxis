@@ -1,51 +1,7 @@
-# docker/stack
+# Local Docker chat runtime
 
-`docker/stack/docker-compose.yml` brings up a full verification stack:
+Use scripts/deploy_docker.ps1. Services: postgres, redis, migrator, server-1/server-2, gateway-1/gateway-2, wb_worker, haproxy, admin. Optional observability: prometheus, grafana, redis_exporter, postgres_exporter.
 
-Client (host) -> `haproxy` (TCP) -> `gateway-*` -> `server-*`.
+Startup server manifests: topologies/default.json and scripts/generate_stack_topology.py. Generated compose and active JSON are ignored. Manifest fields are instance_id, shard, TCP/metrics host ports, optional extra_tags; no dynamic orchestration.
 
-## Key Files
-- `docker/stack/docker-compose.yml`: service graph + host port mappings.
-- `docker/stack/topologies/*.json`: committed server topology manifests.
-- `docker/stack/docker-compose.topology.generated.yml`: generated server service compose overlay.
-- `docker/stack/haproxy/haproxy.cfg`: TCP LB configuration.
-- `docker/stack/README.md`: quick start + default URLs.
-
-## Services (Core)
-- `postgres`, `redis`: state/storage.
-- `migrator`: runs schema migrations before app services start.
-- `server-*`: chat servers generated from the selected topology manifest (`METRICS_PORT=9090` mapped per manifest).
-- `gateway-1`, `gateway-2`: gateways (`METRICS_PORT=6001` mapped to host `36001/36002`).
-- `wb_worker`: write-behind worker (`METRICS_PORT=9090` mapped to host `39093`).
-- `admin-app`: read-only admin control-plane (`METRICS_PORT=39200` mapped to host `39200`, UI at `/admin`).
-- `haproxy`: game traffic on host `6000`, stats+Prometheus metrics on host `8404`.
-
-## Chat Hook Plugins (Experimental)
-- `server-*` defaults to `CHAT_HOOK_ENABLED=0` and `CHAT_HOOK_PLUGINS_DIR=/app/plugins` (see `docker/stack/docker-compose.yml`).
-- Sample plugins are packaged into the image under `/app/plugins_builtin/` (fallback path).
-- Hot reload is done by swapping the `.so` in-place (optional lock/sentinel file to defer reload).
-
-## Lua (Experimental)
-- `server-*` defaults to `LUA_ENABLED=0` with scripts mounted at `/app/scripts` and fallback `/app/scripts_builtin`.
-
-## Observability Profile
-Enables: `prometheus`, `grafana`, `redis_exporter`, `postgres_exporter`.
-
-## Commands
-```powershell
-pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build
-pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build -Observability
-pwsh scripts/deploy_docker.ps1 -Action up -Detached -Build -TopologyConfig docker/stack/topologies/mmorpg-same-world-proof.json
-pwsh scripts/deploy_docker.ps1 -Action down
-```
-
-## Boundary
-- `-TopologyConfig` is startup-only.
-- These manifests are local/proof topology artifacts, not the future desired-topology/live-scaling contract.
-- Live scaling/orchestration is documented separately and is not implemented in the current stack.
-
-## Port Overrides
-Most host ports are configurable via env vars in `docker/stack/docker-compose.yml`:
-- `HAPROXY_HOST_PORT`, `HAPROXY_STATS_HOST_PORT`
-- `PROMETHEUS_HOST_PORT`, `GRAFANA_HOST_PORT`
-- `REDIS_EXPORTER_HOST_PORT`, `POSTGRES_EXPORTER_HOST_PORT`
+Default TCP ingress: 6000. Web admin console: 39200 (`admin:9200`). Server metrics: 39091/39092, gateway: 36001/36002, worker: 39093. Development auth is explicit; see docs/ops/authenticated-chat.md for signed mode. Keep data volumes on ordinary down.

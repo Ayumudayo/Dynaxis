@@ -1,8 +1,9 @@
-# Architecture Docs
+# 구조 문서
 
-이 디렉터리는 구조 정리 이후의 canonical architecture index다.
-
-- `docs/architecture/build-test-ownership.md`
-  - build/test manifest ownership과 top-level 진입점 요약
-
-기존 심층 설계 문서 자체는 한 번에 이동하지 않았다. 이번 턴에서는 기존 entrypoint를 깨지 않기 위해 원래 위치를 유지하고, canonical index만 이 경로로 추가했다.
+- [기초 코어와 MSA 채팅](core-and-msa.md)
+- [4.0 전환 계약](../core-api/foundation-v4-migration.md)
+- [인증](../ops/authenticated-chat.md)
+- [재접속](../ops/session-continuity-contract.md)
+- [기초 상태·전달·복구 계약](foundation-contracts.md)
+- [클라이언트 UI·워크벤치 설계](client-workbench-design.md)
+- [웹 관리 콘솔·제어면 설계](web-admin-console.md)

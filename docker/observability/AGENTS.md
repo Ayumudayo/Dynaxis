@@ -6,7 +6,6 @@ Prometheus + Grafana configuration (used by the `observability` compose profile)
 - Config: `docker/observability/prometheus/prometheus.yml`
 - Alerts: `docker/observability/prometheus/alerts.yml`
 - Alert rule tests: `docker/observability/prometheus/alerts.tests.yml`
-- Jobs: `chat_server`, `gateway`, `write_behind`, `admin_app`, `haproxy`, `redis`, `postgres`
 
 ## Grafana
 - Datasource provisioning: `docker/observability/grafana/provisioning/datasources/prometheus.yml`
@@ -34,4 +33,3 @@ pwsh scripts/check_prometheus_rules.ps1
 
 ## Notes
 - Most binaries export `runtime_build_info` (git hash/describe + build time) at the top of `/metrics`.
-- `server_app` can export chat hook plugin metrics when plugins are enabled.

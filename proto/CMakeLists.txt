@@ -16,9 +16,16 @@ target_include_directories(wire_proto PUBLIC
 target_link_libraries(wire_proto PUBLIC protobuf::libprotobuf)
 
 install(TARGETS wire_proto
-        EXPORT server_coreTargets
+        EXPORT chat_wireTargets
         ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
         LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
         RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 install(FILES ${WIRE_HDRS}
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+
+include(CMakePackageConfigHelpers)
+configure_package_config_file(chat_wireConfig.cmake.in
+    "${CMAKE_CURRENT_BINARY_DIR}/chat_wireConfig.cmake"
+    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/chat_wire")
+install(EXPORT chat_wireTargets NAMESPACE chat_wire:: DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/chat_wire")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/chat_wireConfig.cmake" DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/chat_wire")

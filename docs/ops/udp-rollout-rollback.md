@@ -48,7 +48,7 @@ pwsh scripts/deploy_docker.ps1 -Action up -Detached -Observability -EnvFile dock
 
 - 모든 gateway에서 `gateway_udp_enabled 0`
 - TCP 스모크 통과: `python tests/python/verify_pong.py`
-- 기존 세션과 로그인 흐름이 유지되는지 확인(필요 시 `python tests/python/test_load_balancing.py` 추가)
+- 기존 세션과 로그인 흐름이 유지되는지 확인(필요 시 `python tests/python/verify_whisper_cross_instance.py` 추가)
 
 롤백 검증을 따로 적는 이유는 "설정을 되돌렸다"와 "서비스가 정상 상태로 복귀했다"가 같은 뜻이 아니기 때문이다. 운영자는 설정값만이 아니라 실제 접속 경로가 이전 상태로 돌아왔는지도 확인해야 한다.
 

@@ -8,7 +8,6 @@ if (BUILD_GTEST_TESTS)
         gateway_session_directory
         server_state_common
         server_state_redis
-        server_state_consul
     )
 
     discover_labeled_gtests(server_state_tests "integration;shared-state;gateway")

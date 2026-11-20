@@ -19,7 +19,6 @@ DEPLOY_SCRIPT = REPO_ROOT / "scripts" / "deploy_docker.ps1"
 DEFAULT_TOPOLOGY = REPO_ROOT / "docker" / "stack" / "topologies" / "default.json"
 CONTINUITY_SCRIPT = Path(__file__).resolve().with_name("verify_session_continuity_restart.py")
 
-ADMIN_READY_PORT = 39200
 GATEWAY_METRICS_PORTS = (36001, 36002)
 DIRECT_GATEWAY_PORTS = (36100, 36101)
 
@@ -100,7 +99,6 @@ def wait_tcp_ready(host: str, port: int, timeout_sec: float) -> None:
 
 def wait_stack_ready(timeout_sec: float) -> None:
     topology = ensure_stack_topology_artifacts(DEFAULT_TOPOLOGY)
-    wait_http_ready(ADMIN_READY_PORT, timeout_sec)
     for port in GATEWAY_METRICS_PORTS:
         wait_http_ready(port, timeout_sec)
     for port in server_ready_ports(topology).values():
@@ -128,12 +126,12 @@ def run_stage(name: str, commands: list[list[str]], *, build: bool, timeout_sec:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run the restart/recovery continuity baseline as one named Phase 5 matrix."
+        description="Run the restart/recovery continuity baseline as one named core matrix."
     )
     parser.add_argument(
         "--scenario",
-        choices=("phase5-recovery-baseline", "matrix"),
-        default="phase5-recovery-baseline",
+        choices=("core-recovery-baseline", "matrix"),
+        default="core-recovery-baseline",
     )
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--stack-ready-timeout-sec", type=float, default=90.0)
@@ -144,9 +142,11 @@ def main() -> int:
             ("gateway-restart-recovery", [[str(CONTINUITY_SCRIPT), "--scenario", "gateway-restart"]]),
             ("server-restart-recovery", [[str(CONTINUITY_SCRIPT), "--scenario", "server-restart"]]),
             ("locator-fallback-recovery", [[str(CONTINUITY_SCRIPT), "--scenario", "locator-fallback"]]),
-            ("world-residency-fallback-recovery", [[str(CONTINUITY_SCRIPT), "--scenario", "world-residency-fallback"]]),
-            ("world-owner-fallback-recovery", [[str(CONTINUITY_SCRIPT), "--scenario", "world-owner-fallback"]]),
         ]
+
+        plan.append(("server-failover", [[str(CONTINUITY_SCRIPT), "--scenario", "server-failover"]]))
+
+        plan.append(("room-state-missing", [[str(CONTINUITY_SCRIPT), "--scenario", "room-state-missing"]]))
 
         build = not args.no_build
         for stage_name, commands in plan:
@@ -157,7 +157,7 @@ def main() -> int:
                 timeout_sec=args.stack_ready_timeout_sec,
             )
             build = False
-        print("PASS phase5-recovery-baseline: restart and continuity fallback stages succeeded")
+        print("PASS core-recovery-baseline: restart and continuity fallback stages succeeded")
         return 0
     except Exception as exc:  # noqa: BLE001
         print(f"FAIL: {exc}")

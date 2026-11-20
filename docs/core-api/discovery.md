@@ -5,7 +5,6 @@
 | 헤더 | 안정성 |
 |---|---|
 | `server/core/discovery/instance_registry.hpp` | `[Stable]` |
-| `server/core/discovery/world_lifecycle_policy.hpp` | `[Stable]` |
 
 ## 기준 이름
 
@@ -21,9 +20,8 @@
 - selector 로직
 - backend interface
 - in-memory backend
-- world lifecycle policy serialization/parsing
 
-여기서 멈추는 이유도 중요하다. discovery는 “공용 상태를 어떻게 표현하고 고르는가”까지를 책임지고, 실제 Redis/Consul adapter나 sticky routing 전략까지 책임지지 않는다.
+여기서 멈추는 이유도 중요하다. discovery는 “공용 상태를 어떻게 표현하고 고르는가”까지를 책임지고, 실제 Redis adapter나 sticky routing 전략까지 책임지지 않는다.
 
 ## 공개 계약
 
@@ -42,13 +40,10 @@
   - discovery store가 따라야 하는 최소 backend 경계다.
 - `InMemoryStateBackend`
   - 테스트나 단일 프로세스 환경에서 쓰는 안정적인 기본 backend다.
-- `WorldLifecyclePolicy`, `parse_world_lifecycle_policy()`, `serialize_world_lifecycle_policy()`
-  - world drain/replacement owner 정책을 공유 문서 형태로 표현하는 계약이다.
 
 ## 비목표
 
 - Redis-backed registry construction contract
-- Consul adapter contract
 - sticky `SessionDirectory` contract
 - gateway 전용 least-connections / sticky-routing 정책
 

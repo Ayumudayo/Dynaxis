@@ -12,6 +12,8 @@ on:
       - "Dockerfile.base"
       - "core/**"
       - "gateway/**"
+      - "infra/**"
+      - "tools/issue_chat_token.py"
       - "server/**"
       - "proto/**"
       - "protocol/**"
@@ -21,9 +23,7 @@ on:
       - "scripts/run_linux_installed_consumer.ps1"
       - "scripts/smoke_wb.sh"
       - "tests/python/**"
-      - "tests/python/verify_admin_read_only.py"
       - "tests/CMakeLists.txt"
-      - "tools/admin_app/**"
       - "tools/migrations/**"
       - "tools/wb_worker/**"
   pull_request:
@@ -35,6 +35,8 @@ on:
       - "Dockerfile.base"
       - "core/**"
       - "gateway/**"
+      - "infra/**"
+      - "tools/issue_chat_token.py"
       - "server/**"
       - "proto/**"
       - "protocol/**"
@@ -44,9 +46,7 @@ on:
       - "scripts/run_linux_installed_consumer.ps1"
       - "scripts/smoke_wb.sh"
       - "tests/python/**"
-      - "tests/python/verify_admin_read_only.py"
       - "tests/CMakeLists.txt"
-      - "tools/admin_app/**"
       - "tools/migrations/**"
       - "tools/wb_worker/**"
   merge_group:
@@ -94,298 +94,29 @@ jobs:
         run: |
           docker image inspect dynaxis-base:latest > /dev/null
 
-      - name: Linux Installed Consumer Smoke
+      - name: Build and Start Chat Stack
         shell: pwsh
+        run: pwsh -NoProfile -File scripts/deploy_docker.ps1 -Action up -Detached -Build -NoBase
+      - name: Signed Authentication and Cross-node Chat
+        run: python3 tests/python/verify_signed_chat.py --manage-stack
+      - name: Database and Redis Recovery
+        run: python3 tests/python/verify_core_dependency_recovery.py
+      - name: Distributed Authority and Committed Delivery
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_linux_installed_consumer.ps1
-
-      - name: Start Stack Baseline (Runtime Off)
-        shell: pwsh
-        env:
-          DOCKER_BUILDKIT: "0"
-        run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/deploy_docker.ps1 -Action up -Detached -Build
-
-      - name: Wait For HAProxy (Baseline)
-        run: |
-          python3 - <<'PY'
-          import socket, time
-          host, port = '127.0.0.1', 6000
-          deadline = time.time() + 60
-          last_err = None
-          while time.time() < deadline:
-              try:
-                  with socket.create_connection((host, port), timeout=1.0):
-                      print('HAProxy is ready (baseline)')
-                      raise SystemExit(0)
-              except Exception as e:
-                  last_err = e
-                  time.sleep(1)
-          raise SystemExit(f'HAProxy not ready (baseline): {last_err}')
-          PY
-
-      - name: Verify Runtime Toggles (Off Baseline)
-        run: |
-          python3 tests/python/verify_runtime_toggle_metrics.py --expect-chat-hook-enabled 0 --expect-lua-enabled 0
-
-      - name: Smoke Test (PONG, Runtime Off Baseline)
+          python3 tests/python/verify_gateway_readiness.py
+          python3 tests/python/verify_foundation_contracts.py
+      - name: Protocol and Bounded Connections
         run: |
           python3 tests/python/verify_pong.py
-
-      - name: Smoke Test (Chat, Runtime Off Baseline)
-        run: |
           python3 tests/python/verify_chat.py
-
-      - name: Stop Stack Baseline
-        if: always()
-        shell: pwsh
-        run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/deploy_docker.ps1 -Action down
-
-      - name: Start Stack (Detached, Runtime On)
-        shell: pwsh
-        env:
-          DOCKER_BUILDKIT: "0"
-          CHAT_HOOK_ENABLED: "1"
-          LUA_ENABLED: "1"
-        run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/deploy_docker.ps1 -Action up -Detached
-
-      - name: Wait For HAProxy
-        run: |
-          python3 - <<'PY'
-          import socket, time
-          host, port = '127.0.0.1', 6000
-          deadline = time.time() + 60
-          last_err = None
-          while time.time() < deadline:
-              try:
-                  with socket.create_connection((host, port), timeout=1.0):
-                      print('HAProxy is ready')
-                      raise SystemExit(0)
-              except Exception as e:
-                  last_err = e
-                  time.sleep(1)
-          raise SystemExit(f'HAProxy not ready: {last_err}')
-          PY
-
-      - name: Verify Health/Ready Endpoints
-        run: |
-          python3 - <<'PY'
-          import time
-          import urllib.request
-
-          bases = [
-              'http://127.0.0.1:36001',
-              'http://127.0.0.1:36002',
-              'http://127.0.0.1:39091',
-              'http://127.0.0.1:39092',
-              'http://127.0.0.1:39093',
-              'http://127.0.0.1:39200',
-          ]
-          paths = ['/healthz', '/readyz']
-
-          def fetch(url):
-              with urllib.request.urlopen(url, timeout=5) as r:
-                  return r.status, r.read().decode('utf-8', errors='replace')
-
-          pending = {(b, p) for b in bases for p in paths}
-          deadline = time.time() + 30
-          last_err = None
-          while time.time() < deadline and pending:
-              for b, p in list(pending):
-                  try:
-                      st, txt = fetch(b + p)
-                      if st == 200:
-                          pending.remove((b, p))
-                      else:
-                          last_err = f'{b}{p} -> {st} {txt[:120]}'
-                  except Exception as e:
-                      last_err = f'{b}{p} -> {e}'
-              if pending:
-                  time.sleep(0.5)
-
-          if pending:
-              raise SystemExit(f'health/ready not OK for: {sorted(pending)} (last={last_err})')
-
-          print('health/ready endpoints OK')
-          PY
-
-      - name: Verify Runtime Toggles (On)
-        run: |
-          python3 tests/python/verify_runtime_toggle_metrics.py --expect-chat-hook-enabled 1 --expect-lua-enabled 1
-
-      - name: Smoke Test (PONG)
-        run: |
-          python3 tests/python/verify_pong.py
-
-      - name: Smoke Test (Load Balancing)
-        run: |
-          python3 tests/python/test_load_balancing.py
-
-      - name: Smoke Test (Cross-Instance Whisper)
-        run: |
           python3 tests/python/verify_whisper_cross_instance.py
-
-      - name: Smoke Test (Admin API/UI)
-        run: |
-          python3 tests/python/verify_admin_api.py
-
-      - name: Smoke Test (Admin Auth Mode)
-        run: |
-          python3 tests/python/verify_admin_auth.py
-
-      - name: Smoke Test (Admin Control-Plane E2E)
-        run: |
-          python3 tests/python/verify_admin_control_plane_e2e.py
-
-      - name: Prepare Isolated Same-World Proof Topology
-        run: |
-          mkdir -p build/ci
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          source = Path("docker/stack/topologies/mmorpg-same-world-proof.json")
-          target = Path("build/ci/mmorpg-same-world-proof.json")
-          topology = json.loads(source.read_text(encoding="utf-8"))
-          run_id = int(os.environ.get("GITHUB_RUN_ID", "0"))
-          server3_metrics_port = 43100 + (run_id % 400)
-          for server in topology.get("servers", []):
-              if server.get("instance_id") == "server-3":
-                  server["metrics_host_port"] = server3_metrics_port
-                  break
-          target.write_text(json.dumps(topology, indent=2) + "\n", encoding="utf-8")
-          print(f"Prepared isolated same-world topology at {target} with server-3 metrics port {server3_metrics_port}")
-          PY
-
-      - name: Smoke Test (MMORPG Phase 3 Acceptance)
-        run: |
-          python3 tests/python/verify_mmorpg_runtime_matrix.py --scenario phase3-acceptance --no-build --same-world-topology build/ci/mmorpg-same-world-proof.json
-
-      - name: Smoke Test (Continuity Recovery Baseline)
-        run: |
-          python3 tests/python/verify_continuity_recovery_matrix.py --scenario phase5-recovery-baseline --no-build
-
-      - name: Smoke Test (FPS Phase 2 Acceptance)
-        run: |
-          python3 tests/python/verify_fps_rudp_transport_matrix.py --scenario phase2-acceptance --no-build
-
-      - name: Dump Stack Logs (On Failure)
+          python3 tests/python/verify_soak_perf_gate.py
+      - name: Session Restart and Failover
+        run: python3 tests/python/verify_continuity_recovery_matrix.py --no-build
+      - name: Failure Diagnostics
         if: failure()
-        run: |
-          docker compose --project-name dynaxis-stack --project-directory docker/stack -f docker/stack/docker-compose.yml ps
-          docker compose --project-name dynaxis-stack --project-directory docker/stack -f docker/stack/docker-compose.yml logs --no-color --tail 200
-
-      - name: Stop Stack
+        run: python3 tests/python/diagnose_stack.py
+      - name: Cleanup
         if: always()
         shell: pwsh
-        run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/deploy_docker.ps1 -Action down
-
-  admin-read-only-check-linux:
-    name: Admin Read-Only Check (Linux)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Docker Info
-        run: |
-          docker version
-          docker compose version
-
-      - name: Build Base Image (dynaxis-base) with cache
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.base
-          tags: dynaxis-base:latest
-          load: true
-          cache-from: type=gha,scope=dynaxis-base-${{ runner.os }}
-          cache-to: type=gha,mode=max,scope=dynaxis-base-${{ runner.os }}
-          provenance: false
-
-      - name: Verify Local Base Image
-        run: |
-          docker image inspect dynaxis-base:latest > /dev/null
-
-      - name: Build Admin Runtime Image
-        run: |
-          docker build \
-            --file Dockerfile \
-            --target admin-runtime \
-            --tag dynaxis-admin:local \
-            .
-
-      - name: Verify Local Admin Image
-        run: |
-          docker image inspect dynaxis-admin:local > /dev/null
-
-      - name: Run Admin Read-Only Check
-        run: |
-          python3 tests/python/verify_admin_read_only.py
-
-  write-behind-integration-check-linux:
-    name: Write-Behind Integration Check (Linux)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Docker Info
-        run: |
-          docker version
-          docker compose version
-
-      - name: Build Base Image (dynaxis-base) with cache
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.base
-          tags: dynaxis-base:latest
-          load: true
-          cache-from: type=gha,scope=dynaxis-base-${{ runner.os }}
-          cache-to: type=gha,mode=max,scope=dynaxis-base-${{ runner.os }}
-          provenance: false
-
-      - name: Verify Local Base Image
-        run: |
-          docker image inspect dynaxis-base:latest > /dev/null
-
-      - name: Start Stack
-        shell: pwsh
-        env:
-          DOCKER_BUILDKIT: "0"
-        run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/deploy_docker.ps1 -Action up -Detached -Build
-
-      - name: Run Write-Behind Integration Check
-        shell: bash
-        run: |
-          bash scripts/smoke_wb.sh
-
-      - name: Dump Stack Logs (On Failure)
-        if: failure()
-        run: |
-          docker compose --project-name dynaxis-stack --project-directory docker/stack -f docker/stack/docker-compose.yml ps
-          docker compose --project-name dynaxis-stack --project-directory docker/stack -f docker/stack/docker-compose.yml logs --no-color --tail 200
-
-      - name: Stop Stack
-        if: always()
-        shell: pwsh
-        run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/deploy_docker.ps1 -Action down
+        run: pwsh -NoProfile -File scripts/deploy_docker.ps1 -Action down

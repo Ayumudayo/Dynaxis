@@ -35,7 +35,7 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
     }
 
     auto session_sp = s.shared_from_this();
-    if (!job_queue_.TryPush([this, session_sp, room, password = std::move(password_field)]() {
+    if (!enqueue_session(session_sp, [this, session_sp, room, password = std::move(password_field)]() {
         const std::string session_id_str = get_or_create_session_uuid(*session_sp);
         std::string user_uuid;
         std::string provided_password = password;
@@ -47,97 +47,16 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
         std::uint64_t logical_session_expires_unix_ms = 0;
         corelog::info(std::string("JOIN_ROOM: ") + room_to_join);
 
-        std::string redis_password_value;
-        bool redis_password_found = false;
-        if (impl_->runtime.redis) {
-            auto pw = impl_->runtime.redis->get("room:password:" + room_to_join);
-            if (pw.has_value()) {
-                redis_password_value = pw.value();
-                redis_password_found = true;
-            }
-        }
-
+        if (!admit_shared_room(*session_sp, room_to_join, provided_password)) return;
         std::vector<std::shared_ptr<Session>> targets;
         std::vector<std::uint8_t> body;
-        bool should_set_redis_password = false;
-        std::string new_hashed_password;
-
         {
             std::lock_guard<std::mutex> lk(impl_->state.mu);
             if (!impl_->state.authed.count(session_sp.get())) {
                 session_sp->send_error(proto::errc::UNAUTHORIZED, "unauthorized");
                 return;
             }
-
-            auto user_it = impl_->state.user.find(session_sp.get());
-            sender = (user_it != impl_->state.user.end()) ? user_it->second : std::string("guest");
-
-            if (maybe_handle_join_hook(*session_sp, sender, room_to_join)) {
-                return;
-            }
-
-            const bool is_admin_user = impl_->runtime.admin_users.count(sender) > 0;
-            bool is_room_owner = false;
-            bool has_room_invite = false;
-            if (room_to_join != "lobby") {
-                if (auto owner_it = impl_->state.room_owners.find(room_to_join); owner_it != impl_->state.room_owners.end()) {
-                    is_room_owner = (owner_it->second == sender);
-                }
-                if (auto invite_it = impl_->state.room_invites.find(room_to_join); invite_it != impl_->state.room_invites.end()) {
-                    has_room_invite = invite_it->second.count(sender) > 0;
-                }
-            }
-
-            std::string expected_password;
-            if (redis_password_found) {
-                expected_password = redis_password_value;
-                impl_->state.room_passwords[room_to_join] = expected_password;
-            }
-            if (expected_password.empty()) {
-                auto pass_it = impl_->state.room_passwords.find(room_to_join);
-                if (pass_it != impl_->state.room_passwords.end()) {
-                    expected_password = pass_it->second;
-                }
-            }
-
-            const bool has_password = !expected_password.empty();
-            const bool password_ok = has_password
-                && !provided_password.empty()
-                && verify_room_password(provided_password, expected_password);
-            const bool room_exists =
-                impl_->state.rooms.find(room_to_join) != impl_->state.rooms.end()
-                || impl_->state.room_owners.find(room_to_join) != impl_->state.room_owners.end()
-                || impl_->state.room_passwords.find(room_to_join) != impl_->state.room_passwords.end()
-                || has_password;
-
-            if (room_to_join != "lobby"
-                && room_exists
-                && !is_admin_user
-                && !is_room_owner
-                && !has_room_invite
-                && !password_ok) {
-                session_sp->send_error(proto::errc::FORBIDDEN, has_password ? "room locked" : "invite required");
-                return;
-            }
-
-            if (has_password && password_ok) {
-                if (!is_modern_room_password_hash(expected_password)) {
-                    new_hashed_password = hash_room_password(provided_password);
-                    if (!new_hashed_password.empty()) {
-                        impl_->state.room_passwords[room_to_join] = new_hashed_password;
-                        should_set_redis_password = true;
-                    }
-                }
-            } else if (!has_password && !provided_password.empty() && room_to_join != "lobby") {
-                new_hashed_password = hash_room_password(provided_password);
-                if (new_hashed_password.empty()) {
-                    session_sp->send_error(proto::errc::INTERNAL_ERROR, "password hash failed");
-                    return;
-                }
-                impl_->state.room_passwords[room_to_join] = new_hashed_password;
-                should_set_redis_password = true;
-            }
-
+            sender = impl_->state.user[session_sp.get()];
             auto current_room_it = impl_->state.cur_room.find(session_sp.get());
             if (current_room_it != impl_->state.cur_room.end()) {
                 previous_room = current_room_it->second;
@@ -146,7 +65,7 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
                 remove_session_from_room_locked(impl_->state, session_sp, current_room_it->second, sender);
             }
 
-            place_session_in_room_locked(impl_->state, session_sp, room_to_join, sender, has_room_invite);
+            place_session_in_room_locked(impl_->state, session_sp, room_to_join, sender, false, false);
 
             if (auto uuid_it = impl_->state.user_uuid.find(session_sp.get()); uuid_it != impl_->state.user_uuid.end()) {
                 user_uuid = uuid_it->second;
@@ -174,9 +93,6 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
             targets = collect_room_targets_locked(impl_->state, room_to_join, sender);
         }
 
-        if (should_set_redis_password && impl_->runtime.redis) {
-            impl_->runtime.redis->setex("room:password:" + room_to_join, new_hashed_password, 86400);
-        }
         if (!logical_session_id.empty()) {
             persist_continuity_room(logical_session_id, room_to_join, logical_session_expires_unix_ms);
         }
@@ -215,29 +131,6 @@ void ChatService::on_join(ChatService::NetSession& s, std::span<const std::uint8
             try {
                 if (!previous_room.empty() && previous_room != room_to_join) {
                     impl_->runtime.redis->srem("room:users:" + previous_room, sender);
-                    if (previous_room != "lobby") {
-                        std::size_t remaining = 1;
-                        if (impl_->runtime.redis->scard("room:users:" + previous_room, remaining) && remaining == 0) {
-                            impl_->runtime.redis->srem("rooms:active", previous_room);
-                            impl_->runtime.redis->del("room:password:" + previous_room);
-                            if (impl_->runtime.db_pool) {
-                                try {
-                                    auto uow = impl_->runtime.db_pool->make_repository_unit_of_work();
-                                    auto found = uow->rooms().find_by_name_exact_ci(previous_room);
-                                    if (found) {
-                                        uow->rooms().close(found->id);
-                                        uow->commit();
-                                    }
-                                    {
-                                        std::lock_guard<std::mutex> lk(impl_->state.mu);
-                                        impl_->state.room_ids.erase(previous_room);
-                                        impl_->state.room_owners.erase(previous_room);
-                                        impl_->state.room_invites.erase(previous_room);
-                                    }
-                                } catch (...) {}
-                            }
-                        }
-                    }
                 }
 
                 impl_->runtime.redis->sadd("room:users:" + room_to_join, sender);

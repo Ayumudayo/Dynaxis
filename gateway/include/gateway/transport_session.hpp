@@ -11,8 +11,8 @@ namespace gateway {
 /**
  * @brief gateway 세션이 backend로 payload를 전달하기 위한 전송 인터페이스입니다.
  *
- * TCP/UDP 유입 경로는 이 인터페이스만 사용해 backend 전달을 수행하고,
- * 실제 전송 구현(TCP bridge, 향후 UDP/RUDP direct path)은 구현체로 분리합니다.
+ * TCP 유입 경로는 이 인터페이스만 사용해 backend 전달을 수행하고,
+ * backend의 TCP 전송 구현은 구현체로 분리합니다.
  */
 class ITransportSession {
 public:

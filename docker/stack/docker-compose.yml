@@ -31,17 +31,6 @@ x-worker-build: &worker-build
     dockerfile: Dockerfile
     target: worker-runtime
 
-x-admin: &admin
-  image: dynaxis-admin:local
-  pull_policy: never
-
-x-admin-build: &admin-build
-  <<: *admin
-  build:
-    context: ../..
-    dockerfile: Dockerfile
-    target: admin-runtime
-
 x-migrator: &migrator
   image: dynaxis-migrator:local
   pull_policy: never
@@ -52,6 +41,17 @@ x-migrator-build: &migrator-build
     context: ../..
     dockerfile: Dockerfile
     target: migrator-runtime
+
+x-admin: &admin
+  image: dynaxis-admin:local
+  pull_policy: never
+
+x-admin-build: &admin-build
+  <<: *admin
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+    target: admin-runtime
 
 services:
 
@@ -123,61 +123,13 @@ services:
     ports:
       - "${WB_WORKER_METRICS_HOST_PORT:-39093}:9090"
 
-  admin-app:
-    <<: *admin-build
-    command: ["admin"]
-    environment:
-      REDIS_URI: tcp://redis:6379
-      REDIS_CHANNEL_PREFIX: "dynaxis:"
-      SERVER_REGISTRY_PREFIX: "gateway/instances/"
-      SERVER_REGISTRY_TTL: "30"
-      GATEWAY_SESSION_PREFIX: "gateway/session/"
-      WB_WORKER_METRICS_URL: "http://wb_worker:9090/metrics"
-      METRICS_PORT: "39200"
-      ADMIN_POLL_INTERVAL_MS: "1000"
-      GRAFANA_BASE_URL: "http://127.0.0.1:${GRAFANA_HOST_PORT:-33000}"
-      PROMETHEUS_BASE_URL: "http://127.0.0.1:${PROMETHEUS_HOST_PORT:-39090}"
-      ADMIN_COMMAND_SIGNING_SECRET: "${ADMIN_COMMAND_SIGNING_SECRET:-dev-admin-command-secret}"
-      CHAT_HOOK_PLUGINS_DIR: "/app/plugins"
-      CHAT_HOOK_FALLBACK_PLUGINS_DIR: "/app/plugins"
-      LUA_SCRIPTS_DIR: "/app/scripts"
-      LUA_FALLBACK_SCRIPTS_DIR: "/app/scripts"
-      ADMIN_EXT_FORCE_FAIL_WAVE_INDEX: "${ADMIN_EXT_FORCE_FAIL_WAVE_INDEX:-0}"
-    volumes:
-      - ./plugins:/app/plugins:ro
-      - ./scripts:/app/scripts:ro
-    depends_on:
-      redis:
-        condition: service_healthy
-      wb_worker:
-        condition: service_started
-      migrator:
-        condition: service_completed_successfully
-    networks:
-      - dynaxis-stack
-    ports:
-      - "${ADMIN_APP_HOST_PORT:-39200}:39200"
-    healthcheck:
-      test: ["CMD", "bash", "-lc", "exec 3<>/dev/tcp/127.0.0.1/39200 && printf 'GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && IFS= read -r line <&3 && [[ \"$$line\" == *\" 200 \"* ]]"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   gateway-1:
     <<: *gateway-build
     command: ["gateway"]
     environment:
+      CHAT_AUTH_MODE: "${CHAT_AUTH_MODE:-development}"
+      CHAT_AUTH_SIGNING_SECRET: "${CHAT_AUTH_SIGNING_SECRET:-}"
       GATEWAY_LISTEN: "0.0.0.0:6000"
-      GATEWAY_UDP_LISTEN: "${GATEWAY1_UDP_LISTEN:-}"
-      GATEWAY_UDP_BIND_SECRET: "${GATEWAY_UDP_BIND_SECRET:-}"
-      GATEWAY_UDP_BIND_TTL_MS: "${GATEWAY_UDP_BIND_TTL_MS:-5000}"
-      GATEWAY_UDP_BIND_FAIL_WINDOW_MS: "${GATEWAY_UDP_BIND_FAIL_WINDOW_MS:-10000}"
-      GATEWAY_UDP_BIND_FAIL_LIMIT: "${GATEWAY_UDP_BIND_FAIL_LIMIT:-5}"
-      GATEWAY_UDP_BIND_BLOCK_MS: "${GATEWAY_UDP_BIND_BLOCK_MS:-60000}"
-      GATEWAY_UDP_OPCODE_ALLOWLIST: "${GATEWAY_UDP_OPCODE_ALLOWLIST:-}"
-      GATEWAY_RUDP_ENABLE: "${GATEWAY_RUDP_ENABLE:-0}"
-      GATEWAY_RUDP_CANARY_PERCENT: "${GATEWAY_RUDP_CANARY_PERCENT:-0}"
-      GATEWAY_RUDP_OPCODE_ALLOWLIST: "${GATEWAY_RUDP_OPCODE_ALLOWLIST:-}"
       GATEWAY_ID: "gw1"
       REDIS_URI: "tcp://redis:6379"
       REDIS_CHANNEL_PREFIX: "dynaxis:"
@@ -194,23 +146,14 @@ services:
     ports:
       - "${GATEWAY1_TCP_HOST_PORT:-36100}:6000"
       - "${GATEWAY1_METRICS_HOST_PORT:-36001}:6001"
-      - "${GATEWAY1_UDP_HOST_PORT:-7000}:7000/udp"
 
   gateway-2:
     <<: *gateway
     command: ["gateway"]
     environment:
+      CHAT_AUTH_MODE: "${CHAT_AUTH_MODE:-development}"
+      CHAT_AUTH_SIGNING_SECRET: "${CHAT_AUTH_SIGNING_SECRET:-}"
       GATEWAY_LISTEN: "0.0.0.0:6000"
-      GATEWAY_UDP_LISTEN: "${GATEWAY2_UDP_LISTEN:-}"
-      GATEWAY_UDP_BIND_SECRET: "${GATEWAY_UDP_BIND_SECRET:-}"
-      GATEWAY_UDP_BIND_TTL_MS: "${GATEWAY_UDP_BIND_TTL_MS:-5000}"
-      GATEWAY_UDP_BIND_FAIL_WINDOW_MS: "${GATEWAY_UDP_BIND_FAIL_WINDOW_MS:-10000}"
-      GATEWAY_UDP_BIND_FAIL_LIMIT: "${GATEWAY_UDP_BIND_FAIL_LIMIT:-5}"
-      GATEWAY_UDP_BIND_BLOCK_MS: "${GATEWAY_UDP_BIND_BLOCK_MS:-60000}"
-      GATEWAY_UDP_OPCODE_ALLOWLIST: "${GATEWAY_UDP_OPCODE_ALLOWLIST:-}"
-      GATEWAY_RUDP_ENABLE: "${GATEWAY_RUDP_ENABLE:-0}"
-      GATEWAY_RUDP_CANARY_PERCENT: "${GATEWAY_RUDP_CANARY_PERCENT:-0}"
-      GATEWAY_RUDP_OPCODE_ALLOWLIST: "${GATEWAY_RUDP_OPCODE_ALLOWLIST:-}"
       GATEWAY_ID: "gw2"
       REDIS_URI: "tcp://redis:6379"
       REDIS_CHANNEL_PREFIX: "dynaxis:"
@@ -227,7 +170,6 @@ services:
     ports:
       - "${GATEWAY2_TCP_HOST_PORT:-36101}:6000"
       - "${GATEWAY2_METRICS_HOST_PORT:-36002}:6001"
-      - "${GATEWAY2_UDP_HOST_PORT:-7001}:7000/udp"
 
   haproxy:
     image: haproxy:2.9-alpine
@@ -239,6 +181,57 @@ services:
       - "${HAPROXY_STATS_HOST_PORT:-8404}:8404"
     volumes:
       - ./haproxy/${HAPROXY_CONFIG:-haproxy.cfg}:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - dynaxis-stack
+
+  admin:
+    <<: *admin-build
+    command: ["admin"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+      gateway-1:
+        condition: service_started
+      gateway-2:
+        condition: service_started
+    environment:
+      ADMIN_LISTEN_PORT: "${ADMIN_LISTEN_PORT:-9200}"
+      ADMIN_ENV_LABEL: "${ADMIN_ENV_LABEL:-LOCAL}"
+      ADMIN_READ_ONLY: "${ADMIN_READ_ONLY:-1}"
+      ADMIN_AUTH_MODE: "${ADMIN_AUTH_MODE:-development}"
+      ADMIN_DEV_ROLE: "${ADMIN_DEV_ROLE:-viewer}"
+      ADMIN_VIEWER_TOKEN: "${ADMIN_VIEWER_TOKEN:-}"
+      ADMIN_OPERATOR_TOKEN: "${ADMIN_OPERATOR_TOKEN:-}"
+      ADMIN_TOKEN: "${ADMIN_TOKEN:-}"
+      ADMIN_WEB_ROOT: "/app/web"
+      ADMIN_TOPOLOGY_PATH: "/app/topology.active.json"
+      MIGRATIONS_DIR: "/app/migrations"
+      ADMIN_TARGET_MODE: "docker"
+      ADMIN_POLL_INTERVAL_MS: "${ADMIN_POLL_INTERVAL_MS:-5000}"
+      ADMIN_PROBE_TIMEOUT_MS: "${ADMIN_PROBE_TIMEOUT_MS:-1500}"
+      ADMIN_STALE_TTL_MS: "${ADMIN_STALE_TTL_MS:-15000}"
+      ADMIN_OP_VERIFY_TIMEOUT_MS: "${ADMIN_OP_VERIFY_TIMEOUT_MS:-30000}"
+      ADMIN_OBSERVABILITY_ENABLED: "${ADMIN_OBSERVABILITY_ENABLED:-0}"
+      ADMIN_GRAFANA_URL: "${ADMIN_GRAFANA_URL:-http://127.0.0.1:33000}"
+      ADMIN_PROMETHEUS_URL: "${ADMIN_PROMETHEUS_URL:-http://127.0.0.1:39090}"
+      ADMIN_HAPROXY_URL: "${ADMIN_HAPROXY_URL:-http://127.0.0.1:8404/}"
+      REDIS_URI: "${REDIS_URI:-tcp://redis:6379}"
+      REDIS_CHANNEL_PREFIX: "${REDIS_CHANNEL_PREFIX:-dynaxis:}"
+      REDIS_STREAM_KEY: "${REDIS_STREAM_KEY:-session_events}"
+      DB_URI: "postgresql://${POSTGRES_USER:-dynaxis}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-dynaxis_db}"
+      WB_DLQ_STREAM: "${WB_DLQ_STREAM:-session_events_dlq}"
+      WB_DEAD_STREAM: "${WB_DEAD_STREAM:-session_events_dead}"
+      WB_GROUP_DLQ: "${WB_GROUP_DLQ:-wb_dlq_group}"
+      WB_RETRY_MAX: "${WB_RETRY_MAX:-5}"
+    ports:
+      - "${ADMIN_HOST_PORT:-39200}:9200"
+    volumes:
+      - ./topologies:/app/topologies:ro
+      - ./topology.active.json:/app/topology.active.json:ro
     networks:
       - dynaxis-stack
 

@@ -31,7 +31,17 @@ public:
         (void)opts;
         // 일부 배포판에선 ConnectionOptions.uri 필드가 없을 수 있음. 간단한 URI 생성자를 사용.
         redis_ = std::make_unique<sw::redis::Redis>(uri);
+        const sw::redis::Uri parsed(uri);
+        auto subscription_options = parsed.connection_options();
+        // 구독 스레드만 Subscriber를 만진다. timeout으로 stop을 관측하므로
+        // 다른 스레드가 consume 중인 소켓에 punsubscribe할 필요가 없다.
+        subscription_options.socket_timeout = std::chrono::milliseconds(250);
+        subscription_options.connect_timeout = std::chrono::milliseconds(1000);
+        subscription_source_ = std::make_unique<sw::redis::Redis>(
+            subscription_options, parsed.connection_pool_options());
     }
+
+    ~RedisClientImpl() override { stop_psubscribe(); }
 
     bool health_check() override {
         try {
@@ -153,50 +163,32 @@ public:
             sub_cb_ = std::move(on_message);
             sub_pattern_ = pattern;
 
-            subscriber_ = std::make_unique<sw::redis::Subscriber>(redis_->subscriber());
-            subscriber_->on_pmessage([this](std::string /*pat*/, std::string channel, std::string msg) mutable {
-                auto& cb = sub_cb_;
-                if (cb) cb(channel, msg);
-            });
-            subscriber_->psubscribe(sub_pattern_);
+            subscriber_ = make_subscriber();
             sub_running_ = true;
-            // `consume()` 실패 시 짧은 backoff 뒤 재시도한다.
-            sub_thread_ = std::thread([this]() {
-                // 예외 시 점증 backoff(최대 1초)를 적용하고, 필요하면 재구독한다.
-                // 즉시 무한 재시도하면 네트워크 장애 순간 로그와 CPU만 과열되고 실제 복구에는 도움이 되지 않는다.
-                int backoff_ms = 10;
-                while (sub_running_) {
-                    try {
-                        if (subscriber_) {
-                            subscriber_->consume();
-                            // 정상 소비 시 백오프 리셋
-                            backoff_ms = 10;
-                        } else {
-                            std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
-                        }
-                    } catch (const std::exception&) {
-                        // 재구성/재구독 시도
+            try {
+                sub_thread_ = std::thread([this]() {
+                    int backoff_ms = 10;
+                    while (sub_running_) {
                         try {
-                            subscriber_.reset();
-                            auto sub = std::make_unique<sw::redis::Subscriber>(redis_->subscriber());
-                            sub->on_pmessage([this](std::string /*pat*/, std::string channel, std::string msg) mutable {
-                                auto& cb = sub_cb_;
-                                if (cb) cb(channel, msg);
-                            });
-                            sub->psubscribe(sub_pattern_);
-                            subscriber_ = std::move(sub);
+                            // 이전 재연결까지 실패해 null이어도 매번 다시 시도한다.
+                            if (!subscriber_) { subscriber_ = make_subscriber(); }
+                            subscriber_->consume();
                             backoff_ms = 10;
+                        } catch (const sw::redis::TimeoutError&) {
+                            // 유휴 구독의 정상 timeout이다. 구독을 유지하고 stop만 확인한다.
                         } catch (...) {
-                            // 실패 시 백오프 증가
-                            backoff_ms = std::min(1000, backoff_ms * 2);
+                            subscription_ready_.store(false, std::memory_order_relaxed);
+                            subscriber_.reset();
                             std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
+                            backoff_ms = std::min(1000, backoff_ms * 2);
                         }
-                    } catch (...) {
-                        backoff_ms = std::min(1000, backoff_ms * 2);
-                        std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
                     }
-                }
-            });
+                });
+            } catch (...) {
+                sub_running_ = false;
+                subscriber_.reset();
+                throw;
+            }
             return true;
         } catch (const std::exception& e) {
             server::core::log::warn(std::string("Redis PSUBSCRIBE failed: ") + e.what());
@@ -204,10 +196,12 @@ public:
         } catch (...) { server::core::log::warn("Redis PSUBSCRIBE failed: unknown"); return false; }
     }
 
+    bool subscription_ready() const override { return subscription_ready_.load(std::memory_order_relaxed); }
+
     void stop_psubscribe() override {
+        subscription_ready_.store(false, std::memory_order_relaxed);
         try {
             sub_running_ = false;
-            if (subscriber_) { try { subscriber_->punsubscribe(); } catch (...) {} }
             if (sub_thread_.joinable()) sub_thread_.join();
             subscriber_.reset();
             sub_cb_ = nullptr;
@@ -567,10 +561,25 @@ public:
     }
 
 private:
+    std::unique_ptr<sw::redis::Subscriber> make_subscriber() {
+        subscription_ready_.store(false, std::memory_order_relaxed);
+        auto sub = std::make_unique<sw::redis::Subscriber>(subscription_source_->subscriber());
+        sub->on_meta([this](sw::redis::Subscriber::MsgType type, const auto&, long long count) {
+            if (type == sw::redis::Subscriber::MsgType::PSUBSCRIBE) subscription_ready_.store(count > 0, std::memory_order_relaxed);
+        });
+        sub->on_pmessage([this](std::string /*pattern*/, std::string channel, std::string message) {
+            if (sub_cb_) { sub_cb_(channel, message); }
+        });
+        sub->psubscribe(sub_pattern_);
+        return sub;
+    }
+
     std::unique_ptr<sw::redis::Redis> redis_;
+    std::unique_ptr<sw::redis::Redis> subscription_source_;
     std::unique_ptr<sw::redis::Subscriber> subscriber_;
     std::thread sub_thread_;
     std::atomic<bool> sub_running_{false};
+    std::atomic<bool> subscription_ready_{false};
     std::function<void(const std::string&, const std::string&)> sub_cb_{};
     std::string sub_pattern_{};
 };

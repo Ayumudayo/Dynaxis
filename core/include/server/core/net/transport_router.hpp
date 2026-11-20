@@ -9,6 +9,10 @@
 
 #include "server/core/protocol/opcode_policy.hpp"
 
+namespace server::core {
+class JobQueue;
+}
+
 namespace server::core::net {
 
 /**
@@ -57,6 +61,19 @@ public:
     using policy_t = server::core::protocol::OpcodePolicy;
 
     /**
+     * @brief 전역 Registry에서 worker queue를 찾는 기존 호환 경로로 생성합니다.
+     * @details 새 런타임은 queue를 명시하는 생성자를 사용해야 다른 runtime과 실행이 섞이지 않습니다.
+     */
+    TransportRouter() = default;
+
+    /**
+     * @brief 이 router에서만 사용할 worker queue를 주입합니다.
+     * @param worker_queue 공유 소유할 queue. null이면 worker 실행을 거절하며 전역 queue로 우회하지 않습니다.
+     * @details handler 등록과 생성은 dispatch를 시작하기 전에 완료해야 합니다.
+     */
+    explicit TransportRouter(std::shared_ptr<server::core::JobQueue> worker_queue);
+
+    /**
      * @brief msg_id에 대한 handler와 opcode policy를 함께 등록합니다.
      * @param msg_id protocol message ID
      * @param handler payload consumer callback
@@ -99,6 +116,8 @@ private:
     };
 
     std::unordered_map<std::uint16_t, Entry> table_;
+    std::shared_ptr<server::core::JobQueue> worker_queue_;
+    bool use_legacy_worker_queue_{true};
 };
 
 } // namespace server::core::net

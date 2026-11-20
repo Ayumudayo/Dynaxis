@@ -101,6 +101,9 @@ void run_handler_with_guard(const TransportRouter::handler_t& handler,
 
 } // namespace
 
+TransportRouter::TransportRouter(std::shared_ptr<server::core::JobQueue> worker_queue)
+    : worker_queue_(std::move(worker_queue)), use_legacy_worker_queue_(false) {}
+
 void TransportRouter::register_handler(std::uint16_t msg_id, handler_t handler, policy_t policy) {
     table_[msg_id] = Entry{std::move(handler), policy};
 }
@@ -181,7 +184,8 @@ bool TransportRouter::dispatch(std::uint16_t msg_id,
         return true;
     }
 
-    auto job_queue = services::get<server::core::JobQueue>();
+    auto job_queue = use_legacy_worker_queue_
+        ? services::get<server::core::JobQueue>() : worker_queue_;
     if (!job_queue) {
         runtime_metrics::record_dispatch_processing_place_reject(place_index);
         server::core::log::warn(
